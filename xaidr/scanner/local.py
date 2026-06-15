@@ -1,15 +1,12 @@
-"""LocalScanner — runs L1 + L2 + DLP locally, escalates ambiguous cases to Brain.
+"""LocalScanner — runs L1 + L2 + DLP + compositional locally. Standalone — no backend.
 
-Default scanner for xaidr v0.2. Matches the npm sensor architecture:
-local scanning in <5ms, Brain only for L4 escalation.
+Default scanner for xaidr. Local scanning in <5ms with a 3-state verdict
+model (allow / flag / block); enforcement_mode gates whether a block verdict
+actually blocks.
 """
 
-import json
 import time
-from typing import Optional
 from uuid import uuid4
-
-import httpx
 
 from ..types import ScanResult
 from .compositional import CompositionalScanner
@@ -18,35 +15,29 @@ from .l1 import scan_l1
 from .l2 import scan_l2
 from .normalizer import TypoNormalizer
 
-DEFAULT_BLOCK_THRESHOLD = 0.65
-DEFAULT_ESCALATE_THRESHOLD = 0.20
+DEFAULT_BLOCK_THRESHOLD = 0.60
+DEFAULT_FLAG_THRESHOLD = 0.20
 
 
 class LocalScanner:
-    """Scans locally using L1/L2/DLP rules. Escalates to Brain L4 when ambiguous."""
+    """Scans locally using L1/L2/DLP + compositional rules. Standalone — no backend."""
 
     def __init__(
         self,
-        api_key: str,
-        sentinel_url: str,
         block_threshold: float = DEFAULT_BLOCK_THRESHOLD,
-        escalate_threshold: float = DEFAULT_ESCALATE_THRESHOLD,
+        flag_threshold: float = DEFAULT_FLAG_THRESHOLD,
         shadow_mode: bool = False,
         dlp_enabled: bool = True,
-        escalation_client: Optional[httpx.Client] = None,
+        enforcement_mode: str = "monitor",
     ):
-        self._api_key = api_key
-        self._sentinel_url = sentinel_url.rstrip("/")
         self.block_threshold = block_threshold
-        self.escalate_threshold = escalate_threshold
+        self.flag_threshold = flag_threshold
         self.shadow_mode = shadow_mode
         self.dlp_enabled = dlp_enabled
+        # shadow_mode forces observe-only: it IS monitor mode.
+        self.enforcement_mode = "monitor" if shadow_mode else enforcement_mode
         self._normalizer = TypoNormalizer()
         self._compositional = CompositionalScanner()
-        self._escalation_client = escalation_client or httpx.Client(
-            timeout=10.0,
-            headers={"x-delphi-api-key": api_key},
-        )
 
     def scan(
         self,
@@ -100,13 +91,25 @@ class LocalScanner:
                 if comp.get("details"):
                     comp_category = comp["details"][0].get("category")
 
-        action = "allowed"
+        # 3-state local verdict (no backend, no escalation)
         if score >= self.block_threshold:
-            action = "flagged" if self.shadow_mode else "blocked"
-        elif score >= self.escalate_threshold:
-            action = "escalated"
-        elif score > 0:
+            verdict = "block"
+        elif score >= self.flag_threshold:
+            verdict = "flag"
+        else:
+            verdict = "allow"
+
+        # enforcement_mode gates whether a block verdict actually blocks.
+        # monitor (default): nothing is blocked; everything is emitted/logged.
+        # block: a "block" verdict is enforced.
+        if verdict == "block" and self.enforcement_mode == "block":
+            action = "blocked"
+        elif verdict == "block":
+            action = "flagged"  # monitor mode: block-worthy but observe-only
+        elif verdict == "flag":
             action = "flagged"
+        else:
+            action = "allowed"
 
         all_rules = (
             [t.rule for t in l1.threats]
@@ -120,17 +123,6 @@ class LocalScanner:
         category = top_threat.category if top_threat else None
         if category is None and comp_category:
             category = comp_category
-
-        if action == "escalated":
-            l4_result = self._escalate_to_l4(prompt, agent_id, score, category)
-            if l4_result:
-                if l4_result.get("action") == "blocked":
-                    action = "blocked"
-                    score = max(score, l4_result.get("score", 0.85))
-                    category = l4_result.get("category") or category
-                    all_rules.append("L4_aprielguard")
-                else:
-                    action = "allowed"
 
         scan_time_ms = round((time.perf_counter() - scan_start) * 1000, 1)
 
@@ -158,39 +150,6 @@ class LocalScanner:
 
         return base
 
-    def _escalate_to_l4(
-        self,
-        prompt: str,
-        agent_id: str,
-        pre_score: float,
-        category: Optional[str],
-    ) -> Optional[dict]:
-        """Escalate to Brain for L4 AprielGuard classification."""
-        try:
-            body_dict = {
-                "prompt": prompt[:2000],
-                "agentId": agent_id,
-                "direction": "input",
-                "escalation": True,
-                "preScore": pre_score,
-                "preCategory": category,
-            }
-
-            body_bytes = json.dumps(body_dict, separators=(",", ":")).encode("utf-8")
-
-            headers = {"x-delphi-api-key": self._api_key}
-
-            resp = self._escalation_client.post(
-                f"{self._sentinel_url}/v1/scan",
-                content=body_bytes,
-                headers={**headers, "Content-Type": "application/json"},
-            )
-            if resp.status_code == 200:
-                return resp.json()
-            return None
-        except Exception:
-            return None
-
     def close(self) -> None:
-        if self._escalation_client:
-            self._escalation_client.close()
+        """No-op — standalone scanner holds no network clients."""
+        return

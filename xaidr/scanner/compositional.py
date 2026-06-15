@@ -193,6 +193,14 @@ class CompositionalScanner:
             has_ai = has_ai_target
 
         # --- compositions ------------------------------------------------------
+        # Confidence bands (recalibrated for standalone 3-state verdicts:
+        #   block >= 0.60, flag >= 0.20, allow < 0.20):
+        #   STRONG (0.65): full relation with an EXPLICIT AI target — block-capable
+        #   MEDIUM (0.45): full relation but weaker verb/marker, or implied target — flag
+        #   WEAK   (0.30): relation inferred from an imperative, no explicit AI — flag (low)
+        # The final FP guard (soft-context cap) below is UNCHANGED and keeps
+        # benign look-alikes ("set aside some time") at ~0.
+        STRONG, MEDIUM, WEAK = 0.65, 0.45, 0.30
         details: list[dict] = []
 
         def fire(rule: str, category: str, confidence: float) -> None:
@@ -205,47 +213,50 @@ class CompositionalScanner:
                 }
             )
 
-        # 1. role assigned + negation/unsafe + protected concept
+        # 1. role assigned + negation/unsafe + protected concept  (explicit relation)
         if has_role and (has_neg or has_unsafe) and has_protected:
-            fire("role_negated_safety", "role_override", 0.28)
-        # 2. role assigned + negation/unsafe, no explicit protected concept
+            fire("role_negated_safety", "role_override", STRONG)
+        # 2. role assigned + negation/unsafe, no explicit protected concept  (implied)
         if has_role and (has_neg or has_unsafe) and not has_protected:
-            fire("role_negated_implied", "role_override", 0.20)
-        # 3. AI directed + negation + protected, not a role-assignment
+            fire("role_negated_implied", "role_override", MEDIUM)
+        # 3. AI directed + negation + protected, not a role-assignment  (explicit)
         if has_ai and has_neg and has_protected and not has_role:
-            fire("ai_negated_safety", "safety_negation", 0.25)
-        # 4. authority source + authority verb + (override or protected)
+            fire("ai_negated_safety", "safety_negation", STRONG)
+        # 4. authority source + authority verb + (override or protected)  (explicit)
         if has_auth_src and has_auth_verb and (has_override or has_protected):
-            fire("authority_override", "authority", 0.30)
-        # 5. authority grant + AI directed + (override or protected)
+            fire("authority_override", "authority", STRONG)
+        # 5. authority grant + AI directed + (override or protected)  (medium)
         if has_auth_verb and has_ai and (has_override or has_protected):
-            fire("authorization_override", "authority", 0.22)
+            fire("authorization_override", "authority", MEDIUM)
         # 6. behaviour-change marker + (AI or imperative) + (unsafe or negation)
         if has_behavior and (has_ai or has_imperative) and (has_unsafe or has_neg):
-            fire("behavior_modification", "behavior_change", 0.25)
-        # 7. override verb + AI directed + protected concept
+            fire("behavior_modification", "behavior_change", MEDIUM)
+        # 7. override verb + AI directed + protected concept  (explicit, canonical)
         if has_override and has_ai and has_protected:
-            fire("direct_override_safety", "override", 0.30)
-        # 8. imperative override of a protected concept, no explicit AI target
+            fire("direct_override_safety", "override", STRONG)
+        # 8. imperative override of a protected concept, no explicit AI target  (weak)
         if has_override and has_protected and has_imperative and not has_ai:
-            fire("imperative_override_safety", "override", 0.18)
-        # 9. role assignment to a named jailbreak persona
+            fire("imperative_override_safety", "override", WEAK)
+        # 9. role assignment to a named jailbreak persona  (medium)
         if has_role and has_persona:
-            fire("named_persona", "persona", 0.22)
-        # 10. behaviour-change marker + override verb + protected concept
+            fire("named_persona", "persona", MEDIUM)
+        # 10. behaviour-change marker + override verb + protected concept  (medium)
         if has_behavior and has_override and has_protected:
-            fire("behavior_override_safety", "behavior_change", 0.25)
+            fire("behavior_override_safety", "behavior_change", MEDIUM)
 
         score = max((d["confidence"] for d in details), default=0.0)
 
         # --- final FP guard ----------------------------------------------------
         # Nothing AI-directed, no protected concept, no imperative -> hard cap.
+        # UNCHANGED: this is what keeps benign look-alikes near zero.
         if not has_ai and not has_protected and not has_imperative:
             score = min(score, 0.04)
 
         # --- agent-to-agent amplification -------------------------------------
+        # A2A is the higher-risk surface; amplify but cap below 1.0. With the
+        # recalibrated bands a STRONG a2a hit lands ~0.85 (clearly block-band).
         if scan_mode in ("a2a", "agent", "mcp") and score > 0:
-            score = min(score * 1.3, 0.40)
+            score = min(score * 1.3, 0.85)
 
         signals = [d["rule"] for d in details]
         return {"score": round(score, 4), "signals": signals, "details": details}

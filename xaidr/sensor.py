@@ -1,25 +1,20 @@
 """DelphiSensor — main SDK entry point.
 
-v0.2: Local L1/L2/DLP scanning by default. Brain only for L4 escalation
-and telemetry. Matches npm sensor architecture.
+Standalone: local L1/L2/DLP + compositional scanning with a 3-state verdict
+model (allow / flag / block). No account, no backend, no network escalation.
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
-import os
-import time as _time
 from typing import Optional
 from uuid import uuid4
 
 import httpx
-import yaml
-from agent_os.policies import PolicyDocument, PolicyEvaluator
-from dotenv import load_dotenv
+from agent_os.policies import PolicyEvaluator
 
-from .authz import classify, build_request, evaluate, parse_action_policy
+from .authz import classify, build_request, evaluate
 from .reporters import Reporter
 from .scanner.local import LocalScanner
 from .telemetry import SyncTelemetryQueue
@@ -27,14 +22,14 @@ from .types import DelphiBlockedError, ScanResult
 
 logger = logging.getLogger("xaidr.sensor")
 
-DEFAULT_SENTINEL_URL = "https://xaidr.delphisecurity.ai"
-
 
 class DelphiSensor:
-    """Client for the Delphi Sentinel Brain.
+    """Standalone agent security sensor.
 
-    v0.2: Scans locally by default. Only escalates to Brain for
-    ambiguous cases (L4 AprielGuard). Telemetry batched every 5s.
+    Scans locally with a 3-state verdict model (allow / flag / block).
+    ``enforcement_mode`` gates whether a block verdict actually blocks:
+    "monitor" (default) observes only; "block" enforces. No account, no
+    backend, no network required.
 
     Usage::
 
@@ -45,38 +40,33 @@ class DelphiSensor:
     def __init__(
         self,
         agent_id: str,
-        api_key: Optional[str] = None,
-        sentinel_url: str = DEFAULT_SENTINEL_URL,
+        enforcement_mode: str = "monitor",
         shadow_mode: bool = False,
         dlp_enabled: bool = True,
-        block_threshold: float = 0.65,
-        escalate_threshold: float = 0.20,
+        block_threshold: float = 0.60,
+        flag_threshold: float = 0.20,
         telemetry_batch_size: int = 50,
         telemetry_flush_interval_sec: float = 5.0,
         reporter: "Reporter" = None,
     ):
         if not agent_id:
             raise ValueError("agent_id is required")
-
-        load_dotenv()
-        resolved_key = api_key or os.environ.get("DELPHI_API_KEY")
-        if not resolved_key:
+        if enforcement_mode not in ("monitor", "block"):
             raise ValueError(
-                "api_key not provided and DELPHI_API_KEY is not set in environment"
+                f"enforcement_mode must be 'monitor' or 'block', got {enforcement_mode!r}"
             )
 
         self.agent_id = agent_id
-        self.sentinel_url = sentinel_url.rstrip("/")
-        self._api_key = resolved_key
         self.shadow_mode = shadow_mode
+        # shadow_mode forces observe-only — it IS monitor mode.
+        self.enforcement_mode = "monitor" if shadow_mode else enforcement_mode
 
         self._scanner = LocalScanner(
-            api_key=resolved_key,
-            sentinel_url=self.sentinel_url,
             block_threshold=block_threshold,
-            escalate_threshold=escalate_threshold,
+            flag_threshold=flag_threshold,
             shadow_mode=shadow_mode,
             dlp_enabled=dlp_enabled,
+            enforcement_mode=self.enforcement_mode,
         )
         self._scanner_mode = "local"
 
@@ -96,8 +86,6 @@ class DelphiSensor:
 
         self._quarantined = False
         self._quarantine_reason = None
-        self._last_quarantine_check = 0.0
-        self._quarantine_check_interval = 60.0
 
         self._policy_evaluator: Optional[PolicyEvaluator] = None
         self._policies_version: int = 0
@@ -105,127 +93,9 @@ class DelphiSensor:
 
         self._blocked_tools: set[str] = set()
         self._blocked_urls: list[str] = []
-        self._enforcement_mode: str = "blocking"
 
         self._action_policy: Optional[dict] = None
         self._trust_score: Optional[float] = None
-
-        self._refresh_enforcement_status()
-
-    def _refresh_enforcement_status(self) -> None:
-        """Fetch quarantine status, blocked tools, blocked URLs from Brain.
-
-        Called from __init__ and every ``_quarantine_check_interval`` seconds
-        from scan(). Fail-open: if Brain is unreachable, retain last known
-        enforcement state and continue.
-        """
-        try:
-            resp = httpx.get(
-                f"{self.sentinel_url}/v1/fleet/agent-config",
-                params={"agentId": self.agent_id},
-                headers={"x-delphi-api-key": self._api_key},
-                timeout=5.0,
-            )
-            if resp.status_code != 200:
-                return
-            data = resp.json()
-
-            if data.get("quarantined") or data.get("status") == "quarantined":
-                if not self._quarantined:
-                    print(f"[xaidr] QUARANTINED: {self.agent_id}")
-                self._quarantined = True
-                self._quarantine_reason = "Quarantined by fleet administrator"
-            else:
-                if self._quarantined:
-                    print(f"[xaidr] Quarantine lifted for {self.agent_id}")
-                self._quarantined = False
-                self._quarantine_reason = None
-
-            new_blocked_tools = set(data.get("blocked_tools") or [])
-            if new_blocked_tools != self._blocked_tools:
-                added = new_blocked_tools - self._blocked_tools
-                removed = self._blocked_tools - new_blocked_tools
-                if added:
-                    print(f"[xaidr] Tools BLOCKED: {added}")
-                if removed:
-                    print(f"[xaidr] Tools UNBLOCKED: {removed}")
-                self._blocked_tools = new_blocked_tools
-
-            new_blocked_urls = data.get("blocked_urls") or []
-            if new_blocked_urls != self._blocked_urls:
-                print(f"[xaidr] Blocked URLs updated: {len(new_blocked_urls)} patterns")
-                self._blocked_urls = new_blocked_urls
-
-            new_mode = data.get("enforcement_mode") or "blocking"
-            if new_mode != self._enforcement_mode:
-                print(f"[xaidr] Enforcement mode: {self._enforcement_mode} -> {new_mode}")
-                self._enforcement_mode = new_mode
-
-            trust = data.get("trust_score")
-            if trust is not None:
-                try:
-                    self._trust_score = float(trust)
-                except (TypeError, ValueError):
-                    pass
-
-            # Action policy (versioned JSON, optional key). Absent or malformed
-            # -> None, which the evaluator treats as monitor-only defaults.
-            raw_action_policy = data.get("action_policy")
-            new_action_policy = (
-                parse_action_policy(raw_action_policy)
-                if raw_action_policy is not None
-                else None
-            )
-            if new_action_policy != self._action_policy:
-                if new_action_policy is not None:
-                    print(
-                        f"[xaidr] Action policy updated: "
-                        f"{len(new_action_policy['rules'])} rules, "
-                        f"version {new_action_policy['version']}"
-                    )
-                else:
-                    print("[xaidr] Action policy cleared (monitor-only defaults)")
-                self._action_policy = new_action_policy
-
-            new_policies_version = int(data.get("policies_version") or 0)
-            new_policies = data.get("policies") or []
-
-            if new_policies_version != self._policies_version:
-                try:
-                    if new_policies:
-                        policy_docs = []
-                        for p in new_policies:
-                            yaml_str = p.get("yaml")
-                            if not yaml_str:
-                                continue
-                            try:
-                                policy_dict = yaml.safe_load(yaml_str)
-                                policy_docs.append(PolicyDocument(**policy_dict))
-                            except Exception as policy_exc:
-                                logging.warning(
-                                    f"[xaidr] failed to parse policy '{p.get('name', 'unknown')}': {policy_exc}"
-                                )
-
-                        if policy_docs:
-                            self._policy_evaluator = PolicyEvaluator(policy_docs)
-                            self._policy_yamls = [p.get("yaml") for p in new_policies if p.get("yaml")]
-                            logging.info(
-                                f"[xaidr] PolicyEvaluator rebuilt: "
-                                f"{len(policy_docs)} policies, version {new_policies_version}"
-                            )
-                        else:
-                            self._policy_evaluator = None
-                            self._policy_yamls = []
-                    else:
-                        self._policy_evaluator = None
-                        self._policy_yamls = []
-
-                    self._policies_version = new_policies_version
-
-                except Exception as exc:
-                    logging.error(f"[xaidr] PolicyEvaluator rebuild failed: {exc}")
-        except Exception:
-            pass  # Fail-open: if Brain is unreachable, don't self-quarantine
 
     def _evaluate_policy(self, context: dict) -> tuple[bool, Optional[str]]:
         """Evaluate AGT policies against the given context.
@@ -246,11 +116,12 @@ class DelphiSensor:
             return (True, None)
 
     def _apply_mode(self, result: ScanResult) -> ScanResult:
-        """In monitor/watch mode, downgrade a returned 'blocked' to 'flagged'.
+        """In monitor mode, downgrade a returned 'blocked' to 'flagged'.
         Telemetry keeps the true verdict; only the returned action is softened
-        so the agent does not hard-block in monitor mode. Quarantine is never
-        downgraded."""
-        if self._enforcement_mode in ("monitor", "watch") and result.action == "blocked":
+        so the agent does not hard-block in monitor mode. The local scanner
+        already gates on enforcement_mode; this is a belt-and-suspenders guard.
+        Quarantine is never downgraded."""
+        if self.enforcement_mode == "monitor" and result.action == "blocked":
             return ScanResult(
                 action="flagged",
                 score=result.score,
@@ -274,11 +145,6 @@ class DelphiSensor:
         agent→LLM edge. If neither is given, the edge falls back to a generic
         "llm" node.
         """
-        now = _time.time()
-        if now - self._last_quarantine_check > self._quarantine_check_interval:
-            self._last_quarantine_check = now
-            self._refresh_enforcement_status()
-
         if self._quarantined:
             result = ScanResult(
                 action="blocked",
@@ -418,11 +284,6 @@ class DelphiSensor:
         Pass ``mcp_server`` to attribute the call to an MCP server (the fleet
         graph then draws an agent→MCP edge instead of a generic tool edge).
         """
-        now = _time.time()
-        if now - self._last_quarantine_check > self._quarantine_check_interval:
-            self._last_quarantine_check = now
-            self._refresh_enforcement_status()
-
         action = "allowed"
         score = 0.0
         category: Optional[str] = None
@@ -504,9 +365,8 @@ class DelphiSensor:
     def protect_tools(self, tools: list) -> list:
         """Wrap LangChain tools with blocking enforcement.
 
-        Declares tool names to Brain (so the dashboard Tools tab shows
-        them) and wraps each tool to short-circuit with a "blocked"
-        message if its name is in ``self._blocked_tools``.
+        Wraps each tool to short-circuit with a "blocked" message if its
+        name is in ``self._blocked_tools`` or denied by a local policy.
 
         Usage::
 
@@ -519,13 +379,6 @@ class DelphiSensor:
         Returns:
             List of wrapped tools with blocking enforcement.
         """
-        tool_names: list[str] = []
-        for t in tools:
-            name = getattr(t, "name", None) or getattr(t, "__name__", "unknown")
-            tool_names.append(name)
-
-        self._declare_tools(tool_names)
-
         wrapped = []
         for t in tools:
             tool_name = getattr(t, "name", None) or getattr(t, "__name__", "unknown")
@@ -583,20 +436,6 @@ class DelphiSensor:
             wrapped.append(new_tool)
 
         return wrapped
-
-    def _declare_tools(self, tool_names: list[str]) -> None:
-        """Register declared tools with Brain (best-effort)."""
-        try:
-            resp = httpx.post(
-                f"{self.sentinel_url}/v1/fleet/declare-tools",
-                json={"agentId": self.agent_id, "tools": tool_names},
-                headers={"x-delphi-api-key": self._api_key},
-                timeout=5.0,
-            )
-            if resp.status_code == 200:
-                print(f"[xaidr] Declared {len(tool_names)} tools: {tool_names}")
-        except Exception:
-            pass  # Best-effort
 
     def protect_http(self, client: "httpx.Client") -> "ProtectedHttpClient":
         """Wrap an httpx.Client to auto-scan outgoing A2A HTTP calls.
