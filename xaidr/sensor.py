@@ -20,6 +20,7 @@ from . import provenance as _prov
 from . import provenance_chain as _chain
 from .authz import classify, build_request, evaluate
 from .reporters import Reporter
+from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
 from .scanner.local import LocalScanner
 from .telemetry import SyncTelemetryQueue
 from .types import DelphiBlockedError, ScanResult
@@ -54,6 +55,7 @@ class DelphiSensor:
         reporter: "Reporter" = None,
         schema: str | None = None,
         policy_file: str | None = None,
+        a2a_structural_enforcement: str = "flag",
     ):
         if not agent_id:
             raise ValueError("agent_id is required")
@@ -107,6 +109,19 @@ class DelphiSensor:
         # load_policy fails safe and logs what it loads. Auto-loads
         # ./xaidr-policy.yaml when no explicit file is given.
         self._policy = _policy.load_policy(policy_file)
+
+        # A2A structural validation (Tier A, content-blind) + local id tracking
+        # (Tier B, LOCAL ONLY — catches references to ids this sensor never
+        # issued; cross-agent id correlation is the paid Brain tier, not here).
+        # Shared across scan_a2a calls so the id tracker accumulates state.
+        if a2a_structural_enforcement not in ("flag", "block"):
+            raise ValueError(
+                "a2a_structural_enforcement must be 'flag' or 'block', got "
+                f"{a2a_structural_enforcement!r}"
+            )
+        self._a2a_structural_enforcement = a2a_structural_enforcement
+        self._a2a_validator = A2AStructuralValidator()
+        self._a2a_id_tracker = A2AIdTracker()
 
     def _evaluate_policy(self, context: dict) -> tuple[bool, Optional[str]]:
         """Evaluate AGT policies against the given context.
@@ -302,6 +317,50 @@ class DelphiSensor:
             agent_id=self.agent_id,
             direction="a2a",
         )
+
+        # ---- A2A structural (Tier A) + local id tracking (Tier B) -----------
+        # Content-blind, flag-level signals fused into the content verdict by
+        # MAX (they can only RAISE the score). Structural confidences cap at
+        # ~0.45 < the block threshold, so they flag but never hard-block on
+        # their own — unless a2a_structural_enforcement is explicitly "block",
+        # which is decoupled from the main enforcement_mode.
+        score = result.score
+        action = result.action
+        category = result.category
+        rules = list(result.rules)
+
+        try:
+            body = message if isinstance(message, dict) else json.loads(message)
+        except (ValueError, TypeError):
+            body = None
+
+        if isinstance(body, dict):
+            sv = self._a2a_validator.validate(body, "a2a")      # Tier A
+            idv = self._a2a_id_tracker.check_outbound(body)     # Tier B (local)
+            struct_score = max(sv["score"], idv["score"])
+            structural_signals = sv["signals"] + idv["signals"]
+            if structural_signals:
+                rules = rules + structural_signals
+                if struct_score > score:
+                    score = struct_score
+                # Re-derive the action from the fused score. Structural/id hits
+                # are flag-level: lift an "allowed" to "flagged" when over the
+                # flag threshold; never downgrade a stricter content verdict.
+                if action == "allowed" and score >= self._scanner.flag_threshold:
+                    action = "flagged"
+                # Explicit opt-in: only when structural enforcement is "block"
+                # does a structural/id finding escalate to a hard block.
+                if self._a2a_structural_enforcement == "block":
+                    action = "blocked"
+
+        result = ScanResult(
+            action=action,
+            score=round(score, 3),
+            category=category,
+            rules=rules,
+            latency_ms=result.latency_ms,
+        )
+
         data = {
             "scanId": uuid4().hex[:12],
             "agentId": self.agent_id,
@@ -940,6 +999,17 @@ class ProtectedHttpClient:
         Labels the output scan with the LLM provider derived from the request
         host so the fleet graph draws an attributed agent→LLM edge.
         """
+        # Inbound A2A response path: record any task/context ids a peer
+        # legitimately issued to us, so the local id tracker can later
+        # distinguish a smuggled (never-issued) outbound reference. Non-A2A
+        # (e.g. LLM) responses carry no such ids, so record_issued no-ops.
+        try:
+            rbody = response.json()
+        except Exception:
+            rbody = None
+        if isinstance(rbody, dict):
+            self._sensor._a2a_id_tracker.record_issued(rbody)
+
         text = self._extract_response_text(response)
         if text and len(text) >= 3:
             provider = self._extract_provider(str(response.url))
