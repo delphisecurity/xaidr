@@ -12,13 +12,14 @@ from uuid import uuid4
 import httpx
 
 from ..types import ScanResult
+from .compositional import CompositionalScanner
 from .dlp import scan_dlp
 from .l1 import scan_l1
 from .l2 import scan_l2
 from .normalizer import TypoNormalizer
 
 DEFAULT_BLOCK_THRESHOLD = 0.65
-DEFAULT_ESCALATE_THRESHOLD = 0.30
+DEFAULT_ESCALATE_THRESHOLD = 0.20
 
 
 class LocalScanner:
@@ -41,6 +42,7 @@ class LocalScanner:
         self.shadow_mode = shadow_mode
         self.dlp_enabled = dlp_enabled
         self._normalizer = TypoNormalizer()
+        self._compositional = CompositionalScanner()
         self._escalation_client = escalation_client or httpx.Client(
             timeout=10.0,
             headers={"x-delphi-api-key": api_key},
@@ -79,6 +81,25 @@ class LocalScanner:
 
         score = self._compute_composite(l1.score, l2.score, dlp_score)
 
+        # --- Compositional scanner (L1-zero gate) ---
+        # Runs ONLY when L1/L2/DLP all found nothing (score == 0). Catches
+        # relation-based paraphrase attacks the regex/category layers miss.
+        comp_rules = []
+        comp_category = None
+        if score == 0:
+            if direction == "a2a":
+                comp_mode = "a2a"
+            elif direction == "output":
+                comp_mode = "output"
+            else:
+                comp_mode = "chat"
+            comp = self._compositional.scan(normalized, scan_mode=comp_mode)
+            if comp["score"] > 0:
+                score = comp["score"]
+                comp_rules = [d["rule"] for d in comp.get("details", [])]
+                if comp.get("details"):
+                    comp_category = comp["details"][0].get("category")
+
         action = "allowed"
         if score >= self.block_threshold:
             action = "flagged" if self.shadow_mode else "blocked"
@@ -91,11 +112,14 @@ class LocalScanner:
             [t.rule for t in l1.threats]
             + [t.rule for t in l2.threats]
             + dlp_rules
+            + comp_rules
         )
 
         all_threats = list(l1.threats) + list(l2.threats) + list(dlp_threats)
         top_threat = max(all_threats, key=lambda t: t.score, default=None)
         category = top_threat.category if top_threat else None
+        if category is None and comp_category:
+            category = comp_category
 
         if action == "escalated":
             l4_result = self._escalate_to_l4(prompt, agent_id, score, category)

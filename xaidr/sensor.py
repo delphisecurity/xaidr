@@ -50,7 +50,7 @@ class DelphiSensor:
         shadow_mode: bool = False,
         dlp_enabled: bool = True,
         block_threshold: float = 0.65,
-        escalate_threshold: float = 0.30,
+        escalate_threshold: float = 0.20,
         telemetry_batch_size: int = 50,
         telemetry_flush_interval_sec: float = 5.0,
         reporter: "Reporter" = None,
