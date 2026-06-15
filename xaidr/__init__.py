@@ -4,6 +4,7 @@ v0.2: Local L1/L2/DLP scanning. Brain for L4 escalation + fleet intelligence.
 """
 
 from .sensor import DelphiSensor as Sensor, ProtectedHttpClient
+from .provenance import set_origin, origin_scope, clear_origin
 from .types import DelphiBlockedError, ScanResult
 
 __version__ = "0.5.0"
@@ -13,5 +14,8 @@ __all__ = [
     "ProtectedHttpClient",
     "ScanResult",
     "DelphiBlockedError",
+    "set_origin",
+    "origin_scope",
+    "clear_origin",
     "__version__",
 ]

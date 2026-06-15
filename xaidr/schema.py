@@ -24,7 +24,6 @@ the internal event, so this is forward-compatible.
 from __future__ import annotations
 
 import hashlib
-import time
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4

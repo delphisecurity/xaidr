@@ -14,6 +14,7 @@ from uuid import uuid4
 import httpx
 from agent_os.policies import PolicyEvaluator
 
+from . import provenance as _prov
 from .authz import classify, build_request, evaluate
 from .reporters import Reporter
 from .scanner.local import LocalScanner
@@ -138,6 +139,7 @@ class DelphiSensor:
         direction: str = "input",
         destination: Optional[str] = None,
         provider: Optional[str] = None,
+        origin_context: dict | None = None,
     ) -> ScanResult:
         """Synchronous scan — used by LangChain middleware and direct calls.
 
@@ -145,7 +147,11 @@ class DelphiSensor:
         the LLM endpoint (e.g. "anthropic") so the fleet graph can draw an
         agent→LLM edge. If neither is given, the edge falls back to a generic
         "llm" node.
+
+        ``origin_context`` is a per-call provenance override (OBO principal,
+        actor, correlation id); it beats any context set via ``set_origin``.
         """
+        prov = _prov.resolve(self.agent_id, per_call=origin_context)
         if self._quarantined:
             result = ScanResult(
                 action="blocked",
@@ -154,24 +160,27 @@ class DelphiSensor:
                 rules=["QUARANTINE_ENFORCED"],
                 latency_ms=0,
             )
+            data = {
+                "scanId": uuid4().hex[:12],
+                "agentId": self.agent_id,
+                "action": "blocked",
+                "score": 1.0,
+                "category": "quarantined",
+                "rules": ["QUARANTINE_ENFORCED"],
+                "direction": direction,
+                "destinationType": "external_api",
+                "destinationIdentifier": destination or provider or "llm",
+                "scanTimeMs": 0,
+                "promptLength": len(prompt),
+                "promptHash": hashlib.sha256(prompt.encode()).hexdigest()[:16],
+                "prompt": prompt[:2000],
+            }
+            if prov:
+                data["provenance"] = prov
             self._telemetry.enqueue({
                 "type": "scan",
                 "agentId": self.agent_id,
-                "data": {
-                    "scanId": uuid4().hex[:12],
-                    "agentId": self.agent_id,
-                    "action": "blocked",
-                    "score": 1.0,
-                    "category": "quarantined",
-                    "rules": ["QUARANTINE_ENFORCED"],
-                    "direction": direction,
-                    "destinationType": "external_api",
-                    "destinationIdentifier": destination or provider or "llm",
-                    "scanTimeMs": 0,
-                    "promptLength": len(prompt),
-                    "promptHash": hashlib.sha256(prompt.encode()).hexdigest()[:16],
-                    "prompt": prompt[:2000],
-                },
+                "data": data,
             })
             return result
 
@@ -181,24 +190,27 @@ class DelphiSensor:
             direction=direction,
         )
 
+        data = {
+            "scanId": uuid4().hex[:12],
+            "agentId": self.agent_id,
+            "action": result.action,
+            "score": result.score,
+            "category": result.category,
+            "rules": result.rules,
+            "direction": direction,
+            "destinationType": "external_api",
+            "destinationIdentifier": destination or provider or "llm",
+            "scanTimeMs": result.latency_ms,
+            "promptLength": len(prompt),
+            "promptHash": hashlib.sha256(prompt.encode()).hexdigest()[:16],
+            "prompt": prompt[:2000],
+        }
+        if prov:
+            data["provenance"] = prov
         self._telemetry.enqueue({
             "type": "scan",
             "agentId": self.agent_id,
-            "data": {
-                "scanId": uuid4().hex[:12],
-                "agentId": self.agent_id,
-                "action": result.action,
-                "score": result.score,
-                "category": result.category,
-                "rules": result.rules,
-                "direction": direction,
-                "destinationType": "external_api",
-                "destinationIdentifier": destination or provider or "llm",
-                "scanTimeMs": result.latency_ms,
-                "promptLength": len(prompt),
-                "promptHash": hashlib.sha256(prompt.encode()).hexdigest()[:16],
-                "prompt": prompt[:2000],
-            },
+            "data": data,
         })
 
         return self._apply_mode(result)
@@ -208,14 +220,25 @@ class DelphiSensor:
         response: str,
         destination: Optional[str] = None,
         provider: Optional[str] = None,
+        origin_context: dict | None = None,
     ) -> ScanResult:
         """Scan LLM output for DLP/secrets."""
         return self.scan(
-            response, direction="output", destination=destination, provider=provider
+            response,
+            direction="output",
+            destination=destination,
+            provider=provider,
+            origin_context=origin_context,
         )
 
-    def scan_a2a(self, message: str, destination: str) -> ScanResult:
+    def scan_a2a(
+        self,
+        message: str,
+        destination: str,
+        origin_context: dict | None = None,
+    ) -> ScanResult:
         """Scan an A2A delegation message."""
+        prov = _prov.resolve(self.agent_id, per_call=origin_context)
         if self._quarantined:
             result = ScanResult(
                 action="blocked",
@@ -224,23 +247,26 @@ class DelphiSensor:
                 rules=["QUARANTINE_ENFORCED"],
                 latency_ms=0,
             )
+            data = {
+                "scanId": uuid4().hex[:12],
+                "agentId": self.agent_id,
+                "action": "blocked",
+                "score": 1.0,
+                "category": "quarantined",
+                "rules": ["QUARANTINE_ENFORCED"],
+                "direction": "a2a",
+                "destinationAgent": destination,
+                "scanTimeMs": 0,
+                "promptLength": len(message),
+                "promptHash": hashlib.sha256(message.encode()).hexdigest()[:16],
+                "prompt": message[:2000],
+            }
+            if prov:
+                data["provenance"] = prov
             self._telemetry.enqueue({
                 "type": "scan",
                 "agentId": self.agent_id,
-                "data": {
-                    "scanId": uuid4().hex[:12],
-                    "agentId": self.agent_id,
-                    "action": "blocked",
-                    "score": 1.0,
-                    "category": "quarantined",
-                    "rules": ["QUARANTINE_ENFORCED"],
-                    "direction": "a2a",
-                    "destinationAgent": destination,
-                    "scanTimeMs": 0,
-                    "promptLength": len(message),
-                    "promptHash": hashlib.sha256(message.encode()).hexdigest()[:16],
-                    "prompt": message[:2000],
-                },
+                "data": data,
             })
             return result
 
@@ -249,23 +275,26 @@ class DelphiSensor:
             agent_id=self.agent_id,
             direction="a2a",
         )
+        data = {
+            "scanId": uuid4().hex[:12],
+            "agentId": self.agent_id,
+            "action": result.action,
+            "score": result.score,
+            "category": result.category,
+            "rules": result.rules,
+            "direction": "a2a",
+            "destinationAgent": destination,
+            "scanTimeMs": result.latency_ms,
+            "promptLength": len(message),
+            "promptHash": hashlib.sha256(message.encode()).hexdigest()[:16],
+            "prompt": message[:2000],
+        }
+        if prov:
+            data["provenance"] = prov
         self._telemetry.enqueue({
             "type": "scan",
             "agentId": self.agent_id,
-            "data": {
-                "scanId": uuid4().hex[:12],
-                "agentId": self.agent_id,
-                "action": result.action,
-                "score": result.score,
-                "category": result.category,
-                "rules": result.rules,
-                "direction": "a2a",
-                "destinationAgent": destination,
-                "scanTimeMs": result.latency_ms,
-                "promptLength": len(message),
-                "promptHash": hashlib.sha256(message.encode()).hexdigest()[:16],
-                "prompt": message[:2000],
-            },
+            "data": data,
         })
         return self._apply_mode(result)
 
@@ -274,6 +303,7 @@ class DelphiSensor:
         tool_name: str,
         arguments: dict | None = None,
         mcp_server: Optional[str] = None,
+        origin_context: dict | None = None,
     ) -> ScanResult:
         """Scan a tool call against blocked-tools list and per-agent policies.
 
@@ -336,29 +366,33 @@ class DelphiSensor:
         )
 
         # Emit telemetry (mirrors the scan() enqueue shape, direction=tool_call)
+        prov = _prov.resolve(self.agent_id, per_call=origin_context)
+        data = {
+            "scanId": uuid4().hex[:12],
+            "agentId": self.agent_id,
+            "action": action,
+            "score": score,
+            "category": category,
+            "rules": rules,
+            "direction": "tool_call",
+            "toolName": tool_name,
+            "destinationType": "mcp_server" if mcp_server else "tool_call",
+            "destinationIdentifier": mcp_server or tool_name,
+            "mcpServer": mcp_server,
+            "impactClass": impact_class,
+            "impactTier": impact_tier,
+            "authzDecision": authz.decision,
+            "authzPolicyId": authz.policy_id,
+            "scanTimeMs": 0,
+            "promptLength": 0,
+            "promptHash": hashlib.sha256(tool_name.encode()).hexdigest()[:16],
+        }
+        if prov:
+            data["provenance"] = prov
         self._telemetry.enqueue({
             "type": "scan",
             "agentId": self.agent_id,
-            "data": {
-                "scanId": uuid4().hex[:12],
-                "agentId": self.agent_id,
-                "action": action,
-                "score": score,
-                "category": category,
-                "rules": rules,
-                "direction": "tool_call",
-                "toolName": tool_name,
-                "destinationType": "mcp_server" if mcp_server else "tool_call",
-                "destinationIdentifier": mcp_server or tool_name,
-                "mcpServer": mcp_server,
-                "impactClass": impact_class,
-                "impactTier": impact_tier,
-                "authzDecision": authz.decision,
-                "authzPolicyId": authz.policy_id,
-                "scanTimeMs": 0,
-                "promptLength": 0,
-                "promptHash": hashlib.sha256(tool_name.encode()).hexdigest()[:16],
-            },
+            "data": data,
         })
 
         return self._apply_mode(result)
@@ -388,22 +422,26 @@ class DelphiSensor:
             def make_wrapper(orig_func, tname):
                 def wrapper(*args, **kwargs):
                     def _emit(action, category, rule_list):
+                        prov = _prov.resolve(self.agent_id)
+                        data = {
+                            "scanId": uuid4().hex[:12],
+                            "agentId": self.agent_id,
+                            "action": action,
+                            "score": 1.0 if action == "blocked" else 0.0,
+                            "category": category,
+                            "rules": rule_list,
+                            "direction": "tool_call",
+                            "toolName": tname,
+                            "scanTimeMs": 0,
+                            "promptLength": 0,
+                            "promptHash": hashlib.sha256(tname.encode()).hexdigest()[:16],
+                        }
+                        if prov:
+                            data["provenance"] = prov
                         self._telemetry.enqueue({
                             "type": "scan",
                             "agentId": self.agent_id,
-                            "data": {
-                                "scanId": uuid4().hex[:12],
-                                "agentId": self.agent_id,
-                                "action": action,
-                                "score": 1.0 if action == "blocked" else 0.0,
-                                "category": category,
-                                "rules": rule_list,
-                                "direction": "tool_call",
-                                "toolName": tname,
-                                "scanTimeMs": 0,
-                                "promptLength": 0,
-                                "promptHash": hashlib.sha256(tname.encode()).hexdigest()[:16],
-                            },
+                            "data": data,
                         })
                     if tname in self._blocked_tools:
                         print(f"[xaidr] TOOL BLOCKED: {tname}")
