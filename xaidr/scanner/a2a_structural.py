@@ -144,10 +144,13 @@ class A2AStructuralValidator:
         if not valid:
             fire("role_unexpected_value", "structural_role", 0.25)
 
-        # Direction-aware: our own agent asserting a human ("user") role on an
-        # OUTBOUND message is an agent impersonating a human sender.
-        if direction == "a2a" and role == "user":
-            fire("role_user_on_outbound", "structural_role", 0.30)
+        # NOTE: per the A2A spec, the CLIENT side of an exchange is labeled
+        # role="user" even when the client is itself an agent (the client may be
+        # "an application or agent that initiates requests on behalf of a user").
+        # So role="user" on an OUTBOUND (agent-as-client) message is the correct,
+        # spec-compliant value -- NOT an anomaly. We therefore do not flag it.
+        # The genuine structural anomaly is an invalid/unknown role VALUE, caught
+        # above by role_unexpected_value.
 
     # -- 4. METADATA/EXTENSIONS INSTRUCTION SURFACE (0.20) -----------------
     def _check_metadata_surface(self, body: dict, fire) -> None:
