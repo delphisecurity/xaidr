@@ -30,6 +30,14 @@ from typing import Any, Protocol, runtime_checkable
 logger = logging.getLogger("xaidr.reporters")
 
 
+def _apply_schema(event, schema):
+    """Optionally map an internal event to the OpenA2A gen_ai.security.* shape."""
+    if schema == "openA2A":
+        from .schema import to_openA2A
+        return to_openA2A(event)
+    return event
+
+
 @runtime_checkable
 class Reporter(Protocol):
     """The pluggable telemetry sink contract.
@@ -55,13 +63,15 @@ class StdoutReporter:
     so the sensor is useful immediately with no account and no backend.
     """
 
-    def __init__(self, stream: Any = None) -> None:
+    def __init__(self, stream: Any = None, schema: str | None = None) -> None:
         self._stream = stream if stream is not None else sys.stdout
+        self._schema = schema
 
     def report(self, events: list[dict[str, Any]]) -> None:
         for event in events:
             try:
-                self._stream.write(json.dumps(event, separators=(",", ":")) + "\n")
+                payload = _apply_schema(event, self._schema)
+                self._stream.write(json.dumps(payload, separators=(",", ":")) + "\n")
             except Exception as exc:  # never break the batch
                 logger.warning("StdoutReporter failed to write event: %s", exc)
         try:
@@ -83,14 +93,16 @@ class FileReporter:
     the file. Opens in append mode; one event per line.
     """
 
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, schema: str | None = None) -> None:
         self._path = path
         self._fh = open(path, "a", encoding="utf-8")
+        self._schema = schema
 
     def report(self, events: list[dict[str, Any]]) -> None:
         try:
             for event in events:
-                self._fh.write(json.dumps(event, separators=(",", ":")) + "\n")
+                payload = _apply_schema(event, self._schema)
+                self._fh.write(json.dumps(payload, separators=(",", ":")) + "\n")
             self._fh.flush()
         except Exception as exc:
             logger.warning("FileReporter failed (%s): %s", self._path, exc)
@@ -116,10 +128,12 @@ class WebhookReporter:
         url: str,
         headers: dict[str, str] | None = None,
         timeout: float = 10.0,
+        schema: str | None = None,
     ) -> None:
         import httpx  # lazy: only needed if this reporter is used
 
         self._url = url
+        self._schema = schema
         self._client = httpx.Client(
             timeout=httpx.Timeout(timeout),
             headers={"Content-Type": "application/json", **(headers or {})},
@@ -127,7 +141,8 @@ class WebhookReporter:
 
     def report(self, events: list[dict[str, Any]]) -> None:
         try:
-            body = json.dumps({"events": events}, separators=(",", ":")).encode("utf-8")
+            payload = [_apply_schema(e, self._schema) for e in events]
+            body = json.dumps({"events": payload}, separators=(",", ":")).encode("utf-8")
             resp = self._client.post(self._url, content=body)
             resp.raise_for_status()
         except Exception as exc:
@@ -182,13 +197,18 @@ class OTelReporter:
                 logger.warning("OTelReporter failed to emit event: %s", exc)
 
     def _build_record(self, event: dict[str, Any]) -> Any:
-        # Placeholder structured record. Replaced with full LogRecord +
-        # gen_ai.security.* attribute mapping during the schema-emission phase.
+        # The OTel reporter's natural output IS the OpenA2A schema: map the
+        # internal event to gen_ai.security.* and place those flat, dotted keys
+        # directly as the log record attributes.
         from opentelemetry._logs import LogRecord  # type: ignore
 
+        from .schema import to_openA2A
+
+        attributes = to_openA2A(event)
+        attributes["event.domain"] = "agent.security"
         return LogRecord(
             body=json.dumps(event, separators=(",", ":")),
-            attributes={"event.domain": "agent.security"},
+            attributes=attributes,
         )
 
     def close(self) -> None:

@@ -48,6 +48,7 @@ class DelphiSensor:
         telemetry_batch_size: int = 50,
         telemetry_flush_interval_sec: float = 5.0,
         reporter: "Reporter" = None,
+        schema: str | None = None,
     ):
         if not agent_id:
             raise ValueError("agent_id is required")
@@ -76,7 +77,7 @@ class DelphiSensor:
         resolved_reporter = reporter
         if resolved_reporter is None:
             from .reporters import StdoutReporter
-            resolved_reporter = StdoutReporter()
+            resolved_reporter = StdoutReporter(schema=schema)
         self._telemetry = SyncTelemetryQueue(
             reporter=resolved_reporter,
             batch_size=telemetry_batch_size,
