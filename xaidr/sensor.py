@@ -650,7 +650,7 @@ class ProtectedHttpClient:
 
     # Cap on total extracted text fed to the scanner — a safety bound against a
     # pathologically large body. Excess is truncated with a warning.
-    _EXTRACT_CHAR_CAP = 20000
+    _EXTRACT_CHAR_CAP = 50000
 
     # Keys whose string values are non-content identifiers (IDs, protocol
     # envelope fields). Skipped in the recursive catch-all AND in metadata
@@ -870,18 +870,13 @@ class ProtectedHttpClient:
             for v in node:
                 self._extract_catchall(v, key, add)
 
-    def _is_noise(self, key, value) -> bool:
-        """True if a string value is non-content ID/envelope noise.
-
-        Filters by key name (``_NOISE_KEYS``) and by value shape (a canonical
-        UUID or a long unbroken hex run). Pure parsing — no external calls.
-        """
+    def _is_noise(self, key, value: str) -> bool:
+        """True if a (key, string-value) pair is a non-content identifier."""
         if isinstance(key, str) and key.lower() in self._NOISE_KEYS:
             return True
-        if isinstance(value, str):
-            v = value.strip()
-            if self._UUID_RE.match(v) or self._LONG_HEX_RE.match(v):
-                return True
+        stripped = value.strip()
+        if self._UUID_RE.match(stripped) or self._LONG_HEX_RE.match(stripped):
+            return True
         return False
 
     def _extract_response_text(self, response: "httpx.Response") -> str:
