@@ -14,6 +14,7 @@ from uuid import uuid4
 import httpx
 from agent_os.policies import PolicyEvaluator
 
+from . import local_policy as _policy
 from . import provenance as _prov
 from . import provenance_chain as _chain
 from .authz import classify, build_request, evaluate
@@ -51,6 +52,7 @@ class DelphiSensor:
         telemetry_flush_interval_sec: float = 5.0,
         reporter: "Reporter" = None,
         schema: str | None = None,
+        policy_file: str | None = None,
     ):
         if not agent_id:
             raise ValueError("agent_id is required")
@@ -100,6 +102,11 @@ class DelphiSensor:
         self._action_policy: Optional[dict] = None
         self._trust_score: Optional[float] = None
 
+        # Local YAML policy source (no backend). None if absent/malformed —
+        # load_policy fails safe and logs what it loads. Auto-loads
+        # ./xaidr-policy.yaml when no explicit file is given.
+        self._policy = _policy.load_policy(policy_file)
+
     def _evaluate_policy(self, context: dict) -> tuple[bool, Optional[str]]:
         """Evaluate AGT policies against the given context.
 
@@ -117,6 +124,16 @@ class DelphiSensor:
         except Exception as exc:
             logging.warning(f"[xaidr] policy evaluation error: {exc}")
             return (True, None)
+
+    def set_policy(self, policy: dict | None) -> bool:
+        """Set the local authorization policy from a dict. Returns True if a
+        valid policy was applied, False if it was malformed/cleared."""
+        if policy is None:
+            self._policy = None
+            return False
+        parsed = _policy.set_policy_dict(policy)
+        self._policy = parsed
+        return parsed is not None
 
     def _apply_mode(self, result: ScanResult) -> ScanResult:
         """In monitor mode, downgrade a returned 'blocked' to 'flagged'.
@@ -313,6 +330,7 @@ class DelphiSensor:
         arguments: dict | None = None,
         mcp_server: Optional[str] = None,
         origin_context: dict | None = None,
+        server_name: Optional[str] = None,
     ) -> ScanResult:
         """Scan a tool call against blocked-tools list and per-agent policies.
 
@@ -321,9 +339,12 @@ class DelphiSensor:
         protect_tools() applies, and emits telemetry so the dashboard records
         the verdict. Honors enforcement mode (monitor downgrades block->flag).
 
-        Pass ``mcp_server`` to attribute the call to an MCP server (the fleet
-        graph then draws an agent→MCP edge instead of a generic tool edge).
+        Pass ``mcp_server`` (alias ``server_name``) to attribute the call to an
+        MCP server (the fleet graph then draws an agent→MCP edge instead of a
+        generic tool edge).
         """
+        mcp_server = mcp_server or server_name
+
         action = "allowed"
         score = 0.0
         category: Optional[str] = None
@@ -370,6 +391,26 @@ class DelphiSensor:
                 reason = authz.reason or f"Tool '{tool_name}' requires approval"
                 print(f"[xaidr] TOOL requires approval: {tool_name} ({authz.policy_id})")
 
+        # Compose the local YAML policy as an overlay (STRICTER WINS), BEFORE the
+        # enforcement_mode gate so the same gate (_apply_mode) sees the composed
+        # action. Policy can only tighten the detection verdict, never weaken it.
+        _local_policy_decision: Optional[str] = None
+        _local_policy_id: Optional[str] = None
+        if self._policy is not None:
+            pol = _policy.evaluate_policy(
+                self._policy,
+                agent_id=self.agent_id,
+                trust=None,                       # open sensor has no fleet trust score
+                tool_name=tool_name,
+                impact_class=impact_class,        # from the existing classifier
+                impact_tier=impact_tier,          # from the existing classifier
+                destination_type="mcp_server" if mcp_server else "tool_call",
+                destination_identifier=mcp_server or tool_name,
+            )
+            action = _policy.compose(action, pol.decision)
+            _local_policy_decision = pol.decision
+            _local_policy_id = pol.policy_id
+
         result = ScanResult(
             action=action, score=score, category=category, rules=rules, latency_ms=0,
         )
@@ -400,6 +441,12 @@ class DelphiSensor:
             "promptLength": 0,
             "promptHash": hashlib.sha256(tool_name.encode()).hexdigest()[:16],
         }
+        # surface the local policy decision on the event for audit (overrides the
+        # legacy action_policy fields when a local policy was evaluated)
+        if _local_policy_decision is not None:
+            data["authzDecision"] = _local_policy_decision
+            if _local_policy_id:
+                data["authzPolicyId"] = _local_policy_id
         if prov:
             data["provenance"] = prov
         self._telemetry.enqueue({
