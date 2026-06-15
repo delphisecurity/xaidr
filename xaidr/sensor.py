@@ -15,6 +15,7 @@ import httpx
 from agent_os.policies import PolicyEvaluator
 
 from . import provenance as _prov
+from . import provenance_chain as _chain
 from .authz import classify, build_request, evaluate
 from .reporters import Reporter
 from .scanner.local import LocalScanner
@@ -151,7 +152,11 @@ class DelphiSensor:
         ``origin_context`` is a per-call provenance override (OBO principal,
         actor, correlation id); it beats any context set via ``set_origin``.
         """
-        prov = _prov.resolve(self.agent_id, per_call=origin_context)
+        # resolve the app-supplied principal (3b semantics: per-call > set context)
+        base = _prov.resolve(self.agent_id, per_call=origin_context)
+        obo = base.get("on_behalf_of") if base else None
+        # build the multi-hop chain provenance (records this hop, accumulates chain)
+        prov = _chain.build_provenance(self.agent_id, on_behalf_of=obo)
         if self._quarantined:
             result = ScanResult(
                 action="blocked",
@@ -238,7 +243,11 @@ class DelphiSensor:
         origin_context: dict | None = None,
     ) -> ScanResult:
         """Scan an A2A delegation message."""
-        prov = _prov.resolve(self.agent_id, per_call=origin_context)
+        # resolve the app-supplied principal (3b semantics: per-call > set context)
+        base = _prov.resolve(self.agent_id, per_call=origin_context)
+        obo = base.get("on_behalf_of") if base else None
+        # build the multi-hop chain provenance (records this hop, accumulates chain)
+        prov = _chain.build_provenance(self.agent_id, on_behalf_of=obo)
         if self._quarantined:
             result = ScanResult(
                 action="blocked",
@@ -366,7 +375,11 @@ class DelphiSensor:
         )
 
         # Emit telemetry (mirrors the scan() enqueue shape, direction=tool_call)
-        prov = _prov.resolve(self.agent_id, per_call=origin_context)
+        # resolve the app-supplied principal (3b semantics: per-call > set context)
+        base = _prov.resolve(self.agent_id, per_call=origin_context)
+        obo = base.get("on_behalf_of") if base else None
+        # build the multi-hop chain provenance (records this hop, accumulates chain)
+        prov = _chain.build_provenance(self.agent_id, on_behalf_of=obo)
         data = {
             "scanId": uuid4().hex[:12],
             "agentId": self.agent_id,
@@ -422,7 +435,11 @@ class DelphiSensor:
             def make_wrapper(orig_func, tname):
                 def wrapper(*args, **kwargs):
                     def _emit(action, category, rule_list):
-                        prov = _prov.resolve(self.agent_id)
+                        # resolve the app-supplied principal (3b semantics)
+                        base = _prov.resolve(self.agent_id)
+                        obo = base.get("on_behalf_of") if base else None
+                        # build the multi-hop chain provenance (records this hop)
+                        prov = _chain.build_provenance(self.agent_id, on_behalf_of=obo)
                         data = {
                             "scanId": uuid4().hex[:12],
                             "agentId": self.agent_id,
