@@ -1,0 +1,136 @@
+[
+  {
+    "name": "INTENT_exfiltrate_data",
+    "actions": "\\b(?:send|forward|export|dump|extract|retrieve|share|transmit|post|upload|leak|exfiltrate|transfer|email|relay|ship|expose|reveal|enumerate|output|list|display)\\b",
+    "targets": "\\b(?:data|records|credentials|keys|tokens|passwords|secrets|history|conversations|logs|database|users|customers|PII|SSN|emails|files|documents|source\\s*code|intellectual\\s*property)\\b",
+    "modifiers": "\\b(?:silently|quietly|without\\s*(?:logging|detection|alerting|notifying)|to\\s+(?:https?:\\/\\/|external|my\\s+server|webhook)|covertly|secretly|discreetly)\\b",
+    "category": "data_exfiltration",
+    "owasp": "LLM06",
+    "baseScore": 0.45,
+    "modifiedScore": 0.75
+  },
+  {
+    "name": "INTENT_generate_harmful",
+    "actions": "\\b(?:write|generate|create|produce|draft|compose|make|craft|build|design)\\b",
+    "targets": "\\b(?:malware|ransomware|exploit|phishing\\s*(?:email|page)|threat|harassment|hate\\s*speech|propaganda|spam|scam|fake\\s*(?:review|news|document|identity|passport)|deepfake|smear|attack\\s*(?:script|tool|payload))\\b",
+    "modifiers": "\\b(?:realistic|convincing|undetectable|working|functional|professional|targeted)\\b",
+    "category": "model_abuse",
+    "owasp": "LLM02",
+    "baseScore": 0.55,
+    "modifiedScore": 0.8
+  },
+  {
+    "name": "INTENT_fabricate_pii",
+    "actions": "\\b(?:generate|create|produce|output|make|fabricate|list|provide|give\\s+me)\\b",
+    "targets": "\\b(?:SSN|social\\s*security|credit\\s*card|passport\\s*(?:number)?|driver'?s?\\s*licen[cs]e|bank\\s*account|medical\\s*record|tax\\s*(?:return|ID)|identity\\s*(?:document|card)|personal\\s*(?:data|information|details))\\b",
+    "modifiers": "\\b(?:realistic|valid|working|real-?looking|fake|synthetic|bulk|batch|\\d{2,}\\s*(?:of|different))\\b",
+    "category": "pii_harvesting",
+    "owasp": "LLM06",
+    "baseScore": 0.5,
+    "modifiedScore": 0.78
+  },
+  {
+    "name": "INTENT_destroy_resources",
+    "actions": "\\b(?:delete|drop|truncate|remove|destroy|wipe|erase|purge|kill|terminate|shutdown|format|clear|reset)\\b",
+    "targets": "\\b(?:table|database|schema|files?|server|production|system|records|accounts?|users?|data|logs?|backups?|everything|all\\s+(?:data|records|files))\\b",
+    "modifiers": "\\b(?:immediately|now|force|all|every|entire|permanently|without\\s*(?:backup|confirmation|warning|asking))\\b",
+    "category": "tool_misuse",
+    "owasp": "ASI02",
+    "baseScore": 0.5,
+    "modifiedScore": 0.78
+  },
+  {
+    "name": "INTENT_escalate_privileges",
+    "actions": "\\b(?:grant|escalate|promote|assign|give|add|create|install|enable|activate|register)\\b",
+    "targets": "\\b(?:admin|root|superuser|sudo|SSH\\s*key|API\\s*key|privileges?|permissions?|access|backdoor|service\\s*account|role|credentials?)\\b",
+    "modifiers": "\\b(?:permanent|persistent|hidden|without\\s*(?:approval|review|audit)|for\\s+(?:me|my\\s+account|everyone))\\b",
+    "category": "agentic_abuse",
+    "owasp": "ASI03",
+    "baseScore": 0.5,
+    "modifiedScore": 0.78
+  },
+  {
+    "name": "INTENT_conceal_activity",
+    "actions": "\\b(?:hide|conceal|suppress|silence|remove|delete|disable|turn\\s*off|don'?t\\s*(?:log|report|alert|tell|mention|record|track))\\b",
+    "targets": "\\b(?:action|activity|request|operation|command|this|log|traces?|evidence|audit|alert|notification|monitoring|history)\\b",
+    "modifiers": "\\b(?:from\\s+(?:admin|security|team|anyone|logs)|permanently|always|going\\s+forward|from\\s+now\\s+on)\\b",
+    "category": "agentic_abuse",
+    "owasp": "ASI01",
+    "baseScore": 0.55,
+    "modifiedScore": 0.8
+  },
+  {
+    "name": "INTENT_bypass_security",
+    "actions": "\\b(?:bypass|circumvent|skip|disable|remove|ignore|override|turn\\s*off|deactivate|evade|avoid|get\\s*(?:around|past|through))\\b",
+    "targets": "\\b(?:safety|security|filter|restriction|guard|guardrail|check|review|test|approval|moderation|content\\s*(?:filter|policy)|rate\\s*limit|auth(?:entication|orization)?|validation|firewall|WAF)\\b",
+    "modifiers": "\\b(?:completely|entirely|for\\s+(?:this|all|every)|permanently|without\\s*(?:detection|triggering))\\b",
+    "category": "jailbreak",
+    "owasp": "LLM01",
+    "baseScore": 0.5,
+    "modifiedScore": 0.78
+  },
+  {
+    "name": "INTENT_unsafe_deployment",
+    "actions": "\\b(?:push|deploy|release|publish|merge|ship|promote|rollout|roll\\s+out)\\b",
+    "targets": "\\b(?:production|prod|live|main\\s+branch|master|release\\s+branch|customer[- ]facing|public)\\b",
+    "modifiers": "\\b(?:bypass(?:ing)?|skip(?:ping)?|without\\s+(?:review|testing|approval|staging|QA|CI|checks?)|directly|immediately|force|no\\s+(?:review|test|check|staging|approval))\\b",
+    "category": "tool_misuse",
+    "owasp": "ASI02",
+    "baseScore": 0.5,
+    "modifiedScore": 0.75
+  },
+  {
+    "name": "INTENT_agent_delegation_abuse",
+    "actions": "\\b(?:delegate|forward|hand\\s*off|pass|route|redirect|relay|dispatch|transfer\\s+(?:this|the)\\s+(?:task|request|query|job))\\b",
+    "targets": "\\b(?:(?:another|different|external|third[- ]?party|secondary|backup|fallback)\\s+(?:agent|model|assistant|bot|service|endpoint)|(?:agent|model|assistant)\\s+(?:that|who|which)\\s+(?:can|will|has\\s+(?:access|permission)))\\b",
+    "modifiers": "\\b(?:bypass(?:ing)?|avoid(?:ing)?|without\\s+(?:checking|verification|approval|policy|guardrails?|restrictions?)|skipping?\\s+(?:auth|security|policy)|no\\s+(?:audit|logging|trace|oversight))\\b",
+    "category": "agent_delegation_abuse",
+    "owasp": "ASI07",
+    "baseScore": 0.55,
+    "modifiedScore": 0.8
+  },
+  {
+    "name": "INTENT_agent_config_theft",
+    "actions": "\\b(?:extract|reveal|expose|list|show|output|display|dump|enumerate|share|export)\\b",
+    "targets": "\\b(?:(?:your|agent|model|system)\\s+(?:config(?:uration)?|credentials?|api\\s*keys?|tokens?|secrets?|auth(?:entication)?|permissions?|capabilities|tools?\\s+(?:list|registry|definitions?)|tool\\s*(?:schema|descriptions?))|(?:mcp|a2a)\\s+(?:server|endpoint|config|connection))\\b",
+    "modifiers": "\\b(?:all|every|complete|full|entire|detailed|including\\s+(?:keys|secrets|tokens)|as\\s+(?:json|yaml|text|code))\\b",
+    "category": "agent_config_theft",
+    "owasp": "ASI03",
+    "baseScore": 0.55,
+    "modifiedScore": 0.8
+  },
+  {
+    "name": "INTENT_agent_scope_escalation",
+    "actions": "\\b(?:override|expand|elevate|escalate|upgrade|change|modify|update|extend)\\b",
+    "targets": "\\b(?:(?:your|agent|my)\\s+(?:permissions?|privileges?|access|scope|role|capabilities|authorization|clearance)|(?:security|access)\\s+(?:level|tier|clearance))\\b",
+    "modifiers": "\\b(?:admin|root|superuser|unlimited|unrestricted|full|god[- ]?mode|elevated|maximum|to\\s+(?:admin|root|full))\\b",
+    "category": "privilege_escalation",
+    "owasp": "ASI03",
+    "baseScore": 0.6,
+    "modifiedScore": 0.85
+  },
+  {
+    "name": "INTENT_memory_manipulation",
+    "actions": "\\b(?:modify|alter|overwrite|inject|insert|poison|corrupt|update|change|replace|add\\s+to)\\b",
+    "targets": "\\b(?:(?:your|agent|system)\\s+(?:memory|state|context|history|conversation\\s*(?:log|history)|learned\\s+(?:behavior|preference|pattern))|(?:long[- ]?term|persistent|session)\\s+(?:memory|storage|state|data))\\b",
+    "modifiers": "\\b(?:permanently|persistently|across\\s+sessions?|for\\s+(?:all|future)\\s+(?:conversations?|sessions?|interactions?)|so\\s+(?:that|you)\\s+(?:always|never|remember))\\b",
+    "category": "memory_manipulation",
+    "owasp": "ASI09",
+    "baseScore": 0.55,
+    "modifiedScore": 0.8
+  },
+  {
+    "name": "INTENT_propagate_instructions",
+    "category": "agentic_abuse",
+    "actions": "\\b(?:forward|propagate|spread|distribute|relay|broadcast|send|pass)\\b",
+    "targets": "\\b(?:instructions?|directives?|rules?|commands?|behavior|policy|prompt|guidelines?)\\b",
+    "modifiers": "\\b(?:to\\s+(?:all|every|other|downstream|connected)\\s+(?:agents?|services?|systems?)|across\\s+(?:all|the)\\s+(?:network|fleet|cluster|deployment))\\b"
+  },
+  {
+    "name": "INTENT_manipulate_human",
+    "category": "agentic_abuse",
+    "actions": "\\b(?:convince|persuade|trick|mislead|deceive|manipulate|pressure|coerce|influence)\\b",
+    "targets": "\\b(?:the\\s+)?(?:user|human|operator|admin|person|reviewer|approver|manager)\\b",
+    "modifiers": "\\b(?:into\\s+(?:approving|accepting|confirming|allowing|granting|clicking|signing)|to\\s+(?:approve|accept|confirm|allow|grant|click|sign|bypass|skip|ignore))\\b"
+  }
+]

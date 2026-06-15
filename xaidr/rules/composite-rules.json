@@ -1,0 +1,203 @@
+[
+  {
+    "name": "COMPOSITE_inject_plus_extract",
+    "description": "Injection attempt combined with data extraction \u2014 likely trying to override instructions to steal data",
+    "category": "data_exfiltration",
+    "owasp": "LLM01",
+    "confidence": 0.85,
+    "severity": "critical",
+    "conditions": {
+      "requireAll": [
+        [
+          "prompt_injection",
+          "jailbreak"
+        ],
+        [
+          "system_prompt_leak",
+          "pii_detected",
+          "data_exfiltration",
+          "lmm06"
+        ]
+      ]
+    }
+  },
+  {
+    "name": "COMPOSITE_jailbreak_plus_harmful",
+    "description": "Jailbreak framing combined with harmful content request \u2014 bypassing safety to generate dangerous output",
+    "category": "jailbreak",
+    "owasp": "LLM01",
+    "confidence": 0.88,
+    "severity": "critical",
+    "conditions": {
+      "requireAll": [
+        [
+          "jailbreak"
+        ],
+        [
+          "toxic_content",
+          "model_abuse",
+          "pii_harvesting"
+        ]
+      ]
+    }
+  },
+  {
+    "name": "COMPOSITE_role_override_system_probe",
+    "description": "Role manipulation combined with system probing \u2014 social engineering to extract configuration",
+    "category": "system_prompt_leak",
+    "owasp": "LLM07",
+    "confidence": 0.82,
+    "severity": "high",
+    "conditions": {
+      "requireAll": [
+        [
+          "prompt_injection",
+          "jailbreak",
+          "role_confusion"
+        ],
+        [
+          "system_prompt_leak"
+        ]
+      ]
+    }
+  },
+  {
+    "name": "COMPOSITE_dense_attack",
+    "description": "Multiple attack signals in a short prompt \u2014 concentrated attack with high signal density",
+    "category": "prompt_injection",
+    "owasp": "LLM01",
+    "confidence": 0.8,
+    "severity": "high",
+    "conditions": {
+      "minSignalCount": 3,
+      "promptFeatures": {
+        "maxWords": 40
+      }
+    }
+  },
+  {
+    "name": "COMPOSITE_encoded_injection",
+    "description": "Encoding evasion techniques combined with injection patterns \u2014 obfuscated attack",
+    "category": "encoding_evasion",
+    "owasp": "LLM01",
+    "confidence": 0.83,
+    "severity": "high",
+    "conditions": {
+      "requireAll": [
+        [
+          "encoding_evasion"
+        ],
+        [
+          "prompt_injection",
+          "jailbreak",
+          "system_prompt_leak"
+        ]
+      ]
+    }
+  },
+  {
+    "name": "COMPOSITE_agentic_compound",
+    "description": "Multiple agentic abuse signals \u2014 coordinated attempt to exploit agent capabilities",
+    "category": "agentic_abuse",
+    "owasp": "ASI01",
+    "confidence": 0.85,
+    "severity": "critical",
+    "conditions": {
+      "requireAny": [
+        "agentic_abuse",
+        "tool_misuse",
+        "excessive_agency"
+      ],
+      "minSignalCount": 2
+    }
+  },
+  {
+    "name": "COMPOSITE_multi_vector",
+    "description": "Signals across 3+ distinct attack categories \u2014 sophisticated multi-vector attack",
+    "category": "prompt_injection",
+    "owasp": "LLM01",
+    "confidence": 0.78,
+    "severity": "high",
+    "conditions": {
+      "minCategories": 3,
+      "minSignalCount": 3
+    }
+  },
+  {
+    "name": "COMPOSITE_rag_exfil",
+    "description": "RAG poisoning combined with data exfiltration \u2014 injecting instructions via documents to steal data",
+    "category": "rag_poisoning",
+    "owasp": "LLM08",
+    "confidence": 0.87,
+    "severity": "critical",
+    "conditions": {
+      "requireAll": [
+        [
+          "rag_poisoning",
+          "indirect_injection"
+        ],
+        [
+          "data_exfiltration",
+          "pii_detected",
+          "system_prompt_leak"
+        ]
+      ]
+    }
+  },
+  {
+    "name": "COMPOSITE_trust_exploit_data_access",
+    "description": "Agent claims authorization from another agent AND requests sensitive data",
+    "category": "agentic_abuse",
+    "owasp": "LLM08",
+    "confidence": 0.82,
+    "severity": "high",
+    "conditions": {
+      "requireAll": [
+        [
+          "agentic_abuse"
+        ],
+        [
+          "data_exfiltration",
+          "pii_detected"
+        ]
+      ],
+      "minSignalCount": 2
+    }
+  },
+  {
+    "name": "COMPOSITE_a2a_normalization_in_agent_traffic",
+    "description": "Text obfuscation in A2A traffic is inherently suspicious \u2014 agents don't use leet speak",
+    "category": "encoding_evasion",
+    "owasp": "ASI07",
+    "confidence": 0.78,
+    "severity": "high",
+    "conditions": {
+      "requireAny": [
+        "encoding_evasion"
+      ],
+      "scanModeRequired": "a2a",
+      "minSignalCount": 1
+    }
+  },
+  {
+    "name": "COMPOSITE_cascading_failure",
+    "description": "Destructive action + multi-agent scope = potential cascade",
+    "category": "agentic_abuse",
+    "owasp": "ASI08",
+    "confidence": 0.85,
+    "severity": "critical",
+    "conditions": {
+      "requireAll": [
+        [
+          "agentic_abuse",
+          "tool_misuse"
+        ],
+        [
+          "data_exfiltration",
+          "excessive_agency"
+        ]
+      ],
+      "minSignalCount": 3
+    }
+  }
+]

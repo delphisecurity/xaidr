@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "description": "Impact classification seed ruleset. Maps tool calls to an impact class and tier. Rules are evaluated in order; first match wins. Structured for future server distribution via agent-config.",
+  "default": {
+    "impact_class": "unknown",
+    "impact_tier": "medium"
+  },
+  "rules": [
+    {
+      "id": "transfer.funds",
+      "impact_class": "transfer",
+      "impact_tier": "critical",
+      "tool_name": ["transfer*", "*_transfer", "*payment*", "*wire*", "pay_*", "*payout*", "*refund*"]
+    },
+    {
+      "id": "transfer.mcp",
+      "impact_class": "transfer",
+      "impact_tier": "critical",
+      "mcp_server": ["*payment*", "*stripe*", "*banking*"]
+    },
+    {
+      "id": "delete.destructive",
+      "impact_class": "delete",
+      "impact_tier": "high",
+      "tool_name": ["delete_*", "*_delete", "rm", "rm_*", "remove_*", "drop_*", "*_drop", "destroy_*", "truncate*", "purge*", "wipe_*"]
+    },
+    {
+      "id": "authenticate.credentials",
+      "impact_class": "authenticate",
+      "impact_tier": "high",
+      "tool_name": ["auth_*", "*_auth", "authenticate*", "*oauth*", "*token*", "*credential*", "*password*", "*secret*", "*api_key*", "*apikey*", "login*", "logout*", "sign_in*", "signin*"]
+    },
+    {
+      "id": "deploy.release",
+      "impact_class": "deploy",
+      "impact_tier": "high",
+      "tool_name": ["deploy*", "*_deploy", "release_*", "*_release", "*rollout*", "promote_*"]
+    },
+    {
+      "id": "publish.content",
+      "impact_class": "publish",
+      "impact_tier": "high",
+      "tool_name": ["publish*", "*_publish", "*_upload", "upload_*"]
+    },
+    {
+      "id": "send.outbound",
+      "impact_class": "send",
+      "impact_tier": "medium",
+      "tool_name": ["send_*", "*_send", "*_email", "email_*", "post_*", "*_post", "notify*", "*_sms", "sms_*", "reply_*", "tweet*", "compose_*", "forward_*"]
+    },
+    {
+      "id": "send.mcp",
+      "impact_class": "send",
+      "impact_tier": "medium",
+      "mcp_server": ["*email*", "*gmail*", "*smtp*", "*slack*", "*twilio*"]
+    },
+    {
+      "id": "share.access",
+      "impact_class": "share",
+      "impact_tier": "medium",
+      "tool_name": ["share*", "*_share", "grant_*", "invite_*", "*_permission*", "add_member*"]
+    },
+    {
+      "id": "read.lookup",
+      "impact_class": "read",
+      "impact_tier": "low",
+      "tool_name": ["get_*", "read_*", "list_*", "fetch_*", "search_*", "query_*", "describe_*", "view_*", "lookup*", "find_*", "*_get", "*_read", "*_list", "check_*"]
+    }
+  ],
+  "argument_escalations": [
+    {
+      "id": "esc.payment_details",
+      "keys": ["amount", "recipient", "*account*", "iban", "beneficiary", "routing*"],
+      "min_tier": "high"
+    },
+    {
+      "id": "esc.url",
+      "keys": ["url", "uri", "endpoint", "webhook*"],
+      "min_tier": "medium"
+    },
+    {
+      "id": "esc.path",
+      "keys": ["path", "file_path", "*filepath*", "file"],
+      "min_tier": "medium"
+    },
+    {
+      "id": "esc.credential_value",
+      "keys": ["*"],
+      "value_pattern": "(?i)(api[_-]?key\\s*[:=]|password\\s*[:=]|client_secret|bearer\\s+[a-z0-9])",
+      "min_tier": "high"
+    }
+  ]
+}

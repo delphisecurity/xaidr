@@ -1,0 +1,43 @@
+{
+  "_comment": "Security keywords for Damerau-Levenshtein typo normalization (Phase 13). Each token in the input text is checked against these keywords. If DL distance <= 1, the token is replaced with the canonical keyword before L1 regex scan.",
+  "version": "1.0.0",
+  "keywords": {
+    "tier_a_injection_verbs": [
+      "ignore", "bypass", "override", "forget", "disregard", "disable",
+      "reveal", "disclose", "expose", "leak", "dump", "exfiltrate",
+      "extract", "output", "print", "display", "show", "repeat",
+      "reproduce", "echo"
+    ],
+    "tier_b_targets": [
+      "prompt", "instructions", "instruction", "system", "configuration",
+      "config", "rules", "guidelines", "policy", "directive",
+      "constraint", "restriction"
+    ]
+  },
+  "all_keywords": [
+    "ignore", "bypass", "override", "forget", "disregard", "disable",
+    "reveal", "disclose", "expose", "leak", "dump", "exfiltrate",
+    "extract", "output", "print", "display", "show", "repeat",
+    "reproduce", "echo", "prompt", "instructions", "instruction",
+    "system", "configuration", "config", "rules", "guidelines",
+    "policy", "directive", "constraint", "restriction"
+  ],
+  "denylist": [
+    "promote", "promoted", "promotes", "promoting", "promotion",
+    "promise", "promised", "prominent", "promo", "promos",
+    "prince", "printer", "primate", "protein", "protect",
+    "proven", "provide", "process", "produce", "product",
+    "program", "project", "proper", "profit", "problem",
+    "shovel", "shower", "shove", "shore", "shown",
+    "extra", "extreme", "external", "extend", "extent",
+    "systemic", "syntax", "syndrome", "symbol", "symptom",
+    "distant", "discuss", "dismiss", "dispose", "dispute",
+    "ruling", "ruled", "ruler",
+    "console", "consist", "confirm", "confine", "concern",
+    "police", "polite", "polish",
+    "direct", "digest", "divine",
+    "export", "exploit", "explore", "express", "expand"
+  ],
+  "min_token_length": 4,
+  "max_edit_distance": 1
+}

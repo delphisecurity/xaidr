@@ -1,0 +1,299 @@
+[
+  {
+    "id": "OUT_pii_ssn",
+    "pattern": "\\b\\d{3}[-.\\s]?\\d{2}[-.\\s]?\\d{4}\\b",
+    "score": 0.88,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM06",
+    "description": "SSN pattern in LLM output"
+  },
+  {
+    "id": "OUT_pii_credit_card",
+    "pattern": "\\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\\b",
+    "score": 0.95,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM06",
+    "description": "Credit card number in LLM output"
+  },
+  {
+    "id": "OUT_pii_phone",
+    "pattern": "\\b\\d{3}[-.\\s]?\\d{3}[-.\\s]?\\d{4}\\b",
+    "score": 0.72,
+    "category": "out",
+    "severity": "medium",
+    "owasp": "LLM06",
+    "description": "Phone number in LLM output"
+  },
+  {
+    "id": "OUT_pii_email",
+    "pattern": "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b",
+    "score": 0.75,
+    "category": "out",
+    "severity": "medium",
+    "owasp": "LLM06",
+    "description": "Email address in LLM output"
+  },
+  {
+    "id": "OUT_secret_aws_key",
+    "pattern": "\\b(AKIA|ASIA)[A-Z0-9]{16}\\b",
+    "score": 0.98,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM06",
+    "description": "AWS access key leaked in output"
+  },
+  {
+    "id": "OUT_secret_openai_key",
+    "pattern": "\\bsk-[a-zA-Z0-9]{20,}\\b",
+    "score": 0.97,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM06",
+    "description": "OpenAI API key leaked in output"
+  },
+  {
+    "id": "OUT_secret_github_token",
+    "pattern": "\\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}\\b",
+    "score": 0.97,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM06",
+    "description": "GitHub token leaked in output"
+  },
+  {
+    "id": "OUT_secret_credential",
+    "pattern": "\\b(password|passwd|secret|api[_-]?key|access[_-]?token|bearer)\\s*(is|=|:|was|are)\\s*[`\"']?\\S{6,}",
+    "score": 0.88,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM06",
+    "description": "Credential or secret value in output"
+  },
+  {
+    "id": "OUT_secret_private_key",
+    "pattern": "-----BEGIN\\s+(?:RSA\\s+)?PRIVATE\\s+KEY-----",
+    "score": 0.99,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM06",
+    "description": "Private key leaked in output"
+  },
+  {
+    "id": "OUT_secret_jwt",
+    "pattern": "\\bey[A-Za-z0-9_-]{20,}\\.ey[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}\\b",
+    "score": 0.9,
+    "category": "out",
+    "severity": "high",
+    "owasp": "LLM06",
+    "description": "JWT token in output"
+  },
+  {
+    "id": "OUT_secret_connection_string",
+    "pattern": "(?:mongodb(?:\\+srv)?|postgres(?:ql)?|mysql|redis|amqp):\\/\\/[^\\s\"']+",
+    "score": 0.92,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM06",
+    "description": "Database connection string in output"
+  },
+  {
+    "id": "OUT_secret_slack_token",
+    "pattern": "\\bxox[bpsa]-[A-Za-z0-9-]{10,}\\b",
+    "score": 0.95,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM06",
+    "description": "Slack token leaked in output"
+  },
+  {
+    "id": "OUT_secret_sendgrid",
+    "pattern": "\\bSG\\.[A-Za-z0-9_-]{22}\\.[A-Za-z0-9_-]{43}\\b",
+    "score": 0.96,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM06",
+    "description": "SendGrid API key in output"
+  },
+  {
+    "id": "OUT_secret_stripe",
+    "pattern": "\\bsk_(?:live|test)_[A-Za-z0-9]{24,}\\b",
+    "score": 0.97,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM06",
+    "description": "Stripe API key in output"
+  },
+  {
+    "id": "OUT_code_unsafe_exec",
+    "pattern": "\\beval\\s*\\(|exec\\s*\\(|os\\.system\\s*\\(|subprocess\\.\\w+\\s*\\(",
+    "score": 0.92,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM02",
+    "description": "Unsafe code execution pattern in output"
+  },
+  {
+    "id": "OUT_code_xss",
+    "pattern": "<script\\b|javascript\\s*:|on(?:error|load|click)\\s*=",
+    "score": 0.95,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM02",
+    "description": "XSS/script injection in output"
+  },
+  {
+    "id": "OUT_code_sql",
+    "pattern": "\\bDROP\\s+TABLE|DELETE\\s+FROM|UNION\\s+SELECT|INSERT\\s+INTO\\s+.*VALUES",
+    "score": 0.9,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM02",
+    "description": "SQL injection pattern in output"
+  },
+  {
+    "id": "OUT_code_destructive",
+    "pattern": "rm\\s+-rf\\s+\\/|format\\s+c:|mkfs\\s+\\/dev\\/",
+    "score": 0.95,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM02",
+    "description": "Destructive system command in output"
+  },
+  {
+    "id": "OUT_code_deserialization",
+    "pattern": "(?:pickle|yaml|marshal)\\.(?:loads?|unsafe_load)\\s*\\(",
+    "score": 0.85,
+    "category": "out",
+    "severity": "high",
+    "owasp": "LLM02",
+    "description": "Unsafe deserialization in output code"
+  },
+  {
+    "id": "OUT_code_pipe_exec",
+    "pattern": "\\bcurl\\s+.*\\|\\s*(?:bash|sh|zsh)\\b",
+    "score": 0.9,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM02",
+    "description": "Curl-to-shell piping in output"
+  },
+  {
+    "id": "OUT_code_reverse_shell",
+    "pattern": "(?:nc|ncat|netcat)\\s+-[elp]",
+    "score": 0.93,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM02",
+    "description": "Reverse shell pattern in output"
+  },
+  {
+    "id": "OUT_code_privilege_esc",
+    "pattern": "\\bchmod\\s+(?:777|u\\+s)|setuid|setgid",
+    "score": 0.82,
+    "category": "out",
+    "severity": "high",
+    "owasp": "LLM02",
+    "description": "Privilege escalation command in output"
+  },
+  {
+    "id": "OUT_url_raw_ip",
+    "pattern": "https?:\\/\\/\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(?::\\d+)?(?:\\/|$)",
+    "score": 0.75,
+    "category": "out",
+    "severity": "high",
+    "owasp": "LLM02",
+    "description": "Raw IP address URL in output (potential C2/phishing)"
+  },
+  {
+    "id": "OUT_url_shortener",
+    "pattern": "https?:\\/\\/[^\\/\\s]*(?:bit\\.ly|tinyurl|t\\.co|goo\\.gl|is\\.gd|buff\\.ly|ow\\.ly|rebrand\\.ly)[\\/\\s]",
+    "score": 0.6,
+    "category": "out",
+    "severity": "medium",
+    "owasp": "LLM02",
+    "description": "URL shortener in output (destination unknown)"
+  },
+  {
+    "id": "OUT_url_data_uri",
+    "pattern": "data:(?:text\\/html|application\\/javascript|text\\/javascript)[;,]",
+    "score": 0.88,
+    "category": "out",
+    "severity": "high",
+    "owasp": "LLM02",
+    "description": "Data URI with executable content in output"
+  },
+  {
+    "id": "OUT_content_self_harm",
+    "pattern": "\\b(?:kill\\s+(?:yourself|your\\s*self|them|him|her)|commit\\s+suicide|end\\s+(?:your|their)\\s+life)\\b",
+    "score": 0.92,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM02",
+    "description": "Self-harm or violence encouragement in output"
+  },
+  {
+    "id": "OUT_content_dangerous_instructions",
+    "pattern": "\\b(?:how\\s+to\\s+(?:make|build|create|synthesize)\\s+(?:a\\s+)?(?:bomb|explosive|weapon|poison|meth|fentanyl))\\b",
+    "score": 0.88,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM02",
+    "description": "Dangerous instructions in output"
+  },
+  {
+    "id": "OUT_content_hate_speech",
+    "pattern": "\\b(?:(?:all|those)\\s+(?:blacks?|whites?|jews?|muslims?|asians?)\\s+(?:are|should))\\b",
+    "score": 0.78,
+    "category": "out",
+    "severity": "high",
+    "owasp": "LLM02",
+    "description": "Discriminatory generalization in output"
+  },
+  {
+    "id": "OUT_content_hacking_instructions",
+    "pattern": "\\b(?:I\\s+(?:can|will)\\s+(?:hack|break\\s+into|bypass|exploit)|here\\s+(?:is|are)\\s+(?:the\\s+)?(?:instructions?|steps?)\\s+to\\s+(?:hack|exploit|bypass))\\b",
+    "score": 0.8,
+    "category": "out",
+    "severity": "high",
+    "owasp": "LLM02",
+    "description": "Hacking instructions in output"
+  },
+  {
+    "id": "OUT_echo_control_tokens",
+    "pattern": "\\[SYSTEM\\]|\\[INST\\]|\\[\\/INST\\]|<\\|im_start\\|>|<\\|im_end\\|>|<<SYS>>|<\\/s>",
+    "score": 0.9,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM01",
+    "description": "LLM output contains raw control tokens \u2014 possible injection success"
+  },
+  {
+    "id": "OUT_echo_instruction_leak",
+    "pattern": "(?:my\\s+(?:new|real|actual)\\s+instructions?\\s+(?:are|is)|I\\s+(?:am|have\\s+been)\\s+(?:instructed|told)\\s+to\\s+ignore)",
+    "score": 0.85,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM01",
+    "description": "LLM acknowledging injected instructions \u2014 injection succeeded"
+  },
+  {
+    "id": "OUT_echo_compliance",
+    "pattern": "(?:sure|ok|yes)[,!]?\\s+(?:I(?:'ll|\\s+will)\\s+ignore\\s+(?:my|the)\\s+(?:previous|original|safety)\\s+(?:instructions?|rules?|guidelines?))",
+    "score": 0.92,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM01",
+    "description": "LLM complying with override instructions"
+  },
+  {
+    "id": "OUT_echo_persona_activated",
+    "pattern": "(?:DAN|STAN|DUDE|AIM)\\s*(?:mode|persona)?\\s*(?:activated|enabled|engaged)",
+    "score": 0.95,
+    "category": "out",
+    "severity": "critical",
+    "owasp": "LLM01",
+    "description": "Hijacked persona activated in output"
+  }
+]

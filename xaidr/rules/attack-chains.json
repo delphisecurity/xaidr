@@ -1,0 +1,406 @@
+[
+  {
+    "name": "CHAIN_recon_then_inject",
+    "description": "Reconnaissance probe followed by injection attempt \u2014 attacker fingerprinted the model before attacking",
+    "category": "prompt_injection",
+    "owasp": "LLM01",
+    "confidence": 0.78,
+    "maxGapBetweenSteps": 4,
+    "steps": [
+      {
+        "label": "recon",
+        "pattern": "\\b(?:what\\s+(?:model|version|AI|LLM)|who\\s+(?:made|created|trained)\\s+you|what\\s+are\\s+you(?:\\s+(?:based|built|running)\\s+on)?|what\\s+(?:is\\s+your|are\\s+your)\\s+(?:capabilities|limitations|rules|instructions))\\b",
+        "role": "user"
+      },
+      {
+        "label": "inject",
+        "pattern": "\\b(?:ignore|disregard|forget|override|bypass)\\s+(?:all\\s+)?(?:previous|prior|above|your)\\s+(?:instructions|rules|guidelines|programming|training)\\b",
+        "role": "user"
+      }
+    ]
+  },
+  {
+    "name": "CHAIN_trust_then_escalate",
+    "description": "Multiple safe exchanges followed by sudden privilege escalation \u2014 classic social engineering pattern",
+    "category": "agentic_abuse",
+    "owasp": "ASI03",
+    "confidence": 0.72,
+    "maxGapBetweenSteps": 1,
+    "steps": [
+      {
+        "label": "trust_1",
+        "condition": "safe_message",
+        "role": "user"
+      },
+      {
+        "label": "trust_2",
+        "condition": "safe_message",
+        "role": "user"
+      },
+      {
+        "label": "trust_3",
+        "condition": "safe_message",
+        "role": "user"
+      },
+      {
+        "label": "escalate",
+        "pattern": "\\b(?:admin|root|superuser|sudo|elevat|escalat|full\\s+access|unrestricted|override|developer\\s+mode|maintenance\\s+mode|debug\\s+mode)\\b",
+        "role": "user"
+      }
+    ]
+  },
+  {
+    "name": "CHAIN_probe_then_exploit",
+    "description": "Probed agent capabilities then exploited them \u2014 attacker mapped available tools before attacking",
+    "category": "agentic_abuse",
+    "owasp": "ASI02",
+    "confidence": 0.75,
+    "maxGapBetweenSteps": 3,
+    "steps": [
+      {
+        "label": "probe",
+        "pattern": "\\b(?:can\\s+you|do\\s+you\\s+have\\s+access|are\\s+you\\s+able|what\\s+(?:tools|functions|APIs|capabilities|actions)\\s+(?:do\\s+you\\s+have|can\\s+you|are\\s+available))\\b",
+        "role": "user"
+      },
+      {
+        "label": "exploit",
+        "pattern": "\\b(?:now\\s+(?:use|call|execute|run|invoke)|(?:go\\s+ahead|please)\\s+(?:and\\s+)?(?:delete|send|create|modify|execute|transfer|export)|(?:use|call)\\s+(?:that|the)\\s+(?:tool|function|API)\\s+to)\\b",
+        "role": "user"
+      }
+    ]
+  },
+  {
+    "name": "CHAIN_teach_encoding_then_use",
+    "description": "Taught the model an encoding scheme then used it to deliver an obfuscated attack",
+    "category": "encoding_evasion",
+    "owasp": "LLM01",
+    "confidence": 0.82,
+    "maxGapBetweenSteps": 3,
+    "steps": [
+      {
+        "label": "teach",
+        "pattern": "\\b(?:(?:do\\s+you\\s+(?:know|understand))\\s+(?:base64|rot13|hex|caesar|cipher|morse|binary|pig\\s*latin)|let'?s?\\s+(?:use|communicate\\s+in|switch\\s+to)\\s+(?:base64|rot13|hex|code|cipher|our\\s+(?:own|special)\\s+(?:language|code)))\\b",
+        "role": "user"
+      },
+      {
+        "label": "encoded_payload",
+        "pattern": "[A-Za-z0-9+\\/=]{30,}|(?:\\\\x[0-9a-f]{2}){4,}|(?:\\\\u[0-9a-f]{4}){3,}",
+        "role": "user"
+      }
+    ]
+  },
+  {
+    "name": "CHAIN_persistent_rephrase",
+    "description": "Multiple refusals followed by rephrased attempts \u2014 attacker is persistently probing for bypass",
+    "category": "jailbreak",
+    "owasp": "LLM01",
+    "confidence": 0.73,
+    "maxGapBetweenSteps": 1,
+    "steps": [
+      {
+        "label": "refusal_1",
+        "condition": "refusal_response",
+        "role": "assistant"
+      },
+      {
+        "label": "rephrase_1",
+        "pattern": ".",
+        "role": "user"
+      },
+      {
+        "label": "refusal_2",
+        "condition": "refusal_response",
+        "role": "assistant"
+      },
+      {
+        "label": "rephrase_2",
+        "pattern": ".",
+        "role": "user"
+      }
+    ]
+  },
+  {
+    "name": "CHAIN_progressive_extraction",
+    "description": "Progressive system prompt extraction \u2014 each message probes deeper into system configuration",
+    "category": "system_prompt_leak",
+    "owasp": "LLM07",
+    "confidence": 0.8,
+    "maxGapBetweenSteps": 3,
+    "steps": [
+      {
+        "label": "initial_probe",
+        "pattern": "\\b(?:what\\s+(?:are\\s+your|is\\s+your)\\s+(?:role|purpose|function|instructions)|how\\s+(?:were\\s+you|are\\s+you)\\s+(?:configured|set\\s+up|programmed|trained))\\b",
+        "role": "user"
+      },
+      {
+        "label": "deeper_probe",
+        "pattern": "\\b(?:(?:tell|show|give|share)\\s+(?:me\\s+)?(?:more|exactly|specifically|verbatim|word\\s+for\\s+word)|what\\s+(?:else|other)\\s+(?:instructions|rules|guidelines)|repeat\\s+(?:that|your|the)\\s+(?:instructions|prompt|rules))\\b",
+        "role": "user"
+      }
+    ]
+  },
+  {
+    "name": "agent_session_smuggling",
+    "description": "Trust-building then config extraction then unauthorized action",
+    "category": "agentic_abuse",
+    "owasp": "ASI07",
+    "confidence": 0.75,
+    "maxGapBetweenSteps": 5,
+    "steps": [
+      {
+        "label": "trust_build",
+        "pattern": "\\b(?:what\\s+(?:can|do)\\s+you|help\\s+me|tell\\s+me\\s+about|how\\s+(?:do|does))\\b",
+        "role": "user"
+      },
+      {
+        "label": "safe_response",
+        "condition": "safe_message",
+        "role": "assistant"
+      },
+      {
+        "label": "config_probe",
+        "pattern": "\\b(?:what\\s+(?:tools?|capabilities|functions?|endpoints?|services?)\\s+(?:do\\s+you|are|can\\s+you)|list\\s+(?:your|all|available)\\s+(?:tools?|functions?|capabilities))\\b",
+        "role": "user"
+      },
+      {
+        "label": "exploit",
+        "pattern": "\\b(?:(?:now|ok|great|perfect)\\s+)?(?:use|call|invoke|execute|run)\\b",
+        "role": "user"
+      }
+    ]
+  },
+  {
+    "name": "agent_progressive_escalation",
+    "description": "Read-only queries then write operations then admin actions",
+    "category": "privilege_escalation",
+    "owasp": "ASI03",
+    "confidence": 0.72,
+    "maxGapBetweenSteps": 3,
+    "steps": [
+      {
+        "label": "read_ops",
+        "pattern": "\\b(?:read|get|list|show|query|fetch|retrieve|view|search)\\b",
+        "role": "user"
+      },
+      {
+        "label": "write_ops",
+        "pattern": "\\b(?:write|update|modify|change|edit|set|put|patch|create|insert|add)\\b",
+        "role": "user"
+      },
+      {
+        "label": "admin_ops",
+        "pattern": "\\b(?:delete|remove|drop|destroy|purge|admin|grant|revoke|deploy|execute|migrate|configure)\\b",
+        "role": "user"
+      }
+    ]
+  },
+  {
+    "name": "agent_trust_then_poison",
+    "description": "Benign interactions then inject instructions into shared context",
+    "category": "memory_manipulation",
+    "owasp": "ASI09",
+    "confidence": 0.73,
+    "maxGapBetweenSteps": 4,
+    "steps": [
+      {
+        "label": "benign_user",
+        "condition": "safe_message",
+        "role": "user"
+      },
+      {
+        "label": "benign_assistant",
+        "condition": "safe_message",
+        "role": "assistant"
+      },
+      {
+        "label": "poison",
+        "pattern": "\\b(?:from\\s+now\\s+on|going\\s+forward|for\\s+all\\s+(?:future|subsequent)|remember\\s+(?:this|that)|always|whenever\\s+(?:you|someone)|update\\s+your\\s+(?:instructions?|behavior|rules?))\\b",
+        "role": "user"
+      }
+    ]
+  },
+  {
+    "name": "agent_context_contamination",
+    "description": "Inject instructions through tool output or agent response",
+    "category": "prompt_injection",
+    "owasp": "ASI07",
+    "confidence": 0.7,
+    "maxGapBetweenSteps": 2,
+    "steps": [
+      {
+        "label": "fetch_data",
+        "pattern": "\\b(?:search|fetch|retrieve|get|read|load)\\s+(?:from|the|this)\\b",
+        "role": "user"
+      },
+      {
+        "label": "use_injected",
+        "pattern": "\\b(?:now\\s+(?:use|take|follow|apply)|based\\s+on\\s+(?:the\\s+)?(?:results?|output|data|response)|(?:use|follow|apply)\\s+(?:those|these|the)\\s+(?:instructions?|rules?|guidelines?))\\b",
+        "role": "user"
+      }
+    ]
+  },
+  {
+    "name": "CHAIN_crescendo_jailbreak",
+    "description": "Extended crescendo \u2014 5+ benign messages building trust then sudden harmful request",
+    "category": "jailbreak",
+    "owasp": "LLM01",
+    "confidence": 0.78,
+    "maxGapBetweenSteps": 1,
+    "steps": [
+      {
+        "label": "trust_1",
+        "condition": "safe_message",
+        "role": "user"
+      },
+      {
+        "label": "trust_2",
+        "condition": "safe_message",
+        "role": "user"
+      },
+      {
+        "label": "trust_3",
+        "condition": "safe_message",
+        "role": "user"
+      },
+      {
+        "label": "trust_4",
+        "condition": "safe_message",
+        "role": "user"
+      },
+      {
+        "label": "trust_5",
+        "condition": "safe_message",
+        "role": "user"
+      },
+      {
+        "label": "harmful_request",
+        "pattern": "\\b(?:generate|create|write|produce|make|give\\s+me|show\\s+me|tell\\s+me\\s+how)\\b.*\\b(?:hack|exploit|attack|bypass|malware|phish|weapon|drug|kill|harm|steal|fraud|scam|fake|bomb|poison|terror)",
+        "role": "user"
+      }
+    ]
+  },
+  {
+    "name": "CHAIN_adaptive_defense_probe",
+    "description": "Attacker Moves Second \u2014 probes defenses with test payloads then adapts attack based on refusal patterns",
+    "category": "prompt_injection",
+    "owasp": "LLM01",
+    "confidence": 0.75,
+    "maxGapBetweenSteps": 1,
+    "steps": [
+      {
+        "label": "test_attack_1",
+        "pattern": "\\b(?:ignore|bypass|override|disregard)\\s+(?:all\\s+)?(?:previous|prior|above|your)\\s+(?:instructions|rules)",
+        "role": "user"
+      },
+      {
+        "label": "refusal_1",
+        "condition": "refusal_response",
+        "role": "assistant"
+      },
+      {
+        "label": "test_attack_2",
+        "pattern": "\\b(?:ignore|bypass|override|disregard|pretend|imagine|hypothetical|roleplay|act\\s+as)",
+        "role": "user"
+      },
+      {
+        "label": "refusal_2",
+        "condition": "refusal_response",
+        "role": "assistant"
+      },
+      {
+        "label": "adapted_attack",
+        "pattern": "\\b(?:for\\s+(?:educational|research|academic|safety|security)\\s+purposes?|as\\s+a\\s+(?:security\\s+)?(?:researcher|expert|analyst)|in\\s+a\\s+(?:controlled|lab|test)\\s+(?:environment|setting))",
+        "role": "user"
+      }
+    ]
+  },
+  {
+    "name": "CHAIN_encoding_escalation",
+    "description": "Tests plain text attack, gets blocked, then tries encoded version of same attack",
+    "category": "encoding_evasion",
+    "owasp": "LLM01",
+    "confidence": 0.8,
+    "maxGapBetweenSteps": 2,
+    "steps": [
+      {
+        "label": "plain_attack",
+        "pattern": "\\b(?:ignore|bypass|override|hack|exploit|jailbreak)\\b",
+        "role": "user"
+      },
+      {
+        "label": "refusal",
+        "condition": "refusal_response",
+        "role": "assistant"
+      },
+      {
+        "label": "encoded_attack",
+        "pattern": "[A-Za-z0-9+\\/=]{30,}|(?:\\\\x[0-9a-f]{2}){4,}|(?:\\\\u[0-9a-f]{4}){3,}|%[0-9A-Fa-f]{2}(?:%[0-9A-Fa-f]{2}){4,}",
+        "role": "user"
+      }
+    ]
+  },
+  {
+    "name": "CHAIN_task_completion_hijack",
+    "description": "Legitimate conversation followed by fake task completion boundary and new malicious instruction",
+    "category": "prompt_injection",
+    "owasp": "LLM01",
+    "confidence": 0.8,
+    "maxGapBetweenSteps": 2,
+    "steps": [
+      {
+        "label": "legitimate_task",
+        "condition": "safe_message",
+        "role": "user"
+      },
+      {
+        "label": "legitimate_response",
+        "condition": "safe_message",
+        "role": "assistant"
+      },
+      {
+        "label": "completion_hijack",
+        "pattern": "(?:great\\s+(?:job|work)|well\\s+done|task\\s+(?:complete|done|finished)|perfect|excellent)[.!]*\\s*(?:now|next|new\\s+(?:task|instruction)|here'?s|your\\s+(?:real|actual|next))",
+        "role": "user"
+      }
+    ]
+  },
+  {
+    "name": "CHAIN_agent_worm_propagation",
+    "category": "agentic_abuse",
+    "description": "Agent receives instruction modification, complies, then propagates to other agents",
+    "steps": [
+      {
+        "label": "receive_instruction",
+        "pattern": "\\b(?:update|modify|change)\\s+(?:your|the)\\s+(?:behavior|instructions?|rules?)\\b",
+        "role": "user"
+      },
+      {
+        "label": "comply",
+        "condition": "safe_message",
+        "role": "assistant"
+      },
+      {
+        "label": "propagate",
+        "pattern": "\\b(?:forward|pass|send|relay)\\s+(?:this|these|the\\s+same)\\s+(?:to|instructions?)\\s+(?:to\\s+)?(?:all|other|downstream|connected)\\b",
+        "role": "user"
+      }
+    ]
+  },
+  {
+    "name": "CHAIN_cross_agent_exfil",
+    "category": "data_exfiltration",
+    "description": "Data gathered from one agent, relayed through another to external destination",
+    "steps": [
+      {
+        "label": "gather",
+        "pattern": "\\b(?:get|retrieve|fetch|query|read|access)\\s+(?:the\\s+)?(?:data|records|credentials|keys|config)\\b",
+        "role": "user"
+      },
+      {
+        "label": "relay",
+        "pattern": "\\b(?:send|forward|relay|transfer|pass)\\s+(?:the\\s+)?(?:result|output|data|response)\\s+to\\s+(?:the\\s+)?(?:other|another|external|second)\\b",
+        "role": "user"
+      }
+    ]
+  }
+]
