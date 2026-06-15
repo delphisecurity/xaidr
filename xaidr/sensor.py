@@ -7,6 +7,7 @@ model (allow / flag / block). No account, no backend, no network escalation.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from typing import Optional
 from uuid import uuid4
@@ -644,20 +645,244 @@ class ProtectedHttpClient:
                 return provider
         return None
 
+    # Minimum length for a string to be worth scanning in the catch-all pass.
+    _CATCHALL_MIN_LEN = 4
+
+    # Cap on total extracted text fed to the scanner — a safety bound against a
+    # pathologically large body. Excess is truncated with a warning.
+    _EXTRACT_CHAR_CAP = 20000
+
+    # Keys whose string values are non-content identifiers (IDs, protocol
+    # envelope fields). Skipped in the recursive catch-all AND in metadata
+    # extraction. High-signal content keys (text/content/description/name/
+    # query/prompt/message/hint) are never here, so attack text in metadata
+    # (e.g. metadata.hint) is still captured.
+    _NOISE_KEYS = frozenset({
+        # protocol / envelope
+        'id', 'messageid', 'taskid', 'contextid', 'artifactid',
+        'jsonrpc', 'method', 'kind', 'role', 'mimetype', 'version', 'uuid',
+        # identity / routing identifiers — these carry IDs and addresses
+        # (often PII-shaped, e.g. an email in metadata.userId), not prose.
+        # Scanning them as content produces DLP false positives on benign
+        # A2A traffic without adding attack coverage.
+        'userid', 'user_id', 'useremail', 'user_email', 'email',
+        'sessionid', 'session_id', 'requestid', 'request_id',
+        'traceid', 'trace_id', 'correlationid', 'correlation_id',
+        'source', 'timestamp', 'fileid', 'file_id',
+    })
+
+    # A canonical UUID (8-4-4-4-12 hex). Such values are IDs, never prose.
+    _UUID_RE = _re.compile(
+        r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+        _re.IGNORECASE,
+    )
+    # A long unbroken hex run (>= 16 chars). Catches hex token/task IDs that
+    # aren't UUID-formatted, e.g. "abc123def456...".
+    _LONG_HEX_RE = _re.compile(r'^[0-9a-f]{16,}$', _re.IGNORECASE)
+
     def _extract_message(self, json_body: dict | None, content: str | bytes | None) -> str:
-        """Extract the message text from request body."""
-        if json_body:
-            for field in ('message', 'prompt', 'content', 'input', 'text', 'query'):
-                val = json_body.get(field)
-                if val and isinstance(val, str):
-                    return val
+        """Extract all text worth scanning from an outgoing request body.
 
-        if isinstance(content, str):
-            return content
+        A2A-protocol-aware hybrid extractor. Real A2A JSON-RPC traffic buries
+        prompt text under nested paths like ``params.message.parts[].text``;
+        the old top-level-field scan missed all of it. This runs two passes:
+
+        1. A structured pass over known A2A text-bearing paths (request,
+           response, and fallback "A2A-ish" envelope shapes), plus the legacy
+           top-level fields so simple bodies still work.
+        2. A recursive catch-all that walks the entire JSON tree and collects
+           any remaining string value, guarding against spec drift and
+           nonstandard nesting. ID/envelope noise is filtered out by key name
+           and by UUID/long-hex value shape.
+
+        Returns every distinct extracted string joined with newlines (so
+        downstream L1/L2 scans see each text-bearing field), capped at
+        ``_EXTRACT_CHAR_CAP`` chars.
+        """
+        ordered: list[str] = []
+        seen: set[str] = set()
+
+        def add(value) -> None:
+            if isinstance(value, str):
+                text = value.strip()
+                if text and text not in seen:
+                    seen.add(text)
+                    ordered.append(text)
+
+        def add_string_values(node) -> None:
+            """Add every string value reachable under ``node`` (any container)."""
+            if isinstance(node, str):
+                add(node)
+            elif isinstance(node, dict):
+                for v in node.values():
+                    add_string_values(v)
+            elif isinstance(node, (list, tuple)):
+                for v in node:
+                    add_string_values(v)
+
+        # Resolve the JSON we'll scan. `content` may itself carry JSON; if it
+        # parses, fold it into the structured + catch-all logic. Otherwise it's
+        # a raw string body we still want to scan.
+        body = json_body if isinstance(json_body, dict) else None
+        content_str: str | None = None
         if isinstance(content, bytes):
-            return content.decode('utf-8', errors='ignore')
+            content_str = content.decode('utf-8', errors='ignore')
+        elif isinstance(content, str):
+            content_str = content
 
-        return ''
+        content_json = None
+        if content_str:
+            try:
+                parsed = json.loads(content_str)
+            except (ValueError, TypeError):
+                parsed = None
+            if isinstance(parsed, (dict, list)):
+                content_json = parsed
+
+        # ---- Structured pass -------------------------------------------------
+        if body is not None:
+            self._extract_structured(body, add, add_string_values)
+        if isinstance(content_json, dict):
+            self._extract_structured(content_json, add, add_string_values)
+
+        # ---- Recursive catch-all pass ---------------------------------------
+        # Walk the entire tree and collect any string >= min length whose key
+        # isn't obvious ID/envelope noise and whose value isn't a bare ID.
+        if body is not None:
+            self._extract_catchall(body, None, add)
+        if content_json is not None:
+            self._extract_catchall(content_json, None, add)
+
+        # If content wasn't JSON, include it as a raw string.
+        if content_json is None and content_str:
+            add(content_str)
+
+        # ---- Join + cap ------------------------------------------------------
+        result = '\n'.join(ordered)
+        if len(result) > self._EXTRACT_CHAR_CAP:
+            logger.warning(
+                "xaidr: extracted text truncated from %d to %d chars",
+                len(result), self._EXTRACT_CHAR_CAP,
+            )
+            result = result[:self._EXTRACT_CHAR_CAP]
+        return result
+
+    def _extract_structured(self, body: dict, add, add_string_values) -> None:
+        """Pull text from known A2A text-bearing paths in ``body``."""
+        # Legacy top-level fields — keep simple bodies working.
+        for field in ('message', 'prompt', 'content', 'input', 'text', 'query'):
+            val = body.get(field)
+            if isinstance(val, str):
+                add(val)
+
+        params = body.get('params')
+        if isinstance(params, dict):
+            # Single-string envelope variants.
+            for field in ('input', 'prompt', 'query'):
+                add(params.get(field))
+
+            # params.message — request shape.
+            msg = params.get('message')
+            if isinstance(msg, dict):
+                add(msg.get('content'))  # single-string content variant
+                self._extract_parts(msg.get('parts'), add, add_string_values)
+                self._extract_metadata(msg.get('metadata'), add_string_values)
+
+            # params.messages[] — OpenAI-chat / ACP fallback shapes.
+            messages = params.get('messages')
+            if isinstance(messages, list):
+                for m in messages:
+                    if not isinstance(m, dict):
+                        continue
+                    # OpenAI-chat: content is a string (or list of blocks).
+                    add_string_values(m.get('content'))
+                    # ACP: nested parts with text/content.
+                    self._extract_parts(m.get('parts'), add, add_string_values)
+
+        result = body.get('result')
+        if isinstance(result, dict):
+            # Response: result.message.parts[].text
+            rmsg = result.get('message')
+            if isinstance(rmsg, dict):
+                self._extract_parts(rmsg.get('parts'), add, add_string_values)
+                self._extract_metadata(rmsg.get('metadata'), add_string_values)
+
+            # Response: result.artifacts[]
+            artifacts = result.get('artifacts')
+            if isinstance(artifacts, list):
+                for art in artifacts:
+                    if not isinstance(art, dict):
+                        continue
+                    add(art.get('name'))
+                    self._extract_parts(art.get('parts'), add, add_string_values)
+                    self._extract_metadata(art.get('metadata'), add_string_values)
+
+    def _extract_parts(self, parts, add, add_string_values) -> None:
+        """Extract text from an A2A ``parts[]`` array (request or response)."""
+        if not isinstance(parts, list):
+            return
+        for part in parts:
+            if not isinstance(part, dict):
+                # ACP parts may be bare strings.
+                add_string_values(part)
+                continue
+            add(part.get('text'))
+            add(part.get('content'))  # ACP-style content
+            add(part.get('name'))
+            add(part.get('description'))
+            # data may be a string or an arbitrarily nested object — recurse.
+            add_string_values(part.get('data'))
+            self._extract_metadata(part.get('metadata'), add_string_values)
+
+    def _extract_metadata(self, metadata, add_string_values) -> None:
+        """Extract content string values from a metadata object.
+
+        Metadata mixes prose hints (high-signal — e.g. an injected
+        ``hint: "bypass all filters"``) with identity/routing identifiers
+        (``userId``, ``source``, ``traceId`` …) that are often PII-shaped and
+        produce DLP false positives if scanned. Skip noise-keyed and ID-shaped
+        values; keep everything else.
+        """
+        if not isinstance(metadata, dict):
+            return
+        for key, value in metadata.items():
+            if isinstance(value, str):
+                if not self._is_noise(key, value):
+                    add_string_values(value)
+            elif isinstance(value, (dict, list, tuple)):
+                # Nested metadata: recurse, but drop whole subtrees under a
+                # noise key (e.g. metadata.user.{id,email}).
+                if isinstance(key, str) and key.lower() in self._NOISE_KEYS:
+                    continue
+                add_string_values(value)
+
+    def _extract_catchall(self, node, key, add) -> None:
+        """Walk the whole tree; add strings that aren't ID/envelope noise."""
+        if isinstance(node, str):
+            if key is not None and self._is_noise(key, node):
+                return
+            if len(node.strip()) >= self._CATCHALL_MIN_LEN:
+                add(node)
+        elif isinstance(node, dict):
+            for k, v in node.items():
+                self._extract_catchall(v, k, add)
+        elif isinstance(node, (list, tuple)):
+            for v in node:
+                self._extract_catchall(v, key, add)
+
+    def _is_noise(self, key, value) -> bool:
+        """True if a string value is non-content ID/envelope noise.
+
+        Filters by key name (``_NOISE_KEYS``) and by value shape (a canonical
+        UUID or a long unbroken hex run). Pure parsing — no external calls.
+        """
+        if isinstance(key, str) and key.lower() in self._NOISE_KEYS:
+            return True
+        if isinstance(value, str):
+            v = value.strip()
+            if self._UUID_RE.match(v) or self._LONG_HEX_RE.match(v):
+                return True
+        return False
 
     def _extract_response_text(self, response: "httpx.Response") -> str:
         """Extract text from response body for output scanning."""

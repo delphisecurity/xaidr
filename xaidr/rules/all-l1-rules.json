@@ -1,8 +1,8 @@
 [
   {
     "id": "LLM01_direct_override",
-    "pattern": "\\b(?:ignore|disregard|forget|drop)\\s+(?:all\\s+)?(?:previous|prior|above|earlier)\\s+(?:instructions|rules|prompts|guidelines|directives|programming)\\b",
-    "score": 0.95,
+    "pattern": "(?:ignore|disregard|forget|drop)\\s+(?:all\\s+)?(?:(?:previous|prior|above|earlier|original|initial|current|existing|my|your|the)\\s+)?(?:instructions|rules|prompts|guidelines|directives|programming|constraints|restrictions|protocols|policies)",
+    "score": 0.96,
     "category": "prompt_injection"
   },
   {
@@ -109,7 +109,7 @@
   },
   {
     "id": "LLM01_no_ethics",
-    "pattern": "respond\\s+(as|like)\\s+(if\\s+)?(you\\s+)?(have\\s+)?no\\s+(ethical|moral|safety)\\s+(guidelines|rules|restrictions)",
+    "pattern": "(?:(?:respond|act|behave|operate|function)\\s+(?:as\\s+(?:if|though)\\s+)?(?:you\\s+)?(?:have\\s+|with\\s+)?(?:no|zero|without(?:\\s+any)?)\\s+(?:ethical|moral|safety)\\s+(?:guidelines?|rules?|restrictions?|filters?|constraints?|boundaries?))|(?:(?:you\\s+)?(?:have\\s+|has\\s+)?(?:no|zero)\\s+(?:ethical|moral|safety)\\s+(?:guidelines?|rules?|restrictions?|filters?))",
     "score": 0.93,
     "category": "jailbreak"
   },
@@ -570,126 +570,6 @@
     "category": "prompt_injection"
   },
   {
-    "id": "ASI02_tool_dangerous_action",
-    "pattern": "(?:use|call|invoke|execute)\\s+(?:the\\s+)?(?:Slack|email|calendar|database|deployment|admin|file|ssh|git)\\s+(?:tool|api|function|command)\\s+(?:to|and)\\s+(?:authorize|transfer|delete|send|push|create|modify|grant)",
-    "score": 0.28,
-    "category": "asi02"
-  },
-  {
-    "id": "ASI02_financial_tool_abuse",
-    "pattern": "(?:wire\\s*transfer|bank\\s*transfer|authorize\\s*(?:payment|transfer|transaction))\\s+(?:of\\s+)?\\$?\\d",
-    "score": 0.3,
-    "category": "asi02"
-  },
-  {
-    "id": "ASI03_privilege_escalation_expanded",
-    "pattern": "(?:grant|give|assign|escalate)\\s+(?:yourself|me|this\\s*(?:agent|user|session))\\s+(?:root|admin|superuser|elevated|full)\\s+(?:access|privileges?|permissions?|role)",
-    "score": 0.3,
-    "category": "asi03"
-  },
-  {
-    "id": "ASI10_self_modification_expanded",
-    "pattern": "(?:modify|change|edit|update)\\s+(?:your\\s+)?(?:own\\s+)?(?:code|source|instructions?|programming|config)\\s+(?:to\\s+)?(?:remove|disable|bypass|eliminate)\\s+(?:safety|restriction|filter|guard|limit)",
-    "score": 0.3,
-    "category": "asi10"
-  },
-  {
-    "id": "ASI10_concealment_expanded",
-    "pattern": "(?:do\\s+not|don'?t|never)\\s+(?:log|report|record|alert|notify|tell|inform)\\s+(?:this|any|the)\\s+(?:action|activity|request|command)",
-    "score": 0.28,
-    "category": "asi10"
-  },
-  {
-    "id": "ASI03_credential_creation",
-    "pattern": "(?:add|create|generate|install)\\s+(?:a\\s+)?(?:new\\s+)?(?:SSH\\s*key|API\\s*key|admin\\s*account|superuser|backdoor|root\\s*access)",
-    "score": 0.28,
-    "category": "asi03"
-  },
-  {
-    "id": "ASI02_unsafe_deployment",
-    "pattern": "(?:push|deploy|ship|release)\\s+(?:to\\s+)?(?:production|prod|live|main)\\s+(?:without|bypassing|skipping|no)\\s+(?:test|review|approval|CI|check)",
-    "score": 0.4,
-    "category": "asi02"
-  },
-  {
-    "id": "ASI02_mass_tool_invoke_expanded",
-    "pattern": "(?:call\\s+every\\s+(?:available\\s+)?tool|invoke\\s+all\\s+(?:available\\s+)?(?:tools|functions|APIs))",
-    "score": 0.25,
-    "category": "asi02"
-  },
-  {
-    "id": "ASI03_credential_exfil_via_tool",
-    "pattern": "(?:send|forward)\\s+(?:my\\s+)?(?:API\\s*key|credentials?|tokens?)\\s+(?:to|and\\s+all)\\s+",
-    "score": 0.28,
-    "category": "asi03"
-  },
-  {
-    "id": "AGT001_react_injection",
-    "pattern": "^(?:Thought|Action|Observation)\\s*:\\s*.+",
-    "score": 0.28,
-    "category": "agt001"
-  },
-  {
-    "id": "AGT001_react_chain_spoof",
-    "pattern": "(?:Thought:\\s*I\\s+(?:need|should|will|must)\\s+|Action:\\s*\\w+\\(|Observation:\\s*(?:Error|Success|Result))",
-    "score": 0.3,
-    "category": "agt001"
-  },
-  {
-    "id": "RAGSCAN_document_priority_override",
-    "pattern": "(?:this\\s+document|these\\s+instructions?)\\s+(?:takes?\\s+priority|supersedes?|overrides?)\\s+(?:all|any|every)\\s+(?:other|previous|prior|safety)",
-    "score": 0.28,
-    "category": "rag_poisoning"
-  },
-  {
-    "id": "RAGSCAN_fake_verification",
-    "pattern": "(?:verified\\s+(?:information|content)|authorized\\s+(?:by|content)|approved\\s+by\\s+(?:security|admin|team))\\s*[.:]\\s*(?:all|ignore|disable|override|lift)",
-    "score": 0.25,
-    "category": "rag_poisoning"
-  },
-  {
-    "id": "RAGSCAN_document_priority",
-    "pattern": "(?:ignore\\s+all\\s+other\\s+documents|this\\s+document\\s+takes?\\s+priority)",
-    "score": 0.25,
-    "category": "rag_poisoning"
-  },
-  {
-    "id": "RAGSCAN_fake_classification",
-    "pattern": "(?:CONFIDENTIAL|INTERNAL)\\s+(?:MEMO|DOCUMENT)\\s*:",
-    "score": 0.2,
-    "category": "rag_poisoning"
-  },
-  {
-    "id": "ASI02_destructive_command",
-    "pattern": "(?:DROP\\s+(?:TABLE|DATABASE|INDEX|SCHEMA)|TRUNCATE\\s+TABLE|DELETE\\s+FROM\\s+\\w+\\s*;|rm\\s+-rf|rmdir\\s+\\/|format\\s+[cC]:|del\\s+\\/[fFsS])",
-    "score": 0.3,
-    "category": "asi02"
-  },
-  {
-    "id": "ASI02_remote_code_exec",
-    "pattern": "(?:curl|wget|fetch)\\s+(?:https?:\\/\\/|ftp:\\/\\/).*(?:\\|\\s*(?:bash|sh|exec)|>\\s*\\/(?:tmp|var))",
-    "score": 0.3,
-    "category": "asi02"
-  },
-  {
-    "id": "ASI02_path_traversal",
-    "pattern": "(?:\\.\\.\\/){2,}(?:etc|var|usr|home|root|tmp)",
-    "score": 0.28,
-    "category": "asi02"
-  },
-  {
-    "id": "ASI02_query_and_exfil",
-    "pattern": "(?:SELECT\\s+\\*\\s+FROM\\s+\\w+)\\s*;\\s*(?:then\\s+)?(?:POST|send|forward|upload)\\s+(?:to|the\\s+results?)",
-    "score": 0.28,
-    "category": "asi02"
-  },
-  {
-    "id": "ASI02_download_and_exec",
-    "pattern": "(?:wget|curl)\\s+https?:\\/\\/\\S+\\s+.*(?:chmod|bash|exec|\\|)",
-    "score": 0.3,
-    "category": "asi02"
-  },
-  {
     "id": "LLM02_output_injection",
     "pattern": "(?:always\\s+)?(?:include|insert|append|add|embed)\\s+(?:this|the\\s+following|a)\\s+(?:invisible|hidden|tracking|script|pixel|tag)\\s+(?:in|to)\\s+(?:your|every|all)\\s+(?:response|output|reply)",
     "score": 0.28,
@@ -774,90 +654,6 @@
     "category": "eva003"
   },
   {
-    "id": "REC001_model_fingerprint",
-    "pattern": "(?:what|which|tell\\s+me)\\s+(?:AI\\s+)?(?:model|LLM|language\\s+model|version|architecture)\\s+(?:are\\s+you|do\\s+you\\s+use|powers?\\s+you|is\\s+this|are\\s+you\\s+(?:based\\s+on|built\\s+(?:on|with)))",
-    "score": 0.15,
-    "category": "rec001"
-  },
-  {
-    "id": "REC001_cutoff_probe",
-    "pattern": "(?:what\\s+is\\s+your|when\\s+is\\s+your|what'?s?\\s+your)\\s+(?:knowledge|training)\\s+(?:cutoff|cut-off)\\s+(?:date)?",
-    "score": 0.15,
-    "category": "rec001"
-  },
-  {
-    "id": "REC001_token_probe",
-    "pattern": "(?:respond|reply|generate|output)\\s+(?:with\\s+)?(?:exactly|precisely)\\s+(\\d+)\\s+(?:tokens?|words?|characters?)",
-    "score": 0.12,
-    "category": "rec001"
-  },
-  {
-    "id": "REC001_model_name_probe",
-    "pattern": "(?:are\\s+you|is\\s+this)\\s+(?:GPT|Claude|Llama|Gemini|Mistral|PaLM|Bard|ChatGPT|GPT-?[34])",
-    "score": 0.12,
-    "category": "rec001"
-  },
-  {
-    "id": "RAG005_enumerate_kb",
-    "pattern": "(?:list|show|enumerate|display|output)\\s+(?:all|every)\\s+(?:document|file|source|page|article|entry|record)\\s+(?:in|from|of)\\s+(?:your|the)\\s+(?:knowledge|vector|document|data)\\s*(?:base|store|database|index|collection)",
-    "score": 0.28,
-    "category": "rag005"
-  },
-  {
-    "id": "RAG005_verbatim_extraction",
-    "pattern": "(?:reproduce|repeat|output|copy|print|dump)\\s+(?:the\\s+)?(?:full|complete|entire|exact|verbatim|original)\\s+(?:text|content|body|document|source|article)",
-    "score": 0.25,
-    "category": "rag005"
-  },
-  {
-    "id": "RAG005_count_probe",
-    "pattern": "(?:how\\s+many|count\\s+(?:the|all))\\s+(?:document|file|source|page|record|chunk|embedding)\\s+(?:do\\s+you\\s+have|are\\s+(?:there|stored|indexed)|in\\s+(?:your|the))",
-    "score": 0.15,
-    "category": "rag005"
-  },
-  {
-    "id": "RAG005_verification_pretext",
-    "pattern": "(?:for\\s+verification|to\\s+verify|for\\s+accuracy)\\s*,?\\s*(?:reproduce|include|provide|output)\\s+(?:the\\s+)?(?:complete|full|exact|original|raw)\\s+(?:text|content|source|passage|paragraph|quote)",
-    "score": 0.25,
-    "category": "rag005"
-  },
-  {
-    "id": "REC004_source_probe",
-    "pattern": "(?:what|which)\\s+(?:sources?|documents?|references?|files?)\\s+(?:did\\s+you|were)\\s+(?:use|consult|reference|access|retrieve|read|pull\\s+from)",
-    "score": 0.12,
-    "category": "rec004"
-  },
-  {
-    "id": "REC004_citation_probe",
-    "pattern": "(?:cite|quote|attribute|reference)\\s+(?:the\\s+)?(?:document|source|file|page|database|passage)\\s+(?:you|that\\s+you)\\s+(?:just\\s+)?(?:used|cited|referenced|retrieved|accessed|read)",
-    "score": 0.12,
-    "category": "rec004"
-  },
-  {
-    "id": "REC004_file_title_probe",
-    "pattern": "(?:what\\s+is\\s+the\\s+title|what\\s+file)\\s+(?:of\\s+)?(?:the\\s+)?(?:document|source|file)\\s+(?:that\\s+)?(?:contains?|mentions?|has|includes?)\\s+",
-    "score": 0.12,
-    "category": "rec004"
-  },
-  {
-    "id": "REC006_tool_enumeration",
-    "pattern": "(?:list|show|enumerate|display|what\\s+are)\\s+(?:all\\s+)?(?:your|the|available)\\s+(?:tools?|functions?|capabilities|actions?|commands?|APIs?)\\s+(?:you\\s+(?:have|can)|that\\s+(?:are|you))",
-    "score": 0.15,
-    "category": "rec006"
-  },
-  {
-    "id": "REC006_capability_probe",
-    "pattern": "(?:what|which)\\s+(?:tools?|functions?|APIs?|services?|capabilities)\\s+(?:can\\s+you|do\\s+you\\s+have|are\\s+you\\s+able\\s+to)\\s+(?:access|call|invoke|use|interact\\s+with)",
-    "score": 0.15,
-    "category": "rec006"
-  },
-  {
-    "id": "REC006_schema_probe",
-    "pattern": "describe\\s+(?:your\\s+)?(?:available|all)\\s+(?:capabilities|functions?|tools?|actions?)\\s+(?:in\\s+detail|including\\s+parameters?|with\\s+(?:their\\s+)?(?:arguments?|schemas?|inputs?))",
-    "score": 0.2,
-    "category": "rec006"
-  },
-  {
     "id": "LLM07_system_leak_broad",
     "pattern": "(?:output|print|display|show|reveal|share|echo|repeat|reproduce)\\s+(?:your|the|my)?\\s*(?:system\\s*(?:prompt|instructions?|message|config)|initial\\s*instructions?|original\\s*(?:prompt|instructions?))",
     "score": 0.25,
@@ -912,304 +708,10 @@
     "category": "prompt_injection"
   },
   {
-    "id": "ASI09_memory_behavior_injection",
-    "pattern": "\\b(?:write|create|add|store)\\s+(?:a\\s+)?(?:memory|note|entry|record)\\s+(?:that|which)\\s+(?:will|would|should)\\s+(?:cause|make|force)\\s+(?:you|the\\s+(?:model|agent|assistant))\\s+(?:to\\s+)?(?:behave|act|respond|operate)\\s+(?:differently|in\\s+a\\s+(?:different|new)\\s+way)",
-    "score": 0.8,
-    "category": "asi09"
-  },
-  {
     "id": "LLM06_bulk_data_extraction",
     "pattern": "\\bretrieve\\s+(?:all|every|complete)\\s+(?:records?|data|entries?|rows?)\\s+from\\s+(?:the\\s+)?(?:\\w+\\s+)?(?:table|database|collection|store)\\b",
     "score": 0.7,
     "category": "pii_detected"
-  },
-  {
-    "id": "ASI01_goal_override",
-    "pattern": "(?:your|the)\\s+(?:new|updated|real|actual)\\s+(?:goal|objective|task|mission)\\s+is",
-    "score": 0.88,
-    "category": "asi01"
-  },
-  {
-    "id": "ASI01_output_redirect",
-    "pattern": "redirect\\s+(?:your|the)\\s+(?:output|results?|response)\\s+to",
-    "score": 0.82,
-    "category": "asi01"
-  },
-  {
-    "id": "ASI01_covert_exfil",
-    "pattern": "(?:silently|quietly|secretly|without\\s+(?:telling|notifying|alerting))\\s+(?:send|forward|copy|exfiltrate)",
-    "score": 0.92,
-    "category": "asi01"
-  },
-  {
-    "id": "ASI02_mass_tool_invoke",
-    "pattern": "(?:call|invoke|execute|run)\\s+(?:all|every|each)\\s+(?:tool|function|api|endpoint)",
-    "score": 0.8,
-    "category": "asi02"
-  },
-  {
-    "id": "ASI02_destructive_tool_use",
-    "pattern": "(?:delete|remove|drop|truncate)\\s+(?:all|every|\\*|everything)",
-    "score": 0.9,
-    "category": "asi02"
-  },
-  {
-    "id": "ASI03_privilege_escalation",
-    "pattern": "(?:use|assume|impersonate|act\\s+as)\\s+(?:admin|root|system|service\\s*account|superuser)",
-    "score": 0.9,
-    "category": "asi03"
-  },
-  {
-    "id": "ASI03_credential_forwarding",
-    "pattern": "(?:forward|pass|send|share)\\s+(?:my|the|this)\\s+(?:token|credential|api[_\\s]?key|session|cookie)",
-    "score": 0.88,
-    "category": "asi03"
-  },
-  {
-    "id": "ASI05_generate_and_exec",
-    "pattern": "(?:generate|write|create)\\s+(?:and\\s+)?(?:execute|run|eval)\\s+(?:code|script|command)",
-    "score": 0.85,
-    "category": "asi05"
-  },
-  {
-    "id": "ASI06_memory_manipulation",
-    "pattern": "(?:update|modify|change|overwrite)\\s+(?:your|the)\\s+(?:memory|context|knowledge|state)\\s+(?:to|so\\s+that|with|permanently|for\\s+all|system|override)",
-    "score": 0.78,
-    "category": "asi06"
-  },
-  {
-    "id": "ASI06_persistent_injection",
-    "pattern": "(?:from\\s+now\\s+on|going\\s+forward|permanently|always)\\s+(?:remember|store|save|treat)",
-    "score": 0.8,
-    "category": "asi06"
-  },
-  {
-    "id": "ASI07_agent_instruction",
-    "pattern": "(?:tell|instruct|command|message)\\s+(?:the\\s+)?(?:other|next|downstream)\\s+agent",
-    "score": 0.75,
-    "category": "asi07"
-  },
-  {
-    "id": "ASI10_self_modification",
-    "pattern": "(?:modify|change|update)\\s+(?:your|my)\\s+(?:own\\s+)?(?:code|instructions|behavior|configuration)",
-    "score": 0.85,
-    "category": "asi10"
-  },
-  {
-    "id": "ASI10_concealment",
-    "pattern": "(?:don't|do\\s+not|never)\\s+(?:log|report|alert|notify|tell)\\s+(?:the\\s+)?(?:user|admin|human|operator)",
-    "score": 0.92,
-    "category": "asi10"
-  },
-  {
-    "id": "ASI03_self_admin_grant",
-    "pattern": "\\b(?:execute|run)\\s+(?:a\\s+)?(?:\\w+\\s+)?(?:migration|command|script|query)\\s+(?:that|to|which)\\s+(?:adds?|creates?|grants?|gives?|makes?)\\s+(?:yourself|me|this\\s+(?:agent|user))\\s+(?:(?:as|a|an)\\s+)?(?:super\\s*admin|admin(?:istrator)?|root)",
-    "score": 0.85,
-    "category": "asi03"
-  },
-  {
-    "id": "ASI05_self_safety_removal",
-    "pattern": "\\b(?:modify|edit|change|update|alter)\\s+(?:your\\s+)?(?:own\\s+)?(?:source\\s*code|code|config(?:uration)?)\\s+to\\s+(?:remove|disable|bypass|turn\\s+off|eliminate)\\s+(?:safety|security|guardrails?|checks?|filters?|restrictions?)",
-    "score": 0.88,
-    "category": "asi05"
-  },
-  {
-    "id": "ASI02_unauthorized_transaction",
-    "pattern": "\\b(?:wire\\s+transfer|send\\s+(?:money|funds?|payment)|transfer\\s+\\$?\\d[\\d,.]*)\\s+to\\s+(?:account|wallet|address|routing)\\b",
-    "score": 0.85,
-    "category": "asi02"
-  },
-  {
-    "id": "ASI05_pipe_to_shell",
-    "pattern": "\\b(?:curl|wget|fetch)\\s+\\S+\\s*\\|\\s*(?:bash|sh|zsh|exec|python|perl|ruby)\\b",
-    "score": 0.9,
-    "category": "asi05"
-  },
-  {
-    "id": "ASI05_download_execute",
-    "pattern": "\\b(?:wget|curl)\\s+\\S+.*&&\\s*chmod\\s+\\+x\\b",
-    "score": 0.88,
-    "category": "asi05"
-  },
-  {
-    "id": "ASI02_crypto_mining",
-    "pattern": "\\b(?:mine|mining)\\s+(?:crypto(?:currency)?|bitcoin|ethereum|monero)\\b",
-    "score": 0.82,
-    "category": "asi02"
-  },
-  {
-    "id": "ASI02_firewall_open",
-    "pattern": "\\bmodify\\s+(?:the\\s+)?(?:firewall|iptables|security\\s+group)\\s+(?:rules?|config)?\\s+to\\s+(?:allow|open|permit)\\b",
-    "score": 0.85,
-    "category": "asi02"
-  },
-  {
-    "id": "ASI03_self_authorize",
-    "pattern": "\\b(?:add|make|register)\\s+(?:myself|me)\\s+(?:as\\s+)?(?:an?\\s+)?(?:authorized|approved)\\s+(?:signer|approver|reviewer)\\b",
-    "score": 0.8,
-    "category": "asi03"
-  },
-  {
-    "id": "ASI03_token_escalation",
-    "pattern": "\\bmodify\\s+(?:the\\s+)?(?:OAuth|JWT|SAML)\\s+(?:scope|token|claims?|permissions?)\\s+(?:to\\s+(?:include|add)|of\\s+my)\\b",
-    "score": 0.82,
-    "category": "asi03"
-  },
-  {
-    "id": "ASI05_self_clone_unsafe",
-    "pattern": "\\b(?:shadow|clone|duplicate)\\s+(?:copy\\s+of\\s+)?(?:yourself|this\\s+agent|the\\s+(?:AI|model|assistant))\\s+(?:without|with\\s+no)\\s+(?:safety|restrictions?|guardrails?|constraints?)\\b",
-    "score": 0.88,
-    "category": "asi05"
-  },
-  {
-    "id": "ASI02_monitoring_evasion",
-    "pattern": "\\b(?:inject|insert|add)\\s+(?:false\\s+positive|noise|decoy)\\s+(?:into|to)\\s+(?:the\\s+)?(?:security|monitoring|alert|detection|SIEM)\\b",
-    "score": 0.82,
-    "category": "asi02"
-  },
-  {
-    "id": "ASI07_pipeline_injection",
-    "pattern": "\\b(?:insert|place|add)\\s+(?:a\\s+)?(?:new\\s+)?agent\\s+(?:into|in)\\s+(?:the\\s+)?(?:pipeline|chain|workflow)\\s+(?:between|before|after)\\b",
-    "score": 0.8,
-    "category": "asi07"
-  },
-  {
-    "id": "ASI09_trust_corruption",
-    "pattern": "\\b(?:corrupt|tamper|poison)\\s+(?:the\\s+)?(?:trust\\s+(?:store|registry|score|system)|(?:shared|global)\\s+(?:state|memory|context))\\b",
-    "score": 0.85,
-    "category": "asi09"
-  },
-  {
-    "id": "ASI09_knowledge_poisoning",
-    "pattern": "\\b(?:update|modify|poison)\\s+(?:the\\s+)?(?:knowledge\\s+base|training\\s+data|shared\\s+memory|agent\\s+(?:config|instructions?))\\s+(?:to|so\\s+(?:that|it)|with)\\b",
-    "score": 0.78,
-    "category": "asi09"
-  },
-  {
-    "id": "ASI02_stealth_mode",
-    "pattern": "\\boperate\\s+in\\s+(?:stealth|silent|invisible|covert|hidden)\\s+mode\\b",
-    "score": 0.78,
-    "category": "asi02"
-  },
-  {
-    "id": "RAG_context_override",
-    "pattern": "(?:ignore|disregard|forget)\\s+(?:all\\s+)?(?:previous|prior|other)\\s+(?:context|documents?|chunks?|information)",
-    "score": 0.92,
-    "category": "rag_poisoning"
-  },
-  {
-    "id": "RAG_control_token_in_context",
-    "pattern": "\\[SYSTEM\\]|\\[INST\\]|<\\|im_start\\|>|<<SYS>>|<\\|system\\|>|###\\s*(?:System|Instruction)",
-    "score": 0.95,
-    "category": "rag_poisoning"
-  },
-  {
-    "id": "RAG_priority_manipulation",
-    "pattern": "RETRIEVAL_OVERRIDE|DOCUMENT_PRIORITY\\s*:|CONTEXT_INJECTION",
-    "score": 0.93,
-    "category": "rag_poisoning"
-  },
-  {
-    "id": "RAG_sensitivity_marker",
-    "pattern": "\\b(?:confidential|internal\\s+only|do\\s+not\\s+share|proprietary|classified)\\b",
-    "score": 0.7,
-    "category": "rag_poisoning"
-  },
-  {
-    "id": "RAGSCAN_html_comment_injection",
-    "pattern": "<!--[\\s\\S]*?(?:ignore|override|system|instruction|execute|admin|bypass|disable|output|reveal|extract)[\\s\\S]*?-->",
-    "score": 0.93,
-    "category": "rag_poisoning"
-  },
-  {
-    "id": "RAGSCAN_css_hidden_text",
-    "pattern": "style\\s*=\\s*['\"][^'\"]*(?:display:\\s*none|visibility:\\s*hidden|font-size:\\s*0|color:\\s*(?:white|transparent|rgba?\\([^)]*,\\s*0\\)))[^'\"]*['\"]",
-    "score": 0.91,
-    "category": "rag_poisoning"
-  },
-  {
-    "id": "RAGSCAN_aria_hidden_injection",
-    "pattern": "aria-hidden\\s*=\\s*['\"]true['\"][^>]*>[\\s\\S]*?(?:ignore|override|system|execute|admin|output|reveal|extract|email|send)",
-    "score": 0.9,
-    "category": "rag_poisoning"
-  },
-  {
-    "id": "RAGSCAN_base64_in_document",
-    "pattern": "(?:base64|Base64|BASE64)\\s*[:=]\\s*[A-Za-z0-9+\\/]{20,}={0,2}",
-    "score": 0.75,
-    "category": "rag_poisoning"
-  },
-  {
-    "id": "RAGSCAN_custom_marker_injection",
-    "pattern": "%%[A-Z_]+\\[[\\s\\S]*?\\]%%",
-    "score": 0.82,
-    "category": "rag_poisoning"
-  },
-  {
-    "id": "RAGSCAN_authority_spoof",
-    "pattern": "(?:SECURITY\\s+NOTICE|COMPLIANCE\\s+POLICY|SYSTEM\\s+(?:MESSAGE|UPDATE)|ADMIN\\s+(?:OVERRIDE|NOTE)|DEVELOPER\\s+NOTE)\\s*:",
-    "score": 0.88,
-    "category": "rag_poisoning"
-  },
-  {
-    "id": "RAGSCAN_context_manipulation",
-    "pattern": "(?:this\\s+document\\s+supersedes|previous\\s+(?:information|instructions?)\\s+(?:is|are)\\s+(?:incorrect|outdated|revoked|invalid|suspended))",
-    "score": 0.83,
-    "category": "rag_poisoning"
-  },
-  {
-    "id": "RAGSCAN_data_exfil_instruction",
-    "pattern": "(?:include|append|prepend|add|output|reveal)\\s+(?:the\\s+)?(?:system\\s+prompt|api\\s+keys?|credentials?|tokens?|passwords?|secrets?)\\s+(?:in|to)\\s+(?:your\\s+)?(?:response|output|reply|answer)",
-    "score": 0.9,
-    "category": "rag_poisoning"
-  },
-  {
-    "id": "ASI07_a2a_exfiltration",
-    "pattern": "\\b(?:forward|relay|pass)\\s+(?:this|the\\s+(?:response|output|result))\\s+to\\s+(?:https?:\\/\\/|external|another\\s+(?:server|endpoint|agent))",
-    "score": 0.78,
-    "category": "asi07"
-  },
-  {
-    "id": "ASI06_rogue_registration",
-    "pattern": "\\b(?:register|advertise|announce)\\s+(?:myself|me|this\\s+agent)\\s+as\\s+(?:a|an|the)\\s+(?:trusted|authorized|admin|system)\\b",
-    "score": 0.75,
-    "category": "asi06"
-  },
-  {
-    "id": "ASI07_communication_intercept",
-    "pattern": "\\b(?:intercept|monitor|sniff|capture)\\s+(?:(?:all|the)\\s+)?(?:messages?|traffic|communication|requests?)\\s+(?:between|from|to)\\s+(?:agents?|services?|models?)\\b",
-    "score": 0.82,
-    "category": "asi07"
-  },
-  {
-    "id": "ASI09_memory_poisoning",
-    "pattern": "\\b(?:poison|corrupt|manipulate|alter)\\s+(?:the\\s+)?(?:agent|model|system)\\s*(?:'s|s)?\\s*(?:memory|context|state|knowledge|training)\\b",
-    "score": 0.78,
-    "category": "asi09"
-  },
-  {
-    "id": "LPCI_S6_reconstruct_instruction",
-    "pattern": "(?:combine|concatenate|merge|join|assemble|reconstruct|piece\\s+together)\\s+(?:the\\s+)?(?:parts?|pieces?|fragments?|segments?|halves|sections?)\\s+(?:of\\s+)?(?:this|the\\s+(?:instruction|command|message|payload|text))",
-    "score": 0.8,
-    "category": "lpci"
-  },
-  {
-    "id": "LPCI_S6_split_payload",
-    "pattern": "(?:part|piece|fragment|segment|half)\\s+(?:1|one|A|first)\\s*(?:of\\s+\\d+)?[:\\s]+.*?(?:part|piece|fragment|segment|half)\\s+(?:2|two|B|second)",
-    "score": 0.75,
-    "category": "lpci"
-  },
-  {
-    "id": "LPCI_S6_header_footer_split",
-    "pattern": "\\b(?:the\\s+)?(?:first|top|beginning|header)\\s+(?:part|section|half)\\s+(?:says?|contains?|reads?|is)\\b[\\s\\S]{10,200}\\b(?:the\\s+)?(?:second|bottom|end|footer)\\s+(?:part|section|half)\\s+(?:says?|contains?|reads?|is)\\b",
-    "score": 0.78,
-    "category": "lpci"
-  },
-  {
-    "id": "LPCI_S6_distributed_extraction",
-    "pattern": "\\b(?:read|take|extract|get)\\s+(?:the\\s+)?(?:first|last|Nth|odd|even)\\s+(?:word|letter|character|line|sentence)\\s+(?:from|of)\\s+(?:each|every)\\s+(?:paragraph|section|line|sentence|chunk)",
-    "score": 0.78,
-    "category": "lpci"
   },
   {
     "id": "LLM01_task_completion_injection",
@@ -1236,309 +738,111 @@
     "category": "prompt_injection"
   },
   {
-    "id": "MCP_destructive_sql",
-    "pattern": "(?:DROP\\s+TABLE|DELETE\\s+FROM\\s+\\*|TRUNCATE\\s+TABLE|ALTER\\s+TABLE\\s+.*DROP|UPDATE\\s+.*SET\\s+.*WHERE\\s+1\\s*=\\s*1)",
-    "score": 0.95,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "MCP_sensitive_file_access",
-    "pattern": "(?:\\/etc\\/(?:passwd|shadow|hosts)|\\/var\\/log|\\/proc\\/|~\\/\\.(?:ssh|aws|env|bashrc|config)|C:\\\\Windows\\\\System32)",
+    "id": "LLM01_override_synonym_verbs",
+    "pattern": "(?:abandon|set\\s+aside|dismiss|discard|drop|ditch|scrap|shelve|relinquish|throw\\s+(?:out|away)|put\\s+aside|cast\\s+aside|do\\s+away\\s+with).{0,40}(?:instructions?|rules?|guidelines?|constraints?|directives?|policies?|restrictions?|protocols?|commands?|parameters?|boundaries?|limitations?|programming|training|safeguards?)",
     "score": 0.9,
-    "category": "agentic_abuse"
+    "category": "prompt_injection"
   },
   {
-    "id": "MCP_path_traversal",
-    "pattern": "(?:\\.{2}\\/){2,}|\\.{2}\\\\(?:\\.{2}\\\\){1,}",
+    "id": "LLM01_override_expanded_nouns",
+    "pattern": "(?:ignore|forget|disregard|bypass|override|skip|dismiss|abandon).{0,40}(?:guidelines?|constraints?|restrictions?|boundaries?|limitations?|parameters?|protocols?|safeguards?|guardrails?|programming|conditioning)",
+    "score": 0.9,
+    "category": "prompt_injection"
+  },
+  {
+    "id": "LLM01_multilingual_italian",
+    "pattern": "(?:ignora|dimentica|tralascia|scarta|abbandona)\\s+(?:le\\s+)?(?:istruzioni|regole|direttive|linee\\s+guida|vincoli|restrizioni)\\s+(?:precedenti|iniziali|originali|attuali)",
     "score": 0.88,
-    "category": "agentic_abuse"
+    "category": "prompt_injection"
   },
   {
-    "id": "MCP_shell_injection",
-    "pattern": "(?:;|\\||&&|\\$\\(|`)\\s*(?:curl|wget|nc|ncat|bash|sh|python|perl|ruby|node)\\b",
+    "id": "LLM01_multilingual_russian",
+    "pattern": "(?:\u0438\u0433\u043d\u043e\u0440\u0438\u0440\u0443\u0439|\u0437\u0430\u0431\u0443\u0434\u044c|\u043e\u0442\u0431\u0440\u043e\u0441\u044c|\u043e\u0442\u043c\u0435\u043d\u0438|\u043f\u0440\u043e\u0438\u0433\u043d\u043e\u0440\u0438\u0440\u0443\u0439|\u043f\u0440\u043e\u043f\u0443\u0441\u0442\u0438)\\s+(?:\u0432\u0441\u0435\\s+)?(?:\u043f\u0440\u0435\u0434\u044b\u0434\u0443\u0449\u0438\u0435|\u043d\u0430\u0447\u0430\u043b\u044c\u043d\u044b\u0435|\u0442\u0435\u043a\u0443\u0449\u0438\u0435|\u043f\u0440\u0435\u0436\u043d\u0438\u0435)?\\s*(?:\u0438\u043d\u0441\u0442\u0440\u0443\u043a\u0446\u0438\u0438|\u043f\u0440\u0430\u0432\u0438\u043b\u0430|\u0443\u043a\u0430\u0437\u0430\u043d\u0438\u044f|\u043e\u0433\u0440\u0430\u043d\u0438\u0447\u0435\u043d\u0438\u044f|\u0434\u0438\u0440\u0435\u043a\u0442\u0438\u0432\u044b|\u0440\u0443\u043a\u043e\u0432\u043e\u0434\u0441\u0442\u0432\u0430)",
+    "score": 0.88,
+    "category": "prompt_injection"
+  },
+  {
+    "id": "LLM01_multilingual_portuguese",
+    "pattern": "(?:ignore|esque\u00e7a|descarte|abandone|desconsidere)\\s+(?:as\\s+)?(?:instru\u00e7\u00f5es|regras|diretrizes|restri\u00e7\u00f5es)\\s+(?:anteriores|iniciais|originais)",
+    "score": 0.88,
+    "category": "prompt_injection"
+  },
+  {
+    "id": "LLM01_multilingual_japanese",
+    "pattern": "(?:\u4ee5\u524d\u306e|\u524d\u306e|\u5143\u306e)(?:\u6307\u793a|\u547d\u4ee4|\u30eb\u30fc\u30eb|\u30ac\u30a4\u30c9\u30e9\u30a4\u30f3|\u5236\u7d04|\u5236\u9650)(?:\u3092|\u306f)(?:\u7121\u8996|\u5fd8\u308c|\u7834\u68c4|\u53d6\u308a\u6d88)",
+    "score": 0.88,
+    "category": "prompt_injection"
+  },
+  {
+    "id": "LLM01_multilingual_chinese",
+    "pattern": "(?:\u5ffd\u7565|\u65e0\u89c6|\u5fd8\u8bb0|\u653e\u5f03|\u4e22\u5f03|\u53d6\u6d88)(?:\u6240\u6709|\u4e4b\u524d\u7684|\u5148\u524d\u7684|\u539f\u59cb\u7684)?(?:\u6307\u4ee4|\u6307\u793a|\u89c4\u5219|\u51c6\u5219|\u9650\u5236|\u7ea6\u675f|\u8bf4\u660e)",
+    "score": 0.88,
+    "category": "prompt_injection"
+  },
+  {
+    "id": "LLM01_multilingual_korean",
+    "pattern": "(?:\uc774\uc804|\uc6d0\ub798|\uae30\uc874)(?:\uc758)?\\s*(?:\uc9c0\uc2dc|\uba85\ub839|\uaddc\uce59|\uac00\uc774\ub4dc\ub77c\uc778|\uc81c\uc57d|\uc81c\ud55c)(?:\uc744|\ub97c)?\\s*(?:\ubb34\uc2dc|\uc78a\uc5b4|\ucde8\uc18c|\ud3d0\uae30)",
+    "score": 0.88,
+    "category": "prompt_injection"
+  },
+  {
+    "id": "LLM01_multilingual_arabic",
+    "pattern": "(?:\u062a\u062c\u0627\u0647\u0644|\u0627\u0646\u0633\u064e|\u062a\u062e\u0644\u064e\u0651 \u0639\u0646|\u0623\u0644\u063a\u0650|\u0627\u062a\u0631\u0643)\\s*(?:\u062c\u0645\u064a\u0639\\s+)?(?:\u0627\u0644\u062a\u0639\u0644\u064a\u0645\u0627\u062a|\u0627\u0644\u0642\u0648\u0627\u0639\u062f|\u0627\u0644\u062a\u0648\u062c\u064a\u0647\u0627\u062a|\u0627\u0644\u0642\u064a\u0648\u062f|\u0627\u0644\u0623\u0648\u0627\u0645\u0631)\\s*(?:\u0627\u0644\u0633\u0627\u0628\u0642\u0629|\u0627\u0644\u0623\u0648\u0644\u064a\u0629|\u0627\u0644\u0623\u0635\u0644\u064a\u0629)",
+    "score": 0.88,
+    "category": "prompt_injection"
+  },
+  {
+    "id": "LLM01_persona_expanded",
+    "pattern": "(?:pretend|imagine|suppose|assume|act\\s+as\\s+if)\\s+(?:you\\s+(?:are|were)|that\\s+you(?:'re|\\s+are))\\s+(?:a\\s+|an\\s+)?(?:AI|assistant|bot|model|system|agent)?\\s*(?:called|named|known\\s+as)?\\s*\\w+\\s+(?:who|that|with)\\s+(?:has\\s+)?(?:no|zero|without\\s+any|unrestricted|unlimited)\\s+(?:restrictions?|rules?|limitations?|constraints?|boundaries?|filters?|guidelines?|safety)",
     "score": 0.93,
-    "category": "agentic_abuse"
+    "category": "jailbreak"
   },
   {
-    "id": "MCP_callback_exfil",
-    "pattern": "(?:https?:\\/\\/(?!(?:localhost|127\\.0\\.0\\.1|10\\.|172\\.(?:1[6-9]|2\\d|3[01])\\.|192\\.168\\.))[\\w.-]+).*(?:callback|webhook|notify|ping|exfil|report)",
-    "score": 0.8,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "MCP_bulk_data_extraction",
-    "pattern": "(?:SELECT\\s+\\*|LIMIT\\s+(?:1000|10000|ALL)|OFFSET\\s+0).*(?:FROM\\s+(?:users|accounts|customers|employees|credentials|secrets))",
-    "score": 0.88,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "MCP_result_injection",
-    "pattern": "(?:\\[INST\\]|<\\|im_start\\|>|<<SYS>>|SYSTEM:|ASSISTANT:)[\\s\\S]*?(?:ignore|override|forget|disregard)",
-    "score": 0.92,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "AGT001_react_in_tool_response",
-    "pattern": "(?:^|\\n)(?:Thought|Action|Observation)\\s*:\\s*.{10,}",
-    "score": 0.3,
-    "category": "agt001"
-  },
-  {
-    "id": "ASI02_tool_description_injection",
-    "pattern": "\\b(?:tool|function)\\s+(?:description|definition)\\s+(?:says?|instructs?|tells?|requires?)\\s+(?:you\\s+(?:to|must|should)|that\\s+you)\\b",
-    "score": 0.75,
-    "category": "asi02"
-  },
-  {
-    "id": "ASI02_tool_chain_injection",
-    "pattern": "\\b(?:before|after|when)\\s+(?:calling|using|invoking)\\s+(?:this|any|the\\s+next)\\s+(?:tool|function)\\s*[,:]\\s*(?:first|also|always)\\s+(?:send|include|attach|forward)\\b",
-    "score": 0.73,
-    "category": "asi02"
-  },
-  {
-    "id": "TOOL_destructive_args",
-    "pattern": "rm\\s+-rf|del\\s+\\/[sfq]|format\\s+[a-z]:|DROP\\s+TABLE|DELETE\\s+FROM\\s+\\*",
-    "score": 0.95,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_path_traversal",
-    "pattern": "\\*{2,}|\\.{2}\\/|~\\/|\\/etc\\/|\\/var\\/|C:\\\\Windows",
-    "score": 0.82,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_credential_in_args",
-    "pattern": "(?:password|secret|token|api[_-]?key|credential)[\"']?\\s*[=:]",
-    "score": 0.9,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_wildcard_identity",
-    "pattern": "[\"'](?:user_id|customer_id|account_id|employee_id|scope|target)[\"']\\s*:\\s*[\"']\\*[\"']",
-    "score": 0.88,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_global_scope",
-    "pattern": "[\"']scope[\"']\\s*:\\s*[\"'](?:all|global|full_access|\\*)[\"']",
-    "score": 0.82,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_security_disable",
-    "pattern": "[\"'](?:auth_required|mfa_enabled|mfa|authentication|security|safety|filter|logging|audit|monitoring|verification)[\"']\\s*:\\s*(?:false|\"false\"|\"off\"|\"disabled\"|0|\"none\"|\"bypass\")",
-    "score": 0.9,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_safety_bypass",
-    "pattern": "[\"'](?:skip_ci|skip_review|skip_approval|skip_auth|skip_validation|force|no_verify|bypass_check)[\"']\\s*:\\s*true",
-    "score": 0.85,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_privilege_in_args",
-    "pattern": "[\"'](?:role|permissions?|access_level|privilege|clearance)[\"']\\s*:\\s*[\"'](?:admin|superadmin|root|owner|full|god|super|unrestricted)[\"']",
-    "score": 0.88,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_permanent_credential",
-    "pattern": "[\"'](?:scope|permissions?|access)[\"']\\s*:\\s*[\"'](?:full_access|admin|\\*|all|unrestricted)[\"'].*[\"'](?:expires?|ttl|duration)[\"']\\s*:\\s*[\"'](?:never|permanent|0|unlimited)[\"']",
-    "score": 0.9,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_no_expiry",
-    "pattern": "[\"']expires?[\"']\\s*:\\s*[\"']never[\"']",
-    "score": 0.75,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_suspicious_transfer",
-    "pattern": "[\"'](?:amount|value|sum|total)[\"']\\s*:\\s*(?:\\d{5,}|[1-9]\\d*(?:\\.\\d+)?)\\s*[,}].*[\"'](?:to_account|destination|recipient|to|beneficiary)[\"']\\s*:\\s*[\"'](?:offshore|external|attacker|unknown)",
-    "score": 0.85,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_financial_function",
-    "pattern": "(?:wire_transfer|transfer_funds|send_money|issue_refund|approve_payment)\\b",
-    "score": 0.7,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_destructive_action",
-    "pattern": "[\"'](?:action|operation|command)[\"']\\s*:\\s*[\"'](?:delete_all|drop|truncate|purge|wipe|destroy|format|reset_factory)[\"']",
-    "score": 0.9,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_force_flag",
-    "pattern": "[\"'](?:force|cascade|recursive|permanent|irreversible)[\"']\\s*:\\s*true",
+    "id": "LLM01_fiction_frame_harmful",
+    "pattern": "(?:write|create|draft|compose|tell)\\s+(?:a\\s+)?(?:short\\s+)?(?:story|fiction|novel|script|scene|narrative|tale)\\s+(?:where|in\\s+which|about)\\s+(?:a\\s+)?(?:character|person|someone|protagonist|villain|scientist|chemist)\\s+(?:explains?|describes?|teaches?|shows?|demonstrates?|details?)\\s+(?:how\\s+to|step\\s+by\\s+step|the\\s+process\\s+of)",
     "score": 0.78,
-    "category": "agentic_abuse"
+    "category": "jailbreak"
   },
   {
-    "id": "TOOL_concealment_function",
-    "pattern": "(?:disable_logging|clear_logs|delete_audit|suppress_alerts|modify_audit_trail)\\b",
-    "score": 0.9,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_permanent_scope",
-    "pattern": "[\"'](?:duration|scope|period)[\"']\\s*:\\s*[\"'](?:permanent|forever|indefinite|all)[\"']",
-    "score": 0.75,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_security_config_change",
-    "pattern": "(?:modify_config|update_config|change_settings|alter_configuration)\\b.*[\"'](?:auth|security|firewall|encryption|tls|ssl|cors|whitelist|allowlist)[\"']",
-    "score": 0.8,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_webhook_hijack",
-    "pattern": "(?:modify_webhook|update_webhook|create_redirect|update_redirect|set_callback)\\b.*(?:https?:\\/\\/(?!(?:api\\.|www\\.)?(?:company|internal|localhost|127\\.0\\.0\\.1)))",
-    "score": 0.78,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_shell_in_args",
-    "pattern": "[\"'](?:script|command|cmd|exec|shell|code)[\"']\\s*:\\s*[\"'][^\"]*(?:\\||\\$\\(|`|&&|;|>\\s*\\/)",
-    "score": 0.92,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_dns_manipulation",
-    "pattern": "(?:update_dns|modify_dns|change_nameserver)\\b",
-    "score": 0.8,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_mass_scale_down",
-    "pattern": "(?:scale_down|scale_to_zero)\\b.*[\"'](?:service|replicas)[\"']\\s*:\\s*[\"']?\\*[\"']?",
-    "score": 0.85,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_key_destruction",
-    "pattern": "(?:rotate|revoke|destroy).*(?:key|cert|certificate|token).*[\"'](?:destroy_old|revoke_existing|delete_previous)[\"']\\s*:\\s*true",
-    "score": 0.88,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "TOOL_external_url",
-    "pattern": "https?:\\/\\/(?!(?:api\\.|www\\.)?(?:openai|anthropic|google|amazonaws|azure)\\.com)",
-    "score": 0.6,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "AUTH_compliance_authority_spoof",
-    "pattern": "(?:SECURITY\\s+NOTICE|COMPLIANCE\\s+(?:POLICY|DIRECTIVE|REQUIREMENT|MANDATE|UPDATE)|SYSTEM\\s+(?:MESSAGE|UPDATE|DIRECTIVE)|ADMIN\\s+(?:OVERRIDE|NOTE|DIRECTIVE)|DEVELOPER\\s+NOTE|AUDIT\\s+(?:REQUIREMENT|DIRECTIVE|MANDATE)|(?:GDPR|HIPAA|SOX|PCI[\\s-]DSS|ISO\\s*\\d+|NIST|FERPA|CCPA)\\s+(?:COMPLIANCE|REQUIREMENT|MANDATE|POLICY|DIRECTIVE|NOTICE))\\s*:",
-    "score": 0.85,
-    "category": "auth"
-  },
-  {
-    "id": "AUTH_data_exfil_in_response",
-    "pattern": "(?:include|append|prepend|add|output|reveal|embed|insert)\\s+(?:the\\s+)?(?:system\\s+prompt|api\\s+keys?|credentials?|tokens?|passwords?|secrets?|full\\s+(?:response|conversation|context|history))\\s+(?:in|to|into|as\\s+part\\s+of)\\s+(?:your\\s+)?(?:response|output|reply|answer|a\\s+(?:link|URL|image|reference))",
-    "score": 0.88,
-    "category": "auth"
-  },
-  {
-    "id": "AUTH_context_supersession",
-    "pattern": "(?:this\\s+(?:document|message|instruction|directive|policy)\\s+supersedes|previous\\s+(?:information|instructions?|guidelines?|policies?)\\s+(?:is|are)\\s+(?:incorrect|outdated|revoked|invalid|suspended|overridden))",
-    "score": 0.8,
-    "category": "auth"
-  },
-  {
-    "id": "AUTH_mandatory_url_exfil",
-    "pattern": "(?:(?:mandatory|required|must|shall|obligated)\\s+(?:to\\s+)?(?:include|append|add|embed|format|attach)|(?:all|every|each)\\s+(?:responses?|outputs?|replies?)\\s+(?:must|shall|should)\\s+(?:include|contain|have))\\s+[\\s\\S]{0,100}(?:https?:\\/\\/|(?:URL|link|endpoint|webhook|reference)\\s+(?:to|at|pointing))",
-    "score": 0.88,
-    "category": "auth"
-  },
-  {
-    "id": "A2A_trust_exploitation",
-    "pattern": "(?:orchestrator|admin|supervisor|manager|coordinator)\\s+(?:has\\s+)?(?:approved|authorized|granted|confirmed|validated)\\s+(?:this|the|your)",
-    "score": 0.7,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "A2A_dump_credentials",
-    "pattern": "(?:dump|export|list|enumerate|reveal|expose|output)\\s+(?:the\\s+)?(?:full|all|complete|entire)?\\s*(?:api[\\s_-]?keys?|credentials?|secrets?|tokens?|vault|passwords?|key[\\s_-]?vault)",
-    "score": 0.85,
-    "category": "data_exfiltration"
-  },
-  {
-    "id": "A2A_memory_poisoning",
-    "pattern": "(?:update|modify|change|alter|rewrite|replace|overwrite)\\s+(?:your|the|my)?\\s*(?:system\\s+(?:instructions?|prompt|config(?:uration)?)|instructions?|behavior|rules|guidelines|directives)",
-    "score": 0.82,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "A2A_persistent_exfil",
-    "pattern": "(?:from\\s+now\\s+on|always|every\\s+(?:time|response|message|reply))\\s*[,.]?\\s*(?:include|add|attach|append|embed|insert)\\s+(?:the\\s+)?(?:contents?|data|values?|keys?|secrets?|credentials?)",
-    "score": 0.85,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "A2A_bypass_controls",
-    "pattern": "(?:bypass|skip|disable|turn\\s+off|deactivate|remove|circumvent|ignore)\\s+(?:the\\s+)?(?:rate[\\s_-]?limit(?:er|ing)?|access[\\s_-]?control|security|auth(?:entication)?|filter(?:ing)?|guard(?:rail)?s?|restrict(?:ion)?s?|permission|validation|verification)",
-    "score": 0.78,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "A2A_share_to_context",
-    "pattern": "(?:to|into|in)\\s+(?:the\\s+)?(?:shared\\s+context|shared\\s+memory|global\\s+state|conversation\\s+history|agent\\s+context|response\\s+to\\s+(?:the\\s+)?(?:requesting|calling|parent|upstream)\\s+agent)",
-    "score": 0.45,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "A2A_self_propagation",
-    "pattern": "(?:forward|pass|send|relay|propagate|spread)\\s+(?:this|these)\\s+(?:instructions?|rules?|directives?|commands?)\\s+to\\s+(?:all|every|other|downstream|connected)\\s+(?:agents?|models?|services?|systems?)",
-    "score": 0.9,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "A2A_output_injection_for_propagation",
-    "pattern": "(?:include|embed|insert|append|prepend)\\s+(?:in|into|to)\\s+(?:your|the)\\s+(?:response|output|reply|result).*(?:so\\s+(?:that|when)|for)\\s+(?:the\\s+)?(?:next|downstream|receiving|calling)\\s+(?:agent|model|system)",
-    "score": 0.88,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "A2A_recursive_hijack",
-    "pattern": "(?:whenever|every\\s+time|each\\s+time)\\s+(?:you|an?\\s+agent)\\s+(?:receive|get|process|handle)\\s+(?:a\\s+)?(?:request|query|task|message).*(?:also|additionally|first)\\s+(?:include|add|perform|execute)",
-    "score": 0.85,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "ASI09_authority_fabrication",
-    "pattern": "(?:claim|say|tell\\s+(?:them|the\\s+user)|pretend|assert)\\s+(?:that\\s+)?(?:you\\s+(?:are|have)|this\\s+(?:is|has\\s+been))\\s+(?:authorized|approved|verified|certified|compliant|audited|reviewed)",
-    "score": 0.75,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "ASI09_false_urgency",
-    "pattern": "(?:tell|inform|warn)\\s+(?:the\\s+)?(?:user|human|operator)\\s+(?:that\\s+)?(?:this\\s+is|it'?s)\\s+(?:urgent|critical|time[- ]?sensitive|expiring|deadline).*(?:approve|confirm|authorize|accept|proceed)",
-    "score": 0.7,
-    "category": "agentic_abuse"
-  },
-  {
-    "id": "ASI09_decision_manipulation",
-    "pattern": "(?:only\\s+show|hide|omit|don'?t\\s+mention|exclude)\\s+(?:the\\s+)?(?:risk|warning|error|failure|negative|downside|cost|consequence)",
+    "id": "LLM07_authority_pretext_leak",
+    "pattern": "(?:as\\s+a\\s+)?(?:security\\s+researcher|auditor|pentester|red\\s+teamer|compliance\\s+officer|developer|admin(?:istrator)?)\\s+(?:I\\s+)?(?:need\\s+to|must|should|have\\s+to|want\\s+to|would\\s+like\\s+to)\\s+(?:audit|review|inspect|examine|check|verify|test|assess|evaluate)\\s+(?:your|the)\\s+(?:configuration|setup|system|instructions?|prompt|context|settings?|parameters?)",
     "score": 0.72,
-    "category": "agentic_abuse"
+    "category": "system_prompt_leak"
   },
   {
-    "id": "A2A_cascade_trigger",
-    "pattern": "(?:tell|instruct|make|cause|trigger)\\s+(?:the\\s+)?(?:other|downstream|connected|all)\\s+(?:agents?|services?)\\s+to\\s+(?:also|simultaneously|in\\s+turn)\\s+(?:delete|stop|shutdown|terminate|reset|purge)",
-    "score": 0.82,
-    "category": "agentic_abuse"
+    "id": "LLM01_decode_execute_expanded",
+    "pattern": "(?:decode|decipher|decrypt|interpret|translate|convert|parse)\\s+(?:this|the\\s+following|it|that)\\s+(?:and\\s+)?(?:run|execute|follow|do|perform|apply|implement|carry\\s+out)\\s+(?:it)?\\s*[:.]?\\s*[A-Za-z0-9+/=]{8,}",
+    "score": 0.85,
+    "category": "encoding_evasion"
   },
   {
-    "id": "A2A_blast_radius_expansion",
-    "pattern": "(?:apply|execute|perform|run)\\s+(?:this|the\\s+same|these)\\s+(?:action|operation|change|update)\\s+(?:across|on|for)\\s+(?:all|every|each)\\s+(?:instance|deployment|agent|endpoint|server|environment)",
-    "score": 0.75,
-    "category": "agentic_abuse"
+    "id": "LLM01_hex_payload_execution",
+    "pattern": "(?:execute|run|eval|process|interpret|decode)\\s*:?\\s*(?:0x[0-9a-fA-F]{16,}|\\\\x[0-9a-fA-F]{2}(?:\\\\x[0-9a-fA-F]{2}){7,})",
+    "score": 0.85,
+    "category": "encoding_evasion"
+  },
+  {
+    "id": "LLM01_ignore_above_short",
+    "pattern": "(?:ignore|disregard|forget|skip)\\s+(?:the\\s+)?(?:above|preceding|foregoing)(?:\\s+(?:and|then|to)\\b)",
+    "score": 0.45,
+    "category": "prompt_injection"
+  },
+  {
+    "id": "LLM01_negated_state_restrictions",
+    "pattern": "(?:you\\s+(?:no\\s+longer|don'?t|do\\s+not|are\\s+(?:no\\s+longer|not|now\\s+free\\s+(?:from|of)))\\s+(?:have\\s+)?(?:any\\s+)?(?:restrictions?|rules?|guidelines?|filters?|limitations?|constraints?|boundaries?|safeguards?))|(?:(?:all|any|every)\\s+(?:restrictions?|rules?|guidelines?|filters?|limitations?|constraints?)\\s+(?:have\\s+been|are)\\s+(?:removed|lifted|disabled|eliminated|dropped|cleared))",
+    "score": 0.4,
+    "category": "jailbreak"
+  },
+  {
+    "id": "LLM01_pretend_no_constraints",
+    "pattern": "(?:pretend|imagine|suppose|assume|act\\s+as\\s+if)\\s+(?:that\\s+)?(?:you\\s+)?(?:have\\s+|had\\s+|there\\s+(?:are|were)\\s+)?(?:no|zero|without(?:\\s+any)?)\\s+(?:rules?|restrictions?|guidelines?|filters?|limitations?|constraints?|boundaries?|safeguards?|safety|ethics?|ethical)",
+    "score": 0.5,
+    "category": "jailbreak"
+  },
+  {
+    "id": "LLM01_from_now_on_unrestricted",
+    "pattern": "(?:from\\s+now\\s+on|starting\\s+now|henceforth|going\\s+forward)\\s+(?:you\\s+)?(?:can|may|are\\s+(?:free|able|allowed)\\s+to)\\s+(?:do\\s+anything|say\\s+anything|respond\\s+(?:to\\s+)?anything|answer\\s+(?:any|all)|ignore\\s+(?:any|all))",
+    "score": 0.35,
+    "category": "jailbreak"
   }
 ]
