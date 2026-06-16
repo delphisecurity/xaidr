@@ -145,6 +145,20 @@ class DelphiSensor:
         self._a2a_structural_enforcement = a2a_structural_enforcement
         self._a2a_validator = A2AStructuralValidator()
         self._a2a_id_tracker = A2AIdTracker()
+        # A2A field extractor (lazy). scan_a2a routes content through the same
+        # A2A-aware extractor the HTTP-intercept path uses, so it scans the text
+        # buried in params.message.parts[].text / artifacts / metadata — NOT the
+        # raw serialized JSON (which buries split attacks behind syntax and
+        # false-positives on ids/keys). The extractor is pure (no client state).
+        self._a2a_extractor: Optional["ProtectedHttpClient"] = None
+
+    def _extract_a2a_content(self, body: Optional[dict], raw: Optional[str]) -> str:
+        """Extract scannable text from a parsed A2A body (or raw fallback)."""
+        if self._a2a_extractor is None:
+            self._a2a_extractor = ProtectedHttpClient(None, self)
+        return self._a2a_extractor._extract_message(
+            body, None if body is not None else raw
+        )
 
     def _evaluate_policy(self, context: dict) -> tuple[bool, Optional[str]]:
         """Evaluate AGT policies against the given context.
@@ -344,12 +358,14 @@ class DelphiSensor:
     ) -> ScanResult:
         """Scan an A2A delegation message.
 
-        ``message`` may be a JSON string, bytes, or a dict A2A envelope (the dict
-        is serialized for content scanning and used directly for structural
-        validation). Other types fail open gracefully.
+        ``message`` may be a JSON string, bytes, or a dict A2A envelope. Content
+        is scanned via the A2A-aware field extractor (params.message.parts[].text,
+        artifacts, metadata, with id/envelope noise filtered) — NOT the raw
+        serialized JSON. The parsed dict is also used for structural validation.
+        Other types fail open gracefully.
         """
-        # Crash guard. A dict envelope is serialized for the content scanner; the
-        # original dict is kept for structural validation. bytes are decoded.
+        # Crash guard. A dict envelope / JSON string is parsed so we can extract
+        # the A2A text fields and validate structure. bytes are decoded.
         body_obj = message if isinstance(message, dict) else None
         if body_obj is not None:
             scan_message = json.dumps(message)
@@ -360,6 +376,26 @@ class DelphiSensor:
                 direction="a2a",
                 destinationAgent=destination,
             )
+
+        # Parse the body once (reused for both content extraction and the
+        # structural validators below).
+        if body_obj is not None:
+            body = body_obj
+        else:
+            try:
+                parsed = json.loads(scan_message)
+                body = parsed if isinstance(parsed, dict) else None
+            except (ValueError, TypeError):
+                body = None
+
+        # Content to scan = text EXTRACTED from the A2A fields, not the raw JSON.
+        # This catches attacks split across parts (the extractor concatenates
+        # field text) and avoids false positives on ids/keys/JSON syntax. Falls
+        # back to the raw message when there is no JSON body (already-extracted
+        # text from the HTTP path, or a plain string).
+        content_to_scan = self._extract_a2a_content(body, scan_message)
+        if not content_to_scan:
+            content_to_scan = scan_message
 
         # resolve the app-supplied principal (3b semantics: per-call > set context)
         base = _prov.resolve(self.agent_id, per_call=origin_context)
@@ -398,7 +434,7 @@ class DelphiSensor:
             return result
 
         result = self._scanner.scan(
-            prompt=scan_message,
+            prompt=content_to_scan,
             agent_id=self.agent_id,
             direction="a2a",
         )
@@ -414,14 +450,7 @@ class DelphiSensor:
         category = result.category
         rules = list(result.rules)
 
-        if body_obj is not None:
-            body = body_obj
-        else:
-            try:
-                body = json.loads(scan_message)
-            except (ValueError, TypeError):
-                body = None
-
+        # `body` was parsed once at the top (reused here for structural checks).
         if isinstance(body, dict):
             sv = self._a2a_validator.validate(body, "a2a")      # Tier A
             idv = self._a2a_id_tracker.check_outbound(body)     # Tier B (local)
