@@ -18,12 +18,10 @@ from .normalizer import TypoNormalizer
 DEFAULT_BLOCK_THRESHOLD = 0.60
 DEFAULT_FLAG_THRESHOLD = 0.20
 
-# Tighter scan cap for DLP than the L1/L2/compositional detection cap. Some DLP
-# regexes are O(n^2) on long word-char runs (a ReDoS class fixed separately in
-# the DLP rules), so the L1_MAX_SCAN_CHARS (100k) ceiling would still stall here.
-# 10k bounds the worst case to well under the per-scan budget while still seeing
-# any PII/secret that appears near the start of the input.
-DLP_MAX_SCAN_CHARS = 10_000
+# DLP scan cap. The DLP patterns are now linear (the bulk-email ReDoS was
+# linearized to a findall + count threshold), so DLP uses the same ceiling as the
+# other detection scanners — no tighter stopgap is needed.
+DLP_MAX_SCAN_CHARS = L1_MAX_SCAN_CHARS
 
 
 class LocalScanner:
@@ -56,15 +54,23 @@ class LocalScanner:
         scan_start = time.perf_counter()
         scan_id = uuid4().hex[:12]  # noqa: F841 — reserved for future telemetry
 
-        # Phase 0: typo normalization
-        normalized = self._normalizer.normalize(prompt)
+        # Size cap (ReDoS guard) — applied BEFORE any pipeline stage, including
+        # normalization. A megabyte-class input can stall a stage (regex
+        # backtracking, or the normalizer's per-token DL work); capping the raw
+        # input first bounds EVERY stage to the L1_MAX_SCAN_CHARS ceiling. This
+        # truncates the SCANNED view only; `prompt` (the caller's data) is not
+        # mutated. scan_l1 self-caps too as defense in depth.
+        capped = (
+            prompt
+            if len(prompt) <= L1_MAX_SCAN_CHARS
+            else prompt[:L1_MAX_SCAN_CHARS]
+        )
 
-        # Size cap (ReDoS guard): bound the text fed to every regex-based local
-        # scanner. A megabyte-class input can cause catastrophic backtracking and
-        # stall the sensor (>90s observed). We scan only the first
-        # L1_MAX_SCAN_CHARS characters — this truncates the SCANNED view only;
-        # `prompt`/`normalized` (the caller's data) are not mutated. scan_l1
-        # self-caps too; this bounds L2/DLP/compositional with the same ceiling.
+        # Phase 0: typo normalization (on the already-capped view)
+        normalized = self._normalizer.normalize(capped)
+
+        # Normalization preserves length to within token-correction deltas; keep a
+        # defensive ceiling so downstream stages never exceed the cap.
         scan_text = (
             normalized
             if len(normalized) <= L1_MAX_SCAN_CHARS
@@ -79,12 +85,9 @@ class LocalScanner:
         l1_categories = set(t.category for t in l1.threats)
         l2 = scan_l2(scan_text, l1_categories=l1_categories)
 
-        # DLP: PII / secret patterns
-        # DLP gets a TIGHTER cap than the detection scanners: some DLP patterns
-        # (e.g. bulk-email) are O(n^2) on long word-char runs, so 100k would
-        # still stall. PII/secrets that matter appear early, so DLP_MAX_SCAN_CHARS
-        # is a defensible, bounded view. This is a stopgap for the quadratic DLP
-        # patterns and can be raised to L1_MAX_SCAN_CHARS once they are linearized.
+        # DLP: PII / secret patterns. The bulk-email ReDoS was linearized
+        # (findall + count threshold), so DLP now uses the same scan ceiling as
+        # the other detection scanners (DLP_MAX_SCAN_CHARS == L1_MAX_SCAN_CHARS).
         dlp_score = 0.0
         dlp_threats = []
         dlp_rules = []
