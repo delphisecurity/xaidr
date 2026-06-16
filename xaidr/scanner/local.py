@@ -99,24 +99,30 @@ class LocalScanner:
 
         score = self._compute_composite(l1.score, l2.score, dlp_score)
 
-        # --- Compositional scanner (L1-zero gate) ---
-        # Runs ONLY when L1/L2/DLP all found nothing (score == 0). Catches
-        # relation-based paraphrase attacks the regex/category layers miss.
+        # --- Compositional scanner (always-on, MAX-fused) ---
+        # Runs on EVERY scan and fuses via max, so a weak L1/L2/DLP signal (e.g.
+        # a 0.15 self-referential probe) can never preempt a strong relation-based
+        # compositional detection (e.g. 0.65). Compositional's own soft-context FP
+        # guards keep benign inputs near zero, so always-on is safe. `scan_text`
+        # is already capped (L1_MAX_SCAN_CHARS), so the path stays bounded.
         comp_rules = []
         comp_category = None
-        if score == 0:
-            if direction == "a2a":
-                comp_mode = "a2a"
-            elif direction == "output":
-                comp_mode = "output"
-            else:
-                comp_mode = "chat"
-            comp = self._compositional.scan(scan_text, scan_mode=comp_mode)
-            if comp["score"] > 0:
-                score = comp["score"]
-                comp_rules = [d["rule"] for d in comp.get("details", [])]
-                if comp.get("details"):
-                    comp_category = comp["details"][0].get("category")
+        comp_score = 0.0
+        if direction == "a2a":
+            comp_mode = "a2a"
+        elif direction == "output":
+            comp_mode = "output"
+        else:
+            comp_mode = "chat"
+        comp = self._compositional.scan(scan_text, scan_mode=comp_mode)
+        comp_score = comp["score"]
+        if comp_score > 0:
+            comp_rules = [d["rule"] for d in comp.get("details", [])]
+            if comp.get("details"):
+                comp_category = comp["details"][0].get("category")
+        # Fuse: never let compositional LOWER the score, never let a weak
+        # L1/L2/DLP composite suppress a strong compositional signal.
+        score = max(score, comp_score)
 
         # 3-state local verdict (no backend, no escalation)
         if score >= self.block_threshold:
@@ -147,8 +153,15 @@ class LocalScanner:
 
         all_threats = list(l1.threats) + list(l2.threats) + list(dlp_threats)
         top_threat = max(all_threats, key=lambda t: t.score, default=None)
-        category = top_threat.category if top_threat else None
-        if category is None and comp_category:
+        top_l1l2dlp = top_threat.score if top_threat else 0.0
+        # Attribute the category to whichever layer produced the winning signal:
+        # compositional when it is the strict-or-equal top contributor, else the
+        # strongest L1/L2/DLP threat (with compositional as the fallback).
+        if comp_category and comp_score >= top_l1l2dlp:
+            category = comp_category
+        elif top_threat is not None:
+            category = top_threat.category
+        else:
             category = comp_category
 
         scan_time_ms = round((time.perf_counter() - scan_start) * 1000, 1)
