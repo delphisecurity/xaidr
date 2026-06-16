@@ -211,6 +211,7 @@ class DelphiSensor:
             "category": NOT_SCANNABLE_CATEGORY,
             "rules": [NOT_SCANNABLE_RULE],
             "direction": direction,
+            "enforcementMode": self.enforcement_mode,
             "scanTimeMs": 0,
             "promptLength": 0,
             "promptHash": None,
@@ -274,6 +275,7 @@ class DelphiSensor:
                 "direction": direction,
                 "destinationType": "external_api",
                 "destinationIdentifier": destination or provider or "llm",
+                "enforcementMode": self.enforcement_mode,
                 "scanTimeMs": 0,
                 "promptLength": len(prompt),
                 "promptHash": hashlib.sha256(prompt.encode()).hexdigest()[:16],
@@ -303,6 +305,7 @@ class DelphiSensor:
             "direction": direction,
             "destinationType": "external_api",
             "destinationIdentifier": destination or provider or "llm",
+            "enforcementMode": self.enforcement_mode,
             "scanTimeMs": result.latency_ms,
             "promptLength": len(prompt),
             "promptHash": hashlib.sha256(prompt.encode()).hexdigest()[:16],
@@ -380,6 +383,7 @@ class DelphiSensor:
                 "rules": ["QUARANTINE_ENFORCED"],
                 "direction": "a2a",
                 "destinationAgent": destination,
+                "enforcementMode": self.enforcement_mode,
                 "scanTimeMs": 0,
                 "promptLength": len(scan_message),
                 "promptHash": hashlib.sha256(scan_message.encode()).hexdigest()[:16],
@@ -454,6 +458,7 @@ class DelphiSensor:
             "rules": result.rules,
             "direction": "a2a",
             "destinationAgent": destination,
+            "enforcementMode": self.enforcement_mode,
             "scanTimeMs": result.latency_ms,
             "promptLength": len(scan_message),
             "promptHash": hashlib.sha256(scan_message.encode()).hexdigest()[:16],
@@ -566,6 +571,29 @@ class DelphiSensor:
             _local_policy_decision = pol.decision
             _local_policy_id = pol.policy_id
 
+            # When the local policy is the decider, make the event ACTIONABLE.
+            # A bare policy block otherwise carries score=0, category=None,
+            # rules=[] — "blocked" with no reason. Fill policy metadata without
+            # clobbering a real detection category/score (only fill/raise).
+            if pol.decision not in (None, "allow", "allowed"):
+                if not category:
+                    category = "policy"
+                rule_label = (
+                    f"policy:{_local_policy_id}" if _local_policy_id else "policy"
+                )
+                if rule_label not in rules:
+                    rules = rules + [rule_label]
+                # Minimal nonzero severity so score-based dashboards aren't misled
+                # by 0.0 on a policy block. Never lowers a higher real score.
+                policy_severity = {
+                    "blocked": 0.6,
+                    "approval_required": 0.6,
+                    "flag": 0.3,
+                    "monitor": 0.3,
+                }.get(pol.decision, 0.0)
+                if policy_severity > score:
+                    score = policy_severity
+
         result = ScanResult(
             action=action, score=score, category=category, rules=rules, latency_ms=0,
         )
@@ -592,6 +620,7 @@ class DelphiSensor:
             "impactTier": impact_tier,
             "authzDecision": authz.decision,
             "authzPolicyId": authz.policy_id,
+            "enforcementMode": self.enforcement_mode,
             "scanTimeMs": 0,
             "promptLength": 0,
             "promptHash": hashlib.sha256(tool_name.encode()).hexdigest()[:16],
@@ -651,6 +680,7 @@ class DelphiSensor:
                             "rules": rule_list,
                             "direction": "tool_call",
                             "toolName": tname,
+                            "enforcementMode": self.enforcement_mode,
                             "scanTimeMs": 0,
                             "promptLength": 0,
                             "promptHash": hashlib.sha256(tname.encode()).hexdigest()[:16],
