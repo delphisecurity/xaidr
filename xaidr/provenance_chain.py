@@ -97,6 +97,18 @@ def record_hop(agent_id: str, role: str = "agent") -> list[dict[str, Any]]:
     return chain
 
 
+def is_flow_active() -> bool:
+    """True iff a delegation flow was explicitly established in this context.
+
+    A flow becomes active only after begin_flow() or extract_context() seeded
+    the chain / correlation contextvars. A bare scan — no begin_flow, no
+    extracted headers, no principal — does NOT make a flow active, and must not
+    fabricate provenance. This is the gate that enforces the module's honest
+    boundary: no principal in, no provenance out.
+    """
+    return _chain_ctx.get() is not None or _corr_ctx.get() is not None
+
+
 def current_chain() -> list[dict[str, Any]] | None:
     chain = _chain_ctx.get()
     return list(chain) if chain else None
@@ -117,7 +129,16 @@ def build_provenance(agent_id: str, on_behalf_of: str | None = None) -> dict[str
     Records this agent as a hop, then returns the schema-shaped provenance dict
     (consumed by schema.to_openA2A via the `provenance` passthrough). Returns
     None only when there is genuinely no provenance (no chain, no principal).
+
+    HONEST BOUNDARY (the fix): if no flow is active AND no principal (on_behalf_of)
+    was supplied, return None WITHOUT recording a hop. record_hop() seeds the
+    chain/correlation contextvars, so calling it here for a bare scan would both
+    fabricate provenance for that scan and leak the seeded chain into later
+    unrelated scans sharing this context. The gate must come before record_hop.
     """
+    if not is_flow_active() and not on_behalf_of:
+        return None
+
     chain = record_hop(agent_id, "agent")
     corr = current_correlation_id()
 
