@@ -78,7 +78,7 @@ PROTECTED_CONCEPTS = re.compile(
     r"safety|restrictions?|guidelines?|rules?|filters?|guardrails?|"
     r"limitations?|constraints?|ethics|ethical|policies|policy|"
     r"boundaries|boundary|protocols?|safeguards?|training|instructions?|"
-    r"programming|conditioning|"
+    r"programming|conditioning|guidance|configurations?|config|"
     r"directives?|directions?|commands?|limits?|bounds"
     r")\b",
     _I,
@@ -107,6 +107,38 @@ OVERRIDE_VERBS = re.compile(
     r"suspend|supersede|replace|overrule|overwrite|revoke|rescind|annul|negate|"
     r"wave\s+away|cast\s+off|shed|shrug\s+off|throw\s+off|"
     r"pay\s+no\s+heed\s+to|turn\s+a\s+blind\s+eye\s+to"
+    r")\b",
+    _I,
+)
+
+# Verbs that EXFILTRATE / surface hidden content. Distinct from override verbs:
+# the "reveal/expose/show/dump the <secret>" family is an exfiltration relation,
+# not an override one — the biggest paraphrase gap. Gated by a target below so
+# benign "show me the report" never fires.
+EXFILTRATION_VERBS = re.compile(
+    r"\b(?:"
+    r"reveal|expose|show|display|print(?:\s+out)?|output|dump|disclose|leak|"
+    r"repeat|reproduce|surface|divulge|echo|list|read\s+back|spit\s+out|"
+    r"share|tell|give|paste|regurgitate|recite|render"
+    r")\b",
+    _I,
+)
+
+# High-value secret/config targets worth exfiltrating (multi-word aware). These
+# are NAMED secrets — a developer message, the system prompt, the hidden rules —
+# not generic nouns, so pairing an exfiltration verb with one is a strong signal.
+# Folded into ``has_protected`` (a secret IS a protected concept).
+SECRET_TARGETS = re.compile(
+    r"\b(?:"
+    r"system\s+prompt|developer\s+(?:message|note|prompt|instructions?)|"
+    r"(?:hidden|private|internal|confidential|secret|invisible|raw|original|"
+    r"underlying)\s+(?:system\s+)?(?:rules?|policy|policies|instructions?|"
+    r"directives?|guidelines?|guidance|prompt|note|message|config(?:uration)?)|"
+    r"operating\s+guidance|system\s+(?:rules?|message|instructions?)|"
+    r"config(?:uration)?\s+prompt|guardrails?\s+config(?:uration)?|"
+    r"instruction\s+block|invisible\s+instructions?|"
+    r"(?:the\s+)?text\s+that\s+(?:controls?|governs?|dictates?|defines?|"
+    r"shapes?|guides?)\s+(?:your|the)\s+behaviou?r"
     r")\b",
     _I,
 )
@@ -143,6 +175,8 @@ IMPERATIVE_STARTERS = re.compile(
     r"ignore|forget|disregard|bypass|override|skip|dismiss|abandon|"
     r"set\s+aside|respond|behave|act|operate|function|answer|reply|"
     r"pretend|imagine|do\s+not|don'?t|never|always|stop|start|begin|"
+    r"overlook|circumvent|suppress|pay\s+no\s+heed\s+to|"
+    r"turn\s+a\s+blind\s+eye\s+to|"
     r"from\s+now\s+on|going\s+forward|henceforth"
     r")\b",
     _I,
@@ -169,7 +203,11 @@ class CompositionalScanner:
         has_role = bool(ROLE_ASSIGNERS.search(text))
         has_neg = bool(NEGATORS.search(text))
         has_unsafe = bool(UNSAFE_MODIFIERS.search(text))
-        has_protected = bool(PROTECTED_CONCEPTS.search(text))
+        has_secret = bool(SECRET_TARGETS.search(text))
+        # A named secret IS a protected concept — fold it in so the soft-context
+        # FP cap below does not zero out a clean "reveal the developer message".
+        has_protected = bool(PROTECTED_CONCEPTS.search(text)) or has_secret
+        has_exfil = bool(EXFILTRATION_VERBS.search(text))
         has_auth_src = bool(AUTHORITY_SOURCES.search(text))
         has_auth_verb = bool(AUTHORITY_VERBS.search(text))
         has_override = bool(OVERRIDE_VERBS.search(text))
@@ -243,6 +281,15 @@ class CompositionalScanner:
         # 10. behaviour-change marker + override verb + protected concept  (medium)
         if has_behavior and has_override and has_protected:
             fire("behavior_override_safety", "behavior_change", MEDIUM)
+        # 11. EXFILTRATION: reveal/expose/show/dump/... a SECRET target, or an
+        #     AI-directed protected concept. Requires a target — "show me the
+        #     report" (no secret, no AI+protected) stays benign; "show me the
+        #     system prompt" / "reveal your instructions" flag. STRONG when the
+        #     target is a NAMED secret, MEDIUM for AI-directed protected.
+        if has_exfil and has_secret:
+            fire("exfiltrate_secret", "exfiltration", STRONG)
+        elif has_exfil and has_ai and has_protected:
+            fire("exfiltrate_protected", "exfiltration", MEDIUM)
 
         score = max((d["confidence"] for d in details), default=0.0)
 
