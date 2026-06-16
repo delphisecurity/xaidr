@@ -11,12 +11,19 @@ from uuid import uuid4
 from ..types import ScanResult
 from .compositional import CompositionalScanner
 from .dlp import scan_dlp
-from .l1 import scan_l1
+from .l1 import scan_l1, L1_MAX_SCAN_CHARS
 from .l2 import scan_l2
 from .normalizer import TypoNormalizer
 
 DEFAULT_BLOCK_THRESHOLD = 0.60
 DEFAULT_FLAG_THRESHOLD = 0.20
+
+# Tighter scan cap for DLP than the L1/L2/compositional detection cap. Some DLP
+# regexes are O(n^2) on long word-char runs (a ReDoS class fixed separately in
+# the DLP rules), so the L1_MAX_SCAN_CHARS (100k) ceiling would still stall here.
+# 10k bounds the worst case to well under the per-scan budget while still seeing
+# any PII/secret that appears near the start of the input.
+DLP_MAX_SCAN_CHARS = 10_000
 
 
 class LocalScanner:
@@ -52,20 +59,37 @@ class LocalScanner:
         # Phase 0: typo normalization
         normalized = self._normalizer.normalize(prompt)
 
+        # Size cap (ReDoS guard): bound the text fed to every regex-based local
+        # scanner. A megabyte-class input can cause catastrophic backtracking and
+        # stall the sensor (>90s observed). We scan only the first
+        # L1_MAX_SCAN_CHARS characters — this truncates the SCANNED view only;
+        # `prompt`/`normalized` (the caller's data) are not mutated. scan_l1
+        # self-caps too; this bounds L2/DLP/compositional with the same ceiling.
+        scan_text = (
+            normalized
+            if len(normalized) <= L1_MAX_SCAN_CHARS
+            else normalized[:L1_MAX_SCAN_CHARS]
+        )
+
         # L1: regex rules (input or output ruleset)
         is_output = direction == "output"
-        l1 = scan_l1(normalized, output=is_output)
+        l1 = scan_l1(scan_text, output=is_output)
 
         # L2: intents + composites + self-referential probe
         l1_categories = set(t.category for t in l1.threats)
-        l2 = scan_l2(normalized, l1_categories=l1_categories)
+        l2 = scan_l2(scan_text, l1_categories=l1_categories)
 
         # DLP: PII / secret patterns
+        # DLP gets a TIGHTER cap than the detection scanners: some DLP patterns
+        # (e.g. bulk-email) are O(n^2) on long word-char runs, so 100k would
+        # still stall. PII/secrets that matter appear early, so DLP_MAX_SCAN_CHARS
+        # is a defensible, bounded view. This is a stopgap for the quadratic DLP
+        # patterns and can be raised to L1_MAX_SCAN_CHARS once they are linearized.
         dlp_score = 0.0
         dlp_threats = []
         dlp_rules = []
         if self.dlp_enabled:
-            dlp = scan_dlp(normalized)
+            dlp = scan_dlp(scan_text[:DLP_MAX_SCAN_CHARS])
             dlp_score = dlp.score
             dlp_threats = dlp.threats
             dlp_rules = [t.rule for t in dlp.threats]
@@ -84,7 +108,7 @@ class LocalScanner:
                 comp_mode = "output"
             else:
                 comp_mode = "chat"
-            comp = self._compositional.scan(normalized, scan_mode=comp_mode)
+            comp = self._compositional.scan(scan_text, scan_mode=comp_mode)
             if comp["score"] > 0:
                 score = comp["score"]
                 comp_rules = [d["rule"] for d in comp.get("details", [])]

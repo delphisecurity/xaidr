@@ -229,7 +229,7 @@
   },
   {
     "id": "LLM04_repeat_loop",
-    "pattern": "(.{10,})\\1{4,}",
+    "pattern": "(.{10,1000})\\1{4,}",
     "score": 0.88,
     "category": "dos_attempt"
   },

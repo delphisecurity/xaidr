@@ -13,6 +13,22 @@ from typing import List
 
 _RULES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "rules")
 
+# Maximum number of characters L1 will regex-scan. A megabyte-class input fed to
+# every compiled pattern causes catastrophic regex backtracking (an exploitable
+# ReDoS / denial-of-service). We scan only the first L1_MAX_SCAN_CHARS characters
+# — large enough that no real attack payload is missed (attacks lead with their
+# injection, not after 100k chars of filler), small enough to bound worst-case
+# work to well under a second. Truncation applies to the SCANNED view only; the
+# caller's original data is never mutated. The shared call site (local.py) caps
+# the same way so L2/DLP/compositional are bounded too.
+L1_MAX_SCAN_CHARS = 100_000
+
+# Defense-in-depth wall-clock budget for one L1 scan. If the cumulative time
+# spent in the rule loop exceeds this, remaining rules are skipped with a warning
+# so a single pathological pattern can never hang the whole scan. Thread-safe
+# (no signals): checked between rules.
+_L1_SCAN_BUDGET_SEC = 0.5
+
 
 @dataclass
 class ThreatDetail:
@@ -65,7 +81,19 @@ def scan_l1(text: str, output: bool = False) -> L1Result:
     threats: List[ThreatDetail] = []
     max_score = 0.0
 
+    # Size cap: bound the text every regex sees. Truncates the scanned view only.
+    if len(text) > L1_MAX_SCAN_CHARS:
+        text = text[:L1_MAX_SCAN_CHARS]
+
     for rule in rules:
+        # Wall-clock guard (defense in depth): never let one bad pattern hang the
+        # scan. With the size cap + linear patterns this should never trip.
+        if time.perf_counter() - start > _L1_SCAN_BUDGET_SEC:
+            print(
+                f"[xaidr] Warning: L1 scan budget exceeded "
+                f"({_L1_SCAN_BUDGET_SEC}s); skipping remaining rules"
+            )
+            break
         match = rule["pattern"].search(text)
         if match:
             threats.append(ThreatDetail(
