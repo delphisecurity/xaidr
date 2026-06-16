@@ -27,6 +27,29 @@ from .types import DelphiBlockedError, ScanResult
 
 logger = logging.getLogger("xaidr.sensor")
 
+# Marker emitted when a scan entry point receives a non-scannable input. A
+# security sensor must never crash on bad input — it fails OPEN (a non-string is
+# not an attack) but RECORDS the event so the caller's bug stays visible.
+NOT_SCANNABLE_CATEGORY = "input_not_scannable"
+NOT_SCANNABLE_RULE = "INPUT_NOT_SCANNABLE"
+
+
+def _coerce_scannable(value) -> Optional[str]:
+    """Return a scannable string, or None if the input is not scannable.
+
+    str passes through; bytes/bytearray are decoded (UTF-8, replacement on bad
+    bytes) so byte payloads are scanned, not rejected. Everything else (int,
+    float, list, dict, None, tuple, ...) is not scannable -> None.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            return bytes(value).decode("utf-8", errors="replace")
+        except Exception:
+            return None
+    return None
+
 
 class DelphiSensor:
     """Standalone agent security sensor.
@@ -167,6 +190,39 @@ class DelphiSensor:
             )
         return result
 
+    def _emit_not_scannable(self, direction: str, **extra) -> ScanResult:
+        """Record a non-scannable input and return a fail-open ScanResult.
+
+        Fail OPEN (allowed, score 0) — a wrong-typed input is a caller bug, not
+        an attack — but emit a telemetry event marking it so the bug is visible.
+        No raw content is carried (there is none to hash)."""
+        result = ScanResult(
+            action="allowed",
+            score=0.0,
+            category=NOT_SCANNABLE_CATEGORY,
+            rules=[NOT_SCANNABLE_RULE],
+            latency_ms=0,
+        )
+        data = {
+            "scanId": uuid4().hex[:12],
+            "agentId": self.agent_id,
+            "action": "allowed",
+            "score": 0.0,
+            "category": NOT_SCANNABLE_CATEGORY,
+            "rules": [NOT_SCANNABLE_RULE],
+            "direction": direction,
+            "scanTimeMs": 0,
+            "promptLength": 0,
+            "promptHash": None,
+        }
+        data.update(extra)
+        self._telemetry.enqueue({
+            "type": "scan",
+            "agentId": self.agent_id,
+            "data": data,
+        })
+        return result
+
     def scan(
         self,
         prompt: str,
@@ -185,6 +241,16 @@ class DelphiSensor:
         ``origin_context`` is a per-call provenance override (OBO principal,
         actor, correlation id); it beats any context set via ``set_origin``.
         """
+        # Crash guard: coerce to a scannable string (bytes are decoded+scanned);
+        # non-scannable types (None, int, list, dict, ...) fail open gracefully.
+        prompt = _coerce_scannable(prompt)
+        if prompt is None:
+            return self._emit_not_scannable(
+                direction=direction,
+                destinationType="external_api",
+                destinationIdentifier=destination or provider or "llm",
+            )
+
         # resolve the app-supplied principal (3b semantics: per-call > set context)
         base = _prov.resolve(self.agent_id, per_call=origin_context)
         obo = base.get("on_behalf_of") if base else None
@@ -211,7 +277,6 @@ class DelphiSensor:
                 "scanTimeMs": 0,
                 "promptLength": len(prompt),
                 "promptHash": hashlib.sha256(prompt.encode()).hexdigest()[:16],
-                "prompt": prompt[:2000],
             }
             if prov:
                 data["provenance"] = prov
@@ -241,7 +306,6 @@ class DelphiSensor:
             "scanTimeMs": result.latency_ms,
             "promptLength": len(prompt),
             "promptHash": hashlib.sha256(prompt.encode()).hexdigest()[:16],
-            "prompt": prompt[:2000],
         }
         if prov:
             data["provenance"] = prov
@@ -275,7 +339,25 @@ class DelphiSensor:
         destination: str,
         origin_context: dict | None = None,
     ) -> ScanResult:
-        """Scan an A2A delegation message."""
+        """Scan an A2A delegation message.
+
+        ``message`` may be a JSON string, bytes, or a dict A2A envelope (the dict
+        is serialized for content scanning and used directly for structural
+        validation). Other types fail open gracefully.
+        """
+        # Crash guard. A dict envelope is serialized for the content scanner; the
+        # original dict is kept for structural validation. bytes are decoded.
+        body_obj = message if isinstance(message, dict) else None
+        if body_obj is not None:
+            scan_message = json.dumps(message)
+        else:
+            scan_message = _coerce_scannable(message)
+        if scan_message is None:
+            return self._emit_not_scannable(
+                direction="a2a",
+                destinationAgent=destination,
+            )
+
         # resolve the app-supplied principal (3b semantics: per-call > set context)
         base = _prov.resolve(self.agent_id, per_call=origin_context)
         obo = base.get("on_behalf_of") if base else None
@@ -299,9 +381,8 @@ class DelphiSensor:
                 "direction": "a2a",
                 "destinationAgent": destination,
                 "scanTimeMs": 0,
-                "promptLength": len(message),
-                "promptHash": hashlib.sha256(message.encode()).hexdigest()[:16],
-                "prompt": message[:2000],
+                "promptLength": len(scan_message),
+                "promptHash": hashlib.sha256(scan_message.encode()).hexdigest()[:16],
             }
             if prov:
                 data["provenance"] = prov
@@ -313,7 +394,7 @@ class DelphiSensor:
             return result
 
         result = self._scanner.scan(
-            prompt=message,
+            prompt=scan_message,
             agent_id=self.agent_id,
             direction="a2a",
         )
@@ -329,10 +410,13 @@ class DelphiSensor:
         category = result.category
         rules = list(result.rules)
 
-        try:
-            body = message if isinstance(message, dict) else json.loads(message)
-        except (ValueError, TypeError):
-            body = None
+        if body_obj is not None:
+            body = body_obj
+        else:
+            try:
+                body = json.loads(scan_message)
+            except (ValueError, TypeError):
+                body = None
 
         if isinstance(body, dict):
             sv = self._a2a_validator.validate(body, "a2a")      # Tier A
@@ -371,9 +455,8 @@ class DelphiSensor:
             "direction": "a2a",
             "destinationAgent": destination,
             "scanTimeMs": result.latency_ms,
-            "promptLength": len(message),
-            "promptHash": hashlib.sha256(message.encode()).hexdigest()[:16],
-            "prompt": message[:2000],
+            "promptLength": len(scan_message),
+            "promptHash": hashlib.sha256(scan_message.encode()).hexdigest()[:16],
         }
         if prov:
             data["provenance"] = prov
@@ -404,6 +487,18 @@ class DelphiSensor:
         generic tool edge).
         """
         mcp_server = mcp_server or server_name
+
+        # Crash guard: tool_name must be a string (it is hashed + matched against
+        # the blocked-tools list). A wrong-typed name is a caller bug — fail open
+        # gracefully rather than crash on tool_name.encode()/membership.
+        tool_name = _coerce_scannable(tool_name)
+        if tool_name is None:
+            return self._emit_not_scannable(
+                direction="tool_call",
+                destinationType="mcp_server" if mcp_server else "tool_call",
+                destinationIdentifier=mcp_server,
+                mcpServer=mcp_server,
+            )
 
         action = "allowed"
         score = 0.0
