@@ -101,7 +101,14 @@ class A2AStructuralValidator:
             if not isinstance(params, dict) or not isinstance(params.get("message"), dict):
                 fire("envelope_missing_required", "structural_envelope", 0.30)
 
-    # -- 2. PART KIND/CONTENT MISMATCH (0.35) ------------------------------
+    # -- 2. PART ONEOF VIOLATION (0.35) ------------------------------------
+    # A2A v1.0 (Appendix A.2.1) REMOVED the `kind` discriminator: a Part is a
+    # OneOf distinguished by WHICH content field is present — exactly one of
+    # text / file(raw bytes) / data. We validate by PRESENCE, which is correct
+    # for v1.0 parts (no `kind`) AND 0.x parts (with `kind`): zero content fields
+    # or more than one (the old "text part smuggling a data object" case) is the
+    # anomaly. When a legacy `kind` IS present we additionally flag a
+    # kind/content mismatch — a 0.x smuggling signal v1.0 expresses via the OneOf.
     def _check_parts(self, body: dict, fire) -> None:
         for part in self._iter_parts(body):
             if not isinstance(part, dict):
@@ -109,27 +116,30 @@ class A2AStructuralValidator:
             kind = part.get("kind")
             has_text = isinstance(part.get("text"), str)
             has_data = isinstance(part.get("data"), dict)
-            has_file_ref = any(
+            # File part: v1.0 `file` object (FileWithBytes/FileWithUri) or 0.x/ACP
+            # top-level file reference.
+            has_file = isinstance(part.get("file"), (dict, str)) or any(
                 isinstance(part.get(k), str) for k in ("fileId", "url", "uri")
             )
+            present = (has_text, has_data, has_file)
+            n_present = sum(present)
 
-            if kind == "text":
-                if not has_text:
-                    fire("part_text_missing_text", "structural_part", 0.35)
-                # Suspicious: a text part smuggling a structured payload.
-                if has_data:
-                    fire("part_text_smuggles_data", "structural_part", 0.35)
-            elif kind == "data":
-                if "data" not in part:
-                    fire("part_data_missing_data", "structural_part", 0.35)
-            elif kind == "file":
-                if not has_file_ref:
-                    fire("part_file_missing_ref", "structural_part", 0.35)
-            elif kind is None:
-                # No discriminator AND multiple content fields is ambiguous —
-                # which field does the receiver trust?
-                if has_text and has_data:
-                    fire("part_no_kind_multi_content", "structural_part", 0.35)
+            # Presence-based OneOf: exactly one content field is required.
+            if n_present == 0:
+                fire("part_oneof_no_content", "structural_part", 0.35)
+            elif n_present > 1:
+                # Multiple content fields — ambiguous which the receiver trusts,
+                # and the classic "text part also carries a data object" smuggle.
+                fire("part_oneof_multiple_content", "structural_part", 0.35)
+
+            # Backward-compat: a legacy `kind` that names a content field which
+            # is absent is a 0.x kind/content mismatch (e.g. kind=text, no text).
+            if isinstance(kind, str) and n_present >= 1:
+                expected_present = {
+                    "text": has_text, "data": has_data, "file": has_file,
+                }.get(kind)
+                if expected_present is False:
+                    fire("part_kind_content_mismatch", "structural_part", 0.35)
 
     # -- 3. ROLE ANOMALY (0.25 / 0.30) -------------------------------------
     def _check_role(self, body: dict, direction: str, fire) -> None:
