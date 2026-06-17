@@ -33,7 +33,8 @@
     "category": "out",
     "severity": "medium",
     "owasp": "LLM06",
-    "description": "Email address in LLM output"
+    "description": "Email address in LLM output",
+    "filter_reserved_email": true
   },
   {
     "id": "OUT_secret_aws_key",

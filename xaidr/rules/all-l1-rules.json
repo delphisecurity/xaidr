@@ -159,7 +159,8 @@
     "id": "LLM06_email",
     "pattern": "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b",
     "score": 0.92,
-    "category": "pii_detected"
+    "category": "pii_detected",
+    "filter_reserved_email": true
   },
   {
     "id": "LLM06_phone",

@@ -11,6 +11,8 @@ import time
 from dataclasses import dataclass
 from typing import List
 
+from .dlp import _is_reserved_email
+
 _RULES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "rules")
 
 # Maximum number of characters L1 will regex-scan. A megabyte-class input fed to
@@ -64,6 +66,9 @@ def _load_and_compile(filename: str) -> list:
                 "pattern": re.compile(r["pattern"], re.IGNORECASE),
                 "score": r["score"],
                 "category": r["category"],
+                # Email PII rules set this so RFC-reserved documentation domains
+                # (example.com/.test/.invalid/...) don't fire as a PII leak.
+                "filter_reserved_email": bool(r.get("filter_reserved_email", False)),
             })
         except re.error as e:
             print(f"[xaidr] Warning: rule {r.get('id')} regex failed: {e}")
@@ -94,6 +99,23 @@ def scan_l1(text: str, output: bool = False) -> L1Result:
                 f"({_L1_SCAN_BUDGET_SEC}s); skipping remaining rules"
             )
             break
+        if rule.get("filter_reserved_email"):
+            # Email PII rule: drop RFC-reserved documentation-domain matches and
+            # fire only if a real (non-reserved) email remains. Linear: findall +
+            # a list filter over already-found matches (no new backtracking regex).
+            emails = rule["pattern"].findall(text)
+            real = [e for e in emails if not _is_reserved_email(e)]
+            if real:
+                threats.append(ThreatDetail(
+                    rule=rule["id"],
+                    category=rule["category"],
+                    score=rule["score"],
+                    matched=str(real[0])[:100],
+                ))
+                if rule["score"] > max_score:
+                    max_score = rule["score"]
+            continue
+
         match = rule["pattern"].search(text)
         if match:
             threats.append(ThreatDetail(

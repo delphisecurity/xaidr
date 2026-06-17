@@ -8,6 +8,27 @@ import time
 from dataclasses import dataclass
 from typing import List
 
+# RFC 2606 reserved example/test/invalid domains + RFC 6761 localhost. Email at
+# these is a documentation PLACEHOLDER — the domains route nowhere by definition,
+# so they cannot be exfiltration targets and flagging them as PII leaks is pure
+# noise. This is a principled, published reserved set — NOT context-guessing: we
+# never suppress real-looking domains, and a real email always still triggers.
+_RESERVED_EMAIL_DOMAINS = frozenset({"example.com", "example.net", "example.org"})
+_RESERVED_EMAIL_TLDS = (".test", ".example", ".invalid", ".localhost")
+
+
+def _is_reserved_email(email: str) -> bool:
+    """True if an email's domain is an RFC-reserved documentation domain."""
+    if not isinstance(email, str):
+        return False
+    at = email.rfind("@")
+    if at == -1:
+        return False
+    domain = email[at + 1:].strip().lower().rstrip(".")
+    if domain in _RESERVED_EMAIL_DOMAINS:
+        return True
+    return domain.endswith(_RESERVED_EMAIL_TLDS)
+
 
 @dataclass
 class ThreatDetail:
@@ -56,6 +77,10 @@ DLP_PATTERNS = [
         "category": "pii_email_bulk",
         "score": 0.70,
         "min_count": 3,
+        # Drop RFC-reserved documentation domains before applying the bulk
+        # threshold, so a list of example.com/.test/.invalid placeholders is not
+        # flagged as a PII leak. Only the email finding carries this flag.
+        "filter_reserved_email": True,
     },
     {
         "id": "DLP_phone",
@@ -132,6 +157,11 @@ def scan_dlp(text: str) -> DLPResult:
             # matched with findall and flagged only when it occurs >= min_count
             # times. findall is linear, avoiding the repeated-group ReDoS.
             matches = p["pattern"].findall(text)
+            if p.get("filter_reserved_email"):
+                # RFC-reserved placeholder domains are not exfiltration targets;
+                # drop them, then apply the bulk threshold to the real remainder.
+                # Linear: a list comprehension over already-found matches.
+                matches = [m for m in matches if not _is_reserved_email(m)]
             if len(matches) >= min_count:
                 first = matches[0]
                 if isinstance(first, tuple):  # if the regex ever has groups
