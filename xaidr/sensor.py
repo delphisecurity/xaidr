@@ -12,8 +12,10 @@ import logging
 from typing import Optional
 from uuid import uuid4
 
-import httpx
-from agent_os.policies import PolicyEvaluator
+# NOTE: httpx is an OPTIONAL dependency, imported lazily only when the HTTP-
+# intercept feature is used (protect_http / ProtectedHttpClient). It is NOT
+# imported at module level so the open package imports in a bare environment.
+# All httpx type hints in this module are string-quoted for the same reason.
 
 from . import local_policy as _policy
 from . import provenance as _prov
@@ -118,10 +120,6 @@ class DelphiSensor:
         self._quarantined = False
         self._quarantine_reason = None
 
-        self._policy_evaluator: Optional[PolicyEvaluator] = None
-        self._policies_version: int = 0
-        self._policy_yamls: list[str] = []
-
         self._blocked_tools: set[str] = set()
         self._blocked_urls: list[str] = []
 
@@ -161,22 +159,17 @@ class DelphiSensor:
         )
 
     def _evaluate_policy(self, context: dict) -> tuple[bool, Optional[str]]:
-        """Evaluate AGT policies against the given context.
+        """Always-allow stub for the (paid-only) AGT policy evaluator path.
 
-        Returns (allowed, reason). If allowed is False, the action must be blocked.
-        Fail-open: any exception returns (True, None) — never raise.
+        The open distribution ships no AGT evaluator, so this has
+        always returned ``(True, None)`` — its callers (scan_tool_call,
+        protect_tools, ProtectedHttpClient._scan_request) already behave as
+        "policy allows". The real, local authorization is the YAML policy
+        (``self._policy`` via ``local_policy.compose``), which is a separate
+        feature and is unaffected. Kept as a stub so those callers keep working
+        without a dangling reference.
         """
-        if self._policy_evaluator is None:
-            return (True, None)
-        try:
-            decision = self._policy_evaluator.evaluate(context)
-            if decision.allowed:
-                return (True, None)
-            else:
-                return (False, decision.reason or "Blocked by AGT policy")
-        except Exception as exc:
-            logging.warning(f"[xaidr] policy evaluation error: {exc}")
-            return (True, None)
+        return (True, None)
 
     def set_policy(self, policy: dict | None) -> bool:
         """Set the local authorization policy from a dict. Returns True if a
