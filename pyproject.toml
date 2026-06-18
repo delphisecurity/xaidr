@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
+
+[project]
+name = "opena2a"
+dynamic = ["version"]
+description = "Standalone, local-first security sensor for AI agents — prompt-injection, jailbreak, DLP, and A2A-protocol scanning. No backend, no account, zero required dependencies."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "Anirudh Kotaru", email = "rao.uh.edu@gmail.com" }]
+keywords = [
+    "security",
+    "llm",
+    "prompt-injection",
+    "jailbreak",
+    "ai-security",
+    "agent",
+    "a2a",
+    "dlp",
+    "guardrails",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    # NOTE: license is a placeholder ("Proprietary") pending the legal gate; the
+    # OSI "License ::" classifier is intentionally omitted until a license is chosen.
+]
+
+# Zero required runtime dependencies — `pip install opena2a` pulls in nothing.
+dependencies = []
+
+[project.optional-dependencies]
+# HTTP-intercept feature (protect_http / ProtectedHttpClient). Only needed if you
+# wrap an httpx.Client: `pip install opena2a[http]`.
+http = ["httpx>=0.24"]
+
+[project.urls]
+Homepage = "https://github.com/delphisecurity/opena2a"
+Repository = "https://github.com/delphisecurity/opena2a"
+
+# --- Version: single source of truth = xaidr/__init__.py __version__ ----------
+[tool.hatch.version]
+path = "xaidr/__init__.py"
+
+# --- Wheel: ship the `xaidr` package + its rules data files -------------------
+# The dist name is `opena2a`; the import name stays `xaidr`. The rules/*.json are
+# loaded by filesystem path at runtime (l1.py / normalizer.py), so they MUST ship
+# inside the package. Hatchling includes ALL files under the package directory
+# (including the non-Python rules/*.json) by default — verified in CI below.
+[tool.hatch.build.targets.wheel]
+packages = ["xaidr"]
+
+# --- Sdist: the package + project metadata; exclude dev scratch --------------
+[tool.hatch.build.targets.sdist]
+include = ["xaidr", "README.md", "pyproject.toml"]
+exclude = ["_phase1", "**/__pycache__", "*.pyc"]
