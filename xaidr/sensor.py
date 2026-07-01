@@ -210,6 +210,7 @@ class DelphiSensor:
             category=NOT_SCANNABLE_CATEGORY,
             rules=[NOT_SCANNABLE_RULE],
             latency_ms=0,
+            input_status="not_scannable",
         )
         data = {
             "scanId": uuid4().hex[:12],

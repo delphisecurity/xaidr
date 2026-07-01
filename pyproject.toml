@@ -3,21 +3,25 @@ requires = ["hatchling>=1.18"]
 build-backend = "hatchling.build"
 
 [project]
-name = "opena2a"
+name = "xaidr"
 dynamic = ["version"]
 description = "Standalone, local-first security sensor for AI agents — prompt-injection, jailbreak, DLP, and A2A-protocol scanning. No backend, no account, zero required dependencies."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Proprietary" }
-authors = [{ name = "Anirudh Kotaru", email = "rao.uh.edu@gmail.com" }]
+# LICENSE PLACEHOLDER — pending a separate legal review. This is intentionally
+# NOT an OSI license (no Apache-2.0 / MIT asserted yet) and the OSI
+# "License ::" classifier is omitted until the license is chosen. Do not treat
+# this as the final license.
+license = { text = "LicenseRef-Proprietary" }
+authors = [{ name = "Delphi Security" }]
 keywords = [
     "security",
+    "ai-agents",
+    "a2a",
     "llm",
     "prompt-injection",
     "jailbreak",
     "ai-security",
-    "agent",
-    "a2a",
     "dlp",
     "guardrails",
 ]
@@ -31,24 +35,24 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    # NOTE: license is a placeholder ("Proprietary") pending the legal gate; the
-    # OSI "License ::" classifier is intentionally omitted until a license is chosen.
+    # NOTE: no "License ::" classifier — the license is a placeholder pending
+    # the legal gate (see [project].license above).
 ]
 
-# Zero required runtime dependencies — `pip install opena2a` pulls in nothing.
+# Zero required runtime dependencies — `pip install xaidr` pulls in nothing.
 dependencies = []
 
 [project.optional-dependencies]
 # HTTP-intercept feature (protect_http / ProtectedHttpClient). Only needed if you
-# wrap an httpx.Client: `pip install opena2a[http]`.
+# wrap an httpx.Client: `pip install xaidr[http]`.
 http = ["httpx>=0.24"]
 # W3C Trace Context parent resolution (READING HALF only): parse an inbound
 # `traceparent` header / read an active OTel span so scans carry the host's
 # parent as additive telemetry metadata. opentelemetry-api ONLY — never the SDK,
-# never a TracerProvider/exporter. Absent, resolution fails safe to None.
-# `pip install opena2a[trace]`.
+# never a TracerProvider/exporter. Keeps zero required deps. `pip install xaidr[trace]`.
 trace = ["opentelemetry-api>=1.20"]
+# Dev/test tooling — the base pytest regression suite. `pip install xaidr[dev]`.
+dev = ["pytest"]
 
 [project.urls]
 Homepage = "https://github.com/delphisecurity/opena2a"
@@ -58,15 +62,19 @@ Repository = "https://github.com/delphisecurity/opena2a"
 [tool.hatch.version]
 path = "xaidr/__init__.py"
 
-# --- Wheel: ship the `xaidr` package + its rules data files -------------------
-# The dist name is `opena2a`; the import name stays `xaidr`. The rules/*.json are
-# loaded by filesystem path at runtime (l1.py / normalizer.py), so they MUST ship
-# inside the package. Hatchling includes ALL files under the package directory
-# (including the non-Python rules/*.json) by default — verified in CI below.
+# --- Wheel: ship the `xaidr` package + ALL subpackages + rules data files -----
+# Distribution name is `xaidr`; the import name is also `xaidr`. The rules/*.json
+# are loaded by filesystem path at runtime (l1.py / normalizer.py), so they MUST
+# ship inside the package. Hatchling includes ALL files under the package
+# directory (including the non-Python rules/*.json) by default — do NOT add a
+# redundant force-include, it triggers a "duplicate path" build error. Verified
+# empirically by installing the built wheel in a clean venv (338 rules load).
 [tool.hatch.build.targets.wheel]
 packages = ["xaidr"]
 
 # --- Sdist: the package + project metadata; exclude dev scratch --------------
+# _phase1/ is dev oracles/verification scaffolding — kept in the repo, kept OUT
+# of the distribution.
 [tool.hatch.build.targets.sdist]
 include = ["xaidr", "README.md", "pyproject.toml"]
 exclude = ["_phase1", "**/__pycache__", "*.pyc"]
