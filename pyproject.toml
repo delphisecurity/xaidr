@@ -43,6 +43,12 @@ dependencies = []
 # HTTP-intercept feature (protect_http / ProtectedHttpClient). Only needed if you
 # wrap an httpx.Client: `pip install opena2a[http]`.
 http = ["httpx>=0.24"]
+# W3C Trace Context parent resolution (READING HALF only): parse an inbound
+# `traceparent` header / read an active OTel span so scans carry the host's
+# parent as additive telemetry metadata. opentelemetry-api ONLY — never the SDK,
+# never a TracerProvider/exporter. Absent, resolution fails safe to None.
+# `pip install opena2a[trace]`.
+trace = ["opentelemetry-api>=1.20"]
 
 [project.urls]
 Homepage = "https://github.com/delphisecurity/opena2a"

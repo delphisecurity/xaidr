@@ -28,6 +28,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ..sensor import DelphiSensor
+from ..trace_context import resolve_parent
 from ._a2a_detect import looks_like_a2a
 
 
@@ -58,14 +59,23 @@ def route_inbound_scan(
     delegations) is a separate follow-up. Do NOT reintroduce a timing heuristic
     to cover it.
 
+    W3C Trace Context (READING HALF): if the host provided a parent — an inbound
+    ``traceparent`` header or an active OTel span — it is resolved and attached
+    as OPTIONAL, additive telemetry metadata (``parent_context``). It never
+    changes the routing decision or the scan verdict; absent a parent this is a
+    no-op and behavior is byte-identical.
+
     Returns ``(result, is_a2a)``.
     """
+    parent = resolve_parent(headers)
     is_a2a, parsed_body = looks_like_a2a(content, headers)
     if is_a2a:
         # Open scan_a2a accepts the dict envelope directly (parses internally).
-        result = sensor.scan_a2a(parsed_body, destination=agent_id)
+        result = sensor.scan_a2a(
+            parsed_body, destination=agent_id, parent_context=parent
+        )
     else:
-        result = sensor.scan(content, direction="input")
+        result = sensor.scan(content, direction="input", parent_context=parent)
     return result, is_a2a
 
 
