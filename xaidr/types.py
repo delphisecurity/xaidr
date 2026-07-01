@@ -26,6 +26,10 @@ class ScanResult:
     category: Optional[str] = None
     rules: list[str] = field(default_factory=list)
     latency_ms: int = 0
+    # Set to "not_scannable" when the scan received malformed/wrong-typed input
+    # (the verdict stays fail-open allowed). None on all normal scans, so this is
+    # fully additive and backward-compatible.
+    input_status: Optional[str] = None
 
     @property
     def is_blocked(self) -> bool:

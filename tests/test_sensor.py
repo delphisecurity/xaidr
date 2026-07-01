@@ -32,3 +32,16 @@ def test_wrong_type_input_does_not_crash(sensor):
     assert sensor.scan(None).action == "allowed"
     assert sensor.scan(12345).action == "allowed"
     assert sensor.scan(["a", "list"]).action == "allowed"
+
+
+def test_non_scannable_input_surfaced_on_result(sensor):
+    # Malformed/wrong-typed input stays fail-open allowed but is now visibly
+    # marked via input_status, so a caller can tell it wasn't a real scan.
+    for bad in (None, 12345):
+        r = sensor.scan(bad)
+        assert r.action == "allowed"
+        assert r.input_status == "not_scannable"
+
+    # Normal scans leave input_status None — a real verdict is not a marker.
+    assert sensor.scan(BENIGN).input_status is None
+    assert sensor.scan(ATTACK).input_status is None  # flagged, not a malformed marker
