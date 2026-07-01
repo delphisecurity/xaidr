@@ -51,6 +51,8 @@ http = ["httpx>=0.24"]
 # parent as additive telemetry metadata. opentelemetry-api ONLY — never the SDK,
 # never a TracerProvider/exporter. Keeps zero required deps. `pip install xaidr[trace]`.
 trace = ["opentelemetry-api>=1.20"]
+# Dev/test tooling — the base pytest regression suite. `pip install xaidr[dev]`.
+dev = ["pytest"]
 
 [project.urls]
 Homepage = "https://github.com/delphisecurity/opena2a"

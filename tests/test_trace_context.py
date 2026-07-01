@@ -24,6 +24,13 @@ from __future__ import annotations
 import json
 import pathlib
 
+import pytest
+
+# These tests exercise the OTel-interop reading half — they need the [trace]
+# extra (opentelemetry-api). Skip cleanly on a base install so `pytest` still
+# runs green with zero third-party deps.
+pytest.importorskip("opentelemetry")
+
 from opentelemetry import context as otel_context
 from opentelemetry import trace as otel_trace
 from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
