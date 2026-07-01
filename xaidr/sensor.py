@@ -25,6 +25,7 @@ from .reporters import Reporter
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
 from .scanner.local import LocalScanner
 from .telemetry import SyncTelemetryQueue
+from .trace_context import ParentContext
 from .types import DelphiBlockedError, ScanResult
 
 logger = logging.getLogger("xaidr.sensor")
@@ -238,6 +239,7 @@ class DelphiSensor:
         destination: Optional[str] = None,
         provider: Optional[str] = None,
         origin_context: dict | None = None,
+        parent_context: Optional[ParentContext] = None,
     ) -> ScanResult:
         """Synchronous scan — used by LangChain middleware and direct calls.
 
@@ -248,6 +250,11 @@ class DelphiSensor:
 
         ``origin_context`` is a per-call provenance override (OBO principal,
         actor, correlation id); it beats any context set via ``set_origin``.
+
+        ``parent_context`` is an OPTIONAL, read-only W3C Trace Context parent
+        (resolved by the host — inbound ``traceparent`` or an active OTel span).
+        It is attached to telemetry as additive metadata ONLY; it never changes
+        the verdict. Absent, behavior is byte-identical.
         """
         # Crash guard: coerce to a scannable string (bytes are decoded+scanned);
         # non-scannable types (None, int, list, dict, ...) fail open gracefully.
@@ -289,6 +296,8 @@ class DelphiSensor:
             }
             if prov:
                 data["provenance"] = prov
+            if parent_context is not None:
+                data["traceParent"] = parent_context.as_metadata()
             self._telemetry.enqueue({
                 "type": "scan",
                 "agentId": self.agent_id,
@@ -319,6 +328,8 @@ class DelphiSensor:
         }
         if prov:
             data["provenance"] = prov
+        if parent_context is not None:
+            data["traceParent"] = parent_context.as_metadata()
         self._telemetry.enqueue({
             "type": "scan",
             "agentId": self.agent_id,
@@ -348,6 +359,7 @@ class DelphiSensor:
         message: str,
         destination: str,
         origin_context: dict | None = None,
+        parent_context: Optional[ParentContext] = None,
     ) -> ScanResult:
         """Scan an A2A delegation message.
 
@@ -356,6 +368,12 @@ class DelphiSensor:
         artifacts, metadata, with id/envelope noise filtered) — NOT the raw
         serialized JSON. The parsed dict is also used for structural validation.
         Other types fail open gracefully.
+
+        ``parent_context`` is an OPTIONAL, read-only W3C Trace Context parent
+        (host-resolved: inbound ``traceparent`` or an active OTel span). It is
+        attached to telemetry as additive metadata ONLY — it does NOT alter the
+        A2A extraction, the structural/id checks, or the verdict. Absent, the
+        result is byte-identical to before.
         """
         # Crash guard. A dict envelope / JSON string is parsed so we can extract
         # the A2A text fields and validate structure. bytes are decoded.
@@ -419,6 +437,8 @@ class DelphiSensor:
             }
             if prov:
                 data["provenance"] = prov
+            if parent_context is not None:
+                data["traceParent"] = parent_context.as_metadata()
             self._telemetry.enqueue({
                 "type": "scan",
                 "agentId": self.agent_id,
@@ -487,6 +507,8 @@ class DelphiSensor:
         }
         if prov:
             data["provenance"] = prov
+        if parent_context is not None:
+            data["traceParent"] = parent_context.as_metadata()
         self._telemetry.enqueue({
             "type": "scan",
             "agentId": self.agent_id,
