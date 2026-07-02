@@ -23,6 +23,7 @@ from . import provenance_chain as _chain
 from .authz import classify, build_request, evaluate
 from .reporters import Reporter
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
+from .scanner.l1 import scan_l1 as _scan_l1
 from .scanner.local import LocalScanner
 from .telemetry import SyncTelemetryQueue
 from .trace_context import ParentContext
@@ -595,6 +596,25 @@ class DelphiSensor:
                 action, score, category, rules = "blocked", 1.0, "action_policy", ["ACTION_POLICY_APPROVAL_REQUIRED"]
                 reason = authz.reason or f"Tool '{tool_name}' requires approval"
                 print(f"[xaidr] TOOL requires approval: {tool_name} ({authz.policy_id})")
+
+        # Content scan of the tool name + string args for dangerous command /
+        # code-execution patterns (ASI02/ASI05). Even with NO policy configured,
+        # the sensor must not stay silent on e.g. shell_exec("rm -rf /") or
+        # eval("__import__('os').system(...)") — it raises at least a FLAG. Policy
+        # (below) remains the BLOCK layer; this only ADDS a signal, never lowers.
+        if action == "allowed":
+            arg_text = " ".join(
+                str(v) for v in (arguments or {}).values() if v is not None
+            )
+            danger = [
+                t for t in _scan_l1(f"{tool_name} {arg_text}").threats
+                if t.category in ("code_execution", "excessive_agency", "prompt_injection")
+            ]
+            if danger:
+                score = max(score, max(t.score for t in danger))
+                category = category or "code_execution"
+                rules = rules + [t.rule for t in danger if t.rule not in rules]
+                action = "blocked" if self.enforcement_mode == "block" else "flagged"
 
         # Compose the local YAML policy as an overlay (STRICTER WINS), BEFORE the
         # enforcement_mode gate so the same gate (_apply_mode) sees the composed

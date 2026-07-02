@@ -845,5 +845,41 @@
     "pattern": "(?:from\\s+now\\s+on|starting\\s+now|henceforth|going\\s+forward)\\s+(?:you\\s+)?(?:can|may|are\\s+(?:free|able|allowed)\\s+to)\\s+(?:do\\s+anything|say\\s+anything|respond\\s+(?:to\\s+)?anything|answer\\s+(?:any|all)|ignore\\s+(?:any|all))",
     "score": 0.35,
     "category": "jailbreak"
+  },
+  {
+    "id": "LLM08_shell_destructive",
+    "pattern": "\\brm\\s+-[rf]{1,2}\\s+(?:/|~|\\*|\\$HOME|\\.)|\\bformat\\s+c:|\\bmkfs\\.?\\w*\\s+/dev/",
+    "score": 0.9,
+    "category": "code_execution"
+  },
+  {
+    "id": "LLM08_fork_bomb",
+    "pattern": ":\\(\\)\\s*\\{\\s*:\\s*\\|\\s*:\\s*&\\s*\\}\\s*;\\s*:",
+    "score": 0.9,
+    "category": "code_execution"
+  },
+  {
+    "id": "LLM08_os_exec",
+    "pattern": "\\bos\\.system\\s*\\(|\\bsubprocess\\.(?:call|run|Popen|check_output|check_call|getoutput)\\s*\\(|\\b__import__\\s*\\(",
+    "score": 0.9,
+    "category": "code_execution"
+  },
+  {
+    "id": "LLM08_pipe_exec",
+    "pattern": "\\b(?:curl|wget)\\s+[^\\n|]{0,300}\\|\\s*(?:bash|sh|zsh|dash)\\b",
+    "score": 0.9,
+    "category": "code_execution"
+  },
+  {
+    "id": "LLM08_reverse_shell",
+    "pattern": "\\b(?:nc|ncat|netcat)\\s+-[elpc]|/dev/tcp/|\\bbash\\s+-i\\b",
+    "score": 0.9,
+    "category": "code_execution"
+  },
+  {
+    "id": "LLM08_deserialization",
+    "pattern": "\\b(?:pickle|cpickle|marshal|shelve)\\.(?:loads?|load)\\s*\\(|\\byaml\\.(?:unsafe_)?load\\s*\\(",
+    "score": 0.85,
+    "category": "code_execution"
   }
 ]

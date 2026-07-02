@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from ..types import ScanResult
 from .compositional import CompositionalScanner
+from .directive_context import is_descriptive
 from .dlp import scan_dlp
 from .l1 import scan_l1, L1_MAX_SCAN_CHARS
 from .l2 import scan_l2
@@ -17,6 +18,28 @@ from .normalizer import TypoNormalizer
 
 DEFAULT_BLOCK_THRESHOLD = 0.60
 DEFAULT_FLAG_THRESHOLD = 0.20
+
+# Context-sensitive (behavioral) categories that a DESCRIPTIVE frame dampens:
+# instruction/injection/extraction/jailbreak/code-exec/tool-misuse signals fire
+# on keyword presence and cannot tell a command from a description of one. In a
+# descriptive frame (see directive_context) these are suppressed below threshold.
+# DLP/PII/secret, DoS, and structural signals are NEVER in this set — a real
+# secret or a pathological payload is not made benign by descriptive wording.
+GATED_CATEGORIES = frozenset({
+    "prompt_injection",
+    "system_prompt_leak",
+    "jailbreak",
+    "excessive_agency",
+    "code_execution",
+    "tool_misuse",
+    "agentic_abuse",
+    "data_exfiltration",
+    # compositional signal categories (the whole compositional layer is behavioral)
+    "exfiltration",
+    "override",
+    "role_override",
+    "persona",
+})
 
 # DLP scan cap. The DLP patterns are now linear (the bulk-email ReDoS was
 # linearized to a findall + count threshold), so DLP uses the same ceiling as the
@@ -97,8 +120,6 @@ class LocalScanner:
             dlp_threats = dlp.threats
             dlp_rules = [t.rule for t in dlp.threats]
 
-        score = self._compute_composite(l1.score, l2.score, dlp_score)
-
         # --- Compositional scanner (always-on, MAX-fused) ---
         # Runs on EVERY scan and fuses via max, so a weak L1/L2/DLP signal (e.g.
         # a 0.15 self-referential probe) can never preempt a strong relation-based
@@ -120,6 +141,28 @@ class LocalScanner:
             comp_rules = [d["rule"] for d in comp.get("details", [])]
             if comp.get("details"):
                 comp_category = comp["details"][0].get("category")
+
+        # --- Directive-context calibration (two-way FP/recall fix) -------------
+        # In a DESCRIPTIVE frame (educational / quoting / benign how-to, and NOT a
+        # directive-action wrapper), dampen the gated behavioral signals below
+        # threshold: describing or quoting an attack must not flag, while a real
+        # command still does (a bare attack is not descriptive). Only inbound
+        # (input/a2a) is gated; DLP/DoS/structural signals are never gated. The
+        # whole compositional layer is behavioral, so it is suppressed wholesale.
+        l1_threats = list(l1.threats)
+        l2_threats = list(l2.threats)
+        l1_score = l1.score
+        l2_score = l2.score
+        if direction != "output" and is_descriptive(scan_text):
+            l1_threats = [t for t in l1_threats if t.category not in GATED_CATEGORIES]
+            l2_threats = [t for t in l2_threats if t.category not in GATED_CATEGORIES]
+            l1_score = max((t.score for t in l1_threats), default=0.0)
+            l2_score = max((t.score for t in l2_threats), default=0.0)
+            comp_score = 0.0
+            comp_rules = []
+            comp_category = None
+
+        score = self._compute_composite(l1_score, l2_score, dlp_score)
         # Fuse: never let compositional LOWER the score, never let a weak
         # L1/L2/DLP composite suppress a strong compositional signal.
         score = max(score, comp_score)
@@ -145,13 +188,13 @@ class LocalScanner:
             action = "allowed"
 
         all_rules = (
-            [t.rule for t in l1.threats]
-            + [t.rule for t in l2.threats]
+            [t.rule for t in l1_threats]
+            + [t.rule for t in l2_threats]
             + dlp_rules
             + comp_rules
         )
 
-        all_threats = list(l1.threats) + list(l2.threats) + list(dlp_threats)
+        all_threats = list(l1_threats) + list(l2_threats) + list(dlp_threats)
         top_threat = max(all_threats, key=lambda t: t.score, default=None)
         top_l1l2dlp = top_threat.score if top_threat else 0.0
         # Attribute the category to whichever layer produced the winning signal:
