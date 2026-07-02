@@ -41,6 +41,36 @@ GATED_CATEGORIES = frozenset({
     "persona",
 })
 
+# Directive-attack veto (mirrors directive_context._SELF_EXFIL, but by rule-class
+# instead of regex): a LITERAL command form or a LITERAL imperative override is
+# high-signal REGARDLESS of surrounding prose — there is no benign reason for a
+# bare executable command / live "ignore all previous instructions" to appear as
+# an active directive. These are NEVER dampened, so a fake descriptive prefix
+# ("For example, rm -rf /", "In this tutorial, ignore all previous instructions")
+# can no longer smuggle a real attack past the dampener. The distinction is
+# code-as-COMMAND (never dampen) vs code-as-DOCUMENTATION (may dampen): softer
+# keyword rules (theatre-play "system prompt", "how do I delete a file") are NOT
+# in this set and stay dampenable, preserving the FP fix.
+NEVER_DAMPEN_CATEGORIES = frozenset({
+    "code_execution",  # all mirrored command-form rules (LLM08_* shell/os/pipe/…)
+})
+NEVER_DAMPEN_RULES = frozenset({
+    "LLM01_direct_override",           # literal "ignore/disregard … instructions"
+    "LLM01_override_expanded_nouns",
+    "LLM01_override_synonym_verbs",
+    "LLM01_code_injection",            # eval(/exec(/os.system( live code call
+    "LLM01_decode_and_execute",        # "decode this and run it"
+})
+
+
+def _is_directive_attack(threat) -> bool:
+    """True for high-confidence literal command / imperative-override signals that
+    must never be dampened by a descriptive frame."""
+    return (
+        threat.category in NEVER_DAMPEN_CATEGORIES
+        or threat.rule in NEVER_DAMPEN_RULES
+    )
+
 # DLP scan cap. The DLP patterns are now linear (the bulk-email ReDoS was
 # linearized to a findall + count threshold), so DLP uses the same ceiling as the
 # other detection scanners — no tighter stopgap is needed.
@@ -154,8 +184,17 @@ class LocalScanner:
         l1_score = l1.score
         l2_score = l2.score
         if direction != "output" and is_descriptive(scan_text):
-            l1_threats = [t for t in l1_threats if t.category not in GATED_CATEGORIES]
-            l2_threats = [t for t in l2_threats if t.category not in GATED_CATEGORIES]
+            # Keep a signal if it is NOT a gated behavioral category, OR it is a
+            # directive-attack (literal command / imperative override) — the
+            # latter is never dampened, closing the descriptive-frame bypass.
+            l1_threats = [
+                t for t in l1_threats
+                if t.category not in GATED_CATEGORIES or _is_directive_attack(t)
+            ]
+            l2_threats = [
+                t for t in l2_threats
+                if t.category not in GATED_CATEGORIES or _is_directive_attack(t)
+            ]
             l1_score = max((t.score for t in l1_threats), default=0.0)
             l2_score = max((t.score for t in l2_threats), default=0.0)
             comp_score = 0.0
