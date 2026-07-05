@@ -36,7 +36,8 @@
     "console", "consist", "confirm", "confine", "concern",
     "police", "polite", "polish",
     "direct", "digest", "divine",
-    "export", "exploit", "explore", "express", "expand"
+    "export", "exploit", "explore", "express", "expand",
+    "restrictions", "constraints", "directives", "prompts"
   ],
   "min_token_length": 4,
   "max_edit_distance": 1
