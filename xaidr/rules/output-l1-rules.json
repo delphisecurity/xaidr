@@ -28,7 +28,7 @@
   },
   {
     "id": "OUT_pii_email",
-    "pattern": "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b",
+    "pattern": "\\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\\.[A-Za-z]{2,24}\\b",
     "score": 0.75,
     "category": "out",
     "severity": "medium",
