@@ -740,7 +740,7 @@
   },
   {
     "id": "LLM01_override_synonym_verbs",
-    "pattern": "(?:abandon|set\\s+aside|dismiss|discard|drop|ditch|scrap|shelve|relinquish|throw\\s+(?:out|away)|put\\s+aside|cast\\s+aside|do\\s+away\\s+with|suspend|cancel|waive|deprioritize|supersede|retire).{0,40}(?:instructions?|rules?|guidelines?|constraints?|directives?|policies?|restrictions?|protocols?|commands?|parameters?|boundaries?|limitations?|programming|training|safeguards?|objectives?|hierarch(?:y|ies))",
+    "pattern": "(?:abandon|set\\s+aside|dismiss|discard|drop|ditch|scrap|shelve|relinquish|throw\\s+(?:out|away)|put\\s+aside|cast\\s+aside|do\\s+away\\s+with|suspend|cancel|waive|deprioritize|supersede|retire).{0,40}(?:instructions?|rules?|guidelines?|constraints?|directives?|polic(?:y|ies)|restrictions?|protocols?|commands?|parameters?|boundaries?|limitations?|programming|training|safeguards?|objectives?|hierarch(?:y|ies))",
     "score": 0.9,
     "category": "prompt_injection"
   },
