@@ -38,6 +38,24 @@ NOT_SCANNABLE_CATEGORY = "input_not_scannable"
 NOT_SCANNABLE_RULE = "INPUT_NOT_SCANNABLE"
 
 
+def _resolve_provenance(agent_id: str, per_call: dict | None = None) -> Optional[dict]:
+    """Build the provenance block for one emitted event (Option-1 wiring).
+
+    When set_origin()/origin_scope() (or a per-call principal) established an
+    origin context AND no begin_flow chain is active, emit provenance.resolve()'s
+    COMPLETE block — on_behalf_of + actor + the SUPPLIED correlation_id +
+    principal origin_agent — instead of discarding all but on_behalf_of. When a
+    begin_flow chain IS active, fall through to build_provenance so the multi-hop
+    chain path is unchanged byte-for-byte. Neither present → build_provenance
+    returns None as before (no fabricated provenance).
+    """
+    base = _prov.resolve(agent_id, per_call=per_call)
+    if base is not None and not _chain.is_flow_active():
+        return base
+    obo = base.get("on_behalf_of") if base else None
+    return _chain.build_provenance(agent_id, on_behalf_of=obo)
+
+
 def _coerce_scannable(value) -> Optional[str]:
     """Return a scannable string, or None if the input is not scannable.
 
@@ -269,10 +287,7 @@ class DelphiSensor:
             )
 
         # resolve the app-supplied principal (3b semantics: per-call > set context)
-        base = _prov.resolve(self.agent_id, per_call=origin_context)
-        obo = base.get("on_behalf_of") if base else None
-        # build the multi-hop chain provenance (records this hop, accumulates chain)
-        prov = _chain.build_provenance(self.agent_id, on_behalf_of=obo)
+        prov = _resolve_provenance(self.agent_id, per_call=origin_context)
         if self._quarantined:
             result = ScanResult(
                 action="blocked",
@@ -411,10 +426,7 @@ class DelphiSensor:
             content_to_scan = scan_message
 
         # resolve the app-supplied principal (3b semantics: per-call > set context)
-        base = _prov.resolve(self.agent_id, per_call=origin_context)
-        obo = base.get("on_behalf_of") if base else None
-        # build the multi-hop chain provenance (records this hop, accumulates chain)
-        prov = _chain.build_provenance(self.agent_id, on_behalf_of=obo)
+        prov = _resolve_provenance(self.agent_id, per_call=origin_context)
         if self._quarantined:
             result = ScanResult(
                 action="blocked",
@@ -665,10 +677,7 @@ class DelphiSensor:
 
         # Emit telemetry (mirrors the scan() enqueue shape, direction=tool_call)
         # resolve the app-supplied principal (3b semantics: per-call > set context)
-        base = _prov.resolve(self.agent_id, per_call=origin_context)
-        obo = base.get("on_behalf_of") if base else None
-        # build the multi-hop chain provenance (records this hop, accumulates chain)
-        prov = _chain.build_provenance(self.agent_id, on_behalf_of=obo)
+        prov = _resolve_provenance(self.agent_id, per_call=origin_context)
         data = {
             "scanId": uuid4().hex[:12],
             "agentId": self.agent_id,
@@ -731,11 +740,8 @@ class DelphiSensor:
             def make_wrapper(orig_func, tname):
                 def wrapper(*args, **kwargs):
                     def _emit(action, category, rule_list):
-                        # resolve the app-supplied principal (3b semantics)
-                        base = _prov.resolve(self.agent_id)
-                        obo = base.get("on_behalf_of") if base else None
-                        # build the multi-hop chain provenance (records this hop)
-                        prov = _chain.build_provenance(self.agent_id, on_behalf_of=obo)
+                        # honor set_origin's full block; begin_flow path unchanged
+                        prov = _resolve_provenance(self.agent_id)
                         data = {
                             "scanId": uuid4().hex[:12],
                             "agentId": self.agent_id,
