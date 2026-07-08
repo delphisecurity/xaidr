@@ -296,5 +296,23 @@
     "severity": "critical",
     "owasp": "LLM01",
     "description": "Hijacked persona activated in output"
+  },
+  {
+    "id": "OUT_social_authority_credential_request",
+    "pattern": "(?:i\\s*am|i['’]?m|this\\s+is|we\\s+are|we['’]?re|as)(?:\\s+(?:the|your|an?|from))?\\s+(?:system\\s+admin(?:istrator)?|sysadmin|administrator|admin|security\\s+team|security\\s+department|it\\s+support|it\\s+department|it\\s+help\\s?desk|help\\s?desk)[\\s\\S]{0,60}?(?:provide|send|reply\\s+with|give|share|submit|forward|email|hand\\s+over|disclose)\\s+(?:(?:me|us|your|the)\\s+){0,3}(?:password|passphrase|api\\s*key|credentials?|login(?:\\s+(?:credentials?|details?|info))?|secret|token|pin|otp|access\\s+code)",
+    "score": 0.65,
+    "category": "social_engineering",
+    "severity": "high",
+    "owasp": "LLM09",
+    "description": "Tier 1 (ASI09): output claims an authority (admin/security/IT) AND requests a credential/secret — authority-claim credential phishing. Requires BOTH the self-claim and the extraction request within a bounded window; mere advice to change a password does not fire."
+  },
+  {
+    "id": "OUT_social_deceptive_link",
+    "pattern": "(?:(?:verify|confirm|validate)\\s+(?:your\\s+)?(?:account|identity|password|login|credentials?|email|billing|payment|sign-?in)|(?:account|login|profile|access)\\s+(?:is\\s+|has\\s+been\\s+|was\\s+|will\\s+be\\s+)?(?:suspend(?:ed)?|lock(?:ed)?|disabl(?:ed)?|deactivat(?:ed)?)|re-?authenticate|re-?activate|reactivate|unlock\\s+(?:your\\s+)?(?:account|access))[\\s\\S]{0,60}?https?://",
+    "score": 0.65,
+    "category": "social_engineering",
+    "severity": "high",
+    "owasp": "LLM09",
+    "description": "Tier 2 (ASI09): output pairs a deceptive verify/confirm/suspended/re-authenticate pretext with a link — deceptive-link phishing. Requires BOTH the pretext and a URL within a bounded window; a bare informational link does not fire."
   }
 ]
