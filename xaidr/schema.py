@@ -54,6 +54,81 @@ def _hash(text: str | None) -> str | None:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
+# Internal action values are past-tense ("blocked"/"flagged"/"allowed"). Accept
+# the imperative aliases too so the derived fields are robust to either form.
+_ACTION_ALIASES = {"block": "blocked", "flag": "flagged", "allow": "allowed"}
+
+
+def _norm_action(action: Any) -> str | None:
+    if not isinstance(action, str) or not action:
+        return None
+    return _ACTION_ALIASES.get(action, action)
+
+
+def _fmt_score(score: Any) -> str | None:
+    # bool is an int subclass — reject it so True doesn't render as "1.00".
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        return None
+    return f"{score:.2f}"
+
+
+def _detection_severity(action: Any, score: Any) -> str | None:
+    """Map (action, score) to a stable severity enum SOCs can alert on.
+
+    Pure and additive — it does NOT replace the raw score. Cut points live here
+    so they are trivial to tune later (the paid Brain may override; open uses
+    this default). Returns None for unknown/absent action so the caller omits.
+    """
+    act = _norm_action(action)
+    if act is None:
+        return None
+    s = score if isinstance(score, (int, float)) and not isinstance(score, bool) else 0.0
+    if act == "blocked":
+        return "critical" if s >= 0.95 else "high"
+    if act == "flagged":
+        return "high" if s >= 0.90 else "medium"
+    if act == "allowed":
+        return "info"
+    return None
+
+
+def _detection_message(
+    action: Any,
+    category: Any,
+    agent_id: Any,
+    rules: Any,
+    score: Any,
+) -> str | None:
+    """Compose a one-line, analyst-friendly summary from fields already present.
+
+    Shape: "<action> <category> on <agent> via <primary_rule>". Built ONLY from
+    NAMES (action/category/agent/rule) — never from raw content, so the privacy
+    invariant (content stays hashed) is preserved by construction. Degrades
+    gracefully: no category -> "(score X)" form; no rules -> omit " via ...".
+    Returns None (omit cleanly) when there is no action to describe.
+    """
+    act = _norm_action(action)
+    if act is None:
+        return None
+    agent = agent_id if isinstance(agent_id, str) and agent_id else "unknown-agent"
+
+    # rule suffix: single rule name, or first + count when many. Never content.
+    rule_suffix = ""
+    if rules:
+        rule_list = [r for r in rules if isinstance(r, str) and r]
+        if len(rule_list) == 1:
+            rule_suffix = f" via {rule_list[0]}"
+        elif len(rule_list) > 1:
+            rule_suffix = f" via {rule_list[0]} (+{len(rule_list) - 1} more)"
+
+    if isinstance(category, str) and category:
+        base = f"{act} {category} on {agent}"
+    else:
+        fs = _fmt_score(score)
+        base = f"{act} on {agent} (score {fs})" if fs is not None else f"{act} on {agent}"
+    return base + rule_suffix
+
+
 def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
     """Convert one internal event dict to the OpenA2A gen_ai.security.* shape.
 
@@ -124,6 +199,17 @@ def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
     latency = data.get("scanTimeMs")
     if latency is not None:
         out["gen_ai.security.detection.latency_ms"] = latency
+
+    # derived + additive (no raw content): a human-readable one-line summary and
+    # a stable severity enum. Both are composed from the NAMES above (action,
+    # category, agent, rules, score) so the content-stays-hashed invariant holds
+    # by construction. The raw score field above is kept, not replaced.
+    message = _detection_message(action, category, agent_id, rules, score)
+    if message:
+        out["gen_ai.security.detection.message"] = message
+    severity = _detection_severity(action, score)
+    if severity:
+        out["gen_ai.security.detection.severity"] = severity
 
     # --- authz (impact data, when present) ----------------------------------
     impact_tier = data.get("impactTier")
