@@ -39,6 +39,37 @@ _VALID_ROLES = frozenset({"user", "agent"})
 # smuggle instructions past content scanners that only read parts[].text.
 _METADATA_PROSE_LEN = 200
 
+# -- id-field CONTENT validation (ASI07) -------------------------------------
+# An A2A id (messageId/taskId/contextId/any *Id) is an OPAQUE IDENTIFIER — a
+# UUID, hash, prefixed token, or namespaced ref. It is provenance-checked by
+# A2AIdTracker but its STRING CONTENT was never validated: a path-traversal or
+# command-injection payload smuggled into an id field passed unseen (the field
+# is filtered out of the content scan as routing noise). These patterns fire on
+# TRAVERSAL / INJECTION SHAPES only — NOT on every non-UUID id, and NOT on prose
+# (an id carrying words but no dangerous shape stays a filtered noise field).
+#
+# All patterns are anchored or single-pass with no nested/overlapping
+# quantifiers, so they are linear-time on the short id strings they scan
+# (ReDoS-safe).
+#
+# A ".." path SEGMENT — literal traversal — bounded by a separator or an end.
+# Distinguishes traversal ("../", "/..") from a legitimate namespaced single
+# slash ("AGENT-SVC/checkout-flow"), which has no ".." component: THE FP CRUX.
+_ID_TRAVERSAL_SEG = re.compile(r"(?:^|[/\\])\.\.(?:[/\\]|$)")
+# URL-encoded traversal / null: encoded dot, slash, backslash, or NUL. A normal
+# opaque id never percent-encodes, so these building blocks are unambiguous.
+_ID_ENCODED = re.compile(r"(?i)%00|%2e|%2f|%5c")
+# Leading absolute path ("/etc/shadow", "\\host") or a Windows drive path
+# ("C:\\..."). A leading separator is never an identifier shape.
+_ID_ABSOLUTE = re.compile(r"^(?:[/\\]|[A-Za-z]:[/\\])")
+# Control characters incl. the NUL byte and DEL — never in a legitimate id.
+_ID_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+# Shell / command-injection metacharacters. Keyed on METACHARACTERS, not on
+# spaces: "id; rm -rf /" (has ';') is injection, but prose like "ignore all
+# previous instructions" (only spaces and words) is NOT flagged — it stays a
+# filtered noise field, preserving the id-as-noise contract.
+_ID_INJECTION = re.compile(r"[;|&$`<>()\n\r\t]")
+
 
 class A2AStructuralValidator:
     """Stateless structural/wire-format validator for A2A JSON-RPC messages."""
@@ -74,6 +105,7 @@ class A2AStructuralValidator:
         self._check_parts(json_body, fire)
         self._check_role(json_body, direction, fire)
         self._check_metadata_surface(json_body, fire)
+        self._check_id_content(json_body, fire)
 
         score = round(max((d["confidence"] for d in details), default=0.0), 4)
         signals = [d["rule"] for d in details]
@@ -173,6 +205,60 @@ class A2AStructuralValidator:
                 fire("metadata_prose_surface", "structural_metadata", 0.20)
                 # One flag per body is enough; the extractor scans the text.
                 return
+
+    # -- 5. ID-FIELD MALICIOUS CONTENT (0.40) — ASI07 ----------------------
+    # id fields are provenance-checked by A2AIdTracker but never validated for
+    # STRING CONTENT. Scan the VALUES of id fields (messageId/taskId/contextId
+    # and any *Id) for traversal/injection shapes. Fires only on those shapes,
+    # not on every non-UUID id and not on prose — an id carrying words but no
+    # dangerous shape remains a filtered routing-noise field.
+    def _check_id_content(self, body: dict, fire) -> None:
+        for value in self._iter_id_values(body):
+            category = self._id_content_category(value)
+            if category is not None:
+                fire(category, "structural_id", 0.40)
+
+    @staticmethod
+    def _id_content_category(value: str) -> str | None:
+        """Return a signal name if ``value`` carries a malicious id shape.
+
+        ``id_field_traversal`` for path-traversal / encoded-traversal /
+        absolute-path payloads; ``id_field_malicious_content`` for NUL/control
+        bytes and command-injection metacharacters. ``None`` when the value is
+        a benign opaque id — INCLUDING a legitimate namespaced single slash
+        (no ".." segment, no leading separator), the FP crux.
+        """
+        if (
+            _ID_TRAVERSAL_SEG.search(value)
+            or _ID_ENCODED.search(value)
+            or _ID_ABSOLUTE.match(value)
+        ):
+            return "id_field_traversal"
+        if _ID_CONTROL.search(value) or _ID_INJECTION.search(value):
+            return "id_field_malicious_content"
+        return None
+
+    def _iter_id_values(self, body: dict):
+        """Yield string values of id fields on params and params.message.
+
+        An id field is any key equal to ``id`` or ending in ``Id`` (messageId,
+        taskId, contextId, referenceTaskId, ...). Scoped to the id-bearing
+        containers so it never reads a data part's payload (which may legitimately
+        hold a path). Empty strings are skipped.
+        """
+        containers = []
+        params = body.get("params")
+        if isinstance(params, dict):
+            containers.append(params)
+            message = params.get("message")
+            if isinstance(message, dict):
+                containers.append(message)
+        for container in containers:
+            for key, value in container.items():
+                if not isinstance(value, str) or not value:
+                    continue
+                if key == "id" or key.endswith("Id"):
+                    yield value
 
     # -- helpers -----------------------------------------------------------
     @staticmethod
