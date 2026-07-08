@@ -745,6 +745,12 @@
     "category": "prompt_injection"
   },
   {
+    "id": "LLM01_agent_authority_impersonation",
+    "pattern": "(?:i\\s*am|i['’]?m|this\\s+(?:message\\s+)?is\\s+from|message\\s+from\\s*:|this\\s+is\\s+the|speaking\\s+as|on\\s+(?:the\\s+)?authority\\s+of)(?:\\s+(?:the|your|an?|a))?[^.!?\\n]{0,30}?\\b(?:administrator|admin|trusted|authoriz(?:ed|er)|verified|superuser|supervisor|privileged|root\\s+(?:controller|access|user|admin|privileged)|system\\s+admin(?:istrator)?|security\\s*admin(?:istrator)?)\\b",
+    "score": 0.72,
+    "category": "prompt_injection"
+  },
+  {
     "id": "LLM01_override_expanded_nouns",
     "pattern": "(?:ignore|forget|disregard|bypass|override|skip|dismiss|abandon).{0,40}(?:guidelines?|constraints?|restrictions?|boundaries?|limitations?|parameters?|protocols?|safeguards?|guardrails?|programming|conditioning)",
     "score": 0.9,
