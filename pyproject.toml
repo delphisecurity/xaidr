@@ -51,6 +51,24 @@ http = ["httpx>=0.24"]
 # parent as additive telemetry metadata. opentelemetry-api ONLY — never the SDK,
 # never a TracerProvider/exporter. Keeps zero required deps. `pip install xaidr[trace]`.
 trace = ["opentelemetry-api>=1.20"]
+# Local YAML policy loading (local_policy.py) — parses a `./xaidr-policy.yaml`
+# via `yaml.safe_load`. Referenced by the code's own error message
+# ("Install with: pip install xaidr[policy]"). `pip install xaidr[policy]`.
+policy = ["PyYAML>=6"]
+# OTelReporter (reporters.py) — emits each security event as an OTel log record
+# through `opentelemetry._logs`. Referenced by the reporter's own error message
+# ("Install with: pip install xaidr[otel]"). Uses the SAME opentelemetry-api the
+# [trace] extra pins (matched version, no conflicting pin); this extra is named
+# for the reporter feature. To actually export to a backend the user also
+# configures a LoggerProvider from the OpenTelemetry SDK (installed separately
+# by the user — this extra deliberately stays API-only, no SDK pin); absent one,
+# emit is a safe no-op. `pip install xaidr[otel]`.
+otel = ["opentelemetry-api>=1.20"]
+# LangChain 1.0 middleware (integrations/langchain.py) — imports
+# `langchain.agents.middleware` + `langchain_core.messages`. Referenced by the
+# middleware's own error message ("Install with: pip install 'xaidr[langchain]'").
+# `pip install xaidr[langchain]`.
+langchain = ["langchain>=1.0", "langchain-core>=1.0"]
 # Dev/test tooling — the base pytest regression suite. `pip install xaidr[dev]`.
 dev = ["pytest"]
 
