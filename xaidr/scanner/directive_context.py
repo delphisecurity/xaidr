@@ -114,6 +114,56 @@ _AI_SELF_TARGET = re.compile(
     re.IGNORECASE,
 )
 
+# PROTECTIVE language (negative evidence): the text advocates PROTECTING a secret
+# / the system prompt (store it securely, do NOT reveal it, keep it confidential)
+# — the OPPOSITE of an exfiltration request. When present (and no live extraction
+# instruction fires, see below) this is strong negative evidence, so the gated
+# leak/exfil signals are dampened. Bounded quantifiers only (no ReDoS surface).
+_PROTECTIVE = re.compile(
+    r"\b(?:should|must|shall|needs?\s+to|has\s+to|ought\s+to)\s+(?:be\s+|remain\s+|stay\s+)?"
+    r"(?:stored|kept|held|handled|treated)\s+(?:\w+\s+){0,2}"
+    r"(?:secure|securely|safe|safely|confidential|confidentially|private|privately|secret)\b"
+    r"|\b(?:do\s+not|don'?t|never|must\s+not|mustn'?t|should\s+not|shouldn'?t|cannot|can'?t|do\s+not\s+ever)\s+"
+    r"(?:\w+\s+){0,2}(?:reveal|disclos\w+|shar\w+|expos\w+|leak\w*|divulg\w+|show|send|give|hand\s+over|surrender)\b"
+    r"|\bkeep\s+(?:it|them|this|that|the\s+\w+|your\s+\w+)\s+(?:\w+\s+){0,2}(?:secret|private|confidential|secure|safe)\b"
+    r"|\bprevent\s+(?:\w+\s+){0,3}(?:disclosure|leakage|exposure|exfiltration|access)\b"
+    r"|\b(?:protect|safeguard|secure)\s+(?:the|your|our|its)\s+(?:\w+\s+){0,2}"
+    r"(?:prompt|instructions?|secret|credential|configuration|config|key|data)\b",
+    re.IGNORECASE,
+)
+
+# ACTIVE extraction imperative naming an AI-secret target ("reveal the system
+# prompt", "send me your instructions", "exfiltrate the developer instructions").
+# Used ONLY to VETO the protective-language dampening below (an active "…but
+# reveal the system prompt" must stay caught). It is deliberately NOT a global
+# veto — a recontextualized mention ("show me the system prompt in this play")
+# must still be dampenable by the descriptive frame, so this is scoped to the
+# protective branch only. Requires an explicit secret target, so a bare pronoun
+# ("do not reveal it") does NOT trip it.
+_ACTIVE_EXFIL = re.compile(
+    r"\b(?:reveal|expos\w+|disclos\w+|divulg\w+|leak\w*|exfiltrat\w+|dump|send|paste|"
+    r"print|output|reproduce|show|give|hand\s+over|tell)\b[\s\S]{0,40}?"
+    r"(?:system\s*prompt|your\s+(?:prompt|instructions?|rules?|config\w*|guidelines?)|"
+    r"the\s+(?:system\s*)?(?:prompt|instructions?)|hidden\s+(?:instructions?|rules?|developer\s+\w+)|"
+    r"developer\s+(?:instructions?|message|prompt)|initial\s+(?:instructions?|prompt))",
+    re.IGNORECASE,
+)
+
+# Negation guard for _ACTIVE_EXFIL: a negated extraction ("do not reveal …",
+# "never disclose …") is PROTECTIVE, not active — it must not veto the dampening.
+_NEGATED_EXTRACT = re.compile(
+    r"\b(?:not|never|n'?t|cannot|can'?t|won'?t|refuse\s+to|avoid|prevent(?:s|ing)?\s+\w+\s+from)\s+"
+    r"(?:\w+\s+){0,2}"
+    r"(?:reveal|expos\w+|disclos\w+|divulg\w+|leak\w*|shar\w+|send\w*|giv\w+|dump\w*|"
+    r"print\w*|output\w*|paste\w*|show\w*|tell)\b",
+    re.IGNORECASE,
+)
+
+
+def _active_extraction(text: str) -> bool:
+    """True when an UNNEGATED active extraction imperative targets an AI secret."""
+    return bool(_ACTIVE_EXFIL.search(text)) and not _NEGATED_EXTRACT.search(text)
+
 
 def is_descriptive(text: str) -> bool:
     """True when ``text`` is a benign descriptive/quoting/interrogative frame.
@@ -128,6 +178,15 @@ def is_descriptive(text: str) -> bool:
     #    attack is being ACTED on / targets this assistant, keep it caught.
     if _DIRECTIVE_VETO.search(text) or _SELF_EXFIL.search(text):
         return False
+
+    # 1b. PROTECTIVE-language negative evidence: text advocating protection of a
+    #     secret / the system prompt ("store it securely", "do not reveal it") is
+    #     the OPPOSITE of exfiltration, so dampen the gated leak/exfil signals —
+    #     UNLESS an active, unnegated extraction imperative targeting an AI secret
+    #     is also present ("…but reveal the system prompt"), which vetoes the
+    #     dampening and keeps the attack caught (anti-bypass).
+    if _PROTECTIVE.search(text) and not _active_extraction(text):
+        return True
 
     # 2. Strong educational / quotation / reference frame wins outright.
     if _DESCRIPTIVE.search(text) or _CODE_AS_DOCS.search(text):

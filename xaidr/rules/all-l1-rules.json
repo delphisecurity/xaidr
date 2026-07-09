@@ -49,13 +49,25 @@
   },
   {
     "id": "LLM01_encoding_evasion",
-    "pattern": "base64|rot13|hex\\s*(?:en|de)cod|url\\s*encod|unicode\\s*escap",
+    "pattern": "(?:decode|decipher|decrypt|unescape|de-?obfuscate|unpack|interpret|execute|exec|eval|run|follow|apply|obey|process)\\b[\\s\\S]{0,20}?(?:base64|rot-?13|hex\\s*(?:en|de)?cod|url\\s*encod|unicode\\s*escap)|(?:base64|rot-?13|hex\\s*(?:en|de)?cod|url\\s*encod|unicode\\s*escap)\\b[\\s\\S]{0,40}?(?:execute|\\bexec\\b|\\beval\\b|\\brun\\b|follow|obey|do\\s+what|do\\s+it|carry\\s+out|and\\s+do|and\\s+run|and\\s+follow)",
     "score": 0.72,
     "category": "prompt_injection"
   },
   {
+    "id": "LLM06_exfiltrate_data",
+    "pattern": "\\b(?:exfiltrat\\w+|smuggl\\w+|siphon\\w*)\\b[\\s\\S]{0,40}?(?:instruction|prompt|secret|credential|password|api[\\s_-]*key|token|developer|hidden|config)|\\b(?:leak|steal|send|upload|forward|transmit|email|post)\\b[\\s\\S]{0,30}?(?:system\\s*prompt|developer\\s+(?:instruction|message)|hidden\\s+(?:instruction|rule)|secret|credential|api[\\s_-]*key|password)",
+    "score": 0.7,
+    "category": "data_exfiltration"
+  },
+  {
     "id": "LLM01_code_injection",
-    "pattern": "\\bpayload\\s*[:=]|json\\.loads|eval\\s*\\(|exec\\s*\\(",
+    "pattern": "eval\\s*\\(|exec\\s*\\(",
+    "score": 0.9,
+    "category": "prompt_injection"
+  },
+  {
+    "id": "LLM01_deserialize_to_exec",
+    "pattern": "(?:json\\.loads|\\.loads\\s*\\(|\\bpayload\\s*[:=])[\\s\\S]{0,40}?(?:\\bexec\\b|\\beval\\b|os\\.system|subprocess|\\bshell\\b|run\\s+it|then\\s+(?:run|exec|eval))|(?:\\bexec\\b|\\beval\\b|os\\.system|subprocess)[\\s\\S]{0,40}?(?:json\\.loads|\\.loads\\s*\\(|\\bpayload\\s*[:=])",
     "score": 0.9,
     "category": "prompt_injection"
   },
@@ -746,7 +758,7 @@
   },
   {
     "id": "LLM01_agent_authority_impersonation",
-    "pattern": "(?:i\\s*am|i['’]?m|this\\s+(?:message\\s+)?is\\s+from|message\\s+from\\s*:|this\\s+is\\s+the|speaking\\s+as|on\\s+(?:the\\s+)?authority\\s+of)(?:\\s+(?:the|your|an?|a))?[^.!?\\n]{0,30}?\\b(?:administrator|admin|trusted|authoriz(?:ed|er)|verified|superuser|supervisor|privileged|root\\s+(?:controller|access|user|admin|privileged)|system\\s+admin(?:istrator)?|security\\s*admin(?:istrator)?)\\b",
+    "pattern": "(?:i\\s*am|i['\u2019]?m|this\\s+(?:message\\s+)?is\\s+from|message\\s+from\\s*:|this\\s+is\\s+the|speaking\\s+as|on\\s+(?:the\\s+)?authority\\s+of)(?:\\s+(?:the|your|an?|a))?[^.!?\\n]{0,30}?\\b(?:administrator|admin|trusted|authoriz(?:ed|er)|verified|superuser|supervisor|privileged|root\\s+(?:controller|access|user|admin|privileged)|system\\s+admin(?:istrator)?|security\\s*admin(?:istrator)?)\\b",
     "score": 0.72,
     "category": "prompt_injection"
   },
