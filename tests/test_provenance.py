@@ -1,8 +1,7 @@
 """Provenance coverage (xaidr/provenance.py + provenance_chain.py).
 
-Promotes the positive cases of ``_phase1/verify_provenance.py``: a set principal
-is carried, and a multi-hop chain accumulates. The no-fabrication invariant lives
-in ``test_security_invariants.py``.
+Positive cases: a set principal is carried, and a multi-hop chain accumulates.
+The no-fabrication invariant lives in ``test_security_invariants.py``.
 """
 
 from __future__ import annotations

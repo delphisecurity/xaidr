@@ -1,14 +1,13 @@
 """reporters.py — Pluggable telemetry sinks (the emit-anywhere layer).
 
 A Reporter receives batches of security events and sends them somewhere:
-stdout, a file, a webhook, an OpenTelemetry pipeline, or (in the commercial
-package) the Delphi Brain. The sensor's job is to SEE and EMIT; where events
-go is the Reporter's job.
+stdout, a file, a webhook, or an OpenTelemetry pipeline. The sensor's job is to
+SEE and EMIT; where events go is the Reporter's job.
 
-This is the decoupling seam: the open sensor ships with standalone reporters
-(Stdout/File/Webhook/OTel) and never depends on any backend. The commercial
-Brain reporter implements this same protocol in a separate package and plugs
-in via one line — no sensor change, no reinstall.
+This is the decoupling seam: the sensor ships with standalone reporters
+(Stdout/File/Webhook/OTel) and never depends on any backend. Any custom sink
+that implements this same protocol plugs in via one line — no sensor change,
+no reinstall.
 
 Contract:
     report(events: list[dict]) -> None    # emit a batch; SHOULD fail open

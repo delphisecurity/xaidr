@@ -1,7 +1,7 @@
 """A2A extraction + structural coverage.
 
-Promotes ``_phase1/verify_a2a_extraction.py``: proves ``scan_a2a`` routes content
-through the A2A FIELD EXTRACTOR (params.message.parts[].text / artifacts), not a
+Proves ``scan_a2a`` routes content through the A2A FIELD EXTRACTOR
+(params.message.parts[].text / artifacts), not a
 raw scan of the serialized JSON — the discriminators below give opposite verdicts
 under extraction vs raw-string scanning. Includes the TRUE-SPLIT oracle and one
 structural-validator check.

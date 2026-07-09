@@ -5,8 +5,7 @@ example key, a 555-style SSN placeholder) — never real secrets.
 
 Note (observed): a *single* email is not a raw-DLP finding; the reserved-vs-real
 email distinction lives at the SENSOR output-L1 layer (rule ``OUT_pii_email``),
-so that case is exercised through ``scan_output`` — promoting
-``_phase1/verify_dlp_placeholder.py``.
+so that case is exercised through ``scan_output``.
 """
 
 from __future__ import annotations

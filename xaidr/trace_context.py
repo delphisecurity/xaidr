@@ -17,8 +17,8 @@ OPEN-CORE LINE (do not cross it):
     never a batch span processor, and it NEVER installs or overrides the global
     tracer provider. It only *reads* whatever the host set up.
   * There is deliberately NO self-owned ContextVar parent stack here. The
-    sensor does not push/pop its own parent spans — that standalone in-process
-    capability is a paid-only differentiator and must not appear in this repo.
+    sensor does not push/pop its own parent spans — it only *reads* the host's
+    active context, keeping this module a pure, dependency-light reader.
 """
 
 from __future__ import annotations

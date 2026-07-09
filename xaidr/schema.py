@@ -79,8 +79,8 @@ def _detection_severity(action: Any, score: Any) -> str | None:
     """Map (action, score) to a stable severity enum SOCs can alert on.
 
     Pure and additive — it does NOT replace the raw score. Cut points live here
-    so they are trivial to tune later (the paid Brain may override; open uses
-    this default). Returns None for unknown/absent action so the caller omits.
+    so they are trivial to tune later. Returns None for unknown/absent action so
+    the caller omits.
     """
     act = _norm_action(action)
     if act is None:

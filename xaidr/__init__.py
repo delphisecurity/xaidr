@@ -1,6 +1,8 @@
 """xaidr — Delphi xAIDR Python SDK.
 
-v0.2: Local L1/L2/DLP scanning. Brain for L4 escalation + fleet intelligence.
+Standalone, local-first security sensor for AI agents: L1/L2/DLP + compositional
+and A2A-protocol scanning with a 3-state verdict (allow / flag / block). No
+account, no backend, no network required.
 """
 
 from .sensor import DelphiSensor as Sensor, ProtectedHttpClient

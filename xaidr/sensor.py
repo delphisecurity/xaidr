@@ -124,7 +124,7 @@ class DelphiSensor:
 
         # Telemetry delivery is decoupled from any backend via the Reporter seam.
         # Default to StdoutReporter so the sensor emits events with no account
-        # and no backend — NOT a Brain reporter.
+        # and no backend.
         resolved_reporter = reporter
         if resolved_reporter is None:
             from .reporters import StdoutReporter
@@ -152,7 +152,7 @@ class DelphiSensor:
 
         # A2A structural validation (Tier A, content-blind) + local id tracking
         # (Tier B, LOCAL ONLY — catches references to ids this sensor never
-        # issued; cross-agent id correlation is the paid Brain tier, not here).
+        # issued; cross-agent id correlation across agents is out of scope here).
         # Shared across scan_a2a calls so the id tracker accumulates state.
         if a2a_structural_enforcement not in ("flag", "block"):
             raise ValueError(
@@ -178,9 +178,9 @@ class DelphiSensor:
         )
 
     def _evaluate_policy(self, context: dict) -> tuple[bool, Optional[str]]:
-        """Always-allow stub for the (paid-only) AGT policy evaluator path.
+        """Always-allow stub for the optional AGT policy evaluator path.
 
-        The open distribution ships no AGT evaluator, so this has
+        This distribution ships no AGT evaluator, so this has
         always returned ``(True, None)`` — its callers (scan_tool_call,
         protect_tools, ProtectedHttpClient._scan_request) already behave as
         "policy allows". The real, local authorization is the YAML policy
@@ -263,9 +263,9 @@ class DelphiSensor:
         """Synchronous scan — used by LangChain middleware and direct calls.
 
         For agent→LLM (input/output) calls, ``destination``/``provider`` label
-        the LLM endpoint (e.g. "anthropic") so the fleet graph can draw an
-        agent→LLM edge. If neither is given, the edge falls back to a generic
-        "llm" node.
+        the LLM endpoint (e.g. "anthropic") so a downstream topology view can
+        draw an agent→LLM edge. If neither is given, the edge falls back to a
+        generic "llm" node.
 
         ``origin_context`` is a per-call provenance override (OBO principal,
         actor, correlation id); it beats any context set via ``set_origin``.
@@ -545,8 +545,8 @@ class DelphiSensor:
         the verdict. Honors enforcement mode (monitor downgrades block->flag).
 
         Pass ``mcp_server`` (alias ``server_name``) to attribute the call to an
-        MCP server (the fleet graph then draws an agent→MCP edge instead of a
-        generic tool edge).
+        MCP server (a downstream topology view then draws an agent→MCP edge
+        instead of a generic tool edge).
         """
         mcp_server = mcp_server or server_name
 
@@ -591,7 +591,7 @@ class DelphiSensor:
         # Blocked-tools list
         elif tool_name in self._blocked_tools:
             action, score, category, rules = "blocked", 1.0, "blocked_tool", ["TOOL_BLOCKED"]
-            reason = f"Tool '{tool_name}' blocked by fleet administrator"
+            reason = f"Tool '{tool_name}' blocked by local policy"
         else:
             # Per-agent AGT policy evaluation
             allowed, policy_reason = self._evaluate_policy({"tool_name": tool_name})
@@ -636,7 +636,7 @@ class DelphiSensor:
             pol = _policy.evaluate_policy(
                 self._policy,
                 agent_id=self.agent_id,
-                trust=None,                       # open sensor has no fleet trust score
+                trust=None,                       # standalone sensor has no trust score
                 tool_name=tool_name,
                 impact_class=impact_class,        # from the existing classifier
                 impact_tier=impact_tier,          # from the existing classifier
@@ -765,7 +765,7 @@ class DelphiSensor:
                     if tname in self._blocked_tools:
                         print(f"[xaidr] TOOL BLOCKED: {tname}")
                         _emit("blocked", "blocked_tool", ["TOOL_BLOCKED"])
-                        return f"[BLOCKED] Tool '{tname}' has been blocked by the fleet administrator."
+                        return f"[BLOCKED] Tool '{tname}' has been blocked by local policy."
                     allowed, reason = self._evaluate_policy({"tool_name": tname})
                     if not allowed:
                         print(f"[xaidr] TOOL BLOCKED by policy: {tname} ({reason})")
@@ -876,8 +876,9 @@ class ProtectedHttpClient:
 
         return 'unknown'
 
-    # Known LLM API hosts → provider label. Used so agent→LLM edges in the
-    # fleet graph are attributed to a named provider rather than a generic node.
+    # Known LLM API hosts → provider label. Used so agent→LLM edges in
+    # downstream telemetry are attributed to a named provider rather than a
+    # generic node.
     _PROVIDER_HOSTS = (
         ("anthropic", "anthropic"),
         ("openai", "openai"),
@@ -1192,7 +1193,7 @@ class ProtectedHttpClient:
         """Scan response body for output DLP.
 
         Labels the output scan with the LLM provider derived from the request
-        host so the fleet graph draws an attributed agent→LLM edge.
+        host so downstream telemetry attributes an agent→LLM edge.
         """
         # Inbound A2A response path: record any task/context ids a peer
         # legitimately issued to us, so the local id tracker can later

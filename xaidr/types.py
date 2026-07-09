@@ -61,7 +61,7 @@ class ScanResult:
 
 
 class DelphiBlockedError(Exception):
-    """Raised when the Sentinel Brain returns action=blocked."""
+    """Raised when a scan returns action=blocked in block enforcement mode."""
 
     def __init__(self, result: ScanResult, message: Optional[str] = None):
         self.result = result
