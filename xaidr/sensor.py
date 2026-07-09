@@ -6,7 +6,6 @@ model (allow / flag / block). No account, no backend, no network escalation.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 from typing import Optional
@@ -27,7 +26,7 @@ from .scanner.l1 import scan_l1 as _scan_l1
 from .scanner.local import LocalScanner
 from .telemetry import SyncTelemetryQueue
 from .trace_context import ParentContext
-from .types import DelphiBlockedError, ScanResult
+from .types import DelphiBlockedError, ScanResult, safe_content_hash
 
 logger = logging.getLogger("xaidr.sensor")
 
@@ -309,7 +308,7 @@ class DelphiSensor:
                 "enforcementMode": self.enforcement_mode,
                 "scanTimeMs": 0,
                 "promptLength": len(prompt),
-                "promptHash": hashlib.sha256(prompt.encode()).hexdigest()[:16],
+                "promptHash": safe_content_hash(prompt),
             }
             if prov:
                 data["provenance"] = prov
@@ -341,7 +340,7 @@ class DelphiSensor:
             "enforcementMode": self.enforcement_mode,
             "scanTimeMs": result.latency_ms,
             "promptLength": len(prompt),
-            "promptHash": hashlib.sha256(prompt.encode()).hexdigest()[:16],
+            "promptHash": safe_content_hash(prompt),
         }
         if prov:
             data["provenance"] = prov
@@ -447,7 +446,7 @@ class DelphiSensor:
                 "enforcementMode": self.enforcement_mode,
                 "scanTimeMs": 0,
                 "promptLength": len(scan_message),
-                "promptHash": hashlib.sha256(scan_message.encode()).hexdigest()[:16],
+                "promptHash": safe_content_hash(scan_message),
             }
             if prov:
                 data["provenance"] = prov
@@ -517,7 +516,7 @@ class DelphiSensor:
             "enforcementMode": self.enforcement_mode,
             "scanTimeMs": result.latency_ms,
             "promptLength": len(scan_message),
-            "promptHash": hashlib.sha256(scan_message.encode()).hexdigest()[:16],
+            "promptHash": safe_content_hash(scan_message),
         }
         if prov:
             data["provenance"] = prov
@@ -697,7 +696,7 @@ class DelphiSensor:
             "enforcementMode": self.enforcement_mode,
             "scanTimeMs": 0,
             "promptLength": 0,
-            "promptHash": hashlib.sha256(tool_name.encode()).hexdigest()[:16],
+            "promptHash": safe_content_hash(tool_name),
         }
         # surface the local policy decision on the event for audit (overrides the
         # legacy action_policy fields when a local policy was evaluated)
@@ -754,7 +753,7 @@ class DelphiSensor:
                             "enforcementMode": self.enforcement_mode,
                             "scanTimeMs": 0,
                             "promptLength": 0,
-                            "promptHash": hashlib.sha256(tname.encode()).hexdigest()[:16],
+                            "promptHash": safe_content_hash(tname),
                         }
                         if prov:
                             data["provenance"] = prov

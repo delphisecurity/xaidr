@@ -23,10 +23,11 @@ the internal event, so this is forward-compatible.
 
 from __future__ import annotations
 
-import hashlib
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
+
+from .types import safe_content_hash
 
 SCHEMA_VERSION = "0.1.0"
 
@@ -51,7 +52,9 @@ _INTERACTION_DIRECTION = {
 def _hash(text: str | None) -> str | None:
     if not text:
         return None
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    # Route through the centralized fail-open helper (surrogatepass) so a
+    # malformed-unicode content_hash never raises (B1). None/empty stays None.
+    return safe_content_hash(text)
 
 
 # Internal action values are past-tense ("blocked"/"flagged"/"allowed"). Accept
