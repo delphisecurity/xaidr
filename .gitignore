@@ -5,3 +5,7 @@ __pycache__/
 dist/
 build/
 .pytest_cache/
+
+# Claude Code local settings
+.claude/settings.local.json
+.claude/settings.local.json.bak
