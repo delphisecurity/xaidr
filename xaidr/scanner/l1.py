@@ -57,6 +57,15 @@ def _load_and_compile(filename: str) -> list:
     except FileNotFoundError:
         print(f"[xaidr] Warning: {filename} not found, using empty ruleset")
         return []
+    except Exception as e:
+        # A corrupt/unreadable rule asset must NOT make `import xaidr` crash the
+        # host — degrade to an empty ruleset (same posture as a missing file).
+        print(f"[xaidr] Warning: {filename} failed to load ({e}); using empty ruleset")
+        return []
+
+    if not isinstance(raw, list):
+        print(f"[xaidr] Warning: {filename} is not a rule list; using empty ruleset")
+        return []
 
     compiled = []
     for r in raw:

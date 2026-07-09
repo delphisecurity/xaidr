@@ -36,6 +36,17 @@ logger = logging.getLogger("xaidr.sensor")
 NOT_SCANNABLE_CATEGORY = "input_not_scannable"
 NOT_SCANNABLE_RULE = "INPUT_NOT_SCANNABLE"
 
+# Marker emitted when a scan ENTRY POINT catches an UNEXPECTED internal error
+# (a scanner/normalizer/regex bug, a json.dumps failure on a pathological A2A
+# envelope, ...). A security sensor embedded in a host must NEVER crash that
+# host: on an unexpected fault it fails OPEN (allowed) — there is no verdict to
+# preserve once detection itself has raised — but emits a DISTINCT, alertable
+# telemetry event AND a WARN log so the degradation is visible, not a silent
+# allow. This is the "safe result + signal" discipline (never "stop detecting":
+# normal scans are untouched; this triggers only on a would-be host crash).
+SCAN_ERROR_CATEGORY = "scan_error"
+SCAN_ERROR_RULE = "SCAN_FAILED_OPEN"
+
 
 def _resolve_provenance(agent_id: str, per_call: dict | None = None) -> Optional[dict]:
     """Build the provenance block for one emitted event (Option-1 wiring).
@@ -251,6 +262,58 @@ class DelphiSensor:
         })
         return result
 
+    def _emit_scan_error(
+        self, direction: str, exc: BaseException, prompt=None, **extra
+    ) -> ScanResult:
+        """Fail OPEN on an unexpected internal scan error, with a visible signal.
+
+        Returns a safe (allowed) ScanResult so an internal fault can never crash
+        the host agent, and emits a DISTINCT telemetry event (``degraded: True``,
+        rule ``SCAN_FAILED_OPEN``) plus a WARN log an operator can alert on. No
+        raw content is carried (hash-only, and only when it can be computed).
+        This method NEVER raises — the degradation signal cannot itself become a
+        new failure point."""
+        try:
+            logger.warning(
+                "xaidr: scan failed open on %s (%s: %s)",
+                direction, type(exc).__name__, exc,
+            )
+        except Exception:
+            pass
+        result = ScanResult(
+            action="allowed",
+            score=0.0,
+            category=SCAN_ERROR_CATEGORY,
+            rules=[SCAN_ERROR_RULE],
+            latency_ms=0,
+            input_status="scan_error",
+        )
+        try:
+            phash = safe_content_hash(prompt) if isinstance(prompt, str) else None
+            plen = len(prompt) if isinstance(prompt, str) else 0
+            data = {
+                "scanId": uuid4().hex[:12],
+                "agentId": self.agent_id,
+                "action": "allowed",
+                "score": 0.0,
+                "category": SCAN_ERROR_CATEGORY,
+                "rules": [SCAN_ERROR_RULE],
+                "direction": direction,
+                "enforcementMode": self.enforcement_mode,
+                "scanTimeMs": 0,
+                "promptLength": plen,
+                "promptHash": phash,
+                "degraded": True,
+                "errorType": type(exc).__name__,
+            }
+            data.update(extra)
+            self._telemetry.enqueue(
+                {"type": "scan", "agentId": self.agent_id, "data": data}
+            )
+        except Exception:
+            pass
+        return result
+
     def scan(
         self,
         prompt: str,
@@ -261,6 +324,34 @@ class DelphiSensor:
         parent_context: Optional[ParentContext] = None,
     ) -> ScanResult:
         """Synchronous scan — used by LangChain middleware and direct calls.
+
+        Wrapped so an UNEXPECTED internal fault fails OPEN with a signal (see
+        ``_emit_scan_error``) instead of raising into the host. ``DelphiBlockedError``
+        (intentional control flow) is re-raised. Normal verdicts are unchanged.
+        """
+        try:
+            return self._scan_impl(
+                prompt, direction, destination, provider, origin_context, parent_context
+            )
+        except DelphiBlockedError:
+            raise
+        except Exception as exc:
+            return self._emit_scan_error(
+                direction, exc, prompt,
+                destinationType="external_api",
+                destinationIdentifier=destination or provider or "llm",
+            )
+
+    def _scan_impl(
+        self,
+        prompt: str,
+        direction: str = "input",
+        destination: Optional[str] = None,
+        provider: Optional[str] = None,
+        origin_context: dict | None = None,
+        parent_context: Optional[ParentContext] = None,
+    ) -> ScanResult:
+        """Core scan implementation — see ``scan`` for the fail-open wrapper.
 
         For agent→LLM (input/output) calls, ``destination``/``provider`` label
         the LLM endpoint (e.g. "anthropic") so a downstream topology view can
@@ -377,7 +468,33 @@ class DelphiSensor:
         origin_context: dict | None = None,
         parent_context: Optional[ParentContext] = None,
     ) -> ScanResult:
-        """Scan an A2A delegation message.
+        """Scan an A2A delegation message (fail-open wrapper).
+
+        An unexpected internal fault — e.g. ``json.dumps`` raising on a circular
+        or pathologically deep envelope — fails OPEN with a signal instead of
+        raising into the host. See ``_scan_a2a_impl`` for the logic.
+        """
+        try:
+            return self._scan_a2a_impl(
+                message, destination, origin_context, parent_context
+            )
+        except DelphiBlockedError:
+            raise
+        except Exception as exc:
+            return self._emit_scan_error(
+                "a2a", exc,
+                prompt=message if isinstance(message, str) else None,
+                destinationAgent=destination,
+            )
+
+    def _scan_a2a_impl(
+        self,
+        message: str,
+        destination: str,
+        origin_context: dict | None = None,
+        parent_context: Optional[ParentContext] = None,
+    ) -> ScanResult:
+        """Core A2A scan implementation — see ``scan_a2a`` for the wrapper.
 
         ``message`` may be a JSON string, bytes, or a dict A2A envelope. Content
         is scanned via the A2A-aware field extractor (params.message.parts[].text,
@@ -537,7 +654,34 @@ class DelphiSensor:
         origin_context: dict | None = None,
         server_name: Optional[str] = None,
     ) -> ScanResult:
-        """Scan a tool call against blocked-tools list and per-agent policies.
+        """Scan a tool call (fail-open wrapper).
+
+        An unexpected internal fault (classifier/authz/policy/L1 bug) fails OPEN
+        with a signal instead of raising into the host. See ``_scan_tool_call_impl``.
+        """
+        try:
+            return self._scan_tool_call_impl(
+                tool_name, arguments, mcp_server, origin_context, server_name
+            )
+        except DelphiBlockedError:
+            raise
+        except Exception as exc:
+            return self._emit_scan_error(
+                "tool_call", exc,
+                prompt=tool_name if isinstance(tool_name, str) else None,
+                toolName=tool_name if isinstance(tool_name, str) else None,
+                destinationIdentifier=mcp_server or server_name,
+            )
+
+    def _scan_tool_call_impl(
+        self,
+        tool_name: str,
+        arguments: dict | None = None,
+        mcp_server: Optional[str] = None,
+        origin_context: dict | None = None,
+        server_name: Optional[str] = None,
+    ) -> ScanResult:
+        """Core tool-call scan implementation — see ``scan_tool_call`` for wrapper.
 
         Use this for any non-LangChain integration (manual wrappers, custom
         frameworks). Enforces the same blocked_tools + AGT policy rules that

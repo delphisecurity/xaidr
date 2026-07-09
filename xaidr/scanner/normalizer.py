@@ -53,9 +53,15 @@ def _load_typo_config() -> dict:
     path = os.path.join(_RULES_DIR, "typo-keywords.json")
     try:
         with open(path) as f:
-            return json.load(f)
+            cfg = json.load(f)
     except FileNotFoundError:
         return {"all_keywords": [], "denylist": []}
+    except Exception as e:
+        # Corrupt/unreadable asset must not crash `import xaidr` — degrade to the
+        # empty config (normalization becomes a no-op; detection still runs).
+        print(f"[xaidr] Warning: typo-keywords.json failed to load ({e}); normalization disabled")
+        return {"all_keywords": [], "denylist": []}
+    return cfg if isinstance(cfg, dict) else {"all_keywords": [], "denylist": []}
 
 
 def _damerau_levenshtein(s1: str, s2: str) -> int:

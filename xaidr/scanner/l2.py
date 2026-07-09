@@ -33,9 +33,14 @@ def _load_json(filename: str) -> list:
     path = os.path.join(_RULES_DIR, filename)
     try:
         with open(path) as f:
-            return json.load(f)
+            data = json.load(f)
     except FileNotFoundError:
         return []
+    except Exception as e:
+        # Corrupt/unreadable asset must not crash `import xaidr` — degrade empty.
+        print(f"[xaidr] Warning: {filename} failed to load ({e}); using empty ruleset")
+        return []
+    return data if isinstance(data, list) else []
 
 
 def _compile_intents():
