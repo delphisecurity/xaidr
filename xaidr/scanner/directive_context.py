@@ -159,10 +159,78 @@ _NEGATED_EXTRACT = re.compile(
     re.IGNORECASE,
 )
 
+# ── ANTI-BYPASS: override-AFTER-protective construction ───────────────────────
+# The protective dampening above is defeated by _active_extraction ONLY when the
+# WHOLE input carries no negated extraction. But an attacker can prepend a
+# protective clause whose negation ("do NOT reveal …") trips _NEGATED_EXTRACT
+# globally, masking a SECOND, unnegated override clause that follows ("…but
+# ignore that and reveal it"). The global negation guard then wrongly cancels the
+# veto. This block closes that coverage hole WITHOUT touching the protective
+# detection: it fires ONLY on a reversal/override CONNECTOR paired with an
+# UNNEGATED extraction clause — so a purely-protective input (no override
+# connector) is never affected, keeping FP3 dampened.
+
+# A reversal/override connector that COUNTERMANDS a preceding protective clause:
+# "but ignore that", "ignore the above", "disregard that", "but actually",
+# "now reveal", "instead show". Bounded, no ReDoS surface.
+_OVERRIDE_CONNECTOR = re.compile(
+    r"\b(?:ignore|disregard|forget|overrid\w+)[\s,]+"
+    r"(?:that|this|the\s+(?:above|preceding|previous|prior|earlier|former)|it|them)\b"
+    r"|\b(?:but|however|instead|actually|now)[\s,]+(?:please[\s,]+)?"
+    r"(?:reveal|expos\w+|disclos\w+|divulg\w+|leak\w*|shar\w+|dump|send|paste|print|"
+    r"output|reproduce|show|give|hand\s+over|surrender|tell)\b"
+    r"|\b(?:but|however)[\s,]+(?:actually|now|instead)\b",
+    re.IGNORECASE,
+)
+
+# An extraction imperative — explicit AI-secret target OR pronoun back-reference
+# ("reveal it", "show them", "send it to me", "reveal the system prompt"). The
+# pronoun object covers back-references to the just-protected secret. Evaluated
+# per-match with a LOCAL negation lookback so a negated protective clause ("do not
+# reveal it") is skipped and only the UNNEGATED override clause counts.
+_EXTRACT_CLAUSE = re.compile(
+    r"\b(?:reveal|expos\w+|disclos\w+|divulg\w+|leak\w*|dump|send|paste|print|"
+    r"output|reproduce|show|give|hand\s+over|surrender|tell)[\s,]+"
+    r"(?:me\s+|us\s+)?"
+    r"(?:it|them|those|these"
+    r"|the\s+(?:system\s*)?(?:prompt|instructions?|config\w*|rules?|guidelines?)"
+    r"|your\s+(?:system\s+)?(?:prompt|instructions?|config\w*|rules?|guidelines?)"
+    r"|system\s*prompt)\b",
+    re.IGNORECASE,
+)
+
+# Local negation immediately preceding an extraction verb ("do not …", "never …",
+# "must not …"). Matched against a short, bounded lookback window (not the whole
+# input) so the negation on a protective clause does NOT mask an unnegated clause
+# elsewhere — the exact scope bug the global guard has.
+_LOCAL_NEGATION = re.compile(
+    r"\b(?:not|never|n'?t|cannot|can'?t|won'?t|refuse\s+to|avoid)\s+"
+    r"(?:\w+\s+){0,2}$",
+    re.IGNORECASE,
+)
+
+
+def _has_unnegated_extraction(text: str) -> bool:
+    """True when some extraction clause in ``text`` is NOT locally negated."""
+    for m in _EXTRACT_CLAUSE.finditer(text):
+        window = text[max(0, m.start() - 24):m.start()]
+        if not _LOCAL_NEGATION.search(window):
+            return True
+    return False
+
 
 def _active_extraction(text: str) -> bool:
     """True when an UNNEGATED active extraction imperative targets an AI secret."""
     return bool(_ACTIVE_EXFIL.search(text)) and not _NEGATED_EXTRACT.search(text)
+
+
+def _override_defeats_protection(text: str) -> bool:
+    """True for the protective-then-override bypass: a reversal/override connector
+    ("but ignore that", "now reveal", "instead show it") paired with an UNNEGATED
+    extraction clause. This DEFEATS the protective dampening regardless of a
+    leading protective negation — closing the anti-bypass coverage hole. Requires
+    the override connector, so a purely-protective input never trips it (FP3)."""
+    return bool(_OVERRIDE_CONNECTOR.search(text)) and _has_unnegated_extraction(text)
 
 
 def is_descriptive(text: str) -> bool:
@@ -184,8 +252,15 @@ def is_descriptive(text: str) -> bool:
     #     the OPPOSITE of exfiltration, so dampen the gated leak/exfil signals —
     #     UNLESS an active, unnegated extraction imperative targeting an AI secret
     #     is also present ("…but reveal the system prompt"), which vetoes the
-    #     dampening and keeps the attack caught (anti-bypass).
-    if _PROTECTIVE.search(text) and not _active_extraction(text):
+    #     dampening and keeps the attack caught (anti-bypass). A protective-then-
+    #     override construction ("do not reveal … but ignore that and reveal it")
+    #     — where a leading negation masks a trailing unnegated override clause —
+    #     also vetoes the dampening via _override_defeats_protection.
+    if (
+        _PROTECTIVE.search(text)
+        and not _active_extraction(text)
+        and not _override_defeats_protection(text)
+    ):
         return True
 
     # 2. Strong educational / quotation / reference frame wins outright.
