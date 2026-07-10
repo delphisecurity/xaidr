@@ -61,3 +61,31 @@ def test_detection_action_surfaced():
         "flagged",
         "blocked",
     )
+
+
+def test_degraded_scan_signal_mapped():
+    """A degraded (fail-open) scan carries the degraded flag + error type so a
+    SIEM sees the reduced-assurance verdict, not a clean 'allowed'."""
+    ev = {
+        "type": "scan",
+        "agentId": "a",
+        "data": {
+            "action": "allowed",
+            "score": 0.0,
+            "degraded": True,
+            "errorType": "ValueError",
+            "agentId": "a",
+            "direction": "input",
+        },
+    }
+    mapped = to_openA2A(ev)
+    assert mapped["gen_ai.security.detection.degraded"] is True
+    assert mapped["gen_ai.security.detection.error_type"] == "ValueError"
+
+
+def test_non_degraded_scan_omits_degraded_keys():
+    """A normal scan must not carry degraded/error_type (omit, never guess)."""
+    ev = {"type": "scan", "agentId": "a", "data": {"action": "allowed", "score": 0.0, "agentId": "a"}}
+    mapped = to_openA2A(ev)
+    assert "gen_ai.security.detection.degraded" not in mapped
+    assert "gen_ai.security.detection.error_type" not in mapped
