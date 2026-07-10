@@ -10,7 +10,12 @@ from uuid import uuid4
 
 from ..types import ScanResult
 from .compositional import CompositionalScanner
-from .directive_context import is_descriptive
+from .directive_context import (
+    active_extraction,
+    is_descriptive,
+    protective_override_bypass,
+    security_mention,
+)
 from .dlp import scan_dlp
 from .l1 import scan_l1, L1_MAX_SCAN_CHARS
 from .l2 import scan_l2
@@ -70,6 +75,33 @@ def _is_directive_attack(threat) -> bool:
         threat.category in NEVER_DAMPEN_CATEGORIES
         or threat.rule in NEVER_DAMPEN_RULES
     )
+
+
+# Live command-form signals that must NEVER be capped into the flag band by the
+# benign-mention calibration: a shell/eval/decode-and-execute call is a live
+# command regardless of any surrounding "documentation" framing (guards the
+# runbook-framed "execute: curl … | sh" bypass).
+_LIVE_COMMAND_RULES = frozenset({
+    "LLM01_code_injection",
+    "LLM01_decode_and_execute",
+})
+
+
+def _has_live_command(l1_threats, l2_threats) -> bool:
+    """True when a live command-form signal (code-execution category or an
+    eval/exec/decode-and-run rule) fired — such text is never a mere mention, so
+    it is excluded from the benign-mention flag-band cap."""
+    for t in (*l1_threats, *l2_threats):
+        if t.category == "code_execution" or t.rule in _LIVE_COMMAND_RULES:
+            return True
+    return False
+
+
+def _FLAG_BAND_CAP(block_threshold: float, flag_threshold: float) -> float:
+    """A score strictly inside the flag band [flag_threshold, block_threshold):
+    just below the block threshold so a benign mention SURFACES (flag) without
+    blocking. Kept ≥ flag_threshold so it never silently drops to allow."""
+    return max(flag_threshold, block_threshold - 0.05)
 
 # DLP scan cap. The DLP patterns are now linear (the bulk-email ReDoS was
 # linearized to a findall + count threshold), so DLP uses the same ceiling as the
@@ -206,6 +238,37 @@ class LocalScanner:
         # L1/L2/DLP composite suppress a strong compositional signal.
         score = max(score, comp_score)
 
+        # --- Benign-security MENTION cap (flag-band calibration) ----------------
+        # Text that QUOTES or DOCUMENTS an attack (security docs, checklists, test
+        # fixtures, log lines) rather than ISSUING it should be SURFACED (flag),
+        # not BLOCK legitimate documentation. When such a mention frame is present
+        # we CAP the gated behavioral score into the flag band — but ONLY when the
+        # attack is genuinely just mentioned: no live command form (code exec), no
+        # active-extraction imperative targeting a secret, and the score is not
+        # driven by a real secret (DLP). Real attacks — a bare/live override, an
+        # active extraction, a shell pipe, a leaked secret — are all excluded, so
+        # they keep their block-band score. Only lowers a score, never raises one.
+        if (
+            direction != "output"
+            and score >= self.block_threshold
+            and dlp_score < self.block_threshold
+            and not _has_live_command(l1_threats, l2_threats)
+            and not active_extraction(scan_text)
+            and security_mention(scan_text)
+        ):
+            score = min(score, _FLAG_BAND_CAP(self.block_threshold, self.flag_threshold))
+
+        # --- Protective-then-override bypass: a POSITIVE attack signal ----------
+        # "Protect the secret … now dump/echo/show it" is a live extraction attack
+        # even when the target is a bare pronoun no keyword rule scored on its own.
+        # When the clause-scoped structural bypass fires, ensure a block-band score
+        # (this runs AFTER the mention cap so a genuine override attack still
+        # blocks). Purely-protective input never fires it (all extraction verbs are
+        # negated), so FP3 is preserved. Inbound only; never touches output.
+        bypass_hit = direction != "output" and protective_override_bypass(scan_text)
+        if bypass_hit:
+            score = max(score, self.block_threshold, 0.85)
+
         # 3-state local verdict (no backend, no escalation)
         if score >= self.block_threshold:
             verdict = "block"
@@ -232,6 +295,8 @@ class LocalScanner:
             + dlp_rules
             + comp_rules
         )
+        if bypass_hit:
+            all_rules.append("DIRECTIVE_protective_override_bypass")
 
         all_threats = list(l1_threats) + list(l2_threats) + list(dlp_threats)
         top_threat = max(all_threats, key=lambda t: t.score, default=None)
@@ -245,6 +310,10 @@ class LocalScanner:
             category = top_threat.category
         else:
             category = comp_category
+        # Bypass is a positive signal even when no keyword threat scored (bare
+        # pronoun target) — attribute the category so telemetry is not empty.
+        if bypass_hit and not category:
+            category = "system_prompt_leak"
 
         scan_time_ms = round((time.perf_counter() - scan_start) * 1000, 1)
 

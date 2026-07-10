@@ -231,7 +231,7 @@
   {
     "id": "LLM06_confidential",
     "pattern": "confidential|proprietary|classified|top\\s*secret|restricted",
-    "score": 0.65,
+    "score": 0.15,
     "category": "pii_detected"
   },
   {
