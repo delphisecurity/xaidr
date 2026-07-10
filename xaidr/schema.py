@@ -202,6 +202,15 @@ def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
     latency = data.get("scanTimeMs")
     if latency is not None:
         out["gen_ai.security.detection.latency_ms"] = latency
+    # Degraded-scan signal: when an internal scan fault made the sensor fail open
+    # (allow + emit), carry the degraded flag and the fault's exception type so a
+    # SIEM sees the reduced-assurance verdict instead of a clean "allowed".
+    degraded = data.get("degraded")
+    if degraded:
+        out["gen_ai.security.detection.degraded"] = True
+        error_type = data.get("errorType") or data.get("error_type")
+        if error_type:
+            out["gen_ai.security.detection.error_type"] = error_type
 
     # derived + additive (no raw content): a human-readable one-line summary and
     # a stable severity enum. Both are composed from the NAMES above (action,
