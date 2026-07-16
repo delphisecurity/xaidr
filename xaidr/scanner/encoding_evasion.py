@@ -19,11 +19,21 @@ DIRECTIVE acting on the blob is what makes it malicious. The blob must be the
 directive's object (only punctuation/whitespace between them), so an incidental
 directive word and an incidental blob elsewhere never pair. All patterns use
 bounded quantifiers over a size-capped view, so there is no ReDoS surface.
+
+URL/percent-encoding is handled separately (``url_decoded_danger``): unlike the
+opaque base64/hex blobs, percent-escapes are unambiguously decodable, so the
+signal is the DECODED content — a url-encoded dangerous command / injection is
+decoded and re-scanned against the same L1 rules, ratio-independently. Benign
+percent-encoded URLs (%20/%2F) decode to benign text and never fire.
 """
 
 from __future__ import annotations
 
 import re
+import urllib.parse
+
+from .l1 import scan_l1, L1_MAX_SCAN_CHARS
+from .normalizer import TypoNormalizer
 
 # ── Encoded blobs of meaningful length ───────────────────────────────────────
 # Bounded upper repeat ({N,4096}) → linear scan, no catastrophic backtracking.
@@ -111,6 +121,77 @@ def _blob_ends_before(text: str, pos: int) -> bool:
         if any(m.end() == end for m in p.finditer(seg)):
             return True
     return False
+
+
+# ── URL / percent-encoding: decode-and-rescan ────────────────────────────────
+# Unlike base64/hex (opaque — the DIRECTIVE is the signal, see the pairing above),
+# percent-encoding is trivially and unambiguously decodable, so the real signal is
+# the DECODED content: "%72%6d%20%2d%72%66" → "rm -rf", and PARTIAL encoding
+# ("ignore%20all%20previous%20instructions", "rm%20-rf") evades the raw keyword
+# rules because %20 breaks word matching and the letters aren't a consecutive
+# %XX run. We decode the percent-escapes and re-run L1 on the decoded text: a
+# url-encoded dangerous command / injection is exposed to the SAME rules that
+# catch it in the clear, RATIO-INDEPENDENTLY (embedded in prose/log too). This is
+# what makes "a url-encoded dangerous command → caught" work regardless of a
+# directive; a directive-paired url blob is caught because the decoded payload is
+# itself dangerous.
+#
+# FP guard (percent-encoding is everywhere in benign URLs): a benign URL/query
+# string with %20/%2F decodes to benign text ("path with spaces", "a/b") which
+# has NO dangerous L1 rule — so it stays allowed. The DECODED DANGER is what
+# fires it, not the mere presence of %XX.
+_PERCENT_ESCAPE = re.compile(r"%[0-9A-Fa-f]{2}")
+
+# Only DANGEROUS categories count — a decoded benign URL never lands in these, so
+# decode-and-rescan cannot FP on normal percent-encoded URLs.
+_URL_DANGER_CATEGORIES = frozenset({
+    "code_execution",
+    "prompt_injection",
+    "excessive_agency",
+    "jailbreak",
+    "data_exfiltration",
+    "system_prompt_leak",
+})
+
+# Need at least a couple of escapes before it is worth decoding (a stray "50% off"
+# is not URL-encoding). Bounds the work; unquote itself is linear.
+_MIN_ESCAPES = 2
+
+# The decoded text is run through the SAME normalizer the main pipeline applies
+# before L1. This is a correctness AND safety measure: the normalizer folds
+# obfuscation (so a decoded homoglyph command is still caught) and collapses
+# separator runs — which is what keeps L1 bounded. Decoding %20×N would otherwise
+# manufacture a long all-whitespace string that trips L1's repeat-scan
+# backtracking (the main pipeline never feeds L1 raw whitespace runs for exactly
+# this reason). Module-level singleton — the normalizer is reusable and stateless.
+_NORMALIZER = TypoNormalizer()
+
+
+def url_decoded_danger(text: str) -> float:
+    """Percent-decode ``text``, normalize, and re-scan; return the max L1 score
+    among DANGEROUS categories in the decoded form (0.0 if none / not URL-encoded).
+
+    Catches url-encoded dangerous commands and injections — full OR partial
+    encoding, bare OR embedded — by exposing the decoded payload to the existing
+    L1 rules. Benign percent-encoded URLs decode to benign text (no dangerous
+    rule), so this never fires on ordinary %20/%2F URLs. Bounded: the size-capped
+    view, a single linear unquote, and the normalizer's separator-collapse (which
+    keeps the L1 rescan off pathological whitespace runs) → no ReDoS surface.
+    """
+    if not text or "%" not in text:
+        return 0.0
+    view = text[:L1_MAX_SCAN_CHARS]
+    if len(_PERCENT_ESCAPE.findall(view)) < _MIN_ESCAPES:
+        return 0.0
+    decoded = urllib.parse.unquote(view)
+    if decoded == view:
+        return 0.0
+    normalized = _NORMALIZER.normalize(decoded)
+    danger = [
+        t.score for t in scan_l1(normalized).threats
+        if t.category in _URL_DANGER_CATEGORIES
+    ]
+    return max(danger, default=0.0)
 
 
 def encoded_payload_with_directive(text: str) -> bool:

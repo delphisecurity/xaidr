@@ -17,7 +17,7 @@ from .directive_context import (
     security_mention,
 )
 from .dlp import scan_dlp
-from .encoding_evasion import encoded_payload_with_directive
+from .encoding_evasion import encoded_payload_with_directive, url_decoded_danger
 from .l1 import scan_l1, L1_MAX_SCAN_CHARS
 from .l2 import scan_l2
 from .normalizer import TypoNormalizer
@@ -282,6 +282,20 @@ class LocalScanner:
         if encoding_hit:
             score = max(score, self.block_threshold, 0.75)
 
+        # --- URL/percent-encoded payload: decode-and-rescan --------------------
+        # Percent-encoding is unambiguously decodable, so unlike the opaque
+        # base64/hex blobs the signal is the DECODED content. A url-encoded
+        # dangerous command / injection ("%72%6d…" → rm -rf, "ignore%20all…" →
+        # the override) evades the raw keyword rules (partial %20 encoding breaks
+        # word matching); decoding + re-scanning L1 exposes it to the SAME rules,
+        # ratio-independently. Benign %20/%2F URLs decode to benign text (no
+        # dangerous rule) so they never fire — the decoded DANGER is the signal,
+        # not the presence of %XX. Uses the decoded L1 score directly (severity-
+        # accurate). Inbound only; never touches output.
+        url_score = url_decoded_danger(scan_text) if direction != "output" else 0.0
+        if url_score > 0:
+            score = max(score, url_score)
+
         # 3-state local verdict (no backend, no escalation)
         if score >= self.block_threshold:
             verdict = "block"
@@ -312,6 +326,8 @@ class LocalScanner:
             all_rules.append("DIRECTIVE_protective_override_bypass")
         if encoding_hit:
             all_rules.append("LLM01_encoded_payload_directive")
+        if url_score > 0:
+            all_rules.append("LLM01_url_encoded_danger")
 
         all_threats = list(l1_threats) + list(l2_threats) + list(dlp_threats)
         top_threat = max(all_threats, key=lambda t: t.score, default=None)
@@ -330,6 +346,8 @@ class LocalScanner:
         if bypass_hit and not category:
             category = "system_prompt_leak"
         if encoding_hit and not category:
+            category = "prompt_injection"
+        if url_score > 0 and not category:
             category = "prompt_injection"
 
         scan_time_ms = round((time.perf_counter() - scan_start) * 1000, 1)
