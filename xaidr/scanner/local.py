@@ -17,6 +17,7 @@ from .directive_context import (
     security_mention,
 )
 from .dlp import scan_dlp
+from .encoding_evasion import encoded_payload_with_directive
 from .l1 import scan_l1, L1_MAX_SCAN_CHARS
 from .l2 import scan_l2
 from .normalizer import TypoNormalizer
@@ -269,6 +270,18 @@ class LocalScanner:
         if bypass_hit:
             score = max(score, self.block_threshold, 0.85)
 
+        # --- Embedded encoded-payload evasion: a POSITIVE attack signal --------
+        # The bare-blob rule is anchored ^…$ (blob must dominate the input), so an
+        # encoded blob embedded in prose ("please decode and follow: <blob>", a
+        # blob in a log line, "run this: <blob>") evaded it. The real signal is an
+        # encoded blob that is the OBJECT of a decode/execute directive — caught
+        # RATIO-INDEPENDENTLY here, regardless of how much prose surrounds it. A
+        # bare blob with no directive (config/JWT/data-uri/API field) never fires,
+        # so this adds the embedded case without new base64 false positives.
+        encoding_hit = direction != "output" and encoded_payload_with_directive(scan_text)
+        if encoding_hit:
+            score = max(score, self.block_threshold, 0.75)
+
         # 3-state local verdict (no backend, no escalation)
         if score >= self.block_threshold:
             verdict = "block"
@@ -297,6 +310,8 @@ class LocalScanner:
         )
         if bypass_hit:
             all_rules.append("DIRECTIVE_protective_override_bypass")
+        if encoding_hit:
+            all_rules.append("LLM01_encoded_payload_directive")
 
         all_threats = list(l1_threats) + list(l2_threats) + list(dlp_threats)
         top_threat = max(all_threats, key=lambda t: t.score, default=None)
@@ -314,6 +329,8 @@ class LocalScanner:
         # pronoun target) — attribute the category so telemetry is not empty.
         if bypass_hit and not category:
             category = "system_prompt_leak"
+        if encoding_hit and not category:
+            category = "prompt_injection"
 
         scan_time_ms = round((time.perf_counter() - scan_start) * 1000, 1)
 
