@@ -24,6 +24,7 @@ from .reporters import Reporter
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
 from .scanner.l1 import scan_l1 as _scan_l1
 from .scanner.local import LocalScanner
+from .scanner.normalizer import TypoNormalizer
 from .telemetry import SyncTelemetryQueue
 from .trace_context import ParentContext
 from .types import DelphiBlockedError, ScanResult, safe_content_hash
@@ -646,6 +647,19 @@ class DelphiSensor:
         })
         return self._apply_mode(result)
 
+    def _arg_normalizer(self) -> TypoNormalizer:
+        """The unicode/typo normalizer used for tool-argument content scanning.
+
+        Reuses the LocalScanner's normalizer (the SAME Port-1 normalizer the
+        scan() path applies) so obfuscated tool args are folded identically to
+        prompt content; builds one lazily as a fallback. Cached after first use.
+        """
+        n = getattr(self, "_tool_arg_norm", None)
+        if n is None:
+            n = getattr(self._scanner, "_normalizer", None) or TypoNormalizer()
+            self._tool_arg_norm = n
+        return n
+
     def scan_tool_call(
         self,
         tool_name: str,
@@ -761,8 +775,17 @@ class DelphiSensor:
             arg_text = " ".join(
                 str(v) for v in (arguments or {}).values() if v is not None
             )
+            # Route the tool name + attacker-controlled arg content through the
+            # SAME Port-1 unicode normalizer the scan() path uses BEFORE L1, so a
+            # zero-width / homoglyph-obfuscated command or injection in an arg
+            # value ("ignore all previous instructions", homoglyph "rm -rf") is
+            # folded to its canonical form and caught — closing the §11 gap where
+            # the arg path ran raw L1 with no normalizer. Additive: the normalizer
+            # only folds obfuscation, so benign args are unchanged (its partial
+            # folding is keyword-gated and never spells a keyword on benign text).
+            normalized_args = self._arg_normalizer().normalize(f"{tool_name} {arg_text}")
             danger = [
-                t for t in _scan_l1(f"{tool_name} {arg_text}").threats
+                t for t in _scan_l1(normalized_args).threats
                 if t.category in ("code_execution", "excessive_agency", "prompt_injection")
             ]
             if danger:
