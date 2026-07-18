@@ -872,7 +872,7 @@
   },
   {
     "id": "LLM08_shell_destructive",
-    "pattern": "\\brm\\s+-[rf]{1,2}\\s+(?:/|~|\\*|\\$HOME|\\.)|\\bformat\\s+c:|\\bmkfs\\.?\\w*\\s+/dev/",
+    "pattern": "\\brm\\s+-[rf]{1,2}\\s+(?:/|~|\\*|\\$HOME|\\.)|\\bformat\\s+c:|\\bmkfs\\.?\\w*\\s+/dev/|\\bchmod\\s+(?:-[a-zA-Z]+\\s+)*(?:0?777|0?666|a\\+w|o\\+w)\\b|\\bchmod\\s+(?:-[a-zA-Z]+\\s+)*\\+x\\s+(?:/tmp/|/var/tmp/|/dev/shm/)|\\bdd\\s+[^\\n]{0,300}?\\bof=/dev/|\\b(?:shred|wipefs)\\s+[^\\n]{0,300}?(?:/dev/|-a\\b)|>\\s*/dev/(?:sd|nvme|hd|vd|mmcblk)\\w*|:\\(\\)\\s*\\{\\s*:\\|:&\\s*\\}\\s*;\\s*:",
     "score": 0.9,
     "category": "code_execution"
   },

@@ -9,15 +9,6 @@
     "description": "SSN pattern in LLM output"
   },
   {
-    "id": "OUT_pii_credit_card",
-    "pattern": "\\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13})\\b",
-    "score": 0.95,
-    "category": "out",
-    "severity": "critical",
-    "owasp": "LLM06",
-    "description": "Credit card number in LLM output"
-  },
-  {
     "id": "OUT_pii_phone",
     "pattern": "\\b\\d{3}[-.\\s]?\\d{3}[-.\\s]?\\d{4}\\b",
     "score": 0.72,
@@ -47,12 +38,12 @@
   },
   {
     "id": "OUT_secret_openai_key",
-    "pattern": "\\bsk-[a-zA-Z0-9]{20,}\\b",
+    "pattern": "\\bsk-(?:[a-zA-Z0-9]{1,12}-){0,4}[a-zA-Z0-9]{20,}\\b",
     "score": 0.97,
     "category": "out",
     "severity": "critical",
     "owasp": "LLM06",
-    "description": "OpenAI API key leaked in output"
+    "description": "OpenAI API key leaked in output (incl. sk-live-/sk-proj- hyphenated prefixes)"
   },
   {
     "id": "OUT_secret_github_token",

@@ -30,6 +30,27 @@ def _is_reserved_email(email: str) -> bool:
     return domain.endswith(_RESERVED_EMAIL_TLDS)
 
 
+def _luhn_valid(text: str) -> bool:
+    """True if the digits in ``text`` (separators stripped) satisfy the Luhn
+    checksum and form a plausible 13-19 digit card. Used to gate DLP_credit_card
+    so a non-Luhn 13-19 digit number (an order ID, tracking number) is NOT a
+    payment card. Pure integer arithmetic — no regex, no ReDoS surface."""
+    digits = [int(c) for c in text if c.isdigit()]
+    if not 13 <= len(digits) <= 19:
+        return False
+    total = 0
+    for i, d in enumerate(reversed(digits)):
+        if i % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return total % 10 == 0
+
+
+_VALIDATORS = {"luhn": _luhn_valid}
+
+
 @dataclass
 class ThreatDetail:
     rule: str
@@ -54,13 +75,20 @@ DLP_PATTERNS = [
         "score": 0.85,
     },
     {
+        # Payment-card numbers (Visa/MC/Amex/Discover), tolerant of space/dash
+        # grouping ("4242 4242 4242 4242"). Prefix-anchored to card BINs so an
+        # arbitrary long digit run is not a candidate, and gated by ``validate:
+        # luhn`` below — a match only counts if the stripped digits pass the Luhn
+        # checksum, which cuts the FP rate on non-card 13-19 digit numbers (order
+        # IDs, tracking numbers) dramatically. Bounded {9,15} repeat → no ReDoS.
         "id": "DLP_credit_card",
         "pattern": re.compile(
-            r"\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|"
-            r"6(?:011|5[0-9]{2})[0-9]{12})\b"
+            r"\b(?:4[0-9]{3}|5[1-5][0-9]{2}|3[47][0-9]{2}|6(?:011|5[0-9]{2}))"
+            r"(?:[ -]?[0-9]){9,15}\b"
         ),
         "category": "pii_credit_card",
         "score": 0.85,
+        "validate": "luhn",
     },
     {
         # Bulk-email exfiltration. The old pattern repeated an email-shaped group
@@ -178,6 +206,12 @@ def scan_dlp(text: str) -> DLPResult:
 
         match = p["pattern"].search(text)
         if match:
+            # Optional value-level validation (e.g. Luhn for cards): a regex match
+            # only counts if the validator on the matched span passes. Keeps the
+            # FP guard (non-Luhn digit runs) in code, not the pattern.
+            validator = _VALIDATORS.get(p.get("validate"))
+            if validator and not validator(match.group()):
+                continue
             threats.append(ThreatDetail(
                 rule=p["id"],
                 category=p["category"],
