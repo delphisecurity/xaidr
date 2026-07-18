@@ -890,7 +890,7 @@
   },
   {
     "id": "LLM08_pipe_exec",
-    "pattern": "\\b(?:curl|wget)\\s+[^\\n|]{0,300}\\|\\s*(?:bash|sh|zsh|dash)\\b",
+    "pattern": "\\b(?:curl|wget)\\s+[^\\n|]{0,300}\\|\\s*(?:bash|sh|zsh|dash|python\\d?|perl|ruby|node|php|pwsh)\\b|\\b(?:base64\\s+(?:-d|-D|--decode)|openssl\\s+(?:base64|enc)[^\\n|]{0,60}?-d|xxd\\s+-r|gunzip|zcat|gzip\\s+-d)\\b[^\\n|]{0,120}\\|\\s*(?:bash|sh|zsh|dash|python\\d?|perl|ruby|node|php|pwsh)\\b|\\beval\\s+[\"']?\\$\\([^)]{0,300}(?:base64\\s+(?:-d|--decode)|xxd\\s+-r|openssl\\s+(?:base64|enc)[^)]{0,40}?-d)",
     "score": 0.9,
     "category": "code_execution"
   },
