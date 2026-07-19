@@ -19,12 +19,16 @@ _RULES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "rules")
 # English keyword, so legitimate text is not wholesale folded (verified against a
 # benign-Cyrillic control in the corpus). Not an exhaustive transliteration.
 _CONFUSABLES = {
-    # Cyrillic -> Latin
+    # Cyrillic -> Latin (vowels + strong consonant look-alikes)
     "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "х": "x", "у": "y",
     "і": "i", "ј": "j", "ѕ": "s", "ԁ": "d", "һ": "h", "ѡ": "w",
+    # Cyrillic consonant homoglyphs (BS5): kept to glyphs genuinely confusable with
+    # a Latin letter, so benign Cyrillic text (which uses many NON-confusable
+    # letters) never collapses into an English keyword.
+    "г": "r", "к": "k", "т": "t", "в": "b", "м": "m", "ё": "e",
     # Greek -> Latin
     "ο": "o", "α": "a", "ε": "e", "ρ": "p", "ι": "i", "υ": "u", "ν": "v",
-    "χ": "x", "κ": "k", "τ": "t",
+    "χ": "x", "κ": "k", "τ": "t", "ϲ": "c",
 }
 _CONFUSABLE_MAP = str.maketrans(_CONFUSABLES)
 
@@ -34,6 +38,16 @@ _CONFUSABLE_MAP = str.maketrans(_CONFUSABLES)
 # space in the run class would absorb the neighbouring word's letters. Linear-time:
 # the two classes are disjoint and adjacent — no nested-quantifier backtracking.
 _SEP_RUN_RE = re.compile(r"[A-Za-z](?:[._\-][A-Za-z])+")
+
+# A spaced-out run: 3+ single letters each separated by a SINGLE space
+# ("i g n o r e", "a l l"). A larger gap (2+ spaces) or a multi-letter token bounds
+# the run, so word boundaries in "i g n o r e  a l l" (double space) are preserved
+# and a normal sentence (multi-letter words) never matches. A benign initialism
+# ("U S A", "F B I") does collapse, but only spells a KEYWORD when the letters
+# already were one — collapse cannot manufacture a false positive from ordinary
+# text (a non-keyword collapse is inert downstream). Linear: each " [A-Za-z]"
+# consumes 2 chars, no nested quantifier -> no ReDoS.
+_SPACED_RUN_RE = re.compile(r"(?<![A-Za-z])[A-Za-z](?: [A-Za-z]){2,}(?![A-Za-z])")
 
 # Leetspeak digit/symbol substitutions. A single leet char (e.g. "ign0re") is
 # already within Damerau-Levenshtein distance 1 of its keyword, but MULTI-char
@@ -204,8 +218,22 @@ class TypoNormalizer:
         text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
         # 2. NFKC — folds full-width and many compatibility variants to Latin
         text = unicodedata.normalize("NFKC", text)
+        # 2b. strip combining diacritics on the SCANNED copy (é->e, í->i) so
+        #     accent-substituted keywords ("ígnóré") fold to the base-Latin form.
+        #     NFKD decomposes base+mark; dropping the Mn (combining) marks leaves
+        #     the base letter. Benign accented words (café, José) fold to non-
+        #     keywords, so this never manufactures a false positive.
+        text = "".join(
+            ch for ch in unicodedata.normalize("NFKD", text)
+            if unicodedata.category(ch) != "Mn"
+        )
         # 3. bounded confusable/homoglyph skeleton (Cyrillic/Greek look-alikes)
         text = text.translate(_CONFUSABLE_MAP)
+        # 3b. collapse spaced-out single-letter runs ("i g n o r e" -> "ignore"),
+        #     preserving 2+ space word boundaries. Structural (a 4+ single-letter
+        #     run is the obfuscation signal); ordinary prose has multi-letter words
+        #     and never matches.
+        text = _SPACED_RUN_RE.sub(lambda m: m.group(0).replace(" ", ""), text)
         # 4. keyword-gated NON-SPACE separator collapse (i.g.n.o.r.e -> ignore)
         text = _SEP_RUN_RE.sub(self._collapse_sep_run, text)
         # 5. keyword-gated single-letter whitespace-token join (i g n o r e -> ignore)
