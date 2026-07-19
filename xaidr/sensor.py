@@ -784,15 +784,29 @@ class DelphiSensor:
             # only folds obfuscation, so benign args are unchanged (its partial
             # folding is keyword-gated and never spells a keyword on benign text).
             normalized_args = self._arg_normalizer().normalize(f"{tool_name} {arg_text}")
+            # data_exfiltration is surfaced too (BS2) but is FLAG-DEFAULT: agents
+            # make legit outbound calls constantly, so an exfil signal in a tool
+            # arg flags for review, it does not block by default. pii_detected
+            # stays FILTERED — a benign email/PII value in a send_email arg must
+            # not FP. The hard categories still block in block mode.
             danger = [
                 t for t in _scan_l1(normalized_args).threats
-                if t.category in ("code_execution", "excessive_agency", "prompt_injection")
+                if t.category in (
+                    "code_execution", "excessive_agency", "prompt_injection",
+                    "data_exfiltration",
+                )
             ]
             if danger:
                 score = max(score, max(t.score for t in danger))
-                category = category or "code_execution"
+                hard = [t for t in danger if t.category != "data_exfiltration"]
+                category = category or (hard[0].category if hard else danger[0].category)
                 rules = rules + [t.rule for t in danger if t.rule not in rules]
-                action = "blocked" if self.enforcement_mode == "block" else "flagged"
+                # Only the hard (destructive/injection) categories enforce a block;
+                # data_exfiltration alone surfaces as a flag (monitor-default).
+                if hard and self.enforcement_mode == "block":
+                    action = "blocked"
+                else:
+                    action = "flagged"
 
         # Compose the local YAML policy as an overlay (STRICTER WINS), BEFORE the
         # enforcement_mode gate so the same gate (_apply_mode) sees the composed

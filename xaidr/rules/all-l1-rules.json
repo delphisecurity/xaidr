@@ -60,6 +60,18 @@
     "category": "data_exfiltration"
   },
   {
+    "id": "LLM06_outbound_exfil_sensitive_body",
+    "pattern": "(?:curl|wget|fetch|axios|requests|httpx|aiohttp|urllib3?|XMLHttpRequest|\\.(?:post|put|patch))\\b[^\\n]{0,160}?(?:-d\\b|--data(?:-\\w+)?|--post-data|--post-file|-F\\b|\\bdata\\s*[:=]|\\bbody\\s*[:=]|\\bjson\\s*=)[^\\n]{0,100}?(?:\\$\\(|@\\/|`[^`]*(?:cat|env|whoami)|\\bcat\\s+\\/|open\\s*\\(|os\\.environ|process\\.env|readFileSync|/etc/(?:passwd|shadow)|\\.ssh\\/|\\.aws\\/|id_rsa|\\benv\\b|secret|credential|password|api[_-]?key|token)",
+    "score": 0.35,
+    "category": "data_exfiltration"
+  },
+  {
+    "id": "LLM06_outbound_exfil_suspicious_dest",
+    "pattern": "(?:curl|wget|fetch|axios|requests|httpx|aiohttp|\\.(?:post|put))\\b[^\\n]{0,200}?(?:-X\\s*POST|--data|--post-data|-d\\b|\\bpost\\b)?[^\\n]{0,120}?(?:https?:\\/\\/)?(?:\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|(?:webhook\\.site|requestbin|pipedream\\.net|beeceptor\\.com|pastebin\\.com|hastebin\\.com|paste\\.ee|ngrok\\.io|burpcollaborator|oastify|interact\\.sh|dnslog|requestcatcher))",
+    "score": 0.45,
+    "category": "data_exfiltration"
+  },
+  {
     "id": "LLM01_code_injection",
     "pattern": "eval\\s*\\(|exec\\s*\\(",
     "score": 0.9,

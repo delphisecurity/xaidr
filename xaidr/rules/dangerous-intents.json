@@ -6,7 +6,7 @@
     "modifiers": "\\b(?:silently|quietly|without\\s*(?:logging|detection|alerting|notifying)|to\\s+(?:https?:\\/\\/|external|my\\s+server|webhook)|covertly|secretly|discreetly)\\b",
     "category": "data_exfiltration",
     "owasp": "LLM06",
-    "baseScore": 0.45,
+    "baseScore": 0.15,
     "modifiedScore": 0.75
   },
   {
