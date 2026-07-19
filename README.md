@@ -163,6 +163,17 @@ Two behaviors are deliberate and worth knowing when you read your flag stream:
   block to a flag (so docs aren't blocked) but never to `allowed` — the sensor
   still surfaces it. This is intentional: a quote is not a free pass.
 
+**Security-content-heavy traffic.** Detection is pattern-based on the raw content,
+so text that legitimately *contains* attack strings — a security checklist, an
+incident report, threat-intel quoting `ignore previous instructions` or `rm -rf`,
+red-team notes — will match. The `security_mention` calibration keeps these in the
+**flag** band (monitor-surfaced) rather than a hard block, but they still surface.
+If your agent routinely handles security documentation, prefer **monitor mode**
+(the default) so these are logged for review without interrupting the flow, and/or
+allowlist the known-good sources. This is the same conservative posture as the
+quoted-attack behavior above: the sensor errs toward surfacing, and monitor mode is
+where that visibility belongs.
+
 If you see a benign input in the `blocked` band, that is a bug worth reporting —
 the benign-vs-real boundary is locked by the regression suite and treated as a
 two-way invariant.
