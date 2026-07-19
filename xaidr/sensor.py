@@ -112,6 +112,7 @@ class DelphiSensor:
         schema: str | None = None,
         policy_file: str | None = None,
         a2a_structural_enforcement: str = "flag",
+        blocked_tools: list | None = None,
     ):
         if not agent_id:
             raise ValueError("agent_id is required")
@@ -151,7 +152,9 @@ class DelphiSensor:
         self._quarantined = False
         self._quarantine_reason = None
 
-        self._blocked_tools: set[str] = set()
+        self._blocked_tools: set[str] = set(
+            str(n) for n in (blocked_tools or ())
+        )
         self._blocked_urls: list[str] = []
 
         self._action_policy: Optional[dict] = None
@@ -895,11 +898,38 @@ class DelphiSensor:
 
         return self._apply_mode(result)
 
-    def protect_tools(self, tools: list) -> list:
-        """Wrap LangChain tools with blocking enforcement.
+    def block_tools(self, tool_names: list) -> None:
+        """Add tool names to the blocked-tools list.
 
-        Wraps each tool to short-circuit with a "blocked" message if its
-        name is in ``self._blocked_tools`` or denied by a local policy.
+        Any tool whose name is in this list is denied by ``scan_tool_call``
+        and by wrappers from ``protect_tools`` — unconditionally, in both
+        enforcement modes (an operator's explicit block is not a detection
+        verdict, so monitor mode does not downgrade it in the wrapper).
+        """
+        self._blocked_tools.update(str(n) for n in tool_names)
+
+    def unblock_tools(self, tool_names: list) -> None:
+        """Remove tool names from the blocked-tools list (unknown names ignored)."""
+        for n in tool_names:
+            self._blocked_tools.discard(str(n))
+
+    def protect_tools(self, tools: list) -> list:
+        """Wrap tools so every invocation is scanned and enforced before it runs.
+
+        Each wrapped call runs ``scan_tool_call(tool_name, arguments)`` on the
+        ACTUAL call arguments before invoking the original tool. That applies,
+        in one pass: the blocked-tools list (``block_tools``), the L1 content
+        scan of the tool name + argument values (destructive shell commands,
+        code execution, injection, exfiltration), and the local YAML policy
+        (``policy_file`` / ``set_policy``), and emits telemetry for the call.
+
+        A "blocked" verdict short-circuits: the original tool is NOT invoked
+        and a ``[BLOCKED]`` message string is returned instead. Detection and
+        policy blocks honor ``enforcement_mode`` ("monitor" observes/flags,
+        "block" enforces); tools explicitly named via ``block_tools`` are
+        denied in both modes. An unexpected internal scan fault fails OPEN
+        (the tool runs, with a degraded-telemetry signal) — see
+        ``scan_tool_call`` — but a clean block verdict always stops the tool.
 
         Usage::
 
@@ -907,56 +937,46 @@ class DelphiSensor:
             agent = create_agent(model=llm, tools=protected)
 
         Args:
-            tools: List of LangChain ``@tool`` decorated functions.
+            tools: LangChain ``@tool`` objects or plain callables.
 
         Returns:
-            List of wrapped tools with blocking enforcement.
+            List of wrapped tools with scanning + blocking enforcement.
         """
         wrapped = []
         for t in tools:
             tool_name = getattr(t, "name", None) or getattr(t, "__name__", "unknown")
+            # LangChain tools carry the callable in .func; a plain callable IS
+            # the tool. (Previously plain callables were never invoked at all —
+            # the wrapper returned args[0] — silently no-op'ing benign tools.)
             original_func = getattr(t, "func", None)
+            if original_func is None and callable(t):
+                original_func = t
 
             def make_wrapper(orig_func, tname):
                 def wrapper(*args, **kwargs):
-                    def _emit(action, category, rule_list):
-                        # honor set_origin's full block; begin_flow path unchanged
-                        prov = _resolve_provenance(self.agent_id)
-                        data = {
-                            "scanId": uuid4().hex[:12],
-                            "agentId": self.agent_id,
-                            "action": action,
-                            "score": 1.0 if action == "blocked" else 0.0,
-                            "category": category,
-                            "rules": rule_list,
-                            "direction": "tool_call",
-                            "toolName": tname,
-                            "enforcementMode": self.enforcement_mode,
-                            "scanTimeMs": 0,
-                            "promptLength": 0,
-                            "promptHash": safe_content_hash(tname),
-                        }
-                        if prov:
-                            data["provenance"] = prov
-                        self._telemetry.enqueue({
-                            "type": "scan",
-                            "agentId": self.agent_id,
-                            "data": data,
-                        })
+                    arguments = {f"arg{i}": v for i, v in enumerate(args)}
+                    arguments.update(kwargs)
+                    # scan_tool_call applies blocked-tools + L1 arg scan +
+                    # local YAML policy, emits telemetry, and NEVER raises
+                    # (internal faults fail open with a degraded signal).
+                    result = self.scan_tool_call(tname, arguments)
                     if tname in self._blocked_tools:
+                        # Explicit operator block: enforced in both modes,
+                        # so monitor mode's downgrade does not soften it.
                         print(f"[xaidr] TOOL BLOCKED: {tname}")
-                        _emit("blocked", "blocked_tool", ["TOOL_BLOCKED"])
                         return f"[BLOCKED] Tool '{tname}' has been blocked by local policy."
-                    allowed, reason = self._evaluate_policy({"tool_name": tname})
-                    if not allowed:
-                        print(f"[xaidr] TOOL BLOCKED by policy: {tname} ({reason})")
-                        _emit("blocked", "policy", ["POLICY_DENY"])
-                        return f"[BLOCKED] Tool '{tname}' blocked by policy: {reason}"
-                    _emit("allowed", None, [])
+                    if result.action == "blocked":
+                        print(
+                            f"[xaidr] TOOL BLOCKED: {tname} "
+                            f"({result.category}: {', '.join(result.rules)})"
+                        )
+                        return (
+                            f"[BLOCKED] Tool '{tname}' blocked by security policy "
+                            f"({result.category})."
+                        )
                     if orig_func is not None:
                         return orig_func(*args, **kwargs)
-                    # Fallback: not a LangChain tool — call directly
-                    return args[0] if args else None
+                    return None
                 return wrapper
 
             new_func = make_wrapper(original_func, tool_name)
