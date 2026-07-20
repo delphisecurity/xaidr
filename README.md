@@ -194,7 +194,31 @@ Sensor(
 ## LangChain
 
 An optional middleware integration is available under
-`xaidr.integrations.langchain` for LangChain-based agents.
+`xaidr.integrations.langchain` for LangChain-based agents (needs the
+`xaidr[langchain]` extra, LangChain ≥ 1.0).
+
+```python
+from langchain.agents import create_agent
+from xaidr.integrations.langchain import delphi_middleware
+
+agent = create_agent(
+    model="anthropic:claude-sonnet-4-5",
+    tools=[...],
+    middleware=[delphi_middleware(agent_id="my-agent", enforcement_mode="block")],
+)
+```
+
+`delphi_middleware` is **full-boundary** — one middleware object hooks all three
+agent boundaries with a single sensor:
+
+| Boundary | Hook | Scans via | On block |
+|----------|------|-----------|----------|
+| Input | `before_model` | `scan` / `scan_a2a` | refusal AIMessage, jump to end |
+| Tool call | `wrap_tool_call` | `scan_tool_call` (name + args, **before execution**) | refusal ToolMessage, tool **not** invoked |
+| Output | `after_model` | `scan_output` | refusal AIMessage, jump to end |
+
+In `monitor` mode nothing blocks (events still emit); `block` enforces. Every
+boundary fails open — a scan fault lets the agent proceed rather than crash it.
 
 ## License
 

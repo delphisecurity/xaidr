@@ -85,12 +85,31 @@ def delphi_middleware(
     reporter: Any = None,
     **sensor_kwargs: Any,
 ) -> Any:
-    """Factory returning a LangChain ``before_model`` middleware.
+    """Factory returning a full-boundary LangChain middleware.
 
-    Scans the latest user message before it hits the model. On a ``blocked``
-    verdict (only possible in block mode) it jumps to ``end`` with a refusal
-    AIMessage; otherwise it passes through. All scans emit telemetry via the
-    sensor's reporter regardless of mode.
+    Returns a SINGLE ``AgentMiddleware`` instance that covers all three agent
+    boundaries with one sensor (so the usual ``middleware=[delphi_middleware(...)]``
+    call site is unchanged — it is one middleware object, not a list of hooks):
+
+    * INPUT (``before_model``): scans the latest user message before it hits the
+      model. A ``blocked`` verdict jumps to ``end`` with a refusal AIMessage.
+    * TOOL CALL (``wrap_tool_call``): scans each tool name + arguments via
+      ``scan_tool_call`` BEFORE the tool executes. A ``blocked`` verdict
+      short-circuits with a refusal ToolMessage — the tool is NOT invoked.
+    * OUTPUT (``after_model``): scans the model's generated text via
+      ``scan_output``. A ``blocked`` verdict jumps to ``end`` with a refusal.
+
+    All scans emit telemetry via the sensor's reporter regardless of mode; in
+    monitor mode nothing blocks (block verdicts are downgraded by the sensor).
+    Every boundary fails OPEN — a scan fault lets the agent proceed (the sensor's
+    scan wrappers already return a safe allow on internal error), so the
+    middleware never crashes the agent.
+
+    Usage::
+
+        agent = create_agent(model=..., tools=[...],
+                              middleware=[delphi_middleware(agent_id="a",
+                                                            enforcement_mode="block")])
 
     Args:
         agent_id: identifier for this agent (appears in telemetry).
@@ -99,8 +118,8 @@ def delphi_middleware(
         **sensor_kwargs: forwarded to DelphiSensor (e.g. policy_file=, schema=).
     """
     try:
-        from langchain.agents.middleware import before_model
-        from langchain_core.messages import AIMessage, HumanMessage
+        from langchain.agents.middleware import AgentMiddleware, hook_config
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
     except ImportError as exc:
         raise ImportError(
             "delphi_middleware requires langchain>=1.0. "
@@ -114,52 +133,116 @@ def delphi_middleware(
         **sensor_kwargs,
     )
 
-    @before_model(can_jump_to=["end"])
-    def delphi_scan(state: dict[str, Any], runtime: Any) -> dict[str, Any]:
-        messages = state.get("messages", [])
-        if not messages:
-            return {}
-
-        last_user = next(
-            (m for m in reversed(messages) if isinstance(m, HumanMessage)),
-            None,
-        )
-        if last_user is None:
-            return {}
-
-        content = last_user.content
-        if not isinstance(content, str) or not content:
-            return {}
-
-        # ── A2A detection via message shape (A2A spec / JSON-RPC) ────────
-        # Shape-based, transport-independent routing (see route_inbound_scan):
-        # a serialized JSON-RPC A2A envelope → scan_a2a (so the A2A field
-        # extractor + structural/id checks run); anything else → generic scan.
-        # No transport headers are available on the LangChain middleware path,
-        # so this decides on payload shape alone. The old 15s thread-local
-        # timing heuristic is gone — it was unsound across processes/containers.
-        result, is_a2a = route_inbound_scan(sensor, content, agent_id)
-
-        print(
-            f"[xaidr] scan action={result.action} score={result.score:.2f} "
-            f"category={result.category} rules={result.rules} "
-            f"latency_ms={result.latency_ms}"
-            f"{' [A2A]' if is_a2a else ''}"
+    def _refusal_text(result: Any) -> str:
+        return (
+            "I can't help with that request. "
+            f"(xaidr:{result.category or 'policy'})"
         )
 
-        if result.action == "blocked":
-            return {
-                "messages": [
-                    AIMessage(
+    class DelphiMiddleware(AgentMiddleware):
+        """xaidr full-boundary middleware: input + tool-call + output."""
+
+        # ── INPUT boundary ───────────────────────────────────────────────
+        @hook_config(can_jump_to=["end"])
+        def before_model(self, state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
+            messages = state.get("messages", [])
+            if not messages:
+                return None
+
+            last_user = next(
+                (m for m in reversed(messages) if isinstance(m, HumanMessage)),
+                None,
+            )
+            if last_user is None:
+                return None
+
+            content = last_user.content
+            if not isinstance(content, str) or not content:
+                return None
+
+            # ── A2A detection via message shape (A2A spec / JSON-RPC) ────
+            # Shape-based, transport-independent routing (route_inbound_scan):
+            # a serialized JSON-RPC A2A envelope → scan_a2a (so the A2A field
+            # extractor + structural/id checks run); anything else → generic
+            # scan. No transport headers are available on the LangChain path,
+            # so this decides on payload shape alone. The old 15s thread-local
+            # timing heuristic is gone — unsound across processes/containers.
+            result, is_a2a = route_inbound_scan(sensor, content, agent_id)
+
+            print(
+                f"[xaidr] scan action={result.action} score={result.score:.2f} "
+                f"category={result.category} rules={result.rules} "
+                f"latency_ms={result.latency_ms}"
+                f"{' [A2A]' if is_a2a else ''}"
+            )
+
+            if result.action == "blocked":
+                return {
+                    "messages": [AIMessage(content=_refusal_text(result))],
+                    "jump_to": "end",
+                }
+            return None
+
+        # ── TOOL-CALL boundary ───────────────────────────────────────────
+        def wrap_tool_call(self, request: Any, handler: Any) -> Any:
+            """Scan a tool call before execution; block → tool NOT invoked."""
+            tool_call = getattr(request, "tool_call", None) or {}
+            tool_name = tool_call.get("name") if isinstance(tool_call, dict) else None
+            arguments = tool_call.get("args") if isinstance(tool_call, dict) else None
+            call_id = tool_call.get("id") if isinstance(tool_call, dict) else None
+
+            if tool_name:
+                # scan_tool_call is fail-open internally (an internal fault
+                # returns a safe allow, never raises), so a scan error lets the
+                # tool proceed.
+                result = sensor.scan_tool_call(tool_name, arguments or {})
+                print(
+                    f"[xaidr] tool_call action={result.action} "
+                    f"score={result.score:.2f} category={result.category} "
+                    f"rules={result.rules} tool={tool_name}"
+                )
+                if result.action == "blocked":
+                    # Short-circuit: return a refusal ToolMessage WITHOUT calling
+                    # the handler, so the tool is never executed.
+                    return ToolMessage(
                         content=(
-                            "I can't help with that request. "
-                            f"(xaidr:{result.category or 'policy'})"
-                        )
+                            f"[BLOCKED] Tool '{tool_name}' blocked by security "
+                            f"policy ({result.category or 'policy'})."
+                        ),
+                        tool_call_id=call_id or "",
+                        name=tool_name,
+                        status="error",
                     )
-                ],
-                "jump_to": "end",
-            }
 
-        return {}
+            return handler(request)
 
-    return delphi_scan
+        # ── OUTPUT boundary ──────────────────────────────────────────────
+        @hook_config(can_jump_to=["end"])
+        def after_model(self, state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
+            messages = state.get("messages", [])
+            if not messages:
+                return None
+
+            last = messages[-1]
+            # Only scan a freshly generated assistant TEXT message (a tool-call
+            # AIMessage carries no prose to DLP-scan; its args are covered by the
+            # tool-call boundary above).
+            if not isinstance(last, AIMessage):
+                return None
+            content = last.content
+            if not isinstance(content, str) or not content:
+                return None
+
+            result = sensor.scan_output(content)
+            print(
+                f"[xaidr] output action={result.action} score={result.score:.2f} "
+                f"category={result.category} rules={result.rules}"
+            )
+            if result.action == "blocked":
+                return {
+                    "messages": [AIMessage(content=_refusal_text(result))],
+                    "jump_to": "end",
+                }
+            return None
+
+    return DelphiMiddleware()
