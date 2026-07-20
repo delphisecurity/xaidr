@@ -37,6 +37,32 @@ def _apply_schema(event, schema):
     return event
 
 
+def apply_default_schema(reporter: Any, schema: str | None) -> None:
+    """Propagate a default output ``schema`` into a reporter that lacks one.
+
+    Precedence: a reporter's OWN explicit schema always wins — this only FILLS
+    reporters whose schema is unset (``_schema is None``). So ``Sensor(schema=)``
+    is the default applied to every reporter that didn't choose its own, and a
+    reporter constructed as ``FileReporter(path, schema="openA2A")`` keeps its
+    choice even if the sensor's default differs. Nothing is ever silently
+    dropped: the schema reaches the path deployments actually use (their own
+    reporter), not just the auto-created one.
+
+    Recurses into ``MultiReporter`` children. Reporters that carry no ``_schema``
+    attribute (e.g. ``OTelReporter``, which always emits openA2A, or a fully
+    custom sink) are left untouched — there is nothing to fill.
+    """
+    if schema is None:
+        return
+    children = getattr(reporter, "_reporters", None)
+    if isinstance(children, list):
+        for child in children:
+            apply_default_schema(child, schema)
+        return
+    if hasattr(reporter, "_schema") and getattr(reporter, "_schema") is None:
+        reporter._schema = schema
+
+
 @runtime_checkable
 class Reporter(Protocol):
     """The pluggable telemetry sink contract.
@@ -119,7 +145,14 @@ class WebhookReporter:
 
     The destination is entirely the user's: their SIEM ingest endpoint, an
     OTel collector's HTTP receiver, an internal service. Delphi is not involved.
-    Requires httpx (already a sensor dependency).
+
+    Requires httpx, which is NOT part of the zero-dependency base install.
+    Install the ``http`` extra::
+
+        pip install xaidr[http]
+
+    Constructing a WebhookReporter without httpx raises a clear ImportError
+    naming that fix (rather than a bare ``No module named 'httpx'``).
     """
 
     def __init__(
@@ -129,7 +162,13 @@ class WebhookReporter:
         timeout: float = 10.0,
         schema: str | None = None,
     ) -> None:
-        import httpx  # lazy: only needed if this reporter is used
+        try:
+            import httpx  # lazy: only needed if this reporter is used
+        except ImportError as exc:
+            raise ImportError(
+                "WebhookReporter requires httpx, which is not a base dependency. "
+                "Install with:  pip install xaidr[http]"
+            ) from exc
 
         self._url = url
         self._schema = schema

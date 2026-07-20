@@ -142,7 +142,14 @@ class DelphiSensor:
         resolved_reporter = reporter
         if resolved_reporter is None:
             from .reporters import StdoutReporter
-            resolved_reporter = StdoutReporter(schema=schema)
+            resolved_reporter = StdoutReporter()
+        # Propagate schema= to the reporter(s) — auto-created OR user-passed —
+        # so Sensor(schema="openA2A", reporter=MyReporter()) actually emits the
+        # requested format on the path every deployment uses. A reporter's own
+        # explicit schema wins; this only fills reporters that don't have one.
+        if schema is not None:
+            from .reporters import apply_default_schema
+            apply_default_schema(resolved_reporter, schema)
         self._telemetry = SyncTelemetryQueue(
             reporter=resolved_reporter,
             batch_size=telemetry_batch_size,
@@ -1053,7 +1060,24 @@ class DelphiSensor:
         """
         return ProtectedHttpClient(client, self)
 
-    async def close(self) -> None:
+    def flush(self) -> None:
+        """Flush pending telemetry synchronously — the sync-safe flush.
+
+        Sync callers MUST use this (or ``close_sync``) to force emission before
+        reading the sink; ``close`` is a coroutine and is a silent no-op if
+        called without ``await`` from sync code. ``flush`` keeps the sensor
+        usable — the reporter stays open and later scans keep emitting.
+        Idempotent.
+        """
+        self._telemetry.flush_sync()
+
+    def close_sync(self) -> None:
+        """Synchronous full shutdown — the sync counterpart of ``await close()``.
+
+        Flushes telemetry, closes the reporter, and closes the scanner. Use this
+        (not ``close``) from sync code; use ``flush`` if you want to keep
+        emitting afterwards. Idempotent.
+        """
         if self._closed:
             return
         self._closed = True
@@ -1063,6 +1087,15 @@ class DelphiSensor:
                 self._scanner.close()
             except Exception:
                 pass
+
+    async def close(self) -> None:
+        """Asynchronous shutdown (for ``async with`` / async callers).
+
+        Sync callers must use ``close_sync`` or ``flush`` instead — awaiting is
+        required here, so calling ``close()`` without ``await`` from sync code
+        does nothing (a coroutine is created and dropped).
+        """
+        self.close_sync()
 
     async def __aenter__(self) -> "DelphiSensor":
         self._telemetry.start()

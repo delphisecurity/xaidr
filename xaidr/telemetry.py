@@ -114,13 +114,13 @@ class SyncTelemetryQueue:
         except Exception as exc:
             logger.warning("reporter failed, dropping %d events: %s", len(batch), exc)
 
-    def close_sync(self) -> None:
-        """Flush remaining events and stop the thread.
+    def _drain_and_stop(self) -> None:
+        """Quiesce the worker and report every pending event. No reporter.close().
 
-        Idempotent — safe to call more than once (atexit fires even after a
-        manual close). Shutdown is bounded: sentinel first (wakes a worker
-        blocked in get()), then join with a timeout; the daemon flag is the
-        backstop if the worker is wedged past the timeout.
+        Shared by flush_sync (keep the reporter open) and close_sync (then close
+        it). Bounded: sentinel first (wakes a worker blocked in get()), then join
+        with a timeout; the daemon flag is the backstop if the worker is wedged.
+        Leaves ``_started`` False so the next ``enqueue`` restarts a fresh worker.
         """
         self._stop_event.set()
         remaining: list = []
@@ -139,11 +139,32 @@ class SyncTelemetryQueue:
             except queue.Full:
                 pass  # queue non-empty => the worker isn't blocked on get()
             self._thread.join(timeout=2.0)
+        self._started = False
+
+    def flush_sync(self) -> None:
+        """Flush pending events synchronously WITHOUT closing the reporter.
+
+        The working sync flush for a sync caller that wants prior events emitted
+        before it reads the sink (e.g. tailing a FileReporter's file). The worker
+        is quiesced and the queue drained to the reporter; the reporter stays
+        open, and the next ``enqueue`` transparently restarts the worker. Bounded
+        and idempotent.
+        """
+        self._drain_and_stop()
+
+    def close_sync(self) -> None:
+        """Flush remaining events, close the reporter, and stop the thread.
+
+        Idempotent — safe to call more than once (atexit fires even after a
+        manual close). Full shutdown: drains like flush_sync, then closes the
+        reporter (releasing files/sockets), so it is NOT the method to call if
+        you intend to keep emitting — use flush_sync for that.
+        """
+        self._drain_and_stop()
         try:
             self._reporter.close()
         except Exception:
             pass
-        self._started = False
 
     async def close(self) -> None:
         """Async-compatible close (calls sync close)."""

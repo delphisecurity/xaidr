@@ -112,12 +112,20 @@ def test_atexit_registered_once_across_restart(sensor):
 
 def test_join_is_bounded():
     """The shutdown bound: sentinel sent before a join WITH timeout, daemon as
-    backstop. Locks the parameters the no-hang guarantee relies on."""
+    backstop. Locks the parameters the no-hang guarantee relies on. The bounded
+    join lives in _drain_and_stop, which BOTH close_sync and flush_sync call."""
     import inspect
 
     from xaidr import telemetry
 
-    src = inspect.getsource(telemetry.SyncTelemetryQueue.close_sync)
+    src = inspect.getsource(telemetry.SyncTelemetryQueue._drain_and_stop)
     assert "join(timeout=" in src
+    # close_sync and flush_sync both route through the bounded _drain_and_stop.
+    assert "_drain_and_stop" in inspect.getsource(
+        telemetry.SyncTelemetryQueue.close_sync
+    )
+    assert "_drain_and_stop" in inspect.getsource(
+        telemetry.SyncTelemetryQueue.flush_sync
+    )
     src_start = inspect.getsource(telemetry.SyncTelemetryQueue.start)
     assert "daemon=True" in src_start

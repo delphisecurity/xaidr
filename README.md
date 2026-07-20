@@ -128,16 +128,28 @@ sensor = Sensor(agent_id="my-agent", reporter=MyReporter())
 
 Events are delivered from a per-sensor **background thread** and batched
 (`telemetry_batch_size`, `telemetry_flush_interval_sec`), so telemetry never
-blocks the request path. Call `sensor.close()` on shutdown to flush.
+blocks the request path. To force emission before reading the sink:
+
+- **Sync code:** `sensor.flush()` (keeps emitting afterwards) or
+  `sensor.close_sync()` (full shutdown). `sensor.close()` is a *coroutine* — in
+  sync code it is a silent no-op unless awaited, so do not use it to flush.
+- **Async code:** `await sensor.close()` (or `async with Sensor(...)`).
 
 **Vendor-neutral schema.** Pass `schema="openA2A"` (or map events yourself via
 `xaidr.schema.to_openA2A`) to emit under the OpenTelemetry-aligned
-`gen_ai.security.*` namespace, ready to drop onto a span or log record.
+`gen_ai.security.*` namespace, ready to drop onto a span or log record. The
+schema applies to whatever reporter you pass (or the default one) — a reporter
+with its own explicit `schema=` keeps it; the sensor's `schema=` fills the rest.
 **Content is never emitted raw** — the prompt is carried as a stable hash, so
 telemetry is safe to ship to a SIEM. Each event also carries a human-readable
 `message`, a stable `severity` enum, and — when an internal scan fault made the
 sensor fail open — a `degraded` flag plus the fault's `error_type`, so a
 reduced-assurance verdict is never mistaken for a clean `allowed`.
+
+**Webhook / SIEM.** `WebhookReporter` POSTs each batch to a URL you control (a
+SIEM ingest endpoint, an OTel collector, an internal service). It needs httpx,
+which is **not** in the base install — `pip install xaidr[http]`; without it,
+constructing one raises a clear error naming that extra.
 
 **OpenTelemetry.** With `pip install xaidr[otel]` the `OTelReporter` emits each
 event as an OTel log record; with `pip install xaidr[trace]` a scan reads an
