@@ -113,6 +113,7 @@ class DelphiSensor:
         policy_file: str | None = None,
         a2a_structural_enforcement: str = "flag",
         blocked_tools: list | None = None,
+        blocked_urls: list | None = None,
     ):
         if not agent_id:
             raise ValueError("agent_id is required")
@@ -155,7 +156,9 @@ class DelphiSensor:
         self._blocked_tools: set[str] = set(
             str(n) for n in (blocked_tools or ())
         )
-        self._blocked_urls: list[str] = []
+        self._blocked_urls: list[str] = [
+            str(u) for u in (blocked_urls or ()) if u
+        ]
 
         self._action_policy: Optional[dict] = None
         self._trust_score: Optional[float] = None
@@ -913,6 +916,21 @@ class DelphiSensor:
         for n in tool_names:
             self._blocked_tools.discard(str(n))
 
+    def block_urls(self, urls: list) -> None:
+        """Add URL/destination substrings to the blocked-destinations list.
+
+        Any outgoing HTTP request whose URL contains one of these substrings is
+        blocked by ``protect_http`` — for EVERY method (GET/DELETE included),
+        regardless of body content. This is the operator destination blocklist;
+        the local YAML deny-destination policy is the structured alternative.
+        """
+        self._blocked_urls.extend(str(u) for u in urls if u)
+
+    def unblock_urls(self, urls: list) -> None:
+        """Remove URL substrings from the blocked-destinations list."""
+        drop = {str(u) for u in urls}
+        self._blocked_urls = [u for u in self._blocked_urls if u not in drop]
+
     def protect_tools(self, tools: list) -> list:
         """Wrap tools so every invocation is scanned and enforced before it runs.
 
@@ -997,12 +1015,22 @@ class DelphiSensor:
         return wrapped
 
     def protect_http(self, client: "httpx.Client") -> "ProtectedHttpClient":
-        """Wrap an httpx.Client to auto-scan outgoing A2A HTTP calls.
+        """Wrap an httpx.Client to enforce on outgoing HTTP calls.
 
-        Every outgoing POST/PUT/PATCH request is scanned before sending.
-        Message text is extracted from JSON body (message, prompt, content fields).
-        Destination agent is inferred from URL (/agents/{id}/) or body (targetAgent, agentId).
-        Response body is scanned for output DLP.
+        Two independent, stricter-wins enforcement layers:
+
+        * DESTINATION (every method, incl. GET/DELETE): the request URL is
+          checked against the blocked-URL list (``block_urls`` / the
+          ``blocked_urls`` ctor arg) and the local deny-destination YAML policy.
+          A denied destination is blocked regardless of body content.
+        * BODY CONTENT (POST/PUT/PATCH): message text is extracted from the JSON
+          body (A2A ``params.message.parts[]``, plus message/prompt/content
+          fields) and scanned via ``scan_a2a``; the response body is scanned for
+          output DLP. A malicious body is blocked even to an allowed destination.
+
+        Requires the ``http`` extra (``pip install xaidr[http]`` — pulls in
+        httpx). Destination agent is inferred from URL (/agents/{id}/) or body
+        (targetAgent, agentId).
 
         Usage::
 
@@ -1010,16 +1038,18 @@ class DelphiSensor:
             from xaidr import Sensor
 
             sensor = Sensor(agent_id="orchestrator", ...)
+            sensor.block_urls(["evil.com"])            # destination blocklist
             protected = sensor.protect_http(httpx.Client())
 
-            # Every outgoing call is now scanned:
+            # Body-scanned, and blocked if the destination is denied:
             resp = protected.post("http://billing:3002/ask", json={"message": task})
 
         Args:
             client: An httpx.Client instance to wrap.
 
         Returns:
-            A ProtectedHttpClient that proxies all methods and scans POST/PUT/PATCH.
+            A ProtectedHttpClient that proxies all methods, blocks denied
+            destinations on every verb, and body-scans POST/PUT/PATCH.
         """
         return ProtectedHttpClient(client, self)
 
@@ -1348,36 +1378,102 @@ class ProtectedHttpClient:
         except Exception:
             return ''
 
-    def _scan_request(self, url: str, json_body: dict | None, content: str | bytes | None) -> None:
-        """Scan outgoing request. Checks blocked URLs first, then A2A scan.
+    def _extract_host(self, url: str) -> Optional[str]:
+        """Return the full host (netloc without scheme/port/path) of ``url``.
 
-        Raises DelphiBlockedError if URL matches a blocked pattern or scan
-        returns action=blocked.
+        Unlike ``_extract_destination`` (which truncates to the first hostname
+        label for topology labelling), this keeps the whole host — e.g.
+        ``evil.com``, ``api.evil.com`` — so a deny-destination policy glob can
+        match against it. Returns None when no host is parseable.
         """
-        url_str = str(url).lower()
-        for blocked_url in self._sensor._blocked_urls:
-            if blocked_url and blocked_url.lower() in url_str:
-                result = ScanResult(
-                    action="blocked",
-                    score=1.0,
-                    category="blocked_url",
-                    rules=["URL_BLOCKED"],
-                    latency_ms=0,
-                )
-                print(f"[xaidr] URL BLOCKED: {url} matches pattern '{blocked_url}'")
-                raise DelphiBlockedError(result)
+        match = _re.search(r'://([^/:?#]+)', str(url))
+        return match.group(1).lower() if match else None
 
-        allowed, reason = self._sensor._evaluate_policy({"url": str(url)})
-        if not allowed:
-            result = ScanResult(
-                action="blocked",
-                score=1.0,
-                category="policy",
-                rules=["POLICY_DENY"],
-                latency_ms=0,
+    def _check_destination(self, url: str, json_body: dict | None = None) -> None:
+        """Destination-level block: blocked-URL list + local deny-destination
+        policy. Applies to EVERY method (GET/DELETE included) and is independent
+        of body content — a denied destination blocks even with a benign body.
+
+        Raises DelphiBlockedError on a block. Fail-open: an unexpected internal
+        fault here must never crash the host request (the caller still runs any
+        body content scan), so it is caught and logged, not raised.
+        """
+        try:
+            url_str = str(url).lower()
+            # 1. Explicit blocked-URL substrings (operator destination blocklist)
+            for blocked_url in self._sensor._blocked_urls:
+                if blocked_url and blocked_url.lower() in url_str:
+                    result = ScanResult(
+                        action="blocked",
+                        score=1.0,
+                        category="blocked_url",
+                        rules=["URL_BLOCKED"],
+                        latency_ms=0,
+                    )
+                    print(f"[xaidr] URL BLOCKED: {url} matches pattern '{blocked_url}'")
+                    raise DelphiBlockedError(result)
+
+            # 2. Local deny-destination YAML policy (host-based, structured).
+            #    Consult the SAME local policy the tool-call path uses, keyed on
+            #    the request destination. A "blocked"/"approval_required" verdict
+            #    denies the destination regardless of body content.
+            policy = self._sensor._policy
+            if policy is not None:
+                host = self._extract_host(url)
+                dest = self._extract_destination(url, json_body)
+                seen: set[str] = set()
+                for dest_id in (host, dest):
+                    if not dest_id or dest_id in seen:
+                        continue
+                    seen.add(dest_id)
+                    pol = _policy.evaluate_policy(
+                        policy,
+                        agent_id=self._sensor.agent_id,
+                        trust=None,
+                        tool_name="http_request",
+                        impact_class="network",
+                        impact_tier="external",
+                        destination_type="external_api",
+                        destination_identifier=dest_id,
+                    )
+                    if pol.decision not in (None, "allow", "allowed", "monitor"):
+                        rule_label = (
+                            f"policy:{pol.policy_id}" if pol.policy_id else "POLICY_DENY"
+                        )
+                        result = ScanResult(
+                            action="blocked",
+                            score=1.0,
+                            category="policy",
+                            rules=[rule_label],
+                            latency_ms=0,
+                        )
+                        print(
+                            f"[xaidr] DESTINATION BLOCKED by policy: {url} "
+                            f"({pol.reason or pol.policy_id or dest_id})"
+                        )
+                        raise DelphiBlockedError(
+                            result,
+                            message=f"Destination '{dest_id}' blocked by policy",
+                        )
+        except DelphiBlockedError:
+            raise
+        except Exception as exc:
+            # Fail open: the destination check must never crash the host request.
+            logger.warning(
+                "xaidr: destination check failed open (%s: %s)",
+                type(exc).__name__, exc,
             )
-            print(f"[xaidr] URL BLOCKED by policy: {url} ({reason})")
-            raise DelphiBlockedError(result, message=f"URL '{url}' blocked by policy: {reason}")
+
+    def _scan_request(self, url: str, json_body: dict | None, content: str | bytes | None) -> None:
+        """Scan outgoing request: destination block first, then A2A body scan.
+
+        Additive / stricter-wins: ``_check_destination`` blocks a denied
+        destination (blocked-URL list or deny-destination policy) even with a
+        benign body; the existing body content scan still blocks a malicious
+        body to an otherwise-allowed destination. Raises DelphiBlockedError on
+        either.
+        """
+        self._check_destination(url, json_body)
 
         message = self._extract_message(json_body, content)
         if not message or len(message) < 3:
@@ -1443,11 +1539,21 @@ class ProtectedHttpClient:
         return self._scan_response(response)
 
     def get(self, url, **kwargs):
-        """GET — passthrough, no scanning (read-only)."""
+        """GET — destination-scanned (no body to content-scan).
+
+        The blocked-URL list and deny-destination policy still apply, so a GET
+        to a denied destination is blocked before the request leaves the host.
+        """
+        self._check_destination(str(url), None)
         return self._client.get(url, **kwargs)
 
     def delete(self, url, **kwargs):
-        """DELETE — passthrough, no scanning."""
+        """DELETE — destination-scanned (no body to content-scan).
+
+        Same destination enforcement as GET: a DELETE to a denied destination
+        is blocked before it is sent.
+        """
+        self._check_destination(str(url), None)
         return self._client.delete(url, **kwargs)
 
     def close(self):
