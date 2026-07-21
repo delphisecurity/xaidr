@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Optional
 from uuid import uuid4
 
@@ -23,6 +24,12 @@ from .authz import classify, build_request, evaluate
 from .reporters import Reporter
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
 from .scanner.l1 import scan_l1 as _scan_l1
+from .scanner.l1 import (
+    L1_MAX_SCAN_CHARS as _L1_MAX_SCAN_CHARS,
+    OVERSIZED_INPUT_CATEGORY as _OVERSIZED_INPUT_CATEGORY,
+    OVERSIZED_INPUT_RULE as _OVERSIZED_INPUT_RULE,
+    iter_scan_windows as _iter_scan_windows,
+)
 from .scanner.local import LocalScanner
 from .scanner.normalizer import TypoNormalizer
 from .telemetry import SyncTelemetryQueue
@@ -797,18 +804,26 @@ class DelphiSensor:
             # only folds obfuscation, so benign args are unchanged (its partial
             # folding is keyword-gated and never spells a keyword on benign text).
             normalized_args = self._arg_normalizer().normalize(f"{tool_name} {arg_text}")
+            # Over-length tool args have the SAME truncation bypass as scan(): an
+            # attacker pads an arg past L1_MAX_SCAN_CHARS to hide a payload after
+            # the cap. Scan the full arg text in bounded overlapping windows (same
+            # helper, same total budget as scan()), so a payload past the cap is
+            # reached; and flag over-length so it is never a silent pass.
+            _arg_scan_start = time.perf_counter()
+            danger = []
+            for _idx, _win in _iter_scan_windows(normalized_args, _arg_scan_start):
+                danger.extend(
+                    t for t in _scan_l1(_win).threats
+                    if t.category in (
+                        "code_execution", "excessive_agency", "prompt_injection",
+                        "data_exfiltration",
+                    )
+                )
             # data_exfiltration is surfaced too (BS2) but is FLAG-DEFAULT: agents
             # make legit outbound calls constantly, so an exfil signal in a tool
             # arg flags for review, it does not block by default. pii_detected
             # stays FILTERED — a benign email/PII value in a send_email arg must
             # not FP. The hard categories still block in block mode.
-            danger = [
-                t for t in _scan_l1(normalized_args).threats
-                if t.category in (
-                    "code_execution", "excessive_agency", "prompt_injection",
-                    "data_exfiltration",
-                )
-            ]
             if danger:
                 score = max(score, max(t.score for t in danger))
                 hard = [t for t in danger if t.category != "data_exfiltration"]
@@ -820,6 +835,18 @@ class DelphiSensor:
                     action = "blocked"
                 else:
                     action = "flagged"
+            # Over-length arg content is itself anomalous — flag-default (never a
+            # hard block on size alone, never a silent pass) if nothing stronger
+            # already fired.
+            if len(normalized_args) > _L1_MAX_SCAN_CHARS:
+                if action == "allowed":
+                    action = "flagged"
+                if score < 0.2:
+                    score = 0.2
+                if not category:
+                    category = _OVERSIZED_INPUT_CATEGORY
+                if _OVERSIZED_INPUT_RULE not in rules:
+                    rules = rules + [_OVERSIZED_INPUT_RULE]
 
         # Compose the local YAML policy as an overlay (STRICTER WINS), BEFORE the
         # enforcement_mode gate so the same gate (_apply_mode) sees the composed
@@ -1168,8 +1195,12 @@ class ProtectedHttpClient:
     _CATCHALL_MIN_LEN = 4
 
     # Cap on total extracted text fed to the scanner — a safety bound against a
-    # pathologically large body. Excess is truncated with a warning.
-    _EXTRACT_CHAR_CAP = 50000
+    # pathologically large body. Must be >= the scanner's over-length threshold
+    # (L1_MAX_SCAN_CHARS) and window reach, otherwise this extractor would
+    # silently truncate A2A content BELOW the point at which the scanner flags +
+    # windows it — recreating the truncation bypass on the A2A path. Sized to the
+    # scanner's total windowed reach; the scanner itself bounds the scan latency.
+    _EXTRACT_CHAR_CAP = _L1_MAX_SCAN_CHARS * 8
 
     # Keys whose string values are non-content identifiers (IDs, protocol
     # envelope fields). Skipped in the recursive catch-all AND in metadata

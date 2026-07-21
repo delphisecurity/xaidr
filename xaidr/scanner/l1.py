@@ -31,6 +31,73 @@ L1_MAX_SCAN_CHARS = 100_000
 # (no signals): checked between rules.
 _L1_SCAN_BUDGET_SEC = 0.5
 
+# --- Over-length windowing (truncation-bypass fix) ---------------------------
+# Truncating to the first L1_MAX_SCAN_CHARS silently dropped everything past the
+# cap — an attacker padded >100k of benign filler to push a payload past it and
+# the whole engine never saw the payload (a clean total bypass). Instead of
+# dropping the tail we scan the FULL input in successive OVERLAPPING windows, but
+# under a HARD TOTAL wall-clock budget so a megabyte-class input cannot impose
+# unbounded latency (the very DoS the cap existed to prevent).
+#
+# The overlap ensures a payload straddling a window boundary appears whole in at
+# least one window. The total budget (checked BETWEEN windows — a single regex
+# can't be interrupted) bounds the worst case to a FIXED ceiling regardless of
+# input size: a 100k input is one window (unchanged); a 10MB input scans as many
+# windows as the budget allows, then stops. Over-length is ALSO surfaced as a
+# flag by the caller, so even a payload past the budget is never a silent pass.
+# The total budget must keep the WHOLE scan (head + tail windows) inside the
+# engine's hard per-scan latency bound (the ReDoS invariant, ~2s). Since a single
+# window can't be interrupted mid-regex, the true worst case is budget + one
+# window, so this is set well below the 2s bound. Over-length is ALWAYS flagged
+# regardless of how far the windowed scan reaches, so a tail the budget can't
+# reach is still surfaced — never a silent pass.
+SCAN_WINDOW_OVERLAP = 512
+MAX_SCAN_WINDOWS = 8
+TOTAL_SCAN_BUDGET_SEC = 1.0
+
+# Signal attached by callers when the input exceeds L1_MAX_SCAN_CHARS. Flag-band
+# (monitor-surfaced), not a hard block: legitimate inputs are rarely this large,
+# but some are, so the operator SEES every over-length input without benign large
+# documents being broken.
+OVERSIZED_INPUT_RULE = "LLM01_oversized_input"
+OVERSIZED_INPUT_CATEGORY = "oversized_input"
+
+
+def iter_scan_windows(
+    text: str,
+    start_time: float,
+    *,
+    window: int = L1_MAX_SCAN_CHARS,
+    overlap: int = SCAN_WINDOW_OVERLAP,
+    max_windows: int = MAX_SCAN_WINDOWS,
+    budget_sec: float = TOTAL_SCAN_BUDGET_SEC,
+):
+    """Yield successive overlapping windows of ``text`` under a total budget.
+
+    Yields ``(index, window_text)``. The FIRST window is always yielded (so a
+    ``<= window`` input behaves exactly as an un-windowed scan). Subsequent
+    windows are yielded only while BOTH the window count is under ``max_windows``
+    AND the cumulative wall-clock since ``start_time`` is under ``budget_sec``
+    (checked between windows — a running regex cannot be interrupted, so the true
+    ceiling is budget + one window). Consecutive windows overlap by ``overlap``
+    so a payload spanning a boundary appears whole in at least one window.
+    """
+    n = len(text)
+    step = max(1, window - overlap)
+    pos = 0
+    idx = 0
+    while True:
+        if idx > 0:
+            if idx >= max_windows:
+                break
+            if (time.perf_counter() - start_time) > budget_sec:
+                break
+        yield idx, text[pos:pos + window]
+        if pos + window >= n:
+            break
+        pos += step
+        idx += 1
+
 
 @dataclass
 class ThreatDetail:

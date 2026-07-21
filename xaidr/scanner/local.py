@@ -18,7 +18,13 @@ from .directive_context import (
 )
 from .dlp import scan_dlp
 from .encoding_evasion import encoded_payload_with_directive, url_decoded_danger
-from .l1 import scan_l1, L1_MAX_SCAN_CHARS
+from .l1 import (
+    scan_l1,
+    L1_MAX_SCAN_CHARS,
+    OVERSIZED_INPUT_CATEGORY,
+    OVERSIZED_INPUT_RULE,
+    iter_scan_windows,
+)
 from .l2 import scan_l2
 from .normalizer import TypoNormalizer
 
@@ -296,6 +302,33 @@ class LocalScanner:
         if url_score > 0:
             score = max(score, url_score)
 
+        # --- Over-length truncation-bypass fix ---------------------------------
+        # Everything above scanned only the first L1_MAX_SCAN_CHARS. If the input
+        # is longer, the tail was historically DROPPED — a total bypass (pad >100k
+        # of filler, hide the payload after it). Instead: (1) scan the tail in
+        # bounded overlapping windows (MAX-fused, no descriptive dampening — a
+        # payload buried past 100k is an attack, not "documentation"), so a
+        # payload just past the cap is CAUGHT; and (2) ALWAYS raise an over-length
+        # flag so even a payload past the scan budget can never sail through
+        # silently. Flag-band floor (monitor-surfaced), so benign large inputs are
+        # not hard-blocked. The windowed scan shares scan_start's total budget, so
+        # a megabyte-class input stays bounded (the ReDoS ceiling the cap guarded).
+        oversized = len(prompt) > L1_MAX_SCAN_CHARS
+        oversize_rules: list = []
+        oversize_category = None
+        if oversized:
+            tail_score, tail_rules, tail_category = self._scan_tail(
+                prompt, direction, scan_start
+            )
+            if tail_score > score:
+                score = tail_score
+            oversize_rules.extend(tail_rules)
+            oversize_category = tail_category
+            # Flag floor: never a silent pass, never a hard block on size alone.
+            score = max(score, self.flag_threshold)
+            # Always surface the over-length signal in telemetry.
+            oversize_rules.append(OVERSIZED_INPUT_RULE)
+
         # 3-state local verdict (no backend, no escalation)
         if score >= self.block_threshold:
             verdict = "block"
@@ -328,6 +361,9 @@ class LocalScanner:
             all_rules.append("LLM01_encoded_payload_directive")
         if url_score > 0:
             all_rules.append("LLM01_url_encoded_danger")
+        for r in oversize_rules:
+            if r not in all_rules:
+                all_rules.append(r)
 
         all_threats = list(l1_threats) + list(l2_threats) + list(dlp_threats)
         top_threat = max(all_threats, key=lambda t: t.score, default=None)
@@ -349,6 +385,11 @@ class LocalScanner:
             category = "prompt_injection"
         if url_score > 0 and not category:
             category = "prompt_injection"
+        # Over-length attribution: a real tail detection names its own category;
+        # otherwise the input is attributed to the over-length signal so an
+        # oversized (but content-clean) input is never a category-less flag.
+        if oversized and not category:
+            category = oversize_category or OVERSIZED_INPUT_CATEGORY
 
         scan_time_ms = round((time.perf_counter() - scan_start) * 1000, 1)
 
@@ -359,6 +400,63 @@ class LocalScanner:
             rules=all_rules,
             latency_ms=int(scan_time_ms),
         )
+
+    def _scan_tail(self, prompt: str, direction: str, scan_start: float):
+        """Scan the input PAST the first window in bounded overlapping windows.
+
+        Returns ``(max_score, rules, category)`` for the strongest detection
+        found across the tail windows. Runs L1/L2/DLP/compositional on each
+        normalized window and MAX-fuses — no descriptive-context dampening: a
+        payload buried past L1_MAX_SCAN_CHARS is a bypass attempt, not benign
+        documentation, so it must not be excused. Bounded by iter_scan_windows'
+        total budget (shared with scan_start) and window cap, so a huge input
+        stays within a fixed latency ceiling. The first window (index 0) is the
+        already-scanned head and is skipped here.
+        """
+        is_output = direction == "output"
+        if direction == "a2a":
+            comp_mode = "a2a"
+        elif is_output:
+            comp_mode = "output"
+        else:
+            comp_mode = "chat"
+
+        max_score = 0.0
+        rules: list = []
+        category = None
+        for idx, window in iter_scan_windows(prompt, scan_start):
+            if idx == 0:
+                continue  # head already scanned by the main pipeline
+            norm = self._normalizer.normalize(window)
+            l1 = scan_l1(norm, output=is_output)
+            l1_cats = set(t.category for t in l1.threats)
+            l2 = scan_l2(norm, l1_categories=l1_cats)
+            dlp_score = 0.0
+            dlp_threats: list = []
+            if self.dlp_enabled:
+                dlp = scan_dlp(norm)
+                dlp_score = dlp.score
+                dlp_threats = list(dlp.threats)
+            comp = self._compositional.scan(norm, scan_mode=comp_mode)
+            comp_score = comp.get("score", 0.0)
+
+            window_score = max(l1.score, l2.score, dlp_score, comp_score)
+            if window_score > max_score:
+                max_score = window_score
+                # Attribute to the strongest layer in THIS (winning) window.
+                threats = list(l1.threats) + list(l2.threats) + dlp_threats
+                top = max(threats, key=lambda t: t.score, default=None)
+                if comp_score >= (top.score if top else 0.0) and comp.get("details"):
+                    category = comp["details"][0].get("category")
+                elif top is not None:
+                    category = top.category
+                rules = (
+                    [t.rule for t in l1.threats]
+                    + [t.rule for t in l2.threats]
+                    + [t.rule for t in dlp_threats]
+                    + [d.get("rule") for d in comp.get("details", []) if d.get("rule")]
+                )
+        return max_score, rules, category
 
     def _compute_composite(
         self, l1_score: float, l2_score: float, dlp_score: float
