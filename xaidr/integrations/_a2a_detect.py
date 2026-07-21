@@ -110,7 +110,12 @@ def looks_like_a2a(
     elif isinstance(body, str):
         try:
             loaded = json.loads(body)
-        except (ValueError, TypeError):
+        except Exception:
+            # Widened from (ValueError, TypeError): the "never raises" guarantee
+            # must not depend on the runtime's json behavior — some builds raise
+            # RecursionError (or another Exception) on deeply-nested input. Any
+            # parse failure fails safe to not-A2A. BaseException (KeyboardInterrupt
+            # / SystemExit) is intentionally NOT caught and still propagates.
             loaded = None
         if isinstance(loaded, dict):
             parsed = loaded

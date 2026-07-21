@@ -1,8 +1,9 @@
 """LocalScanner — runs L1 + L2 + DLP + compositional locally. Standalone — no backend.
 
-Default scanner for xaidr. Local scanning in <5ms with a 3-state verdict
-model (allow / flag / block); enforcement_mode gates whether a block verdict
-actually blocks.
+Default scanner for xaidr. Local scanning is <5ms typical, with a bounded
+worst-case (~2s) on a max-size adversarial input (a 100k separator-bomb; large
+inputs stay under a fixed ceiling, non-scaling). 3-state verdict model (allow /
+flag / block); enforcement_mode gates whether a block verdict actually blocks.
 """
 
 import time

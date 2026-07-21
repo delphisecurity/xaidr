@@ -436,22 +436,29 @@ class DelphiSensor:
         destination: str,
         origin_context: dict | None = None,
         parent_context: Optional[ParentContext] = None,
+        received: bool = False,
     ) -> ScanResult:
         """Scan an A2A delegation message (fail-open wrapper).
 
         An unexpected internal fault — e.g. ``json.dumps`` raising on a circular
         or pathologically deep envelope — fails OPEN with a signal instead of
         raising into the host. See ``_scan_a2a_impl`` for the logic.
+
+        ``received=True`` marks this as a message this agent RECEIVED (inbound
+        flow) rather than one it is SENDING (outbound, the default), so telemetry
+        records the correct interaction direction. It is a labelling-only flag —
+        the detection/verdict is identical either way.
         """
+        emit_direction = "a2a_inbound" if received else "a2a"
         try:
             return self._scan_a2a_impl(
-                message, destination, origin_context, parent_context
+                message, destination, origin_context, parent_context, received
             )
         except DelphiBlockedError:
             raise
         except Exception as exc:
             return self._emit_scan_error(
-                "a2a", exc,
+                emit_direction, exc,
                 prompt=message if isinstance(message, str) else None,
                 destinationAgent=destination,
             )
@@ -462,6 +469,7 @@ class DelphiSensor:
         destination: str,
         origin_context: dict | None = None,
         parent_context: Optional[ParentContext] = None,
+        received: bool = False,
     ) -> ScanResult:
         """Core A2A scan implementation — see ``scan_a2a`` for the wrapper.
 
@@ -471,12 +479,18 @@ class DelphiSensor:
         serialized JSON. The parsed dict is also used for structural validation.
         Other types fail open gracefully.
 
+        ``received`` only labels the emitted telemetry direction (inbound for a
+        received message, outbound for a sent one); the scanner is always invoked
+        with the internal ``"a2a"`` direction, so detection is unchanged.
+
         ``parent_context`` is an OPTIONAL, read-only W3C Trace Context parent
         (host-resolved: inbound ``traceparent`` or an active OTel span). It is
         attached to telemetry as additive metadata ONLY — it does NOT alter the
         A2A extraction, the structural/id checks, or the verdict. Absent, the
         result is byte-identical to before.
         """
+        # Telemetry-only flow label; the scanner direction stays "a2a".
+        emit_direction = "a2a_inbound" if received else "a2a"
         # Crash guard. A dict envelope / JSON string is parsed so we can extract
         # the A2A text fields and validate structure. bytes are decoded.
         body_obj = message if isinstance(message, dict) else None
@@ -486,7 +500,7 @@ class DelphiSensor:
             scan_message = _coerce_scannable(message)
         if scan_message is None:
             return self._emit_not_scannable(
-                direction="a2a",
+                direction=emit_direction,
                 destinationAgent=destination,
             )
 
@@ -498,7 +512,11 @@ class DelphiSensor:
             try:
                 parsed = json.loads(scan_message)
                 body = parsed if isinstance(parsed, dict) else None
-            except (ValueError, TypeError):
+            except Exception:
+                # Widened from (ValueError, TypeError) so a runtime whose
+                # json.loads raises RecursionError (or other) at depth can't
+                # break the "never raises" contract. Non-dict / unparseable ->
+                # body=None (scanned as raw text). BaseException still propagates.
                 body = None
 
         # Content to scan = text EXTRACTED from the A2A fields, not the raw JSON.
@@ -565,7 +583,7 @@ class DelphiSensor:
             "score": result.score,
             "category": result.category,
             "rules": result.rules,
-            "direction": "a2a",
+            "direction": emit_direction,
             "destinationAgent": destination,
             "enforcementMode": self.enforcement_mode,
             "scanTimeMs": result.latency_ms,
@@ -1164,7 +1182,12 @@ class ProtectedHttpClient:
         if content_str:
             try:
                 parsed = json.loads(content_str)
-            except (ValueError, TypeError):
+            except Exception:
+                # Widened from (ValueError, TypeError): the extractor's "never
+                # raises" guarantee must not depend on the runtime's json
+                # behavior (some builds raise RecursionError at depth). Any parse
+                # failure falls through to the not-JSON / raw-string path.
+                # BaseException still propagates (not caught).
                 parsed = None
             if isinstance(parsed, (dict, list)):
                 content_json = parsed

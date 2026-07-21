@@ -37,6 +37,7 @@ _INTERACTION_TYPE = {
     "input": "a2user",
     "output": "a2user",
     "a2a": "a2a",
+    "a2a_inbound": "a2a",   # a RECEIVED A2A message (same surface, inbound flow)
     "tool_call": "a2tool",
     "mcp": "a2mcp",
     "llm": "a2llm",
@@ -44,7 +45,11 @@ _INTERACTION_TYPE = {
 _INTERACTION_DIRECTION = {
     "input": "inbound",
     "output": "outbound",
+    # A SENT A2A message is outbound; a RECEIVED one is inbound. The receive path
+    # tags its events "a2a_inbound" so a received message is no longer mislabelled
+    # outbound in the SIEM.
     "a2a": "outbound",
+    "a2a_inbound": "inbound",
     "tool_call": "outbound",
 }
 
@@ -245,8 +250,12 @@ def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
 def _passthrough_provenance(data: dict[str, Any], out: dict[str, Any]) -> None:
     """Emit provenance attributes if the internal event carries them.
 
-    No-op today (the sensor does not yet capture provenance). Present so that
-    when the provenance phase adds capture, emission needs no mapper change.
+    The sensor now captures provenance (set_origin / origin_scope and the
+    cross-process multi-hop chain resolved via W3C Trace Context), so events may
+    carry an ``on_behalf_of`` / actor / correlation_id / origin_agent /
+    delegation chain block. This maps whatever is present onto the
+    ``gen_ai.security.provenance.*`` attributes; when a field is absent it is
+    simply not emitted (a plain scan with no origin context is unaffected).
     """
     prov = data.get("provenance")
     if not isinstance(prov, dict):

@@ -71,8 +71,10 @@ def route_inbound_scan(
     is_a2a, parsed_body = looks_like_a2a(content, headers)
     if is_a2a:
         # Open scan_a2a accepts the dict envelope directly (parses internally).
+        # This is the RECEIVE side (an inbound A2A message), so mark it received
+        # -> telemetry records interaction.direction "inbound", not "outbound".
         result = sensor.scan_a2a(
-            parsed_body, destination=agent_id, parent_context=parent
+            parsed_body, destination=agent_id, parent_context=parent, received=True
         )
     else:
         result = sensor.scan(content, direction="input", parent_context=parent)
