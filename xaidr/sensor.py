@@ -20,7 +20,7 @@ from uuid import uuid4
 from . import local_policy as _policy
 from . import provenance as _prov
 from . import provenance_chain as _chain
-from .authz import classify, build_request, evaluate
+from .authz import classify
 from .reporters import Reporter
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
 from .scanner.l1 import scan_l1 as _scan_l1
@@ -164,18 +164,12 @@ class DelphiSensor:
         )
         self._closed = False
 
-        self._quarantined = False
-        self._quarantine_reason = None
-
         self._blocked_tools: set[str] = set(
             str(n) for n in (blocked_tools or ())
         )
         self._blocked_urls: list[str] = [
             str(u) for u in (blocked_urls or ()) if u
         ]
-
-        self._action_policy: Optional[dict] = None
-        self._trust_score: Optional[float] = None
 
         # Local YAML policy source (no backend). None if absent/malformed —
         # load_policy fails safe and logs what it loads. Auto-loads
@@ -208,19 +202,6 @@ class DelphiSensor:
         return self._a2a_extractor._extract_message(
             body, None if body is not None else raw
         )
-
-    def _evaluate_policy(self, context: dict) -> tuple[bool, Optional[str]]:
-        """Always-allow stub for the optional AGT policy evaluator path.
-
-        This distribution ships no AGT evaluator, so this has
-        always returned ``(True, None)`` — its callers (scan_tool_call,
-        protect_tools, ProtectedHttpClient._scan_request) already behave as
-        "policy allows". The real, local authorization is the YAML policy
-        (``self._policy`` via ``local_policy.compose``), which is a separate
-        feature and is unaffected. Kept as a stub so those callers keep working
-        without a dangling reference.
-        """
-        return (True, None)
 
     def set_policy(self, policy: dict | None) -> bool:
         """Set the local authorization policy from a dict. Returns True if a
@@ -399,39 +380,6 @@ class DelphiSensor:
 
         # resolve the app-supplied principal (3b semantics: per-call > set context)
         prov = _resolve_provenance(self.agent_id, per_call=origin_context)
-        if self._quarantined:
-            result = ScanResult(
-                action="blocked",
-                score=1.0,
-                category="quarantined",
-                rules=["QUARANTINE_ENFORCED"],
-                latency_ms=0,
-            )
-            data = {
-                "scanId": uuid4().hex[:12],
-                "agentId": self.agent_id,
-                "action": "blocked",
-                "score": 1.0,
-                "category": "quarantined",
-                "rules": ["QUARANTINE_ENFORCED"],
-                "direction": direction,
-                "destinationType": "external_api",
-                "destinationIdentifier": destination or provider or "llm",
-                "enforcementMode": self.enforcement_mode,
-                "scanTimeMs": 0,
-                "promptLength": len(prompt),
-                "promptHash": safe_content_hash(prompt),
-            }
-            if prov:
-                data["provenance"] = prov
-            if parent_context is not None:
-                data["traceParent"] = parent_context.as_metadata()
-            self._telemetry.enqueue({
-                "type": "scan",
-                "agentId": self.agent_id,
-                "data": data,
-            })
-            return result
 
         result = self._scanner.scan(
             prompt=prompt,
@@ -564,38 +512,6 @@ class DelphiSensor:
 
         # resolve the app-supplied principal (3b semantics: per-call > set context)
         prov = _resolve_provenance(self.agent_id, per_call=origin_context)
-        if self._quarantined:
-            result = ScanResult(
-                action="blocked",
-                score=1.0,
-                category="quarantined",
-                rules=["QUARANTINE_ENFORCED"],
-                latency_ms=0,
-            )
-            data = {
-                "scanId": uuid4().hex[:12],
-                "agentId": self.agent_id,
-                "action": "blocked",
-                "score": 1.0,
-                "category": "quarantined",
-                "rules": ["QUARANTINE_ENFORCED"],
-                "direction": "a2a",
-                "destinationAgent": destination,
-                "enforcementMode": self.enforcement_mode,
-                "scanTimeMs": 0,
-                "promptLength": len(scan_message),
-                "promptHash": safe_content_hash(scan_message),
-            }
-            if prov:
-                data["provenance"] = prov
-            if parent_context is not None:
-                data["traceParent"] = parent_context.as_metadata()
-            self._telemetry.enqueue({
-                "type": "scan",
-                "agentId": self.agent_id,
-                "data": data,
-            })
-            return result
 
         result = self._scanner.scan(
             prompt=content_to_scan,
@@ -718,9 +634,10 @@ class DelphiSensor:
         """Core tool-call scan implementation — see ``scan_tool_call`` for wrapper.
 
         Use this for any non-LangChain integration (manual wrappers, custom
-        frameworks). Enforces the same blocked_tools + AGT policy rules that
-        protect_tools() applies, and emits telemetry so the dashboard records
-        the verdict. Honors enforcement mode (monitor downgrades block->flag).
+        frameworks). Enforces the same blocked_tools + local YAML policy + tool-
+        argument content scan that protect_tools() applies, and emits telemetry
+        so the dashboard records the verdict. Honors enforcement mode (monitor
+        downgrades block->flag).
 
         Pass ``mcp_server`` (alias ``server_name``) to attribute the call to an
         MCP server (a downstream topology view then draws an agent→MCP edge
@@ -744,47 +661,14 @@ class DelphiSensor:
         score = 0.0
         category: Optional[str] = None
         rules: list[str] = []
-        reason: Optional[str] = None
 
-        # Action impact classification + local authz evaluation. Both never
-        # raise; with no cached action_policy the decision is monitor-only.
+        # Impact classification — feeds the local YAML policy overlay below (which
+        # is the open authorization mechanism). classify() never raises.
         impact_class, impact_tier = classify(tool_name, arguments, mcp_server)
-        authz = evaluate(
-            self._action_policy,
-            build_request(
-                agent_id=self.agent_id,
-                trust=self._trust_score,
-                tool_name=tool_name,
-                impact_class=impact_class,
-                impact_tier=impact_tier,
-                destination_type="mcp_server" if mcp_server else "tool_call",
-                destination_identifier=mcp_server or tool_name,
-                context={"mcp_server": mcp_server},
-            ),
-        )
 
-        # Quarantine overrides everything
-        if self._quarantined:
-            action, score, category, rules = "blocked", 1.0, "quarantined", ["QUARANTINE_ENFORCED"]
-        # Blocked-tools list
-        elif tool_name in self._blocked_tools:
+        # Blocked-tools list (the explicit operator denylist).
+        if tool_name in self._blocked_tools:
             action, score, category, rules = "blocked", 1.0, "blocked_tool", ["TOOL_BLOCKED"]
-            reason = f"Tool '{tool_name}' blocked by local policy"
-        else:
-            # Per-agent AGT policy evaluation
-            allowed, policy_reason = self._evaluate_policy({"tool_name": tool_name})
-            if not allowed:
-                action, score, category, rules = "blocked", 1.0, "policy", ["POLICY_DENY"]
-                reason = policy_reason
-            elif authz.decision == "blocked":
-                action, score, category, rules = "blocked", 1.0, "action_policy", ["ACTION_POLICY_BLOCK"]
-                reason = authz.reason or f"Tool '{tool_name}' blocked by action policy"
-                print(f"[xaidr] TOOL BLOCKED by action policy: {tool_name} ({authz.policy_id})")
-            elif authz.decision == "approval_required":
-                # Approval flows are not local; block and flag for approval.
-                action, score, category, rules = "blocked", 1.0, "action_policy", ["ACTION_POLICY_APPROVAL_REQUIRED"]
-                reason = authz.reason or f"Tool '{tool_name}' requires approval"
-                print(f"[xaidr] TOOL requires approval: {tool_name} ({authz.policy_id})")
 
         # Content scan of the tool name + string args for dangerous command /
         # code-execution patterns (ASI02/ASI05). Even with NO policy configured,
@@ -912,19 +796,15 @@ class DelphiSensor:
             "mcpServer": mcp_server,
             "impactClass": impact_class,
             "impactTier": impact_tier,
-            "authzDecision": authz.decision,
-            "authzPolicyId": authz.policy_id,
+            # The open authorization mechanism is the local YAML policy; surface
+            # its decision for audit (None when no policy is configured).
+            "authzDecision": _local_policy_decision,
+            "authzPolicyId": _local_policy_id,
             "enforcementMode": self.enforcement_mode,
             "scanTimeMs": 0,
             "promptLength": 0,
             "promptHash": safe_content_hash(tool_name),
         }
-        # surface the local policy decision on the event for audit (overrides the
-        # legacy action_policy fields when a local policy was evaluated)
-        if _local_policy_decision is not None:
-            data["authzDecision"] = _local_policy_decision
-            if _local_policy_id:
-                data["authzPolicyId"] = _local_policy_id
         if prov:
             data["provenance"] = prov
         self._telemetry.enqueue({

@@ -38,8 +38,12 @@ Policy YAML format (mirrors the engine's action_policy structure)::
         effect: require_approval
         match:
           destination_type: ["external_api"]
-        conditions:
-          trust_below: 0.5
+
+Supported match fields: ``tools``, ``impact_class``, ``impact_tier``,
+``destination_type``, ``destination_identifier``. The ``trust_below`` condition
+is NOT supported in this open distribution — it needs a per-agent trust score
+that only the platform tier computes, so a policy using it is REJECTED at load
+(with a clear error) rather than silently never firing.
 """
 
 from __future__ import annotations

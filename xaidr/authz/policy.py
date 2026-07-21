@@ -83,6 +83,23 @@ def parse_action_policy(raw: Any) -> Optional[dict]:
                 return None
             match = r.get("match") if isinstance(r.get("match"), dict) else {}
             conditions = r.get("conditions") if isinstance(r.get("conditions"), dict) else {}
+            # trust_below requires a per-agent trust score, which is a platform-
+            # tier signal this open distribution does not compute (the subject's
+            # trust is always None here). Rather than let such a rule SILENTLY
+            # never fire — a policy that looks enforced but does nothing — reject
+            # the whole policy loudly so the operator sees it and removes the
+            # unsupported condition. (Paid/platform tiers, which do compute trust,
+            # accept it.)
+            if "trust_below" in conditions:
+                logger.error(
+                    "[xaidr] action_policy rule %r uses 'trust_below', which "
+                    "requires a per-agent trust score not available in the open "
+                    "distribution — it would never fire. Policy REJECTED "
+                    "(detection-only). Remove the trust_below condition, or use "
+                    "the platform tier which computes trust.",
+                    r.get("id"),
+                )
+                return None
             rules.append({
                 "id": str(r.get("id")) if r.get("id") is not None else None,
                 "effect": r["effect"],
