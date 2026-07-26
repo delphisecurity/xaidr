@@ -90,9 +90,14 @@ def parse_action_policy(raw: Any) -> Optional[dict]:
             # the whole policy loudly so the operator sees it and removes the
             # unsupported condition. (Paid/platform tiers, which do compute trust,
             # accept it.)
-            if "trust_below" in conditions:
+            # Rejected in EITHER placement — under `conditions:` or under `match:`.
+            # Only `conditions.trust_below` is ever read at evaluation time, so a
+            # rule that puts it under `match:` (the placement the README shows) is
+            # exactly the silent no-op this guard exists to prevent.
+            if "trust_below" in conditions or "trust_below" in match:
                 logger.error(
-                    "[xaidr] action_policy rule %r uses 'trust_below', which "
+                    "[xaidr] action_policy rule %r uses 'trust_below' (under "
+                    "'conditions:' or 'match:' — both are rejected), which "
                     "requires a per-agent trust score not available in the open "
                     "distribution — it would never fire. Policy REJECTED "
                     "(detection-only). Remove the trust_below condition, or use "

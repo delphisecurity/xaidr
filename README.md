@@ -270,6 +270,9 @@ Each wrapped call runs `scan_tool_call(name, actual_arguments)` before the real
 tool executes. A blocked verdict short-circuits: the original tool is **not**
 invoked. Explicitly blocked tool names are denied in both monitor and block mode
 — an operator's deny is not a detection verdict, so monitor does not downgrade it.
+That no-downgrade behavior is enforced by the `protect_tools` wrapper itself:
+calling `sensor.scan_tool_call(...)` directly in monitor mode reports `flagged`
+rather than `blocked` — deliberate, since telemetry still carries the true verdict.
 
 ### Protect outbound HTTP
 
@@ -651,7 +654,7 @@ before enabling hard blocking on a latency-sensitive path.
 - **Malformed content is safe.** Badly formed input cannot turn the sensor into
   a denial-of-service risk.
 
-Verified with `python -m pytest -q` in a clean virtual environment: **763
+Verified with `python -m pytest -q` in a clean virtual environment: **767
 passed, 1 skipped**. The suite covers the public scan APIs, wrappers, policy,
 provenance, reporters, telemetry schema, and resilience behavior.
 

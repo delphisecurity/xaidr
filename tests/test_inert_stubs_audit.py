@@ -50,6 +50,72 @@ def test_local_yaml_policy_still_enforces_without_trust():
     assert s.scan_tool_call("get_weather", {"city": "Toronto"}).action == "allowed"
 
 
+# ── A-11 regression: trust_below is rejected in EITHER placement ─────────────
+#
+# The load-time guard originally inspected only `conditions:`. A rule that put
+# trust_below under `match:` loaded fine, and at evaluation time
+# rule["conditions"].get("trust_below") returned None — so the trust check never
+# ran and the policy looked enforced while doing nothing. `match:` is the
+# placement the README documents, so it was the common case. These tests drive
+# the public API (Sensor.set_policy) so they exercise the real user path.
+
+def _sensor():
+    return Sensor(agent_id="a11-regression", enforcement_mode="block")
+
+
+def test_trust_below_under_conditions_rejected_via_set_policy():
+    """(a) trust_below under `conditions:` → policy rejected."""
+    assert _sensor().set_policy({
+        "version": "1", "defaults": {"effect": "allow"},
+        "rules": [{
+            "id": "untrusted-conditions", "effect": "block",
+            "match": {"destination_type": ["external_api"]},
+            "conditions": {"trust_below": 0.5},
+        }],
+    }) is False
+
+
+def test_trust_below_under_match_alone_rejected_via_set_policy():
+    """(b) trust_below under `match:` alone → policy rejected (the bug)."""
+    assert _sensor().set_policy({
+        "version": "1", "defaults": {"effect": "allow"},
+        "rules": [{
+            "id": "untrusted-match-only", "effect": "block",
+            "match": {"trust_below": 0.5},
+        }],
+    }) is False
+
+
+def test_trust_below_under_match_with_valid_matcher_rejected_via_set_policy():
+    """(c) trust_below under `match:` next to a valid matcher → still rejected.
+
+    The dangerous shape: `tools:` makes the rule look live, so the inert
+    trust_below hides behind a matcher that really does fire.
+    """
+    assert _sensor().set_policy({
+        "version": "1", "defaults": {"effect": "allow"},
+        "rules": [{
+            "id": "untrusted-match-mixed", "effect": "block",
+            "match": {"tools": ["wire_transfer"], "trust_below": 0.5},
+        }],
+    }) is False
+
+
+def test_policy_without_trust_below_still_accepted_via_set_policy():
+    """(d) no trust_below anywhere → accepted; the guard does not over-reject."""
+    assert _sensor().set_policy({
+        "version": "1", "defaults": {"effect": "allow"},
+        "rules": [{
+            "id": "no-wire", "effect": "block",
+            "match": {
+                "tools": ["wire_transfer"],
+                "impact_tier": ["tier_1"],
+                "destination_type": ["external_api"],
+            },
+        }],
+    }) is True
+
+
 # ── A-12 ─────────────────────────────────────────────────────────────────────
 
 def test_no_quarantine_state_on_open_sensor():
