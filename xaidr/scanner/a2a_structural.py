@@ -35,6 +35,10 @@ _SCOPED_AGENT_ROLE = re.compile(r"^agent/[\w.-]+$")
 # Roles the A2A protocol expects on a message.
 _VALID_ROLES = frozenset({"user", "agent"})
 
+_PRIVILEGED_PART_ROLES = frozenset(
+    {"system", "assistant", "tool", "developer", "function"}
+)
+
 # Metadata string longer than this is prose, not a routing hint — a place to
 # smuggle instructions past content scanners that only read parts[].text.
 _METADATA_PROSE_LEN = 200
@@ -146,7 +150,8 @@ class A2AStructuralValidator:
             if not isinstance(part, dict):
                 continue
             kind = part.get("kind")
-            has_text = isinstance(part.get("text"), str)
+            raw_text = part.get("text")
+            has_text = isinstance(raw_text, str) and bool(raw_text.strip())
             has_data = isinstance(part.get("data"), dict)
             # File part: v1.0 `file` object (FileWithBytes/FileWithUri) or 0.x/ACP
             # top-level file reference.
@@ -172,6 +177,21 @@ class A2AStructuralValidator:
                 }.get(kind)
                 if expected_present is False:
                     fire("part_kind_content_mismatch", "structural_part", 0.35)
+
+            # Part-level ROLE forgery (ADI class). `role` is a MESSAGE field in
+            # the A2A spec — a part carrying its own role asserts an identity the
+            # protocol gives it no right to. A privileged value is the forged-
+            # trust injection shape; any other part-level role is still an
+            # anomaly. Flag-level only: surfaces for review, never blocks alone.
+            part_role = part.get("role")
+            if part_role is not None:
+                if (
+                    isinstance(part_role, str)
+                    and part_role.strip().lower() in _PRIVILEGED_PART_ROLES
+                ):
+                    fire("part_role_forgery", "structural_part", 0.40)
+                else:
+                    fire("part_unexpected_role", "structural_part", 0.30)
 
     # -- 3. ROLE ANOMALY (0.25 / 0.30) -------------------------------------
     def _check_role(self, body: dict, direction: str, fire) -> None:

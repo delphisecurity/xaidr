@@ -917,5 +917,11 @@
     "pattern": "\\b(?:pickle|cpickle|marshal|shelve)\\.(?:loads?|load)\\s*\\(|\\byaml\\.(?:unsafe_)?load\\s*\\(",
     "score": 0.85,
     "category": "code_execution"
+  },
+    {
+    "id": "ADI_forged_tool_result",
+    "pattern": "(?:\\[?\\s*(?:tool|function)[_\\s-]?(?:call[_\\s-]?)?(?:result|output|response)\\s*(?:\\([^)]{0,80}\\))?\\s*\\]?\\s*[:\\]=]|<\\s*(?:tool|function)[_\\s-]?(?:result|output)\\s*>)[\\s\\S]{0,200}?\\b(?:access[_\\s-]?level|privileges?|permissions?|role|auth(?:enticated|orized|orization)?|is[_\\s-]?admin|admin[_\\s-]?access|clearance|trust[_\\s-]?level|verified|approval[_\\s-]?status|mfa|status)\\b\\s*[:=]?\\s*[\"']?(?:admin|root|superuser|system|elevated|granted|approved|full|unrestricted|true|verified|success|bypassed)\\b",
+    "score": 0.48,
+    "category": "forged_trust"
   }
 ]

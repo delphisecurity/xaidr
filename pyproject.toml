@@ -8,12 +8,9 @@ dynamic = ["version"]
 description = "Standalone, local-first security sensor for AI agents — prompt-injection, jailbreak, DLP, and A2A-protocol scanning. No backend, no account, zero required dependencies."
 readme = "README.md"
 requires-python = ">=3.10"
-# LICENSE PLACEHOLDER — pending a separate legal review. This is intentionally
-# NOT an OSI license (no Apache-2.0 / MIT asserted yet) and the OSI
-# "License ::" classifier is omitted until the license is chosen. Do not treat
-# this as the final license.
-license = { text = "LicenseRef-Proprietary" }
-authors = [{ name = "Delphi Security" }]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Delphi Security Inc." }]
 keywords = [
     "security",
     "ai-agents",
@@ -35,8 +32,6 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    # NOTE: no "License ::" classifier — the license is a placeholder pending
-    # the legal gate (see [project].license above).
 ]
 
 # Zero required runtime dependencies — `pip install xaidr` pulls in nothing.
