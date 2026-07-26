@@ -68,8 +68,8 @@ langchain = ["langchain>=1.0", "langchain-core>=1.0"]
 dev = ["pytest"]
 
 [project.urls]
-Homepage = "https://github.com/delphisecurity/opena2a"
-Repository = "https://github.com/delphisecurity/opena2a"
+Homepage = "https://github.com/delphisecurity/xaidr"
+Repository = "https://github.com/delphisecurity/xaidr"
 
 # --- Version: single source of truth = xaidr/__init__.py __version__ ----------
 [tool.hatch.version]
