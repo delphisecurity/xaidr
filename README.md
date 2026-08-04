@@ -547,6 +547,12 @@ never blocks everything.
 never firing — it needs a per-agent trust score that only the platform tier
 computes. Silent inert security conditions are how you get false confidence.
 
+**Unknown `match:` or `conditions:` keys are rejected at load** with an error
+naming the key, the rule, and the nearest valid field, so a typo like
+`match: {tool: [...]}` cannot silently disarm a rule. A rule with an
+unrecognized key matches nothing, which would load cleanly and enforce nothing;
+the policy is refused instead and the sensor falls through to detection-only.
+
 ---
 
 ## Provenance and audit trail
@@ -892,7 +898,7 @@ before enabling hard blocking on a latency-sensitive path.
 - **Malformed content is safe.** Badly formed input cannot turn the sensor into
   a denial-of-service risk.
 
-Verified with `python -m pytest -q` in a clean virtual environment: **825
+Verified with `python -m pytest -q` in a clean virtual environment: **840
 passed, 1 skipped**. The suite covers the public scan APIs, wrappers, policy,
 provenance, reporters, telemetry schema, and resilience behavior.
 

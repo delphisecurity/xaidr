@@ -8,6 +8,8 @@ A-3 AGT evaluator: the always-allow AGT stub (_evaluate_policy) and its
 _action_policy/_trust_score state are removed; only the local YAML policy is the
 open authorization mechanism (and it still enforces).
 """
+import logging
+
 import pytest
 
 from xaidr import Sensor
@@ -113,6 +115,143 @@ def test_policy_without_trust_below_still_accepted_via_set_policy():
                 "destination_type": ["external_api"],
             },
         }],
+    }) is True
+
+
+# ── ADV-2 / ADV-3: an unknown match/conditions key disarms the rule ──────────
+# Same failure class as trust_below above, found by an artifact audit: a typo'd
+# match key (`tool` for `tools`) parsed as a VALID policy, set_policy returned
+# True, and the rule then matched nothing. The operator sees a loaded policy and
+# believes the rule is enforcing. Unknown keys now join trust_below in being
+# rejected loudly at load rather than silently ignored.
+
+UNKNOWN_MATCH_KEYS = [
+    ("tool", "tools"),                  # (a) singular typo — the one that was found
+    ("tool_name", "tools"),             # (b) the internal request key, not the match field
+    ("mcp_servers", "mcp_server"),      # (c) plural typo
+    ("destination", "destination_type"),
+    ("agent", "agents"),
+    ("totally_made_up_key", None),      # no near-match: must still reject
+]
+
+
+@pytest.mark.parametrize("bad_key,near", UNKNOWN_MATCH_KEYS)
+def test_unknown_match_key_is_rejected_not_silently_ignored(bad_key, near, caplog):
+    """(a)(b)(c) an unrecognized `match:` key → policy REJECTED, error names it."""
+    with caplog.at_level(logging.ERROR, logger="xaidr.authz"):
+        accepted = _sensor().set_policy({
+            "version": "1", "defaults": {"effect": "allow"},
+            "rules": [{"id": "typo-rule", "effect": "block",
+                       "match": {bad_key: ["export_*"]}}],
+        })
+    assert accepted is False, f"{bad_key!r} loaded as a valid policy — rule is silently dead"
+    text = caplog.text
+    assert bad_key in text, f"error does not name the offending key: {text!r}"
+    assert "typo-rule" in text, f"error does not name the rule id: {text!r}"
+    if near:
+        assert near in text, f"error does not suggest the near-match {near!r}: {text!r}"
+
+
+def test_unknown_match_key_rejected_even_beside_a_valid_matcher(caplog):
+    """The dangerous shape: a typo hiding next to a matcher that really fires.
+
+    Without this, the rule looks like it gates two things and gates only one.
+    """
+    with caplog.at_level(logging.ERROR, logger="xaidr.authz"):
+        accepted = _sensor().set_policy({
+            "version": "1", "defaults": {"effect": "allow"},
+            "rules": [{"id": "half-armed", "effect": "block",
+                       "match": {"tools": ["wire_transfer"], "mcp_servers": ["srv"]}}],
+        })
+    assert accepted is False
+    assert "mcp_servers" in caplog.text
+
+
+@pytest.mark.parametrize("bad_key", ["max_calls", "time_of_day", "only_if_amount_over"])
+def test_unknown_conditions_key_is_rejected(bad_key, caplog):
+    """(d) an unrecognized `conditions:` key → rejected.
+
+    Silently ignoring it is worse than a dead rule: the rule fires in the cases
+    the author believed the condition excluded.
+    """
+    with caplog.at_level(logging.ERROR, logger="xaidr.authz"):
+        accepted = _sensor().set_policy({
+            "version": "1", "defaults": {"effect": "allow"},
+            "rules": [{"id": "cond-rule", "effect": "block",
+                       "match": {"tools": ["export_*"]},
+                       "conditions": {bad_key: 5}}],
+        })
+    assert accepted is False, f"conditions:{bad_key} loaded — the condition is ignored at runtime"
+    assert bad_key in caplog.text
+    assert "cond-rule" in caplog.text
+
+
+def test_every_documented_match_field_still_loads_and_fires():
+    """(e) control: the validator must not over-reject any real field.
+
+    Derived from _MATCH_FIELDS so a newly added field is covered automatically
+    rather than silently untested.
+    """
+    from xaidr.authz.policy import _MATCH_FIELDS
+
+    values = {
+        "tools": ["query_db"], "agents": ["inert-audit"], "impact_class": ["read"],
+        "impact_tier": ["low", "medium", "high", "critical"],
+        "destination_type": ["mcp_server"], "destination_identifier": ["srv-a"],
+        "mcp_server": ["srv-a"],
+    }
+    assert set(values) == set(_MATCH_FIELDS), (
+        "a match field was added/removed without updating this control test"
+    )
+    for field, val in values.items():
+        s = Sensor(agent_id="inert-audit", enforcement_mode="block")
+        assert s.set_policy({
+            "version": "1", "defaults": {"effect": "allow", "unclassified": "allow"},
+            "rules": [{"id": "ok", "effect": "block", "match": {field: val}}],
+        }) is True, f"valid match field {field!r} was rejected"
+        r = s.scan_tool_call("query_db", {"table": "customers"}, mcp_server="srv-a")
+        assert r.action == "blocked", f"valid match field {field!r} loaded but did not fire"
+
+
+def test_all_documented_match_fields_together_still_load_and_fire():
+    """(e) control: every field at once, the full documented matrix in one rule."""
+    s = Sensor(agent_id="inert-audit", enforcement_mode="block")
+    assert s.set_policy({
+        "version": "1", "defaults": {"effect": "allow", "unclassified": "allow"},
+        "rules": [{"id": "all", "effect": "block", "match": {
+            "tools": ["query_db"], "agents": ["inert-audit"], "impact_class": ["read"],
+            "impact_tier": ["low", "medium", "high", "critical"],
+            "destination_type": ["mcp_server"], "destination_identifier": ["srv-a"],
+            "mcp_server": ["srv-a"],
+        }}],
+    }) is True
+    assert s.scan_tool_call("query_db", {"table": "customers"},
+                            mcp_server="srv-a").action == "blocked"
+
+
+def test_rule_with_no_match_block_still_loads():
+    """(f) control: a rule with no match: at all is still a valid load."""
+    assert _sensor().set_policy({
+        "version": "1", "defaults": {"effect": "allow"},
+        "rules": [{"id": "bare", "effect": "allow"}],
+    }) is True
+
+
+def test_empty_match_and_empty_conditions_still_load():
+    """(f) control: empty blocks are not 'unknown keys'."""
+    assert _sensor().set_policy({
+        "version": "1", "defaults": {"effect": "allow"},
+        "rules": [{"id": "empty", "effect": "block", "match": {}, "conditions": {}}],
+    }) is True
+
+
+def test_unknown_keys_outside_match_are_still_ignored():
+    """Scope guard: only match:/conditions: keys disarm a rule, so only they are
+    rejected. An unknown key at rule or top level stays ignored as documented."""
+    assert _sensor().set_policy({
+        "version": "1", "defaults": {"effect": "allow"}, "some_future_field": 1,
+        "rules": [{"id": "x", "effect": "block", "match": {"tools": ["t"]},
+                   "description": "unknown rule-level key, harmless"}],
     }) is True
 
 

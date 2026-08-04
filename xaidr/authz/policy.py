@@ -18,6 +18,7 @@ AuthZEN-shaped request::
 
 from __future__ import annotations
 
+import difflib
 import fnmatch
 import logging
 from dataclasses import dataclass
@@ -36,7 +37,12 @@ _EFFECT_TO_DECISION = {
     "require_approval": "approval_required",
 }
 
-# Rule match fields -> (request section, request key). Unknown fields are ignored.
+# Rule match fields -> (request section, request key). This dict is the SINGLE
+# source of truth for which match keys exist: the evaluator reads it, and the
+# loader validates against it (see _reject_unknown_keys), so a field added here
+# is automatically accepted and one removed is automatically rejected. Do not
+# duplicate this list anywhere — a second copy is how a validator drifts out of
+# sync with the evaluator and starts rejecting keys that actually work.
 _MATCH_FIELDS = {
     "tools": ("action", "tool_name"),
     "agents": ("subject", "agent_id"),
@@ -46,6 +52,40 @@ _MATCH_FIELDS = {
     "destination_identifier": ("resource", "destination_identifier"),
     "mcp_server": ("context", "mcp_server"),
 }
+
+# The only key `_rule_matches` reads out of a rule's `conditions:` block. Same
+# single-source-of-truth discipline as _MATCH_FIELDS above. (`trust_below` is
+# additionally rejected on its own, with a more specific message, because it
+# parses fine but can never fire in this distribution.)
+_CONDITION_FIELDS = frozenset({"trust_below"})
+
+
+def _reject_unknown_keys(rule_id: Any, block_name: str, block: dict, known) -> bool:
+    """Log and reject the first unrecognized key in a rule's match/conditions.
+
+    An unknown key is NOT a harmless typo: `match: {tool: [...]}` (singular)
+    parses, loads, reports success, and then matches nothing — the rule is
+    silently disarmed while the operator believes it is enforcing. That is the
+    same failure class as `trust_below`, so it gets the same loud treatment
+    rather than being quietly ignored.
+
+    Returns True when an unknown key was found (caller must reject the policy).
+    """
+    for key in sorted(block, key=str):
+        if key in known:
+            continue
+        near = difflib.get_close_matches(str(key), sorted(known), n=1, cutoff=0.6)
+        did_you_mean = f" Did you mean {near[0]!r}?" if near else ""
+        logger.error(
+            "[xaidr] action_policy rule %r has an unknown key %r under '%s:'."
+            "%s A rule with an unrecognized key matches NOTHING — it would load "
+            "cleanly and silently never fire. Policy REJECTED (detection-only). "
+            "Valid '%s:' keys: %s.",
+            rule_id, key, block_name, did_you_mean, block_name,
+            ", ".join(sorted(known)),
+        )
+        return True
+    return False
 
 
 @dataclass
@@ -63,7 +103,12 @@ def parse_action_policy(raw: Any) -> Optional[dict]:
 
     Returns the normalized policy dict, or None for anything malformed —
     callers treat None as monitor-only defaults (never raise).
-    Unknown fields at any level are ignored.
+
+    Unknown keys INSIDE a rule's ``match:`` or ``conditions:`` block are
+    REJECTED, not ignored: such a rule loads cleanly and then matches nothing,
+    which is a security control that silently does not run. Unknown fields
+    elsewhere (top level, rule level) remain ignored — those do not disarm
+    anything.
     """
     try:
         if not isinstance(raw, dict):
@@ -104,6 +149,13 @@ def parse_action_policy(raw: Any) -> Optional[dict]:
                     "the platform tier which computes trust.",
                     r.get("id"),
                 )
+                return None
+            # An unrecognized key under match:/conditions: disarms the rule just
+            # as silently as trust_below would, so it is rejected the same way.
+            # Checked AFTER trust_below so that key keeps its specific message.
+            if _reject_unknown_keys(r.get("id"), "match", match, _MATCH_FIELDS.keys()):
+                return None
+            if _reject_unknown_keys(r.get("id"), "conditions", conditions, _CONDITION_FIELDS):
                 return None
             rules.append({
                 "id": str(r.get("id")) if r.get("id") is not None else None,
