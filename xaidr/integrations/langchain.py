@@ -135,7 +135,19 @@ def delphi_middleware(
         **sensor_kwargs,
     )
 
+    # Both "blocked" and "approval_required" HALT the turn, but they are
+    # different states and must read differently: a block is a denial, an
+    # approval gate is a pending human decision on an action that was not
+    # executed. Collapsing them would leave the operator unable to tell one
+    # from the other in transcripts.
+    _HALTING_ACTIONS = ("blocked", "approval_required")
+
     def _refusal_text(result: Any) -> str:
+        if getattr(result, "action", None) == "approval_required":
+            return (
+                "This action requires human approval and was not executed. "
+                f"(xaidr:approval_required:{result.category or 'policy'})"
+            )
         return (
             "I can't help with that request. "
             f"(xaidr:{result.category or 'policy'})"
@@ -178,7 +190,7 @@ def delphi_middleware(
                 f"{' [A2A]' if is_a2a else ''}"
             )
 
-            if result.action == "blocked":
+            if result.action in _HALTING_ACTIONS:
                 return {
                     "messages": [AIMessage(content=_refusal_text(result))],
                     "jump_to": "end",
@@ -203,14 +215,25 @@ def delphi_middleware(
                     f"score={result.score:.2f} category={result.category} "
                     f"rules={result.rules} tool={tool_name}"
                 )
-                if result.action == "blocked":
+                if result.action in _HALTING_ACTIONS:
                     # Short-circuit: return a refusal ToolMessage WITHOUT calling
-                    # the handler, so the tool is never executed.
-                    return ToolMessage(
-                        content=(
+                    # the handler, so the tool is never executed. An approval gate
+                    # gets its own message — the action is pending a human, not
+                    # denied.
+                    if result.action == "approval_required":
+                        content = (
+                            f"[APPROVAL REQUIRED] Tool '{tool_name}' requires "
+                            f"human approval and was NOT executed "
+                            f"({result.category or 'policy'}). Route this action "
+                            "to a human approver."
+                        )
+                    else:
+                        content = (
                             f"[BLOCKED] Tool '{tool_name}' blocked by security "
                             f"policy ({result.category or 'policy'})."
-                        ),
+                        )
+                    return ToolMessage(
+                        content=content,
                         tool_call_id=call_id or "",
                         name=tool_name,
                         status="error",
@@ -240,7 +263,7 @@ def delphi_middleware(
                 f"[xaidr] output action={result.action} score={result.score:.2f} "
                 f"category={result.category} rules={result.rules}"
             )
-            if result.action == "blocked":
+            if result.action in _HALTING_ACTIONS:
                 return {
                     "messages": [AIMessage(content=_refusal_text(result))],
                     "jump_to": "end",

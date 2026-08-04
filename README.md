@@ -123,7 +123,7 @@ sensor = Sensor(agent_id="support-agent")     # monitor mode by default
 def run_agent(user_input: str) -> str:
     # 1. INPUT boundary — untrusted text entering the agent
     r = sensor.scan(user_input, direction="input")
-    if r.action == "blocked":
+    if r.action in ("blocked", "approval_required"):
         return "Request blocked."
 
     reply = call_your_model(user_input)
@@ -132,14 +132,16 @@ def run_agent(user_input: str) -> str:
     if wants_tool(reply):
         name, args = extract_tool_call(reply)
         r = sensor.scan_tool_call(name, args)
-        if r.action == "blocked":
-            return f"Tool '{name}' blocked."
-        tool_output = run_tool(name, args)      # only runs if not blocked
+        if r.action in ("blocked", "approval_required"):
+            # approval_required = a require_approval policy fired: do NOT run
+            # the tool, route it to a human. See "Approval-gated actions".
+            return f"Tool '{name}' halted ({r.action})."
+        tool_output = run_tool(name, args)      # only runs if not halted
         reply = call_your_model(tool_output)
 
     # 3. OUTPUT boundary — leak check before the user sees it
     r = sensor.scan_output(reply)
-    if r.action == "blocked":
+    if r.action in ("blocked", "approval_required"):
         return "Response withheld."
 
     return reply
@@ -147,7 +149,7 @@ def run_agent(user_input: str) -> str:
 # 4. A2A boundary — in the receive path of an agent that accepts delegations
 def on_a2a_message(envelope: dict) -> None:
     r = sensor.scan_a2a(envelope, destination="billing-agent", received=True)
-    if r.action == "blocked":
+    if r.action in ("blocked", "approval_required"):
         reject(envelope)
 ```
 
@@ -155,16 +157,41 @@ Every scan returns a `ScanResult`:
 
 | Field | Meaning |
 |---|---|
-| `.action` | `"allowed"` / `"flagged"` / `"blocked"` — the primary surface |
+| `.action` | `"allowed"` / `"flagged"` / `"blocked"` / `"approval_required"` — the primary surface (see below) |
 | `.score` | 0.0–1.0 fused detection score |
 | `.category` | high-level category for the finding, when one exists |
 | `.rules` | every rule that fired, for triage and tuning |
 | `.latency_ms` | scan time |
 | `.input_status` | `"not_scannable"` when input was malformed/wrong-typed (verdict stays fail-open) |
 
-`.is_blocked` and `.is_allowed` are **properties**, not methods — `result.is_blocked`,
-never `result.is_blocked()`. A bound method is always truthy, so calling it would
-be a silent always-true bug; properties make that impossible.
+### The four `.action` values
+
+`.action` has **four** possible values. Two of them halt the action; two do not.
+
+| `.action` | Halts? | What the caller should do |
+|---|---|---|
+| `"allowed"` | no | Proceed normally — nothing fired. |
+| `"flagged"` | **no** | **Observe and continue.** The action still runs; the finding is for your alert stream, not a stop signal. |
+| `"blocked"` | yes | Do not execute. This is a denial — refuse and return. |
+| `"approval_required"` | yes | Do not execute. A `require_approval` policy gated it: route the action to a **human approver**. It is pending, not denied. |
+
+So the correct guard for "should I stop?" tests **both** halting values:
+
+```python
+if r.action in ("blocked", "approval_required"):
+    return refuse(r)          # tool/action is NOT executed
+```
+
+Do **not** write `if not r.is_allowed:` — `is_allowed` is strictly
+`action == "allowed"`, so that guard also halts on `flagged`, which is meant to
+be observe-and-continue.
+
+`.is_blocked`, `.is_allowed`, `.requires_approval`, and `.must_halt` are
+**properties**, not methods — `result.is_blocked`, never `result.is_blocked()`.
+A bound method is always truthy, so calling it would be a silent always-true bug;
+properties make that impossible. `.is_blocked` means *blocked* and nothing else —
+it deliberately excludes `approval_required`. `.must_halt` is the convenience
+equivalent of the two-value membership test above.
 
 Scans never raise on bad input. Wrong-typed prompts fail **open** with
 `category="input_not_scannable"` and `input_status="not_scannable"`. Unexpected
@@ -192,13 +219,13 @@ sensor = Sensor(agent_id="demo-agent", enforcement_mode="block")
 def handle(user_input: str) -> str:
     # INPUT boundary — scan untrusted text before it reaches your model
     verdict = sensor.scan(user_input, direction="input")
-    if verdict.action == "blocked":
+    if verdict.action in ("blocked", "approval_required"):
         return f"[blocked: {verdict.category}]"
 
     reply = call_model(user_input)
 
     # OUTPUT boundary — scan the model's reply before returning it
-    if sensor.scan_output(reply).action == "blocked":
+    if sensor.scan_output(reply).action in ("blocked", "approval_required"):
         return "[response withheld]"
     return reply
 
@@ -338,7 +365,7 @@ as a first-class scan path.
 
 ```python
 r = sensor.scan_a2a(envelope, destination="billing-agent", received=True)
-if r.action == "blocked":
+if r.action in ("blocked", "approval_required"):
     reject(envelope)
 ```
 
@@ -422,6 +449,32 @@ so you can write policy about *what an action does* rather than enumerating
 every tool name. Argument inspection can **escalate** a tier but never lower it:
 a call carrying `amount` / `recipient` / `iban` is raised to at least `high`;
 one carrying a `url` or a `path` to at least `medium`.
+
+**Approval-gated actions.** A rule with `effect: require_approval` yields
+`action="approval_required"` — a **halting** verdict, not a soft flag. The action
+is **not executed**; the caller is responsible for routing it to a human
+approver. `protect_tools` and the LangChain middleware enforce this for you (the
+tool is never invoked, and the returned message says *approval required*, kept
+distinct from a block so you can tell a pending approval from a denial). On the
+direct API, guard it yourself:
+
+```python
+r = sensor.scan_tool_call("issue_refund", args)
+if r.action == "approval_required":
+    return route_to_human(r)        # NOT executed — pending a human decision
+if r.action == "blocked":
+    return refuse(r)                # denied outright
+
+# or, if you don't need to distinguish them:
+if r.action in ("blocked", "approval_required"):
+    return refuse(r)
+```
+
+In `monitor` mode an approval gate on the tool-call path is downgraded to
+`flagged` like a block, so the action still runs. Telemetry keeps the true
+`approval_required` verdict either way. A **deny-destination** rule is the
+exception: destination blocks are enforced in every mode, monitor included (see
+[Deployment modes](#deployment-modes-and-tuning)).
 
 **Composition is stricter-wins.** The final action is the stricter of
 {detection verdict, policy verdict}. A policy can *add* restrictions but can

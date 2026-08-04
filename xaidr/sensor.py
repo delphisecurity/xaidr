@@ -214,12 +214,19 @@ class DelphiSensor:
         return parsed is not None
 
     def _apply_mode(self, result: ScanResult) -> ScanResult:
-        """In monitor mode, downgrade a returned 'blocked' to 'flagged'.
-        Telemetry keeps the true verdict; only the returned action is softened
-        so the agent does not hard-block in monitor mode. The local scanner
-        already gates on enforcement_mode; this is a belt-and-suspenders guard.
-        Quarantine is never downgraded."""
-        if self.enforcement_mode == "monitor" and result.action == "blocked":
+        """In monitor mode, downgrade a halting verdict to 'flagged'.
+
+        Both halting actions are downgraded: 'blocked' and 'approval_required'
+        (the latter from a ``require_approval`` policy). Monitor mode must never
+        interrupt the agent — an approval gate halts autonomous execution just as
+        a block does, so leaving it un-downgraded would make monitor mode stop
+        traffic. Telemetry keeps the true pre-downgrade verdict (it is emitted
+        from the composed action BEFORE this gate runs); only the returned action
+        is softened. The local scanner already gates on enforcement_mode; this is
+        a belt-and-suspenders guard. Quarantine is never downgraded."""
+        if self.enforcement_mode == "monitor" and result.action in (
+            "blocked", "approval_required",
+        ):
             return ScanResult(
                 action="flagged",
                 score=result.score,
@@ -873,13 +880,18 @@ class DelphiSensor:
         code execution, injection, exfiltration), and the local YAML policy
         (``policy_file`` / ``set_policy``), and emits telemetry for the call.
 
-        A "blocked" verdict short-circuits: the original tool is NOT invoked
-        and a ``[BLOCKED]`` message string is returned instead. Detection and
-        policy blocks honor ``enforcement_mode`` ("monitor" observes/flags,
+        Either HALTING verdict short-circuits: the original tool is NOT invoked.
+        A "blocked" verdict returns a ``[BLOCKED]`` message string; an
+        "approval_required" verdict (from a ``require_approval`` policy) returns
+        a distinct ``[APPROVAL REQUIRED]`` string saying the action was not
+        executed and needs a human approver — a denial and a pending approval are
+        never collapsed into the same message. Detection and policy verdicts
+        honor ``enforcement_mode`` ("monitor" observes/flags — including
+        downgrading an approval gate to ``flagged``, so the tool DOES run —
         "block" enforces); tools explicitly named via ``block_tools`` are
         denied in both modes. An unexpected internal scan fault fails OPEN
         (the tool runs, with a degraded-telemetry signal) — see
-        ``scan_tool_call`` — but a clean block verdict always stops the tool.
+        ``scan_tool_call`` — but a clean halting verdict always stops the tool.
 
         Usage::
 
@@ -915,7 +927,23 @@ class DelphiSensor:
                         # so monitor mode's downgrade does not soften it.
                         print(f"[xaidr] TOOL BLOCKED: {tname}")
                         return f"[BLOCKED] Tool '{tname}' has been blocked by local policy."
-                    if result.action == "blocked":
+                    # Both halting verdicts short-circuit: the original tool is
+                    # NOT invoked. "approval_required" (a require_approval
+                    # policy) halts autonomous execution exactly like a block,
+                    # but keeps a DISTINCT message — the operator must be able to
+                    # tell a denial (final) from a pending approval (routable).
+                    if result.action in ("blocked", "approval_required"):
+                        if result.action == "approval_required":
+                            print(
+                                f"[xaidr] TOOL APPROVAL REQUIRED: {tname} "
+                                f"({result.category}: {', '.join(result.rules)})"
+                            )
+                            return (
+                                f"[APPROVAL REQUIRED] Tool '{tname}' requires "
+                                f"human approval and was NOT executed "
+                                f"({result.category}). Route this action to a "
+                                "human approver."
+                            )
                         print(
                             f"[xaidr] TOOL BLOCKED: {tname} "
                             f"({result.category}: {', '.join(result.rules)})"
