@@ -996,6 +996,9 @@ class DelphiSensor:
                 impact_tier=impact_tier,          # from the existing classifier
                 destination_type="mcp_server" if mcp_server else "tool_call",
                 destination_identifier=mcp_server or tool_name,
+                # Feeds the `mcp_server:` match field, which reads from the
+                # request context. Without this it is silently inert.
+                context={"mcp_server": mcp_server},
             )
             action = _policy.compose(action, pol.decision)
             _local_policy_decision = pol.decision

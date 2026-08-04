@@ -143,11 +143,18 @@ def evaluate_policy(
     impact_tier: str,
     destination_type: str,
     destination_identifier: str,
+    context: Optional[dict] = None,
 ) -> AuthzDecision:
     """Evaluate the local policy for one action. Never raises (engine is fail-safe).
 
     Returns AuthzDecision (decision in: allowed|blocked|monitor|approval_required).
     With no policy, returns the engine's monitor-only default.
+
+    ``context`` is forwarded verbatim to ``build_request`` and is where the
+    context-keyed match fields are read from. Today that is ``mcp_server``:
+    without it, a ``match: {mcp_server: [...]}`` rule reads an absent value and
+    can never fire — an advertised control that silently does nothing. Callers
+    with an MCP server in hand MUST pass it.
     """
     request = build_request(
         agent_id=agent_id,
@@ -157,6 +164,7 @@ def evaluate_policy(
         impact_tier=impact_tier,
         destination_type=destination_type,
         destination_identifier=destination_identifier,
+        context=context,
     )
     return evaluate(policy, request)
 
