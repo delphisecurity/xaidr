@@ -1384,14 +1384,68 @@ class ProtectedHttpClient:
         match = _re.search(r'://([^/:?#]+)', str(url))
         return match.group(1).lower() if match else None
 
+    def _emit_destination_block(self, result: ScanResult, dest_id: Optional[str]) -> None:
+        """Emit ONE telemetry event for a destination-level block.
+
+        Destination blocks raise before any scan_* method runs, so without this
+        they would be the only enforcement path in the SDK that produces no audit
+        record — a blocked exfiltration attempt with nothing in the SIEM. Mirrors
+        the event shape the scan()/scan_a2a()/scan_tool_call() paths emit.
+
+        PRIVACY: carries the destination HOST only, never the full URL. Request
+        query strings routinely carry tokens and API keys, and the hash-only
+        content guarantee has to hold on this path too.
+
+        NEVER raises and NEVER swallows the block: it is called immediately
+        before ``raise DelphiBlockedError`` and has its own guard, so an emit
+        fault cannot be mistaken for a fail-open by the caller's handler.
+        """
+        try:
+            dest = dest_id or "unknown"
+            data = {
+                "scanId": uuid4().hex[:12],
+                "agentId": self._sensor.agent_id,
+                "action": result.action,
+                "score": result.score,
+                "category": result.category,
+                "rules": result.rules,
+                "direction": "a2a",
+                "destinationType": "external_api",
+                # HOST ONLY — never the URL, never the query string.
+                "destinationIdentifier": dest,
+                "enforcementMode": self._sensor.enforcement_mode,
+                "scanTimeMs": 0,
+                "promptLength": 0,
+                "promptHash": safe_content_hash(dest),
+            }
+            prov = _resolve_provenance(self._sensor.agent_id)
+            if prov:
+                data["provenance"] = prov
+            self._sensor._telemetry.enqueue({
+                "type": "scan",
+                "agentId": self._sensor.agent_id,
+                "data": data,
+            })
+        except Exception as exc:
+            try:
+                logger.warning(
+                    "xaidr: destination-block telemetry failed (%s: %s)",
+                    type(exc).__name__, exc,
+                )
+            except Exception:
+                pass
+
     def _check_destination(self, url: str, json_body: dict | None = None) -> None:
         """Destination-level block: blocked-URL list + local deny-destination
         policy. Applies to EVERY method (GET/DELETE included) and is independent
         of body content — a denied destination blocks even with a benign body.
 
-        Raises DelphiBlockedError on a block. Fail-open: an unexpected internal
-        fault here must never crash the host request (the caller still runs any
-        body content scan), so it is caught and logged, not raised.
+        Raises DelphiBlockedError on a block, and emits ONE telemetry event per
+        block first (host only — see ``_emit_destination_block``) so a denied
+        destination leaves an audit record like every other verdict path.
+        Fail-open: an unexpected internal fault here must never crash the host
+        request (the caller still runs any body content scan), so it is caught
+        and logged, not raised.
         """
         try:
             url_str = str(url).lower()
@@ -1406,6 +1460,11 @@ class ProtectedHttpClient:
                         latency_ms=0,
                     )
                     print(f"[xaidr] URL BLOCKED: {url} matches pattern '{blocked_url}'")
+                    # Audit record BEFORE the raise — host only, no URL.
+                    self._emit_destination_block(
+                        result,
+                        self._extract_host(url) or self._extract_destination(url, json_body),
+                    )
                     raise DelphiBlockedError(result)
 
             # 2. Local deny-destination YAML policy (host-based, structured).
@@ -1446,6 +1505,9 @@ class ProtectedHttpClient:
                             f"[xaidr] DESTINATION BLOCKED by policy: {url} "
                             f"({pol.reason or pol.policy_id or dest_id})"
                         )
+                        # Audit record BEFORE the raise — dest_id is the host (or
+                        # the inferred destination agent), never the URL.
+                        self._emit_destination_block(result, dest_id)
                         raise DelphiBlockedError(
                             result,
                             message=f"Destination '{dest_id}' blocked by policy",
