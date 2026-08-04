@@ -21,6 +21,12 @@ from . import local_policy as _policy
 from . import provenance as _prov
 from . import provenance_chain as _chain
 from .authz import classify
+from .circuit_breaker import (
+    CIRCUIT_OPEN_CATEGORY,
+    CIRCUIT_OPEN_RULE,
+    CircuitBreaker,
+    _CircuitRuntime,
+)
 from .reporters import Reporter
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
 from .scanner.l1 import scan_l1 as _scan_l1
@@ -121,6 +127,7 @@ class DelphiSensor:
         a2a_structural_enforcement: str = "flag",
         blocked_tools: list | None = None,
         blocked_urls: list | None = None,
+        circuit_breaker: Optional[CircuitBreaker] = None,
     ):
         if not agent_id:
             raise ValueError("agent_id is required")
@@ -194,6 +201,194 @@ class DelphiSensor:
         # raw serialized JSON (which buries split attacks behind syntax and
         # false-positives on ids/keys). The extractor is pure (no client state).
         self._a2a_extractor: Optional["ProtectedHttpClient"] = None
+
+        # Opt-in circuit breaker. None (the default) means the feature is
+        # ENTIRELY off: no counters, no state, no new telemetry, and every scan
+        # path behaves exactly as it did before the feature existed. A config
+        # with no trigger configured is likewise inert.
+        self._breaker: Optional[_CircuitRuntime] = None
+        if circuit_breaker is not None:
+            if not isinstance(circuit_breaker, CircuitBreaker):
+                raise ValueError(
+                    "circuit_breaker must be a CircuitBreaker instance, got "
+                    f"{type(circuit_breaker).__name__}"
+                )
+            if circuit_breaker.enabled:
+                self._breaker = _CircuitRuntime(
+                    circuit_breaker, self.agent_id, self.enforcement_mode
+                )
+                self._breaker._emit_hook = self._emit_circuit_event
+
+    # ── circuit breaker ──────────────────────────────────────────────────
+    # Every method below is fail-SAFE: a fault anywhere in the breaker degrades
+    # to "no breaker" rather than breaking a scan or taking the host down. That
+    # is the same discipline as the rest of the sensor, applied to the one
+    # feature that deliberately halts the agent.
+
+    @property
+    def circuit_state(self) -> str:
+        """``"closed"`` or ``"open"``. Always ``"closed"`` with no breaker.
+
+        Reading this is what advances an elapsed cooldown (there is no
+        background thread), so it is safe to poll.
+        """
+        if self._breaker is None:
+            return "closed"
+        try:
+            return self._breaker.state()
+        except Exception as exc:
+            logger.warning(
+                "xaidr: circuit_breaker state read failed (%s: %s) — reporting closed",
+                type(exc).__name__, exc,
+            )
+            return "closed"
+
+    def reset_circuit(self) -> None:
+        """Close the circuit immediately and clear both counters. No-op if off."""
+        if self._breaker is None:
+            return
+        try:
+            self._breaker.reset()
+        except Exception as exc:
+            logger.warning(
+                "xaidr: circuit_breaker reset failed (%s: %s)",
+                type(exc).__name__, exc,
+            )
+
+    def _emit_circuit_event(self, event: dict) -> None:
+        """Emit a breaker trip/close event.
+
+        ``type`` is ``"circuit_breaker"``, NOT ``"scan"`` — a breaker event is a
+        state transition of the sensor, not a verdict on a message, and a
+        consumer must be able to tell them apart.
+        """
+        try:
+            data = {
+                "eventId": uuid4().hex[:12],
+                "agentId": self.agent_id,
+                "enforcementMode": self.enforcement_mode,
+                **event,
+            }
+            self._telemetry.enqueue({
+                "type": "circuit_breaker",
+                "agentId": self.agent_id,
+                "data": data,
+            })
+        except Exception as exc:
+            logger.warning(
+                "xaidr: circuit_breaker telemetry failed (%s: %s)",
+                type(exc).__name__, exc,
+            )
+
+    def _circuit_is_blocking(self) -> bool:
+        """True when the circuit is open AND this mode enforces it.
+
+        Monitor mode never returns True: the breaker still trips, still emits,
+        and still fires ``on_trip``, but monitor's contract that nothing is
+        blocked holds — including for the breaker.
+        """
+        if self._breaker is None:
+            return False
+        try:
+            if self.enforcement_mode != "block":
+                return False
+            return self._breaker.state() == "open"
+        except Exception as exc:
+            logger.warning(
+                "xaidr: circuit_breaker check failed (%s: %s) — treating as closed",
+                type(exc).__name__, exc,
+            )
+            return False
+
+    def _emit_circuit_open_verdict(self, direction: str, **extra) -> ScanResult:
+        """The verdict returned while the circuit is open in block mode.
+
+        Detection does NOT run — that is the point of an open circuit. Carries
+        its own category/rule so an operator can tell a breaker halt from a
+        content block at a glance.
+        """
+        result = ScanResult(
+            action="blocked",
+            score=1.0,
+            category=CIRCUIT_OPEN_CATEGORY,
+            rules=[CIRCUIT_OPEN_RULE],
+            latency_ms=0,
+        )
+        try:
+            data = {
+                "scanId": uuid4().hex[:12],
+                "agentId": self.agent_id,
+                "action": "blocked",
+                "score": 1.0,
+                "category": CIRCUIT_OPEN_CATEGORY,
+                "rules": [CIRCUIT_OPEN_RULE],
+                "direction": direction,
+                "enforcementMode": self.enforcement_mode,
+                "scanTimeMs": 0,
+                "promptLength": 0,
+                "promptHash": None,
+            }
+            data.update(extra)
+            self._telemetry.enqueue({
+                "type": "scan",
+                "agentId": self.agent_id,
+                "data": data,
+            })
+        except Exception:
+            pass
+        return result
+
+    def _breaker_observe(self, result: ScanResult) -> None:
+        """Count one verdict's TRUE (pre-downgrade) action toward the breaker.
+
+        MUST be called with the verdict BEFORE ``_apply_mode``. Two shapes count
+        as a true block:
+
+        * ``action == "blocked"`` — the tool-call and A2A paths compute a real
+          block before the mode gate.
+        * ``action == "flagged"`` with ``score >= block_threshold`` — on the
+          scan()/scan_output() path the LocalScanner ALREADY collapsed monitor
+          mode's block-worthy verdict to ``flagged`` internally, so the block is
+          only recoverable from the score. This is what lets the breaker trip in
+          monitor mode at all.
+
+        ``approval_required`` is deliberately NOT counted: an approval gate is a
+        pending human decision, not a denial (and its 0.6 policy severity would
+        otherwise clear the default 0.60 block threshold and be miscounted).
+        """
+        if self._breaker is None:
+            return
+        try:
+            action = result.action
+            if action == "blocked":
+                is_violation = True
+            elif action == "flagged":
+                is_violation = result.score >= self._scanner.block_threshold
+            else:
+                is_violation = False
+            if is_violation:
+                self._breaker.record_violation()
+        except Exception as exc:
+            logger.warning(
+                "xaidr: circuit_breaker violation count failed (%s: %s)",
+                type(exc).__name__, exc,
+            )
+
+    def _breaker_tool_tick(self) -> None:
+        """Count one ``scan_tool_call`` invocation toward the rate trigger.
+
+        Tool calls ONLY — a chatty agent making many ``scan()`` calls must not
+        trip the breaker.
+        """
+        if self._breaker is None:
+            return
+        try:
+            self._breaker.record_tool_call()
+        except Exception as exc:
+            logger.warning(
+                "xaidr: circuit_breaker rate count failed (%s: %s)",
+                type(exc).__name__, exc,
+            )
 
     def _extract_a2a_content(self, body: Optional[dict], raw: Optional[str]) -> str:
         """Extract scannable text from a parsed A2A body (or raw fallback)."""
@@ -337,7 +532,16 @@ class DelphiSensor:
         Wrapped so an UNEXPECTED internal fault fails OPEN with a signal (see
         ``_emit_scan_error``) instead of raising into the host. ``DelphiBlockedError``
         (intentional control flow) is re-raised. Normal verdicts are unchanged.
+
+        With an OPEN circuit breaker in block mode this returns the
+        ``CIRCUIT_BREAKER_OPEN`` verdict without running detection.
         """
+        if self._circuit_is_blocking():
+            return self._emit_circuit_open_verdict(
+                direction,
+                destinationType="external_api",
+                destinationIdentifier=destination or provider or "llm",
+            )
         try:
             return self._scan_impl(
                 prompt, direction, destination, provider, origin_context, parent_context
@@ -419,6 +623,8 @@ class DelphiSensor:
             "data": data,
         })
 
+        # Breaker sees the TRUE verdict — before _apply_mode softens it.
+        self._breaker_observe(result)
         return self._apply_mode(result)
 
     def scan_output(
@@ -457,6 +663,10 @@ class DelphiSensor:
         the detection/verdict is identical either way.
         """
         emit_direction = "a2a_inbound" if received else "a2a"
+        if self._circuit_is_blocking():
+            return self._emit_circuit_open_verdict(
+                emit_direction, destinationAgent=destination,
+            )
         try:
             return self._scan_a2a_impl(
                 message, destination, origin_context, parent_context, received
@@ -606,6 +816,8 @@ class DelphiSensor:
             "agentId": self.agent_id,
             "data": data,
         })
+        # Breaker sees the TRUE verdict — before _apply_mode softens it.
+        self._breaker_observe(result)
         return self._apply_mode(result)
 
     def _arg_normalizer(self) -> TypoNormalizer:
@@ -633,7 +845,19 @@ class DelphiSensor:
 
         An unexpected internal fault (classifier/authz/policy/L1 bug) fails OPEN
         with a signal instead of raising into the host. See ``_scan_tool_call_impl``.
+
+        This is the ONLY entry point that feeds the breaker's rate trigger. The
+        tick happens after the open-circuit check, so calls rejected by an open
+        circuit do not keep re-counting.
         """
+        if self._circuit_is_blocking():
+            return self._emit_circuit_open_verdict(
+                "tool_call",
+                toolName=tool_name if isinstance(tool_name, str) else None,
+                destinationType="mcp_server" if (mcp_server or server_name) else "tool_call",
+                destinationIdentifier=mcp_server or server_name,
+            )
+        self._breaker_tool_tick()
         try:
             return self._scan_tool_call_impl(
                 tool_name, arguments, mcp_server, origin_context, server_name
@@ -838,6 +1062,8 @@ class DelphiSensor:
             "data": data,
         })
 
+        # Breaker sees the TRUE verdict — before _apply_mode softens it.
+        self._breaker_observe(result)
         return self._apply_mode(result)
 
     def block_tools(self, tool_names: list) -> None:

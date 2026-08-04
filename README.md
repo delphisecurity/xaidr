@@ -663,6 +663,7 @@ Sensor(
     a2a_structural_enforcement="flag", # "flag" | "block" — decoupled from the above
     blocked_tools=["drop_database"],
     blocked_urls=["evil.com"],
+    circuit_breaker=None,              # opt-in; see Circuit breaker below
 )
 ```
 
@@ -677,6 +678,93 @@ run before it can affect anyone.
 uniqueness. Reusing one name across agents does not break detection, but it makes
 telemetry ambiguous and muddies provenance chains. Use a unique `agent_id` per
 logical agent; it is the identity in your audit trail.
+
+---
+
+## Circuit breaker
+
+**Opt-in, and off by default.** Without `circuit_breaker=`, a sensor behaves
+exactly as it does today — no counters, no state, no extra telemetry.
+
+Everything else in `xaidr` fails **open**: an internal fault returns `allowed`,
+and the sensor never takes your agent down. The circuit breaker deliberately does
+the opposite — when it trips it **halts the agent**. That inversion is the whole
+reason it is opt-in: you are trading availability for containment, and that is
+your call to make, not a default we pick for you.
+
+```python
+from xaidr import Sensor, CircuitBreaker
+
+sensor = Sensor(
+    agent_id="support-agent",
+    enforcement_mode="block",
+    circuit_breaker=CircuitBreaker(
+        violation_threshold=3,       # 3 blocked verdicts...
+        violation_window_sec=60,     # ...within 60s → open the circuit
+        rate_threshold=50,           # 50 tool calls...
+        rate_window_sec=60,          # ...within 60s → open the circuit
+        cooldown_sec=300,            # auto-close after 5 min
+        on_trip=lambda trip: page_oncall(trip["reason"]),
+    ),
+)
+
+sensor.circuit_state     # "closed" | "open"
+sensor.reset_circuit()   # close now, clear both counters
+```
+
+### What it counts
+
+Two counters. That is the entire mechanism — it does **not** model erratic,
+anomalous, or novel behavior, and it will not notice an attack that does not show
+up in one of these two numbers.
+
+| Trigger | Counts | Does not count |
+|---|---|---|
+| `violation_threshold` | verdicts whose **true** action is `blocked` | `flagged` below your `block_threshold`; `approval_required` |
+| `rate_threshold` | `scan_tool_call` invocations | `scan()` / `scan_output()` — a chatty agent must not trip it |
+
+Either trigger alone opens the circuit. A trigger left at `None` is disabled, so
+you can run one, the other, or both. The trip reason (`"violation_threshold"` or
+`"rate_threshold"`) is recorded and handed to `on_trip`.
+
+**"True" action is load-bearing.** The violation counter sees the verdict *before*
+monitor mode downgrades `blocked` to `flagged`. A breaker that counted the
+returned action could never trip in monitor mode, which would make it useless
+during exactly the phase where you are trying to learn what your traffic does.
+
+### While the circuit is open
+
+- **`block` mode:** every subsequent scan returns `action="blocked"` with category
+  `circuit_breaker_open` and rule `CIRCUIT_BREAKER_OPEN`, **without running
+  detection**. A wrapped tool is not invoked. The distinct rule is there so a
+  breaker halt is never mistaken for a content block during triage.
+- **`monitor` mode:** the breaker still trips, still emits telemetry, and still
+  fires `on_trip` — but **nothing is blocked**. Monitor's contract holds. This is
+  how you calibrate thresholds against real traffic before enforcing.
+- `on_trip` fires **exactly once per trip**, not once per subsequent scan.
+- A trip and a close each emit one telemetry event of type `circuit_breaker`
+  (*not* `"scan"`), carrying the trigger reason and the counter values.
+
+### Recovery
+
+| | |
+|---|---|
+| `cooldown_sec=300` | auto-closes 5 minutes after the trip; both counters cleared |
+| `cooldown_sec=None` | stays open until you call `reset_circuit()` — the manual kill-switch form |
+| `reset_circuit()` | closes immediately and clears both counters, any time |
+
+There is no half-open state: the circuit is closed or open. Recovery is a
+cooldown or an operator, nothing probabilistic.
+
+```python
+# Kill-switch form: trip once, stay down until a human clears it.
+CircuitBreaker(violation_threshold=5, cooldown_sec=None, on_trip=page_oncall)
+```
+
+A fault *inside* the breaker degrades to "no breaker" — the scan still returns its
+verdict — so the one component that can halt your agent cannot halt it by
+malfunctioning. A raising `on_trip` callback is logged and swallowed for the same
+reason.
 
 ---
 
@@ -756,7 +844,7 @@ boundary, not an oversight.
 
 ```python
 from xaidr import (
-    Sensor, ProtectedHttpClient, ScanResult, DelphiBlockedError,
+    Sensor, ProtectedHttpClient, ScanResult, DelphiBlockedError, CircuitBreaker,
     set_origin, origin_scope, clear_origin,
     begin_flow, inject_context, extract_context, clear_flow,
 )
@@ -777,12 +865,17 @@ from xaidr.integrations.langchain import delphi_middleware
 | `block_urls(urls)` / `unblock_urls(urls)` | operator destination blocklist |
 | `protect_tools(tools)` | wrap tools with enforcement |
 | `protect_http(client)` | wrap an `httpx.Client` |
+| `circuit_state` | `"closed"` / `"open"` (property; always `"closed"` with no breaker) |
+| `reset_circuit()` | close the circuit breaker now, clear its counters |
 | `flush()` / `close_sync()` | sync telemetry flush / shutdown |
 | `await close()` | async shutdown |
 
-Direct scan APIs return `ScanResult`; check `.action`, `.is_blocked`, or
-`.is_allowed`. The protected HTTP wrapper raises `DelphiBlockedError` when it
-blocks a request before network execution.
+Direct scan APIs return `ScanResult`; check `.action` (one of the
+[four values](#the-four-action-values)), or the `.is_blocked` /
+`.is_allowed` / `.requires_approval` / `.must_halt` properties. `.must_halt` is
+the one to gate execution on — it covers `blocked` and `approval_required`
+without also stopping on `flagged`. The protected HTTP wrapper raises
+`DelphiBlockedError` when it blocks a request before network execution.
 
 ---
 

@@ -6,6 +6,7 @@ account, no backend, no network required.
 """
 
 from .sensor import DelphiSensor as Sensor, ProtectedHttpClient
+from .circuit_breaker import CircuitBreaker
 from .provenance import set_origin, origin_scope, clear_origin
 from .provenance_chain import (
     begin_flow, inject_context, extract_context, clear_flow,
@@ -19,6 +20,7 @@ __all__ = [
     "ProtectedHttpClient",
     "ScanResult",
     "DelphiBlockedError",
+    "CircuitBreaker",
     "set_origin",
     "origin_scope",
     "clear_origin",
