@@ -31,7 +31,9 @@ Sensor(agent_id="support-agent", enforcement_mode="block").scan(attack).action  
 ```
 
 The default is **monitor**: the verdict is computed and emitted, but nothing is
-blocked. That is deliberate — you measure first, then enforce.
+blocked. That is deliberate — you measure first, then enforce. (One exception:
+destination blocks are enforced in every mode, including monitor — see
+[Deployment modes](#deployment-modes-and-tuning).)
 
 ---
 
@@ -316,10 +318,33 @@ Two independent, stricter-wins layers:
 
 - **Destination** — checked on **every** method including GET and DELETE, against
   the blocked-URL list and the YAML deny-destination policy. A denied
-  destination is blocked regardless of body content.
-- **Body content** — on POST/PUT/PATCH the request body is scanned before send,
-  and the response body is scanned before it is returned to the agent. A
+  destination is blocked regardless of body content, and regardless of
+  enforcement mode: destination blocks are enforced in every mode, monitor
+  included (see [Deployment modes](#deployment-modes-and-tuning)).
+- **Body content** — on POST/PUT/PATCH only. The request body is scanned before
+  send, and the response body is scanned before it is returned to the agent. A
   malicious body is blocked even to an allowed destination.
+
+**GET and DELETE are destination-checked, but their response bodies are not
+content-scanned.** The destination layer above still applies to them, so a GET to
+a denied host is blocked before it leaves. What does not happen is a content scan
+of what comes back. That matters, because a GET response is the canonical
+indirect-injection vector: your agent fetches a webpage or a document, and the
+poisoned instructions arrive in the response body. Scan fetched content yourself,
+at your input boundary, before it reaches the model:
+
+```python
+page = client.get("https://example.com/doc")     # destination-checked only
+r = sensor.scan(page.text, direction="input")    # you scan the content
+if r.action in ("blocked", "approval_required"):
+    return "Fetched content rejected."
+```
+
+**Supported verbs:** `get`, `post`, `put`, `patch`, `delete` (plus `close` and
+use as a context manager). Other verbs are **not** proxied: `head`, `options`,
+`request`, `stream`, and `send` raise `AttributeError` rather than falling
+through to the wrapped client. If you need one of those, call it on your own
+`httpx.Client` and scan at your input boundary as above.
 
 ### LangChain middleware
 
@@ -439,8 +464,42 @@ sensor.set_policy({
 # or drop ./xaidr-policy.yaml beside the agent → auto-loaded and logged
 ```
 
-**Match fields:** `tools`, `agents`, `impact_class`, `impact_tier`,
-`destination_type`, `destination_identifier`, `mcp_server`.
+**Match fields, and where each one is evaluated.** Policy is an overlay on two
+paths only: tool calls, and outbound HTTP destinations. It is **not** consulted by
+`scan()`, `scan_output()`, or a direct `scan_a2a()` call, so no match field can
+gate ordinary input or output scanning.
+
+| Match field | `scan_tool_call()` / `protect_tools` | HTTP destination (`protect_http`) | `scan()` / `scan_output()` / `scan_a2a()` |
+|---|---|---|---|
+| `tools` | ✅ the tool name | ✅ always the literal `http_request` | ✗ never matches |
+| `agents` | ✅ | ✅ | ✗ never matches |
+| `impact_class` | ✅ classified from the call | ✅ always `network` | ✗ never matches |
+| `impact_tier` | ✅ classified from the call | ✅ always `external` | ✗ never matches |
+| `destination_type` | ✅ `tool_call`, or `mcp_server` | ✅ always `external_api` | ✗ never matches |
+| `destination_identifier` | ✅ tool or MCP server name | ✅ the destination host | ✗ never matches |
+| `mcp_server` | ✅ the MCP server name, when the call names one | ✗ no MCP server on an HTTP destination | ✗ never matches |
+
+The column that bites is the last one. A rule written as
+
+```yaml
+- id: gate-external          # NEVER fires
+  effect: block
+  match:
+    destination_type: ["external_api"]
+```
+
+looks like it gates every outbound interaction, but on `scan()` and
+`scan_output()` it is silently inert: those paths do not build a destination at
+all, so the rule matches nothing and the input is scanned as if no policy
+existed. Gate ordinary input and output on the **verdict** your code already
+checks (`r.action`), not on a policy rule.
+
+**Targeting MCP calls.** `mcp_server` matches the server named on the call, so
+`match: {mcp_server: ["billing-mcp"]}` gates one server and globs work as
+elsewhere (`["billing-*"]`). A call made with no MCP server does not match it, so
+the field never catches plain tool calls. `destination_type: ["mcp_server"]`
+remains the way to gate *every* MCP call at once, and `destination_identifier`
+targets a specific server by name.
 
 **Impact classification.** Tool calls are automatically classified into an
 `impact_class` (`transfer`, `delete`, `authenticate`, `deploy`, `publish`,
@@ -528,6 +587,27 @@ correlation id and a compact chain header — the same mechanism OpenTelemetry
 uses, reused rather than reinvented. Telemetry records the chain, its depth, and
 a correlation id stable across the boundary.
 
+**What crosses the boundary, and what does not.** The delegation chain, its
+depth, and the correlation id cross via those headers. The `on_behalf_of`
+principal set by `set_origin()` does **not**: it is contextvar-local to the
+process that set it. `inject_context()` does not serialize it, so the receiving
+process gets the chain and the correlation id but no principal, and its telemetry
+carries no `on_behalf_of` unless you re-establish one:
+
+```python
+# agent B, on receive
+extract_context(request.headers)                 # chain + correlation id restored
+set_origin(on_behalf_of="user:alice")            # principal: re-establish it yourself
+```
+
+One exception worth knowing, because it changes what you have to do: a principal
+seeded with `begin_flow(principal="user:alice")` becomes the **head of the
+chain**, and the chain is what crosses. In that shape the principal does reach
+the next hop and the receiver's provenance carries it with no extra call. It is
+`set_origin()` on its own that stops at the process edge. If you use
+`set_origin()` alone, note that the `correlation_id` you pass it is likewise not
+the one `inject_context()` emits; a fresh id is minted for the outbound flow.
+
 **The honest caveat, stated plainly:** `xaidr` does **not** authenticate and does
 not connect to an identity provider. `set_origin` takes an **app-supplied
 string** and records it — it does not verify a token. Your application must
@@ -549,6 +629,13 @@ tooling you already operate. This is the Falco / Trivy model.
 
 The scan's *return value* drives your control flow. The *reporter* is your
 observability. Two separate things.
+
+**One thing to encode in your SIEM rules:** because destination blocks are
+enforced in every mode, a destination block emits an event carrying
+`action="blocked"` together with the sensor's actual `enforcementMode`, which may
+be `"monitor"`. A rule that assumes monitor mode never produces a blocked action
+needs to account for that combination. It is truthful, not a bug — the request
+genuinely was blocked and never reached the network.
 
 ```python
 from xaidr.reporters import (
@@ -648,8 +735,18 @@ Verdict and enforcement are separate concerns. A scan always computes a verdict;
 
 | Mode | A `blocked` verdict becomes | Use when |
 |---|---|---|
-| `"monitor"` (default) | reported as `flagged` — observe only | rolling out; measuring before enforcing |
+| `"monitor"` (default) | reported as `flagged` — observe only (**except destination blocks**, below) | rolling out; measuring before enforcing |
 | `"block"` | enforced | you want block-worthy traffic stopped |
+
+> **Exception — destination blocks are enforced in every mode.** A request to a
+> destination denied by `block_urls()` (the operator destination list) or by a
+> deny-destination policy rule raises `DelphiBlockedError` and never reaches the
+> network — **in monitor mode too**, and under `shadow_mode=True`. An operator's
+> destination denylist is not a detection verdict, so the mode downgrade does not
+> apply to it. This is the same reasoning as the `block_tools()` list, which is
+> also denied in both modes. Everything else — detection verdicts, and policy
+> verdicts on the tool-call path — downgrades to `flagged` in monitor as the table
+> describes.
 
 ```python
 Sensor(
@@ -671,8 +768,8 @@ Sensor(
 traffic. Watch the `flagged` stream and the block-worthy volume (score ≥
 `block_threshold`). When it is clean and free of false positives on *your*
 traffic, switch to `block`. `shadow_mode=True` forces observe-only even when
-enforcement is set to block, so you can stage the configuration you intend to
-run before it can affect anyone.
+enforcement is set to block (with the destination-block exception above), so you
+can stage the configuration you intend to run before it can affect anyone.
 
 **`agent_id` is a label, not a registered identity** — nothing enforces
 uniqueness. Reusing one name across agents does not break detection, but it makes
@@ -795,7 +892,7 @@ before enabling hard blocking on a latency-sensitive path.
 - **Malformed content is safe.** Badly formed input cannot turn the sensor into
   a denial-of-service risk.
 
-Verified with `python -m pytest -q` in a clean virtual environment: **767
+Verified with `python -m pytest -q` in a clean virtual environment: **825
 passed, 1 skipped**. The suite covers the public scan APIs, wrappers, policy,
 provenance, reporters, telemetry schema, and resilience behavior.
 
@@ -808,14 +905,23 @@ fixtures, or red-team material see this most.
 The rollout path is built in:
 
 1. Start in **monitor** (the default). Verdicts are computed and emitted;
-   nothing is blocked.
+   nothing is blocked — **except destination blocks** (see below).
 2. Watch the `flagged` stream against your real traffic for a few days.
 3. Tune `block_threshold` / `flag_threshold` if your traffic warrants it.
 4. Switch to `enforcement_mode="block"` once the stream is clean.
 
+**What to expect in monitor:** destination blocks are enforced in every mode, so
+if you call `block_urls()` or write a deny-destination policy rule, those denials
+are live immediately — monitor does not soften them, and a matching outbound
+request raises `DelphiBlockedError` and never reaches the network. Validate your
+destination rules before you add them: monitor will not shield you from an
+over-broad pattern there the way it shields you from an over-eager detection
+threshold. A substring like `"api"` in `block_urls()` will match far more hosts
+than you intended, on the first request, in monitor.
+
 `shadow_mode=True` lets you stage the exact configuration you intend to run
-while it stays observe-only, so you can validate the change before it can affect
-anyone.
+while it stays observe-only (with the same destination-block exception), so you
+can validate the change before it can affect anyone.
 
 If a genuinely benign input lands in the `blocked` band, that's a bug worth
 reporting.
