@@ -54,6 +54,10 @@ from .scanner.local import LocalScanner
 from .scanner.normalizer import TypoNormalizer
 from .telemetry import SyncTelemetryQueue
 from .trace_context import ParentContext
+from .privilege_tiers import (
+    least_privileged_tier as _least_privileged_tier,
+    validate_tier as _validate_tier,
+)
 from .types import DelphiBlockedError, ScanResult, safe_content_hash
 
 
@@ -95,7 +99,11 @@ SCAN_ERROR_CATEGORY = "scan_error"
 SCAN_ERROR_RULE = "SCAN_FAILED_OPEN"
 
 
-def _resolve_provenance(agent_id: str, per_call: dict | None = None) -> Optional[dict]:
+def _resolve_provenance(
+    agent_id: str,
+    per_call: dict | None = None,
+    tier: int | None = None,
+) -> Optional[dict]:
     """Build the provenance block for one emitted event (Option-1 wiring).
 
     When set_origin()/origin_scope() (or a per-call principal) established an
@@ -110,7 +118,11 @@ def _resolve_provenance(agent_id: str, per_call: dict | None = None) -> Optional
     if base is not None and not _chain.is_flow_active():
         return base
     obo = base.get("on_behalf_of") if base else None
-    return _chain.build_provenance(agent_id, on_behalf_of=obo)
+    # `tier` records THIS agent's configured privilege tier on its own hop, so
+    # the next hop downstream receives it in the x-openA2A-tiers header. It only
+    # ever labels the hop this sensor is adding; it can never touch another
+    # hop's claim.
+    return _chain.build_provenance(agent_id, on_behalf_of=obo, tier=tier)
 
 
 def _coerce_scannable(value) -> Optional[str]:
@@ -161,6 +173,7 @@ class DelphiSensor:
         blocked_tools: list | None = None,
         blocked_urls: list | None = None,
         circuit_breaker: Optional[CircuitBreaker] = None,
+        privilege_tier: int | None = None,
     ):
         if not agent_id:
             raise ValueError("agent_id is required")
@@ -168,6 +181,31 @@ class DelphiSensor:
             raise ValueError(
                 f"enforcement_mode must be 'monitor' or 'block', got {enforcement_mode!r}"
             )
+
+        # PRIVILEGE TIER (OWASP ASI03) — CONFIG-SOURCED, and only here.
+        #
+        # There is deliberately no setter and no property setter: a tier that
+        # agent code could raise at runtime is not a control, because agent code
+        # is precisely what an injected instruction gets to influence. It is read
+        # from the constructor and nowhere else — never from an inbound header,
+        # which carries CLAIMS about upstream hops and cannot speak for this
+        # sensor.
+        #
+        # Validated LOUDLY per the ADV-2 precedent set by enforcement_mode above:
+        # a security control handed a value it does not understand fails at
+        # construction rather than defaulting quietly and then enforcing
+        # something other than what the deployer wrote.
+        self.privilege_tier = _validate_tier(privilege_tier)
+        # Whether the deployer actually configured one. The tier itself defaults
+        # to 4 so every computation has a value, but "configured as lowest" and
+        # "never configured" are different operational facts, and conflating them
+        # would be a guess dressed up as a claim. So the DECLARED tier — the one
+        # published downstream in x-openA2A-tiers and recorded in telemetry —
+        # stays None when nothing was configured, leaving an honest gap. Both
+        # resolve to 4 at computation time, so this changes the audit trail and
+        # never the verdict.
+        self._privilege_tier_configured = privilege_tier is not None
+        self._declared_tier = self.privilege_tier if privilege_tier is not None else None
 
         self.agent_id = agent_id
         self.shadow_mode = shadow_mode
@@ -623,7 +661,9 @@ class DelphiSensor:
             )
 
         # resolve the app-supplied principal (3b semantics: per-call > set context)
-        prov = _resolve_provenance(self.agent_id, per_call=origin_context)
+        prov = _resolve_provenance(
+            self.agent_id, per_call=origin_context, tier=self._declared_tier
+        )
 
         result = self._scanner.scan(
             prompt=prompt,
@@ -741,6 +781,15 @@ class DelphiSensor:
         """
         # Telemetry-only flow label; the scanner direction stays "a2a".
         emit_direction = "a2a_inbound" if received else "a2a"
+        # PRIVILEGE TIERS: a RECEIVED A2A message is, by definition, work that
+        # arrived from another agent. Marking the context here is one half of the
+        # delegation discriminator (extract_context is the other), and it is what
+        # makes header STRIPPING lose: an attacker who removes x-openA2A-chain
+        # still cannot make an inbound message look like the agent's own local
+        # work, so the unidentified upstream resolves to tier 4 rather than
+        # vanishing. Flag-only — it never touches detection or the verdict here.
+        if received:
+            _chain.mark_inbound()
         # Crash guard. A dict envelope / JSON string is parsed so we can extract
         # the A2A text fields and validate structure. bytes are decoded.
         body_obj = message if isinstance(message, dict) else None
@@ -779,7 +828,9 @@ class DelphiSensor:
             content_to_scan = scan_message
 
         # resolve the app-supplied principal (3b semantics: per-call > set context)
-        prov = _resolve_provenance(self.agent_id, per_call=origin_context)
+        prov = _resolve_provenance(
+            self.agent_id, per_call=origin_context, tier=self._declared_tier
+        )
 
         result = self._scanner.scan(
             prompt=content_to_scan,
@@ -904,6 +955,45 @@ class DelphiSensor:
                 toolName=tool_name if isinstance(tool_name, str) else None,
                 destinationIdentifier=mcp_server or server_name,
             )
+
+    def _least_privileged_tier(self) -> int:
+        """The privilege ceiling for the action about to be taken.
+
+        Numeric MAX across this sensor's own configured tier and every OTHER hop
+        in the delegation chain (1 = highest privilege, 4 = lowest), so a
+        low-privilege caller cannot borrow a high-privilege callee's authority —
+        the ASI03 shape.
+
+        The absence semantics are the load-bearing part and live in
+        ``provenance_chain.is_delegated``: when nothing was delegated, only this
+        agent's OWN tier applies, so an un-instrumented tier-1 agent doing its
+        own work is NOT gated by a phantom unknown upstream. When something WAS
+        delegated but arrived without provenance — including the
+        header-stripping case — the unidentified upstream counts as tier 4.
+        """
+        if not _chain.is_delegated(self.agent_id):
+            return self.privilege_tier
+        upstream = _chain.delegating_hop_tiers(self.agent_id)
+        if not upstream and not _chain.has_upstream_hop(self.agent_id):
+            # Delegated, and NOT ONE upstream hop is even named. Something sent
+            # this work and left no trace of what it was — which is precisely
+            # what stripping x-openA2A-chain produces. Falling back to this
+            # agent's own tier here would make removing the header a clean
+            # BYPASS: the attacker's hop would simply cease to exist and a
+            # tier-1 callee would compute 1. So the unidentified upstream is
+            # materialised as a single unknown hop, which resolves to tier 4.
+            # Stripping therefore costs the attacker the gate instead of opening
+            # it.
+            #
+            # The has_upstream_hop() guard is what keeps this from also firing on
+            # a well-provenanced human-originated flow: chain
+            # [alice:principal, self:agent] yields an empty TIER list (humans are
+            # not tiered) but does name an upstream hop, so it is not a stripped
+            # chain and must not be treated as one. Without that distinction
+            # every flow that names its principal — the documented way to start
+            # one — would gate its own work.
+            upstream = [None]
+        return _least_privileged_tier(self.privilege_tier, upstream)
 
     def _prose_mention_arg(self, arguments: dict | None, raw_text: str) -> bool:
         """True when a tool argument is benign DOCUMENTARY PROSE that merely quotes
@@ -1154,6 +1244,9 @@ class DelphiSensor:
         # action. Policy can only tighten the detection verdict, never weaken it.
         _local_policy_decision: Optional[str] = None
         _local_policy_id: Optional[str] = None
+        # Computed unconditionally (it is cheap and pure) so telemetry can record
+        # it on every tool call, not only on the calls a policy happened to gate.
+        _least_priv = self._least_privileged_tier()
         if self._policy is not None:
             pol = _policy.evaluate_policy(
                 self._policy,
@@ -1166,7 +1259,13 @@ class DelphiSensor:
                 destination_identifier=mcp_server or tool_name,
                 # Feeds the `mcp_server:` match field, which reads from the
                 # request context. Without this it is silently inert.
-                context={"mcp_server": mcp_server},
+                # `least_privileged_tier` feeds the `min_chain_tier_above:`
+                # CONDITION (a numeric comparison, not a glob match field) — same
+                # reasoning: unpopulated, the condition can never fire.
+                context={
+                    "mcp_server": mcp_server,
+                    "least_privileged_tier": _least_priv,
+                },
             )
             action = _policy.compose(action, pol.decision)
             _local_policy_decision = pol.decision
@@ -1201,7 +1300,9 @@ class DelphiSensor:
 
         # Emit telemetry (mirrors the scan() enqueue shape, direction=tool_call)
         # resolve the app-supplied principal (3b semantics: per-call > set context)
-        prov = _resolve_provenance(self.agent_id, per_call=origin_context)
+        prov = _resolve_provenance(
+            self.agent_id, per_call=origin_context, tier=self._declared_tier
+        )
         data = {
             "scanId": uuid4().hex[:12],
             "agentId": self.agent_id,
@@ -1221,6 +1322,18 @@ class DelphiSensor:
             "authzDecision": _local_policy_decision,
             "authzPolicyId": _local_policy_id,
             "enforcementMode": self.enforcement_mode,
+            # PRIVILEGE-TIER AUDIT (OWASP ASI03). Emitted on EVERY tool call, not
+            # only on a halt: a control that stops an action without leaving a
+            # record is the recurring failure in this codebase, and an operator
+            # asked "why was this approval required?" needs the computed ceiling,
+            # this agent's own tier, and the chain it was derived from — all
+            # three, in the same event. `authzPolicyId` above carries the rule id.
+            # The chain itself rides `provenance.delegation_chain` below.
+            "privilegeTier": self.privilege_tier,
+            "privilegeTierConfigured": self._privilege_tier_configured,
+            "leastPrivilegedTier": _least_priv,
+            "delegated": _chain.is_delegated(self.agent_id),
+            "chainTiers": _chain.current_tiers(),
             "scanTimeMs": 0,
             "promptLength": 0,
             "promptHash": safe_content_hash(tool_name),

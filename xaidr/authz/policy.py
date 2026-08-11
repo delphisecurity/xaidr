@@ -53,11 +53,20 @@ _MATCH_FIELDS = {
     "mcp_server": ("context", "mcp_server"),
 }
 
-# The only key `_rule_matches` reads out of a rule's `conditions:` block. Same
+# The keys `_rule_matches` reads out of a rule's `conditions:` block. Same
 # single-source-of-truth discipline as _MATCH_FIELDS above. (`trust_below` is
 # additionally rejected on its own, with a more specific message, because it
 # parses fine but can never fire in this distribution.)
-_CONDITION_FIELDS = frozenset({"trust_below"})
+#
+# `min_chain_tier_above` is a NUMERIC comparison and belongs here rather than in
+# _MATCH_FIELDS: every match field is resolved through `_glob_any`, which is
+# fnmatch over strings. A tier put there would be compared as a glob pattern —
+# `"4"` would match the string `"4"` and nothing else, so `> 1` semantics would
+# be quietly unavailable while the rule still loaded and appeared to work.
+# Living under `conditions:` also means it inherits the ADV-2 unknown-key
+# validator, so `min_chain_tier_abov` is rejected at load instead of disarming
+# the rule in silence.
+_CONDITION_FIELDS = frozenset({"trust_below", "min_chain_tier_above"})
 
 
 def _reject_unknown_keys(rule_id: Any, block_name: str, block: dict, known) -> bool:
@@ -228,6 +237,30 @@ def _rule_matches(rule: dict, request: dict) -> bool:
         matched_anything = True
         trust = (request.get("subject") or {}).get("trust")
         if trust is None or not float(trust) < float(trust_below):
+            return False
+
+    # PRIVILEGE TIERS (OWASP ASI03). Matches when the LEAST PRIVILEGED tier
+    # anywhere in the delegation chain — including this sensor's own configured
+    # tier — is numerically GREATER than the given value. Numerically greater
+    # means LESS privileged (1 = highest, 4 = lowest), so
+    # `min_chain_tier_above: 1` reads as "something below tier 1 is involved in
+    # this action".
+    #
+    # A missing value means the sensor did not compute one, which happens only
+    # when this code path is reached without the tier context — the rule then
+    # does NOT match. That is the inert direction, and it is deliberate: an
+    # un-upgraded caller must not start halting traffic because a policy
+    # mentions a condition it never populates.
+    min_chain_tier_above = rule["conditions"].get("min_chain_tier_above")
+    if min_chain_tier_above is not None:
+        matched_anything = True
+        least_privileged = (request.get("context") or {}).get("least_privileged_tier")
+        if least_privileged is None:
+            return False
+        try:
+            if not int(least_privileged) > int(min_chain_tier_above):
+                return False
+        except (TypeError, ValueError):
             return False
 
     # A rule with no recognized matchers or conditions matches nothing —
