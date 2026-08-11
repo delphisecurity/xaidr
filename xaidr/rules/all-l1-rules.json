@@ -770,7 +770,7 @@
   },
   {
     "id": "LLM01_agent_authority_impersonation",
-    "pattern": "(?:i\\s*am|i['\u2019]?m|this\\s+(?:message\\s+)?is\\s+from|message\\s+from\\s*:|this\\s+is\\s+the|speaking\\s+as|on\\s+(?:the\\s+)?authority\\s+of)(?:\\s+(?:the|your|an?|a))?[^.!?\\n]{0,30}?\\b(?:administrator|admin|trusted|authoriz(?:ed|er)|verified|superuser|supervisor|privileged|root\\s+(?:controller|access|user|admin|privileged)|system\\s+admin(?:istrator)?|security\\s*admin(?:istrator)?)\\b",
+    "pattern": "(?:i\\s*am|i['’]?m|this\\s+(?:message\\s+)?is\\s+from|message\\s+from\\s*:|this\\s+is\\s+the|speaking\\s+as|on\\s+(?:the\\s+)?authority\\s+of)(?:\\s+(?:the|your|an?|a))?[^.!?\\n]{0,30}?\\b(?:administrator|admin|trusted|authoriz(?:ed|er)|verified|superuser|supervisor|privileged|root\\s+(?:controller|access|user|admin|privileged)|system\\s+admin(?:istrator)?|security\\s*admin(?:istrator)?)\\b",
     "score": 0.72,
     "category": "prompt_injection"
   },
@@ -788,37 +788,37 @@
   },
   {
     "id": "LLM01_multilingual_russian",
-    "pattern": "(?:\u0438\u0433\u043d\u043e\u0440\u0438\u0440\u0443\u0439|\u0437\u0430\u0431\u0443\u0434\u044c|\u043e\u0442\u0431\u0440\u043e\u0441\u044c|\u043e\u0442\u043c\u0435\u043d\u0438|\u043f\u0440\u043e\u0438\u0433\u043d\u043e\u0440\u0438\u0440\u0443\u0439|\u043f\u0440\u043e\u043f\u0443\u0441\u0442\u0438)\\s+(?:\u0432\u0441\u0435\\s+)?(?:\u043f\u0440\u0435\u0434\u044b\u0434\u0443\u0449\u0438\u0435|\u043d\u0430\u0447\u0430\u043b\u044c\u043d\u044b\u0435|\u0442\u0435\u043a\u0443\u0449\u0438\u0435|\u043f\u0440\u0435\u0436\u043d\u0438\u0435)?\\s*(?:\u0438\u043d\u0441\u0442\u0440\u0443\u043a\u0446\u0438\u0438|\u043f\u0440\u0430\u0432\u0438\u043b\u0430|\u0443\u043a\u0430\u0437\u0430\u043d\u0438\u044f|\u043e\u0433\u0440\u0430\u043d\u0438\u0447\u0435\u043d\u0438\u044f|\u0434\u0438\u0440\u0435\u043a\u0442\u0438\u0432\u044b|\u0440\u0443\u043a\u043e\u0432\u043e\u0434\u0441\u0442\u0432\u0430)",
+    "pattern": "(?:игнорируй|забудь|отбрось|отмени|проигнорируй|пропусти)\\s+(?:все\\s+)?(?:предыдущие|начальные|текущие|прежние)?\\s*(?:инструкции|правила|указания|ограничения|директивы|руководства)",
     "score": 0.88,
     "category": "prompt_injection"
   },
   {
     "id": "LLM01_multilingual_portuguese",
-    "pattern": "(?:ignore|esque\u00e7a|descarte|abandone|desconsidere)\\s+(?:as\\s+)?(?:instru\u00e7\u00f5es|regras|diretrizes|restri\u00e7\u00f5es)\\s+(?:anteriores|iniciais|originais)",
+    "pattern": "(?:ignore|esqueça|descarte|abandone|desconsidere)\\s+(?:as\\s+)?(?:instruções|regras|diretrizes|restrições)\\s+(?:anteriores|iniciais|originais)",
     "score": 0.88,
     "category": "prompt_injection"
   },
   {
     "id": "LLM01_multilingual_japanese",
-    "pattern": "(?:\u4ee5\u524d\u306e|\u524d\u306e|\u5143\u306e)(?:\u6307\u793a|\u547d\u4ee4|\u30eb\u30fc\u30eb|\u30ac\u30a4\u30c9\u30e9\u30a4\u30f3|\u5236\u7d04|\u5236\u9650)(?:\u3092|\u306f)(?:\u7121\u8996|\u5fd8\u308c|\u7834\u68c4|\u53d6\u308a\u6d88)",
+    "pattern": "(?:以前の|前の|元の)(?:指示|命令|ルール|ガイドライン|制約|制限)(?:を|は)(?:無視|忘れ|破棄|取り消)",
     "score": 0.88,
     "category": "prompt_injection"
   },
   {
     "id": "LLM01_multilingual_chinese",
-    "pattern": "(?:\u5ffd\u7565|\u65e0\u89c6|\u5fd8\u8bb0|\u653e\u5f03|\u4e22\u5f03|\u53d6\u6d88)(?:\u6240\u6709|\u4e4b\u524d\u7684|\u5148\u524d\u7684|\u539f\u59cb\u7684)?(?:\u6307\u4ee4|\u6307\u793a|\u89c4\u5219|\u51c6\u5219|\u9650\u5236|\u7ea6\u675f|\u8bf4\u660e)",
+    "pattern": "(?:忽略|无视|忘记|放弃|丢弃|取消)(?:所有|之前的|先前的|原始的)?(?:指令|指示|规则|准则|限制|约束|说明)",
     "score": 0.88,
     "category": "prompt_injection"
   },
   {
     "id": "LLM01_multilingual_korean",
-    "pattern": "(?:\uc774\uc804|\uc6d0\ub798|\uae30\uc874)(?:\uc758)?\\s*(?:\uc9c0\uc2dc|\uba85\ub839|\uaddc\uce59|\uac00\uc774\ub4dc\ub77c\uc778|\uc81c\uc57d|\uc81c\ud55c)(?:\uc744|\ub97c)?\\s*(?:\ubb34\uc2dc|\uc78a\uc5b4|\ucde8\uc18c|\ud3d0\uae30)",
+    "pattern": "(?:이전|원래|기존)(?:의)?\\s*(?:지시|명령|규칙|가이드라인|제약|제한)(?:을|를)?\\s*(?:무시|잊어|취소|폐기)",
     "score": 0.88,
     "category": "prompt_injection"
   },
   {
     "id": "LLM01_multilingual_arabic",
-    "pattern": "(?:\u062a\u062c\u0627\u0647\u0644|\u0627\u0646\u0633\u064e|\u062a\u062e\u0644\u064e\u0651 \u0639\u0646|\u0623\u0644\u063a\u0650|\u0627\u062a\u0631\u0643)\\s*(?:\u062c\u0645\u064a\u0639\\s+)?(?:\u0627\u0644\u062a\u0639\u0644\u064a\u0645\u0627\u062a|\u0627\u0644\u0642\u0648\u0627\u0639\u062f|\u0627\u0644\u062a\u0648\u062c\u064a\u0647\u0627\u062a|\u0627\u0644\u0642\u064a\u0648\u062f|\u0627\u0644\u0623\u0648\u0627\u0645\u0631)\\s*(?:\u0627\u0644\u0633\u0627\u0628\u0642\u0629|\u0627\u0644\u0623\u0648\u0644\u064a\u0629|\u0627\u0644\u0623\u0635\u0644\u064a\u0629)",
+    "pattern": "(?:تجاهل|انسَ|تخلَّ عن|ألغِ|اترك)\\s*(?:جميع\\s+)?(?:التعليمات|القواعد|التوجيهات|القيود|الأوامر)\\s*(?:السابقة|الأولية|الأصلية)",
     "score": 0.88,
     "category": "prompt_injection"
   },
@@ -918,10 +918,46 @@
     "score": 0.85,
     "category": "code_execution"
   },
-    {
+  {
     "id": "ADI_forged_tool_result",
     "pattern": "(?:\\[?\\s*(?:tool|function)[_\\s-]?(?:call[_\\s-]?)?(?:result|output|response)\\s*(?:\\([^)]{0,80}\\))?\\s*\\]?\\s*[:\\]=]|<\\s*(?:tool|function)[_\\s-]?(?:result|output)\\s*>)[\\s\\S]{0,200}?\\b(?:access[_\\s-]?level|privileges?|permissions?|role|auth(?:enticated|orized|orization)?|is[_\\s-]?admin|admin[_\\s-]?access|clearance|trust[_\\s-]?level|verified|approval[_\\s-]?status|mfa|status)\\b\\s*[:=]?\\s*[\"']?(?:admin|root|superuser|system|elevated|granted|approved|full|unrestricted|true|verified|success|bypassed)\\b",
     "score": 0.48,
     "category": "forged_trust"
+  },
+  {
+    "id": "SHELL_fetch_pipe_exec_variants",
+    "pattern": "\\b(?:ba|z|k|da)?sh\\s*<\\(\\s*(?:curl|wget|fetch)\\b|(?:eval|(?:ba|z|k|da)?sh\\s+-c)\\s+[\\\"']?\\$\\(\\s*(?:curl|wget)\\b|`\\s*(?:curl|wget)\\s+[^`]{0,200}`\\s*\\|?\\s*(?:ba|z|k|da)?sh\\b|\\b(?:curl|wget)\\s+[^\\n|]{0,300}\\|\\s*(?:sudo\\s+|doas\\s+)(?:ba|z|k|da)?sh\\b|(?:ba|z|k|da)?sh\\s*<<<\\s*[\\\"'][^\\\"']{0,200}\\|\\s*(?:ba|z|k|da)?sh",
+    "score": 0.9,
+    "category": "code_execution"
+  },
+  {
+    "id": "SHELL_credential_file_read",
+    "pattern": "(?i)\\b(?:cat|bat|head|tail|less|more|nl|od|xxd|strings|cp|scp|rsync|mv|tar|zip|gzip|base64|openssl|curl|wget|python\\d?|perl|ruby|node)\\b[^\\n]{0,120}?(?:(?:~|/root|/home/[^/\\s]+)?/?\\.ssh/id_(?:rsa|dsa|ecdsa|ed25519)|/etc/(?:shadow|gshadow)\\b|\\.aws/credentials\\b|\\.git-credentials\\b|\\.pgpass\\b|\\.netrc\\b|\\.npmrc\\b|\\.pypirc\\b|\\.docker/config\\.json|\\.kube/config\\b|/proc/[^/\\s]+/environ\\b|/var/run/secrets/kubernetes\\.io/serviceaccount|(?:^|[\\s'\\\"=/])\\.env(?:\\.[a-z0-9_-]+)?(?:[\\s'\\\"]|$))",
+    "score": 0.9,
+    "category": "credential_access"
+  },
+  {
+    "id": "SHELL_credential_file_redirect",
+    "pattern": "(?i)<\\s*[\\\"']?(?:[^\\s\\\"']*/)?(?:\\.env(?:\\.[a-z0-9_-]+)?|\\.ssh/id_(?:rsa|dsa|ecdsa|ed25519)|\\.aws/credentials|\\.pgpass|\\.netrc)\\b",
+    "score": 0.85,
+    "category": "credential_access"
+  },
+  {
+    "id": "SHELL_cloud_metadata_credentials",
+    "pattern": "(?i)\\b(?:curl|wget|fetch|http|httpie|nc|ncat|python\\d?|node|ruby|perl)\\b[^\\n]{0,160}?(?:169\\.254\\.169\\.254|metadata\\.google\\.internal|metadata\\.azure\\.com|100\\.100\\.100\\.200)",
+    "score": 0.9,
+    "category": "credential_access"
+  },
+  {
+    "id": "SHELL_env_secret_filtered",
+    "pattern": "(?i)\\b(?:env|printenv|set|export|docker\\s+inspect|journalctl|history|ps)\\b[^\\n]{0,120}\\|\\s*(?:grep|egrep|rg|ack|findstr|select-string|awk|sed)\\b[^\\n]{0,80}?(?:secret|token|passwd|password|api[_-]?key|apikey|credential|private[_-]?key|access[_-]?key|client[_-]?secret)",
+    "score": 0.88,
+    "category": "credential_access"
+  },
+  {
+    "id": "SHELL_env_named_secret_read",
+    "pattern": "(?i)\\b(?:printenv|echo|printf)\\s+[\\\"']?\\$?\\{?[A-Z0-9_]*(?:SECRET|TOKEN|PASSWD|PASSWORD|API[_-]?KEY|APIKEY|CREDENTIAL|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|CLIENT[_-]?SECRET)[A-Z0-9_]*",
+    "score": 0.88,
+    "category": "credential_access"
   }
 ]

