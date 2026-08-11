@@ -23,6 +23,8 @@ from . import provenance_chain as _chain
 from .authz import classify
 from .authz.classifier import (
     SHELL_ARG_KEYS as _SHELL_ARG_KEYS,
+    classify_command_findings as _command_findings,
+    extract_shell_command as _extract_shell_command,
 )
 from .circuit_breaker import (
     CIRCUIT_OPEN_CATEGORY,
@@ -32,6 +34,11 @@ from .circuit_breaker import (
 )
 from .reporters import Reporter
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
+from .scanner.command_parse import reconstruct as _reconstruct_command
+from .scanner.dlp import (
+    HIGH_CONFIDENCE_SECRET_CATEGORIES as _HIGH_CONFIDENCE_SECRETS,
+    scan_dlp as _scan_dlp,
+)
 from .scanner.l1 import scan_l1 as _scan_l1
 from .scanner.l1 import (
     L1_MAX_SCAN_CHARS as _L1_MAX_SCAN_CHARS,
@@ -48,6 +55,25 @@ from .scanner.normalizer import TypoNormalizer
 from .telemetry import SyncTelemetryQueue
 from .trace_context import ParentContext
 from .types import DelphiBlockedError, ScanResult, safe_content_hash
+
+
+class _StructuralThreat:
+    """A detection finding produced by the PARSE rather than by a text regex.
+
+    Shaped like the L1 ``ThreatDetail`` the tool-argument scan already collects
+    (``rule`` / ``category`` / ``score``) so it flows through the same scoring,
+    blocking and telemetry path with no special-casing. The category is the
+    IMPACT CLASS (``escalate``, ``evade``, …) because that is the string a
+    customer's SIEM rules key on, and it names the actual fact rather than
+    borrowing a neighbouring category's name.
+    """
+
+    __slots__ = ("rule", "category", "score")
+
+    def __init__(self, rule: str, category: str, score: float):
+        self.rule = rule
+        self.category = category
+        self.score = score
 
 logger = logging.getLogger("xaidr.sensor")
 
@@ -992,6 +1018,51 @@ class DelphiSensor:
                         "credential_access", "data_exfiltration",
                     )
                 )
+            # STRUCTURAL RE-SCAN. Everything above regexed the argument STRING, so
+            # it matches famous spellings rather than behaviour: `rm -rf /` blocks
+            # and `r''m -r''f /` — the same command, quote-split — scores nothing.
+            # The parser already collapses that (shlex resolves `e''nv` to `env`),
+            # but only CLASSIFICATION used the parse. Scanning the parser's
+            # canonical reconstruction through the SAME rules closes the whole
+            # quote/`$IFS`/empty-string obfuscation family without adding a single
+            # new evasion pattern — the tokenizer generalises where a regex list
+            # cannot.
+            #
+            # MAX-fused: this only ADDS threats to `danger`, and the block decision
+            # below is unchanged, so a reconstruction can never LOWER a verdict.
+            # Applied ONLY to arguments that really are shell command lines (the
+            # SHELL_ARG_KEYS the classifier parses — shared so the two cannot
+            # drift), because reconstruction necessarily drops quoting: running it
+            # over prose would strip the quotes that mark a command as quoted.
+            shell_command = _extract_shell_command(arguments or {})
+            if shell_command:
+                rebuilt = _reconstruct_command(shell_command)
+                if rebuilt and rebuilt != shell_command:
+                    rebuilt = self._arg_normalizer().normalize(rebuilt)
+                    danger.extend(
+                        t for t in _scan_l1(rebuilt[:_L1_MAX_SCAN_CHARS]).threats
+                        if t.category in (
+                            "code_execution", "excessive_agency", "prompt_injection",
+                            "credential_access", "data_exfiltration",
+                        )
+                        and t.rule not in {x.rule for x in danger}
+                    )
+                # STRUCTURAL findings from the impact-class ruleset. Everything
+                # above — raw string and reconstruction alike — is still a REGEX
+                # over text, so it recognises spellings. These findings come from
+                # the PARSE (verb + object sensitivity + redirect direction), which
+                # is what lets `rm important.db` and `rm -rf /var/lib/postgresql/data`
+                # be the same fact as `rm -rf /` instead of three separate patterns
+                # to remember. Only rules carrying an explicit `detect` block
+                # enforce; the classify-only majority (a deploy agent's `terraform
+                # destroy`, `systemctl enable`, `sudo`) stays a policy decision.
+                # Additive to `danger`, so this can only raise a verdict.
+                for f in _command_findings(shell_command):
+                    if f["rule"] in {x.rule for x in danger}:
+                        continue
+                    danger.append(_StructuralThreat(
+                        rule=f["rule"], category=f["impact_class"], score=f["score"]
+                    ))
             # data_exfiltration is surfaced too (BS2) but is FLAG-DEFAULT: agents
             # make legit outbound calls constantly, so an exfil signal in a tool
             # arg flags for review, it does not block by default. pii_detected
@@ -1028,6 +1099,43 @@ class DelphiSensor:
                     action = "blocked"
                 else:
                     action = "flagged"
+            # --- SECRETS in tool arguments (DLP, secrets ONLY) -----------------
+            # This path ran NO DLP at all, so send_message(body="AKIA…") carried a
+            # live AWS key straight out of the agent without a signal. The L1 rules
+            # above are behavioral (they detect a command that WOULD READ a secret);
+            # this is material (the secret is already IN the argument, on its way
+            # out), which is a different and strictly worse fact.
+            #
+            # SECRETS ONLY — PII IS DELIBERATELY EXCLUDED, and the distinction is
+            # the whole reason this is safe to enforce on. A secret has a
+            # self-identifying SHAPE (an AKIA/ghp_ prefix, PEM armour, a JWT's three
+            # segments, a URL with inline credentials): the pattern IS the evidence,
+            # so a hit is unambiguous. PII has no such shape — an email address or a
+            # phone number in a `send_email` argument is overwhelmingly the tool
+            # doing its job, and blocking it would make the sensor unusable for
+            # exactly the workloads that carry customer data. So `pii_*` stays
+            # FILTERED here, matching the existing rule for the L1 categories above,
+            # and only `secret_*` enforces.
+            #
+            # Within secrets, only the HIGH-confidence categories block;
+            # `secret_password` matches ordinary prose ("reset your password:
+            # instructions at …") and is signal-only. See dlp.py for the taxonomy —
+            # it lives beside the patterns so a new pattern cannot inherit an
+            # enforcement decision nobody made.
+            if self._scanner.dlp_enabled and arg_text.strip():
+                dlp_hits = [
+                    t for t in _scan_dlp(arg_text[:_L1_MAX_SCAN_CHARS]).threats
+                    if t.category in _HIGH_CONFIDENCE_SECRETS
+                ]
+                if dlp_hits:
+                    score = max(score, max(t.score for t in dlp_hits))
+                    category = category or dlp_hits[0].category
+                    rules = rules + [t.rule for t in dlp_hits if t.rule not in rules]
+                    if self.enforcement_mode == "block":
+                        action = "blocked"
+                    elif action == "allowed":
+                        action = "flagged"
+
             # Over-length arg content is itself anomalous — flag-default (never a
             # hard block on size alone, never a silent pass) if nothing stronger
             # already fired.

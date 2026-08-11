@@ -24,6 +24,11 @@ IMPACT_CLASSES = {
     # Stage 2: derived from the PARSED STRUCTURE of a shell command rather than
     # from the tool name, so `run_command` stops being a blind spot.
     "execute", "credential_access",
+    # Stage 3: the remaining shell classes. Most of these rules CLASSIFY without
+    # blocking — `terraform destroy`, `systemctl enable` and `sudo` are real
+    # operations someone's deploy agent performs — so naming the class is the
+    # deliverable: it is what a require_approval policy binds to.
+    "escalate", "persist", "evade", "infra_destruction", "destructive_filesystem",
 }
 
 _TIER_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
@@ -298,6 +303,79 @@ def classify_command(command: str) -> Optional[tuple]:
         return None
 
 
+def classify_command_findings(command: str) -> list:
+    """Structural DETECTION findings for a shell command line.
+
+    Returns ``[{"rule", "impact_class", "impact_tier", "score"}, …]`` for every
+    matched classifier rule that carries a ``detect`` block — the subset of the
+    ruleset judged unambiguous enough to ENFORCE on, not merely to classify.
+
+    Detection and classification read the SAME rules deliberately. The
+    alternative — a parallel list of raw-string regexes in all-l1-rules.json —
+    is what produced the gap this workstream exists to close: the classifier
+    understood ``rm`` + a sensitive object while the detector only knew the
+    literal ``rm -rf /``. One ruleset cannot drift from itself.
+
+    Two guards, both inherited from classification:
+
+    * first-match-wins PER SEGMENT, so the ordering that decides a segment's
+      class also decides whether it enforces. Specific enforcing rules are
+      therefore ordered ahead of the general classify-only ones they sit inside
+      (``escalate.setuid_bit`` before ``escalate.privileged_wrapper``).
+    * a ``parse_degraded`` segment never produces a finding. Non-shell payloads
+      (Python/Perl source shell-tokenized into pseudo-names) are approximations;
+      they may contribute a CLASS but must not, on their own, block a call.
+
+    Never raises: any fault returns ``[]``, leaving the caller where it was.
+    """
+    try:
+        from ..scanner.command_parse import parse_command
+
+        segments = parse_command(command)
+        if not segments:
+            return []
+
+        cc = _RULESET.get("command_classifiers") or {}
+        findings = []
+        seen = set()
+
+        def _emit(entry):
+            detect = entry.get("detect")
+            if not isinstance(detect, dict):
+                return
+            rule_id = entry.get("id")
+            if rule_id in seen:
+                return
+            seen.add(rule_id)
+            findings.append({
+                "rule": rule_id,
+                "impact_class": entry.get("impact_class", "unknown"),
+                "impact_tier": entry.get("impact_tier", "medium"),
+                "score": float(detect.get("score", 0.0)),
+            })
+
+        for seg in segments:
+            if seg.parse_degraded:
+                continue
+            for rule in cc.get("rules") or []:
+                block = rule.get("match")
+                if isinstance(block, dict) and _segment_matches(block, seg):
+                    _emit(rule)
+                    break               # first match wins, as in classification
+
+        clean = [s for s in segments if not s.parse_degraded]
+        for combo in cc.get("combinations") or []:
+            when, and_ = combo.get("when_any"), combo.get("and_any")
+            if not isinstance(when, dict) or not isinstance(and_, dict):
+                continue
+            if any(_segment_matches(when, s) for s in clean) and \
+               any(_segment_matches(and_, s) for s in clean):
+                _emit(combo)
+        return findings
+    except Exception:
+        return []
+
+
 def _extract_command(arguments: dict) -> Optional[str]:
     """Pull a shell command line out of tool arguments, or None.
 
@@ -314,6 +392,13 @@ def _extract_command(arguments: dict) -> Optional[str]:
             if parts:
                 return " ".join(parts)
     return None
+
+
+# Public alias. The sensor's tool-argument scan needs the same answer to "is this
+# argument a shell command line?" that classification uses, and the two must not
+# drift: a key the classifier parses but the scanner does not (or vice versa) is a
+# silent coverage hole.
+extract_shell_command = _extract_command
 
 
 def classify(

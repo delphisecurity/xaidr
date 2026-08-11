@@ -119,14 +119,34 @@ DLP_PATTERNS = [
         "score": 0.40,
     },
     {
+        # `secret[_-]?access[_-]?key` is listed separately from `secret[_-]?key`
+        # because AWS's own spelling puts a word between the two halves
+        # (`aws_secret_access_key = …`), so the shorter alternative does not
+        # reach it. The value shape (20+ key chars after an explicit `=`/`:`)
+        # is what keeps this from firing on prose.
         "id": "DLP_api_key",
         "pattern": re.compile(
-            r"(?:api[_-]?key|apikey|secret[_-]?key|access[_-]?token|"
-            r"auth[_-]?token|bearer)\s*[:=]\s*[\"']?([a-zA-Z0-9_\-]{20,})[\"']?",
+            r"(?:api[_-]?key|apikey|secret[_-]?key|secret[_-]?access[_-]?key|"
+            r"access[_-]?token|auth[_-]?token|bearer)"
+            r"\s*[:=]\s*[\"']?([a-zA-Z0-9_\-/+]{20,})[\"']?",
             re.IGNORECASE,
         ),
         "category": "secret_api_key",
         "score": 0.85,
+    },
+    {
+        # GitHub tokens carry their own prefix, so no surrounding key name is
+        # needed and there is no prose that looks like one: `ghp_`/`gho_`/`ghu_`/
+        # `ghs_`/`ghr_` (classic + OAuth/app tokens) and `github_pat_`
+        # (fine-grained). Bounded repeats over a negated-free character class —
+        # linear, no ReDoS surface.
+        "id": "DLP_github_token",
+        "pattern": re.compile(
+            r"\bgh[pousr]_[A-Za-z0-9]{36,255}\b"
+            r"|\bgithub_pat_[A-Za-z0-9_]{40,255}\b"
+        ),
+        "category": "secret_github_token",
+        "score": 0.90,
     },
     {
         "id": "DLP_aws_key",
@@ -170,6 +190,35 @@ DLP_PATTERNS = [
         "score": 0.80,
     },
 ]
+
+
+# ── Secret categories by CONFIDENCE (used by the tool-argument scan) ──────────
+# The tool-argument path enforces on SECRETS and never on PII — see
+# DelphiSensor._scan_tool_call_impl for why. The split lives here, next to the
+# patterns, so adding a pattern forces a conscious decision about its confidence
+# instead of silently inheriting one.
+#
+# HIGH CONFIDENCE: the match shape is self-identifying — a token prefix (AKIA,
+# ghp_), a PEM armour line, a URL scheme with inline credentials, a JWT's three
+# base64 segments, or an explicit `api_key = <20+ key chars>`. None of these
+# shapes occur in ordinary English, so a hit is a secret, not a sentence.
+HIGH_CONFIDENCE_SECRET_CATEGORIES = frozenset({
+    "secret_api_key",
+    "secret_aws_key",
+    "secret_github_token",
+    "secret_private_key",
+    "secret_connection_string",
+    "secret_jwt",
+})
+
+# LOWER CONFIDENCE, deliberately excluded from enforcement: `secret_password`
+# matches `password:` followed by any 8+ non-space characters, which ordinary
+# prose produces constantly ("please reset your password: instructions are at
+# …"). It stays a SIGNAL — it still scores and still surfaces — but it does not
+# block a tool call on its own. Tightening the pattern instead would weaken the
+# content path, where a low-confidence signal is fused with others rather than
+# acted on alone.
+LOW_CONFIDENCE_SECRET_CATEGORIES = frozenset({"secret_password"})
 
 
 def scan_dlp(text: str) -> DLPResult:
