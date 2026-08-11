@@ -949,7 +949,7 @@ class DelphiSensor:
                     t for t in _scan_l1(_win).threats
                     if t.category in (
                         "code_execution", "excessive_agency", "prompt_injection",
-                        "data_exfiltration",
+                        "credential_access", "data_exfiltration",
                     )
                 )
             # data_exfiltration is surfaced too (BS2) but is FLAG-DEFAULT: agents
@@ -957,6 +957,11 @@ class DelphiSensor:
             # arg flags for review, it does not block by default. pii_detected
             # stays FILTERED — a benign email/PII value in a send_email arg must
             # not FP. The hard categories still block in block mode.
+            # credential_access is a HARD category: reading a private key or an
+            # instance-metadata credential endpoint out of a tool argument has no
+            # benign reading. It reports under its own name rather than borrowing
+            # excessive_agency, because the category string is what a customer's
+            # SIEM rules key on and "excessive agency" would misdescribe the fact.
             if danger:
                 score = max(score, max(t.score for t in danger))
                 hard = [t for t in danger if t.category != "data_exfiltration"]

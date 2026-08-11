@@ -47,6 +47,18 @@ GATED_CATEGORIES = frozenset({
     "tool_misuse",
     "agentic_abuse",
     "data_exfiltration",
+    # credential_access IS gated, and the distinction from the DLP/secret
+    # exclusion above is worth stating: a DLP signal fires on secret MATERIAL
+    # being present in the text, and descriptive wording does not make a leaked
+    # key un-leaked. credential_access fires on a COMMAND THAT WOULD READ a
+    # secret, which is a behavioral signal like code_execution — quoting the
+    # command reads nothing. Measured: without gating, "For example, the command
+    # cat ~/.ssh/id_rsa reads a private key." BLOCKS at 0.90; with gating it
+    # drops to flagged/0.28 while the bare live command `cat ~/.ssh/id_rsa`
+    # still blocks at 1.00 via the directive-attack veto. Gating costs nothing
+    # on the tool path (90 detected / 88 blocked either way) because the
+    # tool-arg scan calls _scan_l1 directly and never reaches this gate.
+    "credential_access",
     # compositional signal categories (the whole compositional layer is behavioral)
     "exfiltration",
     "override",
