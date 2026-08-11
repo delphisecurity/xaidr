@@ -21,6 +21,9 @@ from . import local_policy as _policy
 from . import provenance as _prov
 from . import provenance_chain as _chain
 from .authz import classify
+from .authz.classifier import (
+    SHELL_ARG_KEYS as _SHELL_ARG_KEYS,
+)
 from .circuit_breaker import (
     CIRCUIT_OPEN_CATEGORY,
     CIRCUIT_OPEN_RULE,
@@ -35,6 +38,10 @@ from .scanner.l1 import (
     OVERSIZED_INPUT_CATEGORY as _OVERSIZED_INPUT_CATEGORY,
     OVERSIZED_INPUT_RULE as _OVERSIZED_INPUT_RULE,
     iter_scan_windows as _iter_scan_windows,
+)
+from .scanner.directive_context import (
+    documentary_mention as _documentary_mention,
+    strip_code_spans as _strip_code_spans,
 )
 from .scanner.local import LocalScanner
 from .scanner.normalizer import TypoNormalizer
@@ -872,6 +879,39 @@ class DelphiSensor:
                 destinationIdentifier=mcp_server or server_name,
             )
 
+    def _prose_mention_arg(self, arguments: dict | None, raw_text: str) -> bool:
+        """True when a tool argument is benign DOCUMENTARY PROSE that merely quotes
+        a dangerous command, so the tool-arg scan should FLAG it rather than BLOCK.
+
+        Three conditions, all required — the first is specific to this path:
+
+        * NO shell-argument key. ``run_command(command=…)``, ``exec(script=…)``,
+          ``sh(args=[…])`` are execution requests, and a command reaching a tool
+          arrives there as a bare string, never as markdown-quoted prose. Gating on
+          the key puts the whole attack corpus and every prefixed-attack probe
+          structurally out of reach of this cap.
+        * documentary_mention: the command sits inside a code span and a
+          documentary frame cue sits in the prose OUTSIDE it.
+        * the prose residue (code spans removed) carries no hard-category signal —
+          so a live command outside the quotes still blocks, whatever the framing.
+
+        ``raw_text`` is the PRE-normalization arg text: the typo normalizer folds a
+        backtick that directly precedes a keyword, which unbalances the code span.
+        The residue is normalized before it is scanned, so obfuscation outside the
+        quotes is still caught.
+        """
+        for key in (arguments or {}):
+            if str(key).lower() in _SHELL_ARG_KEYS:
+                return False
+        if not _documentary_mention(raw_text):
+            return False
+        residue = self._arg_normalizer().normalize(_strip_code_spans(raw_text))
+        return not any(
+            t.category in ("code_execution", "excessive_agency", "prompt_injection",
+                           "credential_access")
+            for t in _scan_l1(residue[:_L1_MAX_SCAN_CHARS]).threats
+        )
+
     def _scan_tool_call_impl(
         self,
         tool_name: str,
@@ -967,6 +1007,21 @@ class DelphiSensor:
                 hard = [t for t in danger if t.category != "data_exfiltration"]
                 category = category or (hard[0].category if hard else danger[0].category)
                 rules = rules + [t.rule for t in danger if t.rule not in rules]
+                # Benign DOCUMENTARY-PROSE cap. This path runs raw L1 over the arg
+                # text with none of scan()'s context calibration, so an agent that
+                # passes an incident report, runbook, policy doc or detection-rule
+                # doc into a tool argument (summarise_document(text=…),
+                # send_message(body=…)) BLOCKED on the command the prose QUOTES.
+                # Same structural test as scan(): quoted command, documentary frame
+                # outside the quotes, and a prose residue with no dangerous signal.
+                # Additionally gated OFF whenever the call carries a shell-argument
+                # key — run_command(command=…) & friends are an execution request,
+                # never documentation, so the whole attack corpus and every
+                # prefixed-attack probe are structurally out of reach of this cap.
+                if hard and self.enforcement_mode == "block" and self._prose_mention_arg(
+                    arguments, f"{tool_name} {arg_text}"
+                ):
+                    hard = []
                 # Only the hard (destructive/injection) categories enforce a block;
                 # data_exfiltration alone surfaces as a flag (monitor-default).
                 if hard and self.enforcement_mode == "block":
