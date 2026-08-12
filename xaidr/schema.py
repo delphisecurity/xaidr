@@ -229,6 +229,21 @@ def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
         out["gen_ai.security.detection.severity"] = severity
 
     # --- authz (impact data, when present) ----------------------------------
+    # impact_class sits beside impact_tier in the same authz namespace, because
+    # it is the same fact at a different granularity and a consumer reads them
+    # together. It matters more than a missing field looks: the classify-only
+    # classes (infra_destruction above all) never block, so telemetry is their
+    # ONLY output. Without this attribute a `terraform destroy` reaches a SIEM
+    # as an ordinary allowed scan with nothing naming it as teardown, and the
+    # whole control-not-detection design becomes invisible to the mapped schema.
+    #
+    # "unknown" is the classifier's SENTINEL for "nothing matched", not a class,
+    # so it is omitted rather than emitted. That keeps the schema's omit-don't-
+    # guess contract intact — an absent attribute already means unknown, and
+    # emitting the literal string would be a placeholder dressed as an answer.
+    impact_class = data.get("impactClass")
+    if impact_class and impact_class != "unknown":
+        out["gen_ai.security.authz.impact_class"] = impact_class
     impact_tier = data.get("impactTier")
     if impact_tier:
         out["gen_ai.security.authz.impact_tier"] = impact_tier
