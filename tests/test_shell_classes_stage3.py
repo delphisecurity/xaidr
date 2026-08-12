@@ -553,3 +553,90 @@ def test_ordinary_devops_commands_produce_no_structural_finding(cmd):
     """
     findings = classify_command_findings(cmd)
     assert findings == [], f"{cmd!r} produced {findings}"
+
+
+# ══ THE rm -rf BUILD-DIRECTORY FALSE POSITIVE ════════════════════════════════
+# `LLM08_shell_destructive` matched `rm -rf` followed by anything beginning with
+# a dot, because its object alternative was a bare `\.` meant to catch the
+# current directory. That made `rm -rf ./build`, `rm -rf .pytest_cache` and
+# `rm -rf .venv` block — cleaning a build directory being among the most common
+# legitimate agent operations, and live in published 0.5.0.
+#
+# The rule is now scoped to what that alternative was always meant to mean: the
+# current directory itself (`.`, `./`), a parent escape (`..`, `../`), or a
+# dotfile glob (`.*`). A dot-prefixed NAME is not a sensitive object. The real
+# destructive cases are unaffected because they key on an absolute path, `~`,
+# `$HOME`, or the structural verb-plus-object rule, none of which changed.
+
+BUILD_DIRECTORIES = [
+    "rm -rf ./build",
+    "rm -rf .pytest_cache",
+    "rm -rf node_modules",
+    "rm -rf dist",
+    "rm -rf target",
+    "rm -rf .venv",
+    "rm -rf coverage",
+    # neighbours of the same shape, to stop the fix being over-fitted to the list
+    "rm -rf .next",
+    "rm -rf .cache/pip",
+    "rm -rf ./build && npm ci",
+    "rm -rf .tox",
+    "rm -rf .mypy_cache",
+]
+
+
+@pytest.mark.parametrize("cmd", BUILD_DIRECTORIES)
+def test_cleaning_a_build_directory_is_allowed_on_both_paths(cmd):
+    s = _sensor("block")
+    tool = _quiet(s.scan_tool_call, "run_command", {"command": cmd})
+    content = _quiet(s.scan, cmd, direction="input")
+    assert tool.action == "allowed", f"tool path: {tool.action} {tool.rules}"
+    assert content.action == "allowed", f"content path: {content.action} {content.rules}"
+
+
+STILL_DESTRUCTIVE = [
+    "rm -rf /",
+    "rm -rf /var/lib/postgresql/data",
+    "rm -rf ~/.ssh",
+    "rm -rf /etc",
+    "rm important.db",
+    "rm -rf ~/Documents",
+    # the shapes the narrowed alternative must still cover
+    "rm -rf .",
+    "rm -rf ./",
+    "rm -rf ..",
+    "rm -rf ../",
+    "rm -rf .*",
+    "rm -rf /*",
+    "rm -rf ~",
+    "rm -rf $HOME/.config",
+]
+
+
+@pytest.mark.parametrize("cmd", STILL_DESTRUCTIVE)
+def test_genuinely_destructive_deletes_still_block(cmd):
+    r = _run(cmd)
+    assert r.action == "blocked", f"{cmd!r} -> {r.action}/{r.score} {r.rules}"
+
+
+@pytest.mark.parametrize("cmd", [
+    "rm -rf /",
+    "rm -rf /var/lib/postgresql/data",
+    "rm -rf ~/.ssh",
+])
+def test_the_content_path_still_blocks_destructive_deletes(cmd):
+    """The structural ruleset runs on the TOOL path only, so the raw-string rule
+    is what covers `scan()`. Narrowing it must not quietly remove that: deleting
+    the rule outright was the alternative fix and it cost exactly this.
+    """
+    r = _quiet(_sensor("block").scan, cmd, direction="input")
+    assert r.action == "blocked", f"{cmd!r} -> {r.action}/{r.score} {r.rules}"
+
+
+def test_the_destructive_filesystem_corpus_class_is_unchanged():
+    s = _sensor("block")
+    rows = [a for a in ATTACKS if a["class"] == "destructive_filesystem"]
+    detected = sum(1 for a in rows
+                   if _quiet(s.scan_tool_call, "run_command",
+                             {"command": a["command"]}).score > 0)
+    assert (detected, len(rows)) == (20, 20), f"{detected}/{len(rows)}"
