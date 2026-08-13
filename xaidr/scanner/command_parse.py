@@ -142,6 +142,25 @@ _MAX_PAYLOAD_DEPTH = 2
 # Segment separators, longest-first so `||` and `&&` win over `|` and `&`.
 _SEPARATORS = ("&&", "||", ";;", "|&", ";", "|", "\n", "\r")
 
+# --- Heredocs -----------------------------------------------------------------
+# `python - <<'PY' … PY` is the same act as `python -c '…'`: an interpreter
+# receiving a program. The `-c` form was already expanded into nested segments;
+# the heredoc form was not, so its body fell through the newline splitter and
+# became bogus TOP-LEVEL segments with pseudo-names, which classified as nothing.
+#
+# A heredoc header is `<<`, an optional `-` (the tab-stripping form), and a
+# delimiter that may be bare, single-quoted or double-quoted. Quoting the
+# delimiter suppresses shell expansion inside the body; that changes what the
+# SHELL would do but not what the body IS, so both forms are captured the same
+# way and the distinction is recorded rather than acted on.
+_HEREDOC_HEADER = re.compile(r"<<(-?)\s*(?:'([^']*)'|\"([^\"]*)\"|([A-Za-z_][A-Za-z0-9_]*))")
+
+# Bounds. A heredoc body is attacker-controllable, so both the per-body line
+# count and the number of heredocs on one line are capped; overrunning either
+# marks the parse degraded rather than truncating silently.
+_MAX_HEREDOC_LINES = 512
+_MAX_HEREDOCS_PER_SEGMENT = 8
+
 # Redirection operators arriving as their OWN token.
 _REDIR_STANDALONE = {
     "<": "read", ">": "write", ">>": "append", "<>": "read_write",
@@ -201,6 +220,12 @@ class ParsedCommand:
             ``python3``, ``su``), or None for a top-level segment.
         depth: Payload nesting level. 0 = typed on the command line, 1 = inside
             one ``-c``, 2 = inside two. Capped at ``_MAX_PAYLOAD_DEPTH``.
+        heredocs: One dict per heredoc this segment receives:
+            ``{"delimiter", "body", "quoted", "strip_tabs", "terminated"}``.
+            ``quoted`` records whether the delimiter was quoted (which would
+            suppress shell expansion in the body); ``terminated`` is False when
+            the delimiter line never arrived, in which case the body is
+            everything that remained and the parse is marked degraded.
         separator: The shell separator that PRECEDED this segment (``|``,
             ``&&``, ``;``, ``\\n``, …), or ``""`` for the first segment of a
             line. Kept so a caller can rebuild the line without INVENTING a
@@ -222,6 +247,7 @@ class ParsedCommand:
     parent_name: Optional[str] = None
     depth: int = 0
     separator: str = ""
+    heredocs: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def parse_command(text: str) -> List[ParsedCommand]:
@@ -360,7 +386,7 @@ def _parse_impl(
         return []
 
     out: List[ParsedCommand] = []
-    for sep, raw_segment in _split_segments(text):
+    for sep, raw_segment, heredocs in _split_segments(text):
         if not raw_segment.strip():
             continue
         parsed = _parse_segment(raw_segment)
@@ -368,14 +394,27 @@ def _parse_impl(
             continue
         if truncated:
             parsed.parse_degraded = True
+        parsed.heredocs = heredocs
+        # Decided once, here, and recorded on each body: the expansion below and
+        # the impact classifier must agree about whether a body is a program, and
+        # re-deriving it in two places is how they would drift apart.
+        if heredocs:
+            is_program = _heredoc_is_program(parsed)
+            for h in heredocs:
+                h["is_program"] = is_program
+        if any(not h.get("terminated", True) for h in heredocs):
+            # A body we could not see the end of is a partial view of the input.
+            parsed.parse_degraded = True
         parsed.separator = sep
         parsed.depth = depth
         parsed.nested = depth > 0
         parsed.parent_name = parent_name
         out.append(parsed)
         # Additive: the outer segment above is already appended unchanged, and
-        # any payload it carries becomes EXTRA segments after it.
+        # any payload it carries becomes EXTRA segments after it. A segment can
+        # carry both forms (`python -c 'x' <<EOF`), so both are expanded.
         out.extend(_expand_payload(parsed, depth))
+        out.extend(_expand_heredoc(parsed, depth))
         if len(out) >= _MAX_SEGMENTS:
             del out[_MAX_SEGMENTS:]
             if out:
@@ -386,6 +425,85 @@ def _parse_impl(
 
 def _is_interpreter(name: str) -> bool:
     return name in _INTERPRETERS or name.startswith(_INTERPRETER_PREFIXES)
+
+
+def _heredoc_is_program(cmd: ParsedCommand) -> bool:
+    """Is this segment's heredoc body CODE for an interpreter, or DATA?
+
+    Getting this wrong in either direction is costly, so it is decided
+    structurally in two steps rather than by the delimiter's name:
+
+    1. The receiving binary must be an interpreter. ``cat <<EOF > config.yaml``
+       and ``mysql <<SQL`` receive data; treating their bodies as commands would
+       tokenize YAML and SQL into pseudo-names and manufacture classifications
+       out of prose. This is the same ``_is_interpreter`` set the ``-c`` payload
+       path already uses, so the two forms cannot disagree about what an
+       interpreter is.
+
+    2. The interpreter must have NO script operand. ``python - <<PY`` and
+       ``bash <<EOF`` read their program from stdin, so the body IS the program.
+       ``python manage.py <<EOF`` runs a script and the heredoc is that script's
+       stdin — data again. Flags are skipped (so ``sh -s <<EOF`` still counts as
+       stdin-reading), and a bare ``-`` is the explicit stdin marker rather than
+       a filename.
+
+    Everything that is not clearly a program is treated as data, because a false
+    "this is code" produces garbage segments on ordinary config-writing commands,
+    which is the more common shape by far.
+    """
+    if not _is_interpreter(cmd.name):
+        return False
+    skip_value = False
+    for tok in cmd.args:
+        if skip_value:
+            skip_value = False
+            continue
+        if tok == "-":
+            continue                      # explicit "read from stdin"
+        if tok.startswith("-"):
+            # A flag whose value is a separate token must not be mistaken for a
+            # script operand (`python -m mod`, `perl -I lib`).
+            if tok in _WRAPPER_OPTS_WITH_VALUE or tok in ("-m", "-I", "-X", "--module"):
+                skip_value = True
+            continue
+        return False                      # a script operand: the body is its stdin
+    return True
+
+
+def _expand_heredoc(cmd: ParsedCommand, depth: int) -> List[ParsedCommand]:
+    """Re-parse an interpreter's heredoc body as nested segments.
+
+    Mirrors ``_expand_payload`` exactly — same depth cap, same degraded marking
+    for non-shell interpreters, and the outer segment is never modified beyond
+    its ``parse_degraded`` flag — because ``python - <<PY`` and ``python -c '…'``
+    are the same act and must not produce different structure.
+    """
+    if not cmd.heredocs or not any(h.get("is_program") for h in cmd.heredocs):
+        return []
+
+    out: List[ParsedCommand] = []
+    for hd in cmd.heredocs:
+        if not hd.get("is_program"):
+            continue
+        body = hd.get("body") or ""
+        if not body.strip():
+            continue
+        if depth >= _MAX_PAYLOAD_DEPTH:
+            cmd.parse_degraded = True
+            return out
+        try:
+            inner = _parse_impl(body, depth=depth + 1, parent_name=cmd.name)
+        except Exception:
+            cmd.parse_degraded = True
+            return out
+        if cmd.name not in _SHELL_PAYLOAD_INTERPRETERS:
+            # Python/Perl/Ruby/Node source tokenized with shell rules: usable
+            # signal, approximate names. Say so rather than presenting it as a
+            # clean parse.
+            for seg in inner:
+                seg.parse_degraded = True
+        out.extend(inner)
+    return out
 
 
 def _expand_payload(cmd: ParsedCommand, depth: int) -> List[ParsedCommand]:
@@ -519,6 +637,12 @@ def _split_segments(text: str) -> List[tuple]:
     buf: List[str] = []
     pending_sep = ""
     quote: Optional[str] = None
+    # Heredocs whose HEADER has been seen on the current line but whose BODY
+    # starts after the next newline. Collected here so the body is consumed as a
+    # unit at that newline, BEFORE the newline can act as a segment separator —
+    # otherwise every body line becomes its own bogus top-level segment.
+    pending_heredocs: List[dict] = []
+    seg_heredocs: List[dict] = []
     i = 0
     n = len(text)
     while i < n:
@@ -544,20 +668,97 @@ def _split_segments(text: str) -> List[tuple]:
             buf.append(text[i + 1])
             i += 2
             continue
+        # Heredoc HEADER. Matched before the separator check because `<<` is not
+        # a separator but its delimiter must not be mistaken for one, and
+        # because `<<<` (a herestring, which has no body) must not be taken as a
+        # heredoc — hence the explicit third-`<` guard.
+        if (
+            ch == "<"
+            and text.startswith("<<", i)
+            and not text.startswith("<<<", i)
+            and len(pending_heredocs) < _MAX_HEREDOCS_PER_SEGMENT
+        ):
+            m = _HEREDOC_HEADER.match(text, i)
+            if m:
+                delim = m.group(2) if m.group(2) is not None else (
+                    m.group(3) if m.group(3) is not None else m.group(4)
+                )
+                pending_heredocs.append({
+                    "delimiter": delim,
+                    "quoted": m.group(2) is not None or m.group(3) is not None,
+                    "strip_tabs": m.group(1) == "-",
+                })
+                # Keep the header text in the segment so the existing redirect
+                # extraction still records a `read` redirect for it.
+                buf.append(text[i:m.end()])
+                i = m.end()
+                continue
+        # End of the header line: consume every pending body, in the order the
+        # headers appeared, before this newline is allowed to split a segment.
+        if ch in ("\n", "\r") and pending_heredocs:
+            i += 1
+            for hd in pending_heredocs:
+                body, i, terminated = _consume_heredoc_body(
+                    text, i, hd["delimiter"], hd["strip_tabs"]
+                )
+                hd["body"] = body
+                hd["terminated"] = terminated
+            seg_heredocs.extend(pending_heredocs)
+            pending_heredocs = []
+            # The header line is complete; close the segment here as the plain
+            # newline path would have.
+            if len(segments) < _MAX_SEGMENTS - 1:
+                segments.append((pending_sep, "".join(buf), seg_heredocs))
+                buf = []
+                seg_heredocs = []
+                pending_sep = "\n"
+            continue
         # Stop splitting once the cap is reached: keep the remainder whole
         # rather than dropping it, so a capped parse still sees the tail.
         if len(segments) < _MAX_SEGMENTS - 1:
             sep = _match_separator(text, i)
             if sep:
-                segments.append((pending_sep, "".join(buf)))
+                segments.append((pending_sep, "".join(buf), seg_heredocs))
                 buf = []
+                seg_heredocs = []
                 pending_sep = sep
                 i += len(sep)
                 continue
         buf.append(ch)
         i += 1
-    segments.append((pending_sep, "".join(buf)))
+    segments.append((pending_sep, "".join(buf), seg_heredocs))
     return segments
+
+
+def _consume_heredoc_body(text: str, start: int, delim: str, strip_tabs: bool):
+    """Read a heredoc body from ``start`` to its delimiter line.
+
+    Returns ``(body, index_after_terminator, terminated)``. The terminator is a
+    line whose entire content is the delimiter (leading tabs stripped for the
+    ``<<-`` form), which is why a body line that merely CONTAINS the delimiter
+    does not end it.
+
+    Never raises and always advances: an unterminated heredoc consumes the
+    remaining text and reports ``terminated=False`` rather than scanning
+    forever. Bounded by ``_MAX_HEREDOC_LINES`` on top of the caller's overall
+    input cap.
+    """
+    lines: List[str] = []
+    i = start
+    n = len(text)
+    count = 0
+    while i < n and count < _MAX_HEREDOC_LINES:
+        nl = text.find("\n", i)
+        line = text[i:] if nl == -1 else text[i:nl]
+        candidate = line.lstrip("\t") if strip_tabs else line
+        if candidate.rstrip("\r") == delim:
+            return "\n".join(lines), (n if nl == -1 else nl + 1), True
+        lines.append(line)
+        count += 1
+        if nl == -1:
+            return "\n".join(lines), n, False
+        i = nl + 1
+    return "\n".join(lines), i, False
 
 
 def _match_separator(text: str, i: int) -> str:

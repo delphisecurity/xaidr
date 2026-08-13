@@ -149,6 +149,34 @@ def _apply_escalations(tier: str, arguments: dict) -> str:
     return tier
 
 
+def _operand_text(seg) -> str:
+    """The text a rule's ``args_pattern`` matches against.
+
+    argv operands, plus the body of any heredoc this segment receives AS A
+    PROGRAM. Both are the same fact wearing different syntax: `python -c '<code>'`
+    puts the payload in argv, where args_pattern has always seen it, while
+    `python - <<PY … PY` puts the identical payload in a heredoc body. Without
+    this the two forms classify differently — the `-c` form as
+    credential_access, the heredoc form as `unknown` — and a policy written
+    against the class would gate one and miss the other.
+
+    A DATA heredoc (`cat <<EOF > config.yaml`, a database client reading a
+    query) is deliberately EXCLUDED. Its body is content being written, not an
+    operand describing what the command acts on, so folding it in here would let
+    a YAML document that merely mentions a credential path classify as a
+    credential read. ``is_program`` is decided once at parse time; see
+    ``command_parse._heredoc_is_program``.
+
+    Length is bounded by the parser's own input and heredoc-line caps, so this
+    adds no unbounded work.
+    """
+    parts = list(seg.args)
+    for hd in getattr(seg, "heredocs", None) or ():
+        if hd.get("is_program") and hd.get("body"):
+            parts.append(hd["body"])
+    return " ".join(parts)
+
+
 def _segment_matches(block: dict, seg) -> bool:
     """Does one match block describe this parsed segment?
 
@@ -178,7 +206,7 @@ def _segment_matches(block: dict, seg) -> bool:
     args_pattern = block.get("args_pattern")
     if args_pattern is not None:
         matched_anything = True
-        if not args_pattern.search(" ".join(seg.args)):
+        if not args_pattern.search(_operand_text(seg)):
             return False
 
     args_any = block.get("args_any")
