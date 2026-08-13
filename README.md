@@ -1316,7 +1316,7 @@ differ; the table is the number to design against, not the best case.
 - **Malformed content is safe.** Badly formed input cannot turn the sensor into
   a denial-of-service risk.
 
-Verified with `python -m pytest -q` in a clean virtual environment: **2151
+Verified with `python -m pytest -q` in a clean virtual environment: **2158
 passed, 1 skipped**. The suite covers the public scan APIs, wrappers, policy,
 provenance, reporters, telemetry schema, and resilience behavior.
 
