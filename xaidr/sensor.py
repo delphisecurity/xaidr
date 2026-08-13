@@ -1995,12 +1995,27 @@ class ProtectedHttpClient:
                         rules=["URL_BLOCKED"],
                         latency_ms=0,
                     )
-                    print(f"[xaidr] URL BLOCKED: {url} matches pattern '{blocked_url}'")
-                    # Audit record BEFORE the raise — host only, no URL.
-                    self._emit_destination_block(
-                        result,
-                        self._extract_host(url) or self._extract_destination(url, json_body),
+                    # Destination identifier computed ONCE and used for both the
+                    # console line and the audit record, so the two cannot drift
+                    # into disagreeing about what this path discloses.
+                    dest_id = (
+                        self._extract_host(url)
+                        or self._extract_destination(url, json_body)
                     )
+                    # HOST ONLY, never the full URL: a query string routinely
+                    # carries a token or an API key, and this line goes to the
+                    # host's stdout like any other. The audit record below has
+                    # always been host-only; this used to be broader than the
+                    # record sitting beside it. The pattern echoed back is the
+                    # operator's OWN block_urls() substring, which is
+                    # configuration feedback (which of your rules fired) rather
+                    # than anything derived from the request.
+                    print(
+                        f"[xaidr] URL BLOCKED: {dest_id} "
+                        f"matches pattern '{blocked_url}'"
+                    )
+                    # Audit record BEFORE the raise — host only, no URL.
+                    self._emit_destination_block(result, dest_id)
                     raise DelphiBlockedError(result)
 
             # 2. Local deny-destination YAML policy (host-based, structured).
@@ -2037,8 +2052,12 @@ class ProtectedHttpClient:
                             rules=[rule_label],
                             latency_ms=0,
                         )
+                        # Same rule as the blocked-URL branch above: the
+                        # destination identifier, never the full URL. `dest_id`
+                        # is already the host (or the inferred destination), and
+                        # is exactly what the audit record below carries.
                         print(
-                            f"[xaidr] DESTINATION BLOCKED by policy: {url} "
+                            f"[xaidr] DESTINATION BLOCKED by policy: {dest_id} "
                             f"({pol.reason or pol.policy_id or dest_id})"
                         )
                         # Audit record BEFORE the raise — dest_id is the host (or
@@ -2052,9 +2071,13 @@ class ProtectedHttpClient:
             raise
         except Exception as exc:
             # Fail open: the destination check must never crash the host request.
+            # The exception MESSAGE is suppressed for the same reason it is on the
+            # scan path: a fault raised while handling a URL can interpolate that
+            # URL, query string included, into its own message. Type only.
             logger.warning(
-                "xaidr: destination check failed open (%s: %s)",
-                type(exc).__name__, exc,
+                "xaidr: destination check failed open (%s) "
+                "[message suppressed: may contain request content]",
+                type(exc).__name__,
             )
 
     def _scan_request(self, url: str, json_body: dict | None, content: str | bytes | None) -> None:

