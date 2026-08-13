@@ -547,11 +547,34 @@ class DelphiSensor:
         rule ``SCAN_FAILED_OPEN``) plus a WARN log an operator can alert on. No
         raw content is carried (hash-only, and only when it can be computed).
         This method NEVER raises — the degradation signal cannot itself become a
-        new failure point."""
+        new failure point.
+
+        THE LOG IS HELD TO THE SAME CONTENT RULE AS THE TELEMETRY. An exception
+        MESSAGE is not a safe thing to print: it is routinely built by
+        interpolating the value that caused the fault, so a scanner fault on a
+        prompt containing a key can put that key in the message, and this log
+        ships to the host's pipeline like any other. So the message body is never
+        logged — only the exception TYPE, the code location the fault came from
+        (our own module and line, not input-derived), the direction, and the scan
+        id. That last one is the correlation handle: the same id is on the
+        telemetry event below, so an operator who sees the WARN can find the
+        event, and anyone who genuinely needs the message can catch it at their
+        own logging boundary where they own the disclosure decision."""
+        scan_id = uuid4().hex[:12]
         try:
+            # Code location of the fault, from OUR traceback: diagnostic and
+            # never attacker-controlled. Best-effort; absent on a raised-without-
+            # traceback exception.
+            origin = "unknown"
+            tb = getattr(exc, "__traceback__", None)
+            while tb is not None:
+                frame = tb.tb_frame
+                origin = f"{frame.f_globals.get('__name__', '?')}:{tb.tb_lineno}"
+                tb = tb.tb_next
             logger.warning(
-                "xaidr: scan failed open on %s (%s: %s)",
-                direction, type(exc).__name__, exc,
+                "xaidr: scan failed open on %s (%s at %s) scan_id=%s "
+                "[message suppressed: may contain scanned content]",
+                direction, type(exc).__name__, origin, scan_id,
             )
         except Exception:
             pass
@@ -567,7 +590,10 @@ class DelphiSensor:
             phash = safe_content_hash(prompt) if isinstance(prompt, str) else None
             plen = len(prompt) if isinstance(prompt, str) else 0
             data = {
-                "scanId": uuid4().hex[:12],
+                # Same id as the WARN above, so the log line and this event are
+                # correlatable. They were independently generated before, which
+                # left an operator no way to join them.
+                "scanId": scan_id,
                 "agentId": self.agent_id,
                 "action": "allowed",
                 "score": 0.0,
