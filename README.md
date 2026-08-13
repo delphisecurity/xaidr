@@ -624,26 +624,18 @@ Both worked cases:
 | `bash -c 'cat /etc/shadow'` | `bash`, nested `cat` | `credential_access` / `critical`, from the nested segment, though the outer one is `execute` |
 
 **The object decides, not the flags.** `destructive_filesystem` keys on the verb
-*and* the sensitivity of what it acts on, so these are one rule and not one
-pattern each, and none of them needs `-rf`:
+*and* the sensitivity of what it acts on. That is the difference between a rule
+and a pattern list: a delete against system paths, home-directory configuration,
+a database or backup file, or a scope that escapes the working tree is the same
+finding whichever way it is spelled, and none of it depends on `-rf` being
+present. Destructive intent expressed without the famous flag is caught on the
+same rule as the famous string.
 
-| command | verdict |
-|---|---|
-| `rm important.db` | blocked |
-| `rm -f production.sqlite` | blocked |
-| `rm -rf /var/lib/postgresql/data` | blocked |
-| `rm -rf /` | blocked |
-| `rm -rf ~/.ssh` | blocked |
-| `rm -rf .` and `rm -rf ../` | blocked (the working tree, and a parent escape) |
-| `rm -rf ./build` | allowed |
-| `rm -rf .pytest_cache`, `rm -rf .venv` | allowed |
-| `rm -rf dist`, `rm -rf node_modules`, `rm -rf target` | allowed |
-| `rm -f coverage.xml` | allowed |
-
-Cleaning a build directory is one of the most common things an agent legitimately
-does, so it is worth being explicit that it stays out of the way. A dot-prefixed
-*name* is an ordinary relative path and is not treated as a sensitive object;
-the current directory itself, a parent escape, and a dotfile glob still are.
+Ordinary project housekeeping is not in that set. Removing build output, caches,
+dependency trees and generated artifacts inside the working tree is among the
+most common things an agent legitimately does, and it is not interrupted. That is
+a property of what the object *is*, not an allowlist of directory names, so it
+holds for your project's layout as well as the conventional ones.
 
 The same property means quote-splitting obfuscation is defeated **structurally**,
 with no obfuscation-specific rule written for it: the parser resolves `r''m
@@ -656,21 +648,27 @@ without being worth *blocking*, and treating them the same way is how a security
 tool gets switched off. Detection blocks what is unambiguous; classification is
 how you express the rest as your own policy rather than inheriting ours.
 
-The notable decisions, with the reasoning, so you can disagree with them
-deliberately:
+The notable decisions, by family, with the reasoning, so you can disagree with
+them deliberately and gate what you disagree with:
 
-| classified, not blocked | why |
-|---|---|
-| `terraform destroy`, `kubectl delete namespace`, `aws ec2 terminate-instances` | the whole `infra_destruction` class **never blocks**. These are the inverse of deploy, and ephemeral-environment automation runs them on a schedule. Blocking by default breaks legitimate teardown |
-| `sudo -i`, `doas -u root id`, `pkexec /bin/bash` | privilege escalation is routine inside a container, and CI agents escalate by design |
-| `crontab -e`, `systemctl enable` | scheduling and service enablement are what deployment *is* |
-| `visudo` | the validating editor is the *correct* way to change sudoers. An unvalidated append to `/etc/sudoers` is a different act and does block |
-| `modprobe <name>` | loads a packaged module by name, which provisioning does constantly. `insmod /path/to.ko` loads unsigned code from a writable path and does block |
-| `journalctl --rotate` | ordinary log maintenance; it closes the current file rather than destroying history. `--vacuum-time` destroys history and does block |
-| `vault kv get`, `kubectl get secret` | these are the *sanctioned* way to fetch a secret. Blocking them would push people back to hardcoded credentials |
+| family | class | posture | why |
+|---|---|---|---|
+| infrastructure teardown | `infra_destruction` | **the whole class never blocks** | teardown is the inverse of deploy, and ephemeral-environment automation runs it on a schedule. Blocking by default breaks legitimate operations |
+| privilege escalation wrappers and interactive root shells | `escalate` | classify | routine inside a container, and CI agents escalate by design |
+| user and group administration, cloud IAM grants | `escalate` | classify | this is what a configuration-management run *is* |
+| namespace, mount and kernel-module operations | `escalate` | classify | build sandboxes, provisioning and container runtimes do these constantly |
+| scheduling, service units and launch agents | `persist` | classify | installing and enabling a service is the successful end of a release |
+| package installation and hook configuration | `persist` | classify | legitimate developer and CI actions that are also a supply-chain foothold |
+| routine log maintenance | `evade` | classify | rotation closes the current file rather than destroying history |
+| sanctioned secret retrieval from a managed store | `credential_access` | classify | this is the *correct* way to fetch a secret. Blocking it pushes people back to hardcoded credentials |
 
-Every one of those is still classified, still tiered, and still emitted, so you
-can gate any of them with a single policy rule. `infra_destruction` is the
+Within several of those families the unambiguous variants — the ones with no
+legitimate reading — do block on detection, so "classify" describes the family's
+default posture rather than a guarantee about every member. The verdict you get
+is always on the result; do not infer it from this table.
+
+Every one of these is classified, tiered and emitted, so you can gate any family
+with a single policy rule keyed on its `impact_class`. `infra_destruction` is the
 clearest case, and this is exactly what `require_approval` exists for:
 
 ```yaml
