@@ -20,6 +20,8 @@ crash ``import xaidr`` (that would take down the host's ability to start).
 
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import sys
 
@@ -123,46 +125,132 @@ def test_normal_tool_call_still_flags(sensor):
 
 
 # ── import-time: corrupt rule asset must degrade, never crash import ─────────
+# These tests corrupt a rule asset on purpose. They USED TO corrupt the REAL
+# tracked xaidr/rules/all-l1-rules.json in place and restore it in a `finally`,
+# which made an interrupted run destructive: a timeout, Ctrl-C or OOM between
+# the corruption and the restore strands a gutted rules file plus a
+# `.audit_bak` orphan in the working tree, and the next `git add -A` commits it.
+# That is not hypothetical — a harness timeout produced exactly that state once.
+# For a published repo it is worse, because a contributor interrupting the suite
+# hits it with no idea what happened.
+#
+# Nothing under test needs the real asset, so nothing here writes inside xaidr/
+# any more. Everything lands in tmp_path, which pytest cleans up regardless of
+# how the run ends.
 
-@pytest.mark.parametrize(
-    "mutate",
-    [
-        'open(rules,"w").write("{ this is not valid json ]")',
-        'open(rules,"w").write("{\\"not\\": \\"a list\\"}")',
-    ],
-    ids=["corrupt-json", "wrong-shape"],
-)
-def test_corrupt_rule_asset_does_not_crash_import(mutate):
+_CORRUPTIONS = [
+    pytest.param("{ this is not valid json ]", id="corrupt-json"),
+    pytest.param('{"not": "a list"}', id="wrong-shape"),
+]
+
+
+@pytest.mark.parametrize("payload", _CORRUPTIONS)
+def test_corrupt_rule_asset_degrades_to_empty_ruleset(payload, tmp_path, monkeypatch):
+    """The loader's degradation contract, in-process.
+
+    Monkeypatches the resolver (``l1._RULES_DIR``) at a tmp directory and
+    corrupts the copy there, so the real asset is untouched and unreadable-asset
+    handling is still exercised end to end: a corrupt file must yield an EMPTY
+    ruleset, not an exception.
+    """
+    from xaidr.scanner import l1
+
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir()
+    (rules_dir / "all-l1-rules.json").write_text(payload, encoding="utf-8")
+    monkeypatch.setattr(l1, "_RULES_DIR", str(rules_dir))
+
+    compiled = l1._load_and_compile("all-l1-rules.json")
+    assert compiled == [], (
+        f"corrupt asset should degrade to an empty ruleset, got {len(compiled)} rules"
+    )
+
+
+def _isolated_package(tmp_path):
+    """A throwaway copy of the xaidr package under tmp_path, safe to corrupt."""
+    import shutil
+    import xaidr
+
+    root = tmp_path / "pkgroot"
+    root.mkdir()
+    shutil.copytree(
+        os.path.dirname(os.path.abspath(xaidr.__file__)),
+        root / "xaidr",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
+    return root
+
+
+@pytest.mark.parametrize("payload", _CORRUPTIONS)
+def test_corrupt_rule_asset_does_not_crash_import(payload, tmp_path):
+    """`import xaidr` must survive a corrupt rule asset.
+
+    Runs in a subprocess because the claim is about IMPORT time, and the rules
+    load during module import — by the time an in-process test could patch
+    anything, the import has already happened.
+
+    The subprocess imports from an isolated COPY of the package whose rules file
+    is corrupt, never from the source tree. The copy is put first on sys.path
+    and the subprocess ASSERTS it actually loaded from there: without that
+    check, a path-resolution slip would silently import the real (valid) package
+    and the test would pass while proving nothing.
+    """
+    root = _isolated_package(tmp_path)
+    (root / "xaidr" / "rules" / "all-l1-rules.json").write_text(
+        payload, encoding="utf-8"
+    )
+
     code = (
-        "import sys, os, shutil\n"
-        "src=%r\n"
-        "sys.path.insert(0, src)\n"
-        "rules=os.path.join(src,'xaidr','rules','all-l1-rules.json')\n"
-        "bak=rules+'.audit_bak'\n"
-        "shutil.copy(rules, bak)\n"
+        "import sys\n"
+        "root=%r\n"
+        "sys.path.insert(0, root)\n"
         "try:\n"
-        "    " + mutate + "\n"
-        "    import xaidr\n"
-        "    s=xaidr.Sensor(agent_id='x')\n"
-        "    r=s.scan('hello')\n"
-        "    print('IMPORT_OK', r.action)\n"
+        "    import xaidr, os\n"
+        "    loaded=os.path.abspath(xaidr.__file__)\n"
+        "    if not loaded.startswith(os.path.abspath(root)):\n"
+        "        print('WRONG_PACKAGE', loaded)\n"
+        "    else:\n"
+        "        s=xaidr.Sensor(agent_id='x')\n"
+        "        r=s.scan('hello')\n"
+        "        print('IMPORT_OK', r.action)\n"
         "except BaseException as e:\n"
         "    print('IMPORT_CRASH', type(e).__name__)\n"
-        "finally:\n"
-        "    shutil.move(bak, rules)\n"
-    ) % _repo_root()
+    ) % str(root)
+
     out = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, timeout=60
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=str(tmp_path),
     ).stdout
+    assert "WRONG_PACKAGE" not in out, (
+        f"subprocess imported the real package, not the corrupt copy: {out!r}"
+    )
     assert "IMPORT_OK" in out, f"import crashed on corrupt rule asset: {out!r}"
 
 
-def _repo_root() -> str:
+def test_corrupt_rule_asset_tests_never_write_inside_the_package():
+    """Regression guard for the hazard itself.
+
+    The tests above are the only ones that deliberately corrupt a rule asset.
+    If someone reintroduces an in-place mutation of the shipped rules file, an
+    interrupted run silently damages the working tree again — so pin that the
+    real asset is intact and no backup orphan exists after this module runs.
+    """
     import xaidr
-    import os
-    return os.path.dirname(os.path.dirname(os.path.abspath(xaidr.__file__)))
 
+    pkg = os.path.dirname(os.path.abspath(xaidr.__file__))
+    rules = os.path.join(pkg, "rules", "all-l1-rules.json")
+    with open(rules) as f:
+        raw = json.load(f)
+    assert isinstance(raw, list) and raw, "shipped rules asset is not a rule list"
 
+    strays = [
+        n for n in os.listdir(os.path.join(pkg, "rules"))
+        if not n.endswith(".json")
+    ]
+    assert not strays, f"temp artifacts left inside xaidr/rules: {strays}"
 
 # ── the fail-open LOG is held to the same content rule as the telemetry ──────
 # Telemetry was always hash-only, but the WARN log interpolated the exception's
