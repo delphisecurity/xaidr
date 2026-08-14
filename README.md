@@ -1457,6 +1457,6 @@ without also stopping on `flagged`. The protected HTTP wrapper raises
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE).
+Licensed under the [Apache License, Version 2.0](https://github.com/delphisecurity/xaidr/blob/main/LICENSE).
 
 Copyright 2026 Delphi Security Inc.

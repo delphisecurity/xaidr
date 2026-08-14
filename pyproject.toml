@@ -25,6 +25,12 @@ keywords = [
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
+    # Redundant with the PEP 639 `license = "Apache-2.0"` expression above, and
+    # deprecated by that PEP — kept because scanners that only read classifiers
+    # (and not `License-Expression`) otherwise report this package as unlicensed.
+    # PyPI only rejects the legacy `License` field alongside `License-Expression`;
+    # a `License ::` classifier alongside it is accepted.
+    "License :: OSI Approved :: Apache Software License",
     "Topic :: Security",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Operating System :: OS Independent",
