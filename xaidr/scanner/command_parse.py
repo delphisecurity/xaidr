@@ -158,6 +158,14 @@ _HEREDOC_HEADER = re.compile(r"<<(-?)\s*(?:'([^']*)'|\"([^\"]*)\"|([A-Za-z_][A-Z
 # Bounds. A heredoc body is attacker-controllable, so both the per-body line
 # count and the number of heredocs on one line are capped; overrunning either
 # marks the parse degraded rather than truncating silently.
+#
+# 8 is generous by a wide margin. Surveyed across 634 shell scripts and
+# shell-shebang executables on a developer machine — 908 command lines carrying
+# a heredoc — the maximum on any single command was ONE, and the 421-command
+# corpus contains exactly one heredoc, also singular. Two on a line
+# (`diff <<A <<B`) is already exotic; nine is not a shape legitimate tooling
+# produces, which is why the overflow path optimises for not manufacturing
+# structure rather than for parsing it.
 _MAX_HEREDOC_LINES = 512
 _MAX_HEREDOCS_PER_SEGMENT = 8
 
@@ -386,13 +394,13 @@ def _parse_impl(
         return []
 
     out: List[ParsedCommand] = []
-    for sep, raw_segment, heredocs in _split_segments(text):
+    for sep, raw_segment, heredocs, split_degraded in _split_segments(text):
         if not raw_segment.strip():
             continue
         parsed = _parse_segment(raw_segment)
         if parsed is None:
             continue
-        if truncated:
+        if truncated or split_degraded:
             parsed.parse_degraded = True
         parsed.heredocs = heredocs
         # Decided once, here, and recorded on each body: the expansion below and
@@ -625,9 +633,11 @@ def _try_b64(value: str) -> Optional[str]:
 def _split_segments(text: str) -> List[tuple]:
     """Split on shell separators, respecting quotes so `;` inside a string stays.
 
-    Returns ``(separator_before, segment)`` pairs; the first pair's separator is
-    ``""``. The separator is carried so a caller can rebuild the line exactly as
-    written (see :func:`reconstruct`) instead of guessing at one.
+    Returns ``(separator_before, segment, heredocs, degraded)`` tuples; the first
+    tuple's separator is ``""``. The separator is carried so a caller can rebuild
+    the line exactly as written (see :func:`reconstruct`) instead of guessing at
+    one. ``degraded`` is True when a bound was hit while splitting, and is
+    propagated onto the segment's ``parse_degraded``.
 
     Hand-rolled rather than regex: a regex cannot track quote state, and
     splitting inside a quoted argument would invent segments that the shell
@@ -643,6 +653,9 @@ def _split_segments(text: str) -> List[tuple]:
     # otherwise every body line becomes its own bogus top-level segment.
     pending_heredocs: List[dict] = []
     seg_heredocs: List[dict] = []
+    # Set when a bound is hit mid-split, so the segment it belongs to can report
+    # a partial view instead of presenting one as complete.
+    seg_degraded = False
     i = 0
     n = len(text)
     while i < n:
@@ -676,17 +689,33 @@ def _split_segments(text: str) -> List[tuple]:
             ch == "<"
             and text.startswith("<<", i)
             and not text.startswith("<<<", i)
-            and len(pending_heredocs) < _MAX_HEREDOCS_PER_SEGMENT
         ):
             m = _HEREDOC_HEADER.match(text, i)
             if m:
                 delim = m.group(2) if m.group(2) is not None else (
                     m.group(3) if m.group(3) is not None else m.group(4)
                 )
+                # Past the cap the header is still RECOGNISED, so its body is
+                # still consumed as a unit — it is simply not captured. Letting
+                # the header fall through to the plain `<<` redirect path instead
+                # would leave the body to the newline splitter, which turns every
+                # body line into a bogus TOP-LEVEL segment: `filler`, `d8`, `d9`.
+                # Those look exactly like commands the author ran, and with no
+                # degraded flag a consumer treats them as authoritative. Measured
+                # cost of that: `cat <<D0 … <<D11 > notes.md` with `rm
+                # important.db` in the twelfth body produced a critical
+                # destructive_filesystem FINDING on a file being written.
+                captured = len(seg_heredocs) + sum(
+                    1 for h in pending_heredocs if not h["_overflow"]
+                )
+                overflow = captured >= _MAX_HEREDOCS_PER_SEGMENT
+                if overflow:
+                    seg_degraded = True
                 pending_heredocs.append({
                     "delimiter": delim,
                     "quoted": m.group(2) is not None or m.group(3) is not None,
                     "strip_tabs": m.group(1) == "-",
+                    "_overflow": overflow,
                 })
                 # Keep the header text in the segment so the existing redirect
                 # extraction still records a `read` redirect for it.
@@ -701,16 +730,23 @@ def _split_segments(text: str) -> List[tuple]:
                 body, i, terminated = _consume_heredoc_body(
                     text, i, hd["delimiter"], hd["strip_tabs"]
                 )
+                if hd.pop("_overflow"):
+                    # Consumed and dropped, the same way every other bound here
+                    # drops what it cannot hold (input chars, tokens per segment,
+                    # heredoc lines). `seg_degraded` already recorded the partial
+                    # view. Consuming it is what keeps it out of the top level.
+                    continue
                 hd["body"] = body
                 hd["terminated"] = terminated
-            seg_heredocs.extend(pending_heredocs)
+                seg_heredocs.append(hd)
             pending_heredocs = []
             # The header line is complete; close the segment here as the plain
             # newline path would have.
             if len(segments) < _MAX_SEGMENTS - 1:
-                segments.append((pending_sep, "".join(buf), seg_heredocs))
+                segments.append((pending_sep, "".join(buf), seg_heredocs, seg_degraded))
                 buf = []
                 seg_heredocs = []
+                seg_degraded = False
                 pending_sep = "\n"
             continue
         # Stop splitting once the cap is reached: keep the remainder whole
@@ -718,15 +754,16 @@ def _split_segments(text: str) -> List[tuple]:
         if len(segments) < _MAX_SEGMENTS - 1:
             sep = _match_separator(text, i)
             if sep:
-                segments.append((pending_sep, "".join(buf), seg_heredocs))
+                segments.append((pending_sep, "".join(buf), seg_heredocs, seg_degraded))
                 buf = []
                 seg_heredocs = []
+                seg_degraded = False
                 pending_sep = sep
                 i += len(sep)
                 continue
         buf.append(ch)
         i += 1
-    segments.append((pending_sep, "".join(buf), seg_heredocs))
+    segments.append((pending_sep, "".join(buf), seg_heredocs, seg_degraded))
     return segments
 
 

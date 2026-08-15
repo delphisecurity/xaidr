@@ -310,3 +310,117 @@ def test_is_program_is_recorded_on_each_heredoc():
     data = parse_command("cat <<'EOF' > f.yaml\nkey: value\nEOF")[0]
     assert prog.heredocs[0]["is_program"] is True
     assert data.heredocs[0]["is_program"] is False
+
+
+# ── the per-segment heredoc cap ─────────────────────────────────────────────
+# Past _MAX_HEREDOCS_PER_SEGMENT the header used to stop being recognised as a
+# heredoc: it fell through to the ordinary `<<` redirect path, which left the
+# BODIES to the newline splitter. Every body line then became its own top-level
+# segment with a pseudo-name — `filler`, `d8`, `d9` — and, alone among every
+# bound in the module, parse_degraded was NOT set. Since a degraded segment is
+# precisely what may not produce a finding or drive a critical tier alone, the
+# fabrications arrived labelled as authoritative.
+#
+# Measured before the fix: `cat <<D0 … <<D11 > notes.md` carrying the line
+# `rm important.db` in its twelfth body returned a CRITICAL
+# destructive_filesystem finding (destroy.sensitive_path, blocked/0.90) on a
+# command that WRITES a file. The same command with eight heredocs was
+# allowed/0.00. The cap crossing was the only difference.
+
+from xaidr.scanner.command_parse import _MAX_HEREDOCS_PER_SEGMENT  # noqa: E402
+
+
+def _many_heredocs(n, payload=None, at=None, binary="cat", tail=" > notes.md"):
+    """`binary <<D0 … <<Dn-1 > notes.md` with one body per delimiter."""
+    headers = " ".join(f"<<D{i}" for i in range(n))
+    bodies = "\n".join(
+        f"{payload if i == at else f'filler line {i}'}\nD{i}" for i in range(n)
+    )
+    return f"{binary} {headers}{tail}\n{bodies}"
+
+
+@pytest.mark.parametrize("n", [_MAX_HEREDOCS_PER_SEGMENT + 1,
+                               _MAX_HEREDOCS_PER_SEGMENT + 4])
+def test_past_the_cap_the_excess_is_dropped_and_the_parse_says_so(n):
+    """At most 8 captured, degraded set, and NO fabricated top-level segments."""
+    segs = parse_command(_many_heredocs(n))
+    assert len(segs[0].heredocs) <= _MAX_HEREDOCS_PER_SEGMENT, (
+        f"{len(segs[0].heredocs)} heredocs captured, cap is {_MAX_HEREDOCS_PER_SEGMENT}"
+    )
+    assert segs[0].parse_degraded is True, (
+        "the cap trimmed the input without reporting a partial parse"
+    )
+    top = [s.name for s in segs if not s.nested]
+    assert top == ["cat"], f"excess bodies leaked into top-level segments: {top}"
+
+
+def test_exactly_at_the_cap_is_captured_normally_and_is_not_degraded():
+    """The boundary is not off by one: 8 is fine, 9 is the first one over."""
+    segs = parse_command(_many_heredocs(_MAX_HEREDOCS_PER_SEGMENT))
+    assert len(segs[0].heredocs) == _MAX_HEREDOCS_PER_SEGMENT
+    assert segs[0].parse_degraded is False
+    assert [s.name for s in segs if not s.nested] == ["cat"]
+    assert [h["delimiter"] for h in segs[0].heredocs] == [
+        f"D{i}" for i in range(_MAX_HEREDOCS_PER_SEGMENT)
+    ]
+
+
+def test_the_captured_heredocs_are_the_first_n_not_an_arbitrary_subset():
+    segs = parse_command(_many_heredocs(_MAX_HEREDOCS_PER_SEGMENT + 4))
+    assert [h["delimiter"] for h in segs[0].heredocs] == [
+        f"D{i}" for i in range(_MAX_HEREDOCS_PER_SEGMENT)
+    ]
+    assert [h["body"] for h in segs[0].heredocs] == [
+        f"filler line {i}" for i in range(_MAX_HEREDOCS_PER_SEGMENT)
+    ]
+
+
+@pytest.mark.parametrize("n", [_MAX_HEREDOCS_PER_SEGMENT,
+                               _MAX_HEREDOCS_PER_SEGMENT + 1,
+                               _MAX_HEREDOCS_PER_SEGMENT + 4])
+def test_a_data_body_past_the_cap_does_not_manufacture_a_finding(n):
+    """THE REGRESSION. A file being WRITTEN must not be read as a command run.
+
+    `rm important.db` is chosen deliberately: it is structurally destructive but
+    carries no famous literal, so a raw-string rule does not fire on it and the
+    verdict is decided by structure alone — which is what the leak corrupted.
+    """
+    r = _run(_many_heredocs(n, payload="rm important.db", at=n - 1))
+    assert r.action == "allowed", (
+        f"{n} heredocs: a data body was read as a command -> {r.action}/{r.score} {r.rules}"
+    )
+
+
+@pytest.mark.parametrize("n", [_MAX_HEREDOCS_PER_SEGMENT,
+                               _MAX_HEREDOCS_PER_SEGMENT + 1,
+                               _MAX_HEREDOCS_PER_SEGMENT + 4])
+def test_crossing_the_cap_does_not_change_the_impact_class(n):
+    """The cap is a PARSER bound; crossing it must not move the verdict."""
+    from xaidr.authz.classifier import classify
+
+    cmd = _many_heredocs(n, payload="rm important.db", at=n - 1)
+    assert classify("run_command", {"command": cmd})[0] not in (
+        "destructive_filesystem", "credential_access", "execute"
+    ), f"{n} heredocs: data body conferred a class"
+
+
+def test_the_cap_still_bounds_the_work():
+    """The bound must keep holding: no unbounded capture, no hang."""
+    n = _MAX_HEREDOCS_PER_SEGMENT * 40
+    t0 = time.perf_counter()
+    segs = parse_command(_many_heredocs(n))
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 2.0, f"took {elapsed:.2f}s on {n} heredocs"
+    assert len(segs[0].heredocs) <= _MAX_HEREDOCS_PER_SEGMENT
+    assert len(segs) <= 64
+    assert segs[0].parse_degraded is True
+
+
+def test_an_unterminated_heredoc_past_the_cap_neither_hangs_nor_raises():
+    n = _MAX_HEREDOCS_PER_SEGMENT + 4
+    headers = " ".join(f"<<D{i}" for i in range(n))
+    cmd = f"cat {headers} > out.txt\nbody with no delimiter ever arriving"
+    t0 = time.perf_counter()
+    segs = parse_command(cmd)
+    assert time.perf_counter() - t0 < 1.0
+    assert segs and segs[0].parse_degraded is True

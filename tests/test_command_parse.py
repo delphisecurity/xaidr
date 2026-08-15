@@ -659,6 +659,55 @@ def test_pathological_nesting_returns_promptly():
     assert time.perf_counter() - t0 < 1.0
 
 
+# EVERY bound, in one table. The heredocs-per-segment cap was the one that did
+# not report, and it went unnoticed because each bound was tested in its own
+# function with its own shape — nothing compared them. `parse_degraded` is what
+# stops a segment producing a detection finding and what stops it driving a
+# critical tier alone (see authz.classifier), so a bound that trims the input
+# WITHOUT setting it hands the consumer an approximation labelled as exact.
+def _over_input_chars():
+    return "cat " + "b" * (_MAX_INPUT_CHARS * 4)
+
+
+def _over_segments():
+    return " | ".join(["whoami"] * (_MAX_SEGMENTS * 4))
+
+
+def _over_tokens():
+    return "cat " + " ".join(f"f{i}.txt" for i in range(_MAX_TOKENS_PER_SEGMENT * 4))
+
+
+def _over_heredoc_lines():
+    from xaidr.scanner.command_parse import _MAX_HEREDOC_LINES
+
+    return "bash <<'EOF'\n" + "echo x\n" * (_MAX_HEREDOC_LINES * 4)
+
+
+def _over_heredocs_per_segment():
+    from xaidr.scanner.command_parse import _MAX_HEREDOCS_PER_SEGMENT
+
+    n = _MAX_HEREDOCS_PER_SEGMENT + 4
+    headers = " ".join(f"<<D{i}" for i in range(n))
+    bodies = "\n".join(f"body {i}\nD{i}" for i in range(n))
+    return f"cat {headers} > out.txt\n{bodies}"
+
+
+@pytest.mark.parametrize("name,builder", [
+    ("input chars", _over_input_chars),
+    ("segment count", _over_segments),
+    ("tokens per segment", _over_tokens),
+    ("heredoc lines", _over_heredoc_lines),
+    ("heredocs per segment", _over_heredocs_per_segment),
+])
+def test_every_bound_reports_parse_degraded(name, builder):
+    segs = parse_command(builder())
+    assert segs, f"{name}: over-cap input produced nothing"
+    assert any(s.parse_degraded for s in segs), (
+        f"{name}: the bound trimmed the input without setting parse_degraded, "
+        "so a partial parse is presenting itself as a complete one"
+    )
+
+
 # ── purity / thread-safety ───────────────────────────────────────────────────
 
 def test_parser_is_pure_repeated_calls_are_identical():
