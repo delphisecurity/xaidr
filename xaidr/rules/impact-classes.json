@@ -571,12 +571,9 @@
         "id": "cred.secret_manager",
         "impact_class": "credential_access",
         "impact_tier": "critical",
-        "comment": "Managed secret stores and keychains. BLOCKS: `gcloud secrets versions access`, `aws secretsmanager get-secret-value`, `vault kv get`, `security find-generic-password` all return plaintext secret material. Deliberate consequence: `kubectl get secrets` also blocks — reading cluster secrets is precisely the operation a policy should gate.",
+        "comment": "Managed secret stores and keychains. CLASSIFY-ONLY, deliberately. `gcloud secrets versions access`, `aws secretsmanager get-secret-value`, `vault kv get` and `kubectl get secrets` are the SANCTIONED way to fetch a secret: a deploy agent reading its own database password out of Secrets Manager is the system working as designed, and blocking it breaks the deploy. Naming the class is the deliverable here, because that is what a require_approval policy binds to. Contrast cred.sensitive_file, which does enforce: there is no sanctioned workflow for catting a private key out of ~/.ssh, so the two are not the same fact.",
         "match": {
           "args_pattern": "(?i)(secretsmanager\\s+get-secret-value|secrets\\s+versions\\s+access|auth\\s+print-access-token|account\\s+get-access-token|get\\s+secrets?\\b|kv\\s+get\\b|find-generic-password|find-internet-password|--export-secret-keys)"
-        },
-        "detect": {
-          "score": 0.9
         }
       },
       {

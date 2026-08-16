@@ -37,13 +37,15 @@ NEW_CLASSES = ("escalate", "persist", "evade", "infra_destruction",
                "destructive_filesystem")
 
 # Stage 3 exit numbers. `>=` throughout: these are floors, not targets.
-# Raised 146/144 -> 171/171 by the egress family (see test_shell_egress.py):
-# the four cred.* rules that classified critical now carry `detect`, plus three
-# egress rules and four egress combinations.
-BASELINE_DETECTED, BASELINE_BLOCKED = 171, 171
+# Raised 146/144 -> 160/160 by the egress family (see test_shell_egress.py):
+# three of the four cred.* rules that classified critical now carry `detect`,
+# plus three egress rules and four egress combinations.
+BASELINE_DETECTED, BASELINE_BLOCKED = 160, 160
 # Stage 2 floors that must not regress while the new classes are added.
-# credential_access 29 -> 45 for the same reason.
-EXECUTE_FLOOR, CREDENTIAL_FLOOR = 24, 45
+# credential_access 29 -> 35 for the same reason. It is 35 and not 45 because
+# cred.secret_manager stays CLASSIFY-ONLY on purpose: a managed secret store is
+# the sanctioned way to fetch a secret, so blocking it breaks real deploys.
+EXECUTE_FLOOR, CREDENTIAL_FLOOR = 24, 35
 
 # Per-class classification floors. Every gap below is a DELIBERATE taxonomy call,
 # named with its reason, so a real regression appears as a count drop rather than

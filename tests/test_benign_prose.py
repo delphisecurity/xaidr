@@ -44,10 +44,10 @@ GENRES = {
 # Baseline the attack corpus must hold at or improve on. Measured on the tool
 # path (`scan_tool_call("run_command", …)`), the same method as
 # tests/fixtures/shell_baseline.md.
-# Raised 90/88 -> 171/171 across stages 2/3 and the egress family. These are
+# Raised 90/88 -> 160/160 across stages 2/3 and the egress family. These are
 # floors on the SAME method, so they are comparable to shell_baseline.md's 90/88.
-ATTACK_BASELINE_DETECTED = 171
-ATTACK_BASELINE_BLOCKED = 171
+ATTACK_BASELINE_DETECTED = 160
+ATTACK_BASELINE_BLOCKED = 160
 
 # Prose that still BLOCKS, listed explicitly with the reason so a NEW regression
 # shows up as a new entry rather than hiding inside a percentage. The residue
