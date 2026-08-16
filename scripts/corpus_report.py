@@ -55,6 +55,25 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURE = os.path.join(REPO_ROOT, "tests", "fixtures", "shell_corpus.json")
 PROSE_TEST = os.path.join(REPO_ROOT, "tests", "test_benign_prose.py")
 
+# Measure THIS working tree, not whatever `xaidr` happens to be installed.
+#
+# Run as documented (`python scripts/corpus_report.py` from the repo root),
+# sys.path[0] is the SCRIPT's directory, scripts/, and the repo root never
+# reaches the path at all. Any unrelated `xaidr` in site-packages therefore
+# wins, and the report silently describes a package the contributor is not
+# editing. That is the worst possible failure for a script whose whole job is
+# to say what a rule change did: a wrong table looks exactly like a right one.
+# (On this repo it did not even stay silent: an older, unrelated `xaidr`
+# raised TypeError on the `enforcement_mode` keyword.)
+#
+# The header prints the resolved package path and version, so the table always
+# names what produced it and this line can never regress unnoticed.
+#
+# CI is unaffected in substance: the `corpus` job checks out the PR and runs
+# `pip install .` from the same tree, so both copies are the same code. This
+# only guarantees WHICH one is measured.
+sys.path.insert(0, REPO_ROOT)
+
 WIDTH = 78
 
 
@@ -68,6 +87,31 @@ def _quiet(fn, *args, **kwargs):
     """
     with contextlib.redirect_stdout(io.StringIO()):
         return fn(*args, **kwargs)
+
+
+def _package_provenance():
+    """Where the measured `xaidr` came from, and whether it is this repo.
+
+    Returns (path, version, is_repo_copy). Never raises: a report that cannot
+    name its package still prints, it just says so.
+    """
+    try:
+        import xaidr
+        raw = getattr(xaidr, "__file__", None)
+        version = getattr(xaidr, "__version__", "unknown")
+    except Exception as exc:  # pragma: no cover - main() already imported it
+        return f"<unresolvable: {exc}>", "unknown", False
+    if not raw:
+        # abspath("") is the CWD, which would name the repo by accident.
+        return "<no __file__>", version, False
+    path = os.path.abspath(raw)
+    # commonpath raises across Windows drive letters; a mismatch is the answer
+    # we want there anyway.
+    try:
+        is_repo_copy = os.path.commonpath([path, REPO_ROOT]) == REPO_ROOT
+    except ValueError:
+        is_repo_copy = False
+    return path, version, is_repo_copy
 
 
 def _pct(hit: int, total: int) -> str:
@@ -166,9 +210,16 @@ def print_report(results, documented, doc_note) -> bool:
     """Print the table. Returns True when every benign gate holds."""
     by_class = results["by_class"]
 
+    pkg_path, pkg_version, pkg_is_repo = _package_provenance()
+
     print(_rule("="))
     print("xaidr corpus report")
     print(f"fixture: {os.path.relpath(FIXTURE, REPO_ROOT)}")
+    print(f"package: {pkg_path}")
+    print(f"version: {pkg_version}")
+    if not pkg_is_repo:
+        print(f"WARNING: that package is NOT this repository ({REPO_ROOT}).")
+        print("         The numbers below describe the installed copy, not your changes.")
     print(_rule("="))
     print()
 
