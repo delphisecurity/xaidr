@@ -266,6 +266,7 @@ layer:
 | **Dangerous tool use** | destructive commands, code execution, and privilege escalation caught in the tool *arguments*, before the tool runs |
 | **Sensitive data leakage** | credentials, API keys, private keys, payment cards, SSNs, connection strings and bulk-contact exfiltration, on input and output |
 | **Secrets leaving in a tool argument** | a live key in an outbound argument is caught before the call runs: see [Secrets in tool arguments](#secrets-in-tool-arguments) |
+| **Host data leaving over a shell command** | three families, added in 1.1.0: an archive stream piped into a network sink, a credential file handed to a remote-copy tool, and a cloud-storage upload whose source is a sensitive path. Each requires a sink *and* an object, so reading a log is not the same fact as shipping one |
 | **A2A protocol abuse** | see [A2A protocol inspection](#a2a-protocol-inspection) |
 | **Forged trust & delegation injection** | messages that assert privileged identity or fabricate a trusted result to steer your agent |
 | **Cross-agent privilege escalation** | a low-privilege agent inducing a high-privilege peer to act for it. A *control*, not a detection: see [Agent privilege tiers](#agent-privilege-tiers) |
@@ -278,6 +279,83 @@ signal alone stays quiet while corroborating signals escalate together.
 
 You interact with the result, not the layers: one `.action`, one `.score`, and
 the list of what fired.
+
+
+## Coverage and limitations
+
+Every number here is measured on the committed corpus at
+`tests/fixtures/shell_corpus.json` (281 shell attacks, 74 benign commands, 66
+benign prose passages) and is reproducible from a clone with
+`python -m pytest tests/test_shell_egress.py tests/test_shell_classes_stage3.py
+tests/test_benign_prose.py`. The corpus is checked in, so you can read what is
+being claimed rather than taking the percentage on trust.
+
+**Coverage is reported by family, not per command, and deliberately so.** A
+published list of which individual commands do and do not fire is an evasion map.
+What follows is the shape of the coverage.
+
+| | attacks | classified | blocked |
+|---|---:|---:|---:|
+| Total | 281 | 267 (95%) | 160 (57%) |
+
+Those two columns are different capabilities and the gap between them is the
+main thing to understand before you deploy this.
+
+**Classification is broad. Enforcement is narrow, on purpose.** 95% of the
+corpus is assigned an impact class and tier; 57% is blocked outright with no
+configuration. The difference is the set of operations that are genuinely
+ambiguous. A `terraform destroy`, a `systemctl enable`, a `sudo`, a
+`kubectl get secrets` are all real things a deploy agent does, so the shipped
+ruleset names the class and leaves the decision to a policy you write. If you
+want those gated, bind a `require_approval` rule to the class as shown in
+[Policies](#policies). Running with detection alone and no policy means the
+classify-only majority is observed and allowed.
+
+**Where enforcement is strong.** Irreversible local filesystem damage and
+log or audit tampering are the two families where nearly every corpus case
+blocks with no configuration. Credential-file reads, privilege escalation via
+setuid or container escape, and the three egress families added in 1.1.0 also
+block.
+
+**Where it is weak, and why.**
+
+- `infra_destruction` blocks **nothing** in the shipped configuration: 8 of 8
+  corpus cases classify, 0 block. This is a design decision, not a gap in the
+  patterns. Destroying managed infrastructure is indistinguishable from a
+  legitimate teardown at the command level, so every rule in that family is
+  classify-only and the family is unusable as a control until you attach a
+  policy to it. If you run infrastructure agents, this is the family to gate
+  first.
+- `discovery` is the weakest family by both measures: 4 of 11 classify and 2
+  block. Enumeration is low-tier by intent, because reconnaissance overlaps
+  almost entirely with ordinary operational inspection, and a ruleset that
+  flagged it would flag most of what a healthy agent does.
+- `execute` and `escalate` block well under half their corpus cases (24 of 59
+  and 11 of 37). Most of the remainder classify, so they are reachable by
+  policy, but they are not caught by default.
+
+**False positives that exist today.** The benign gates are asserted on every
+run: 0 of 74 benign shell commands score above zero, and 1 of 66 benign prose
+passages blocks. That one is `bp-055`, and it is documented by ID with its cause
+in `tests/test_benign_prose.py`. It is prose that discusses credential
+exfiltration in wording that remains block-worthy after every quoted command is
+removed, which is the residue guard behaving correctly rather than a pattern
+misfiring. It is listed rather than suppressed so that a second one shows up as a
+new entry instead of disappearing into a percentage.
+
+There is also one enforcement over-reach worth knowing about: an archive stream
+piped into a raw network socket blocks whatever the source directory is, so an
+operator's own `tar` over `netcat` backup is blocked too. That rule keys on the
+relationship instead of the object, because what gets archived is unbounded and
+requiring a named sensitive path would miss the whole-filesystem case. It is
+asserted as a known cost in `tests/test_shell_egress.py`.
+
+**What the corpus does not tell you.** It is a shell-command corpus. It says
+nothing about coverage of prompt injection, jailbreaks, or A2A abuse, which are
+exercised by other test files and are not reduced to a single number here. And a
+corpus is a sample: 57% on this one is not a claim about your traffic. Run
+[monitor mode](#deployment-modes-and-tuning) against your own workload before
+enabling hard blocking.
 
 
 ## Drop-in protection
@@ -1316,7 +1394,7 @@ differ; the table is the number to design against, not the best case.
 - **Malformed content is safe.** Badly formed input cannot turn the sensor into
   a denial-of-service risk.
 
-Verified with `python -m pytest -q` in a clean virtual environment: **2251
+Verified with `python -m pytest -q` in a clean virtual environment: **2256
 passed, 2 skipped**, identical across three consecutive runs with test ordering
 randomised. The suite covers the public scan APIs, wrappers, policy, provenance,
 reporters, telemetry schema, and resilience behavior.
