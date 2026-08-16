@@ -153,6 +153,16 @@ _URL_DANGER_CATEGORIES = frozenset({
     "system_prompt_leak",
 })
 
+# Paid categorizes destructive-command / shell-in-args rules under asi02/asi05/
+# agentic_abuse (not code_execution like open), so a category-only filter misses
+# a decoded "rm -rf" / "curl|bash". Mirror the tool-arg path: also admit any
+# HIGH-confidence L1 hit (>= this) regardless of category — that captures
+# TOOL_destructive_args (0.95), ASI05_pipe_to_shell (0.9), MCP_shell_injection
+# (0.93) while excluding low-confidence signals (a benign external URL at 0.6) and
+# DLP/PII (a benign email/SSN-shaped value) so benign decoded URLs don't FP.
+_URL_HIGH_SCORE = 0.9
+_URL_EXCLUDE_CATEGORIES = frozenset({"pii_detected"})
+
 # Need at least a couple of escapes before it is worth decoding (a stray "50% off"
 # is not URL-encoding). Bounds the work; unquote itself is linear.
 _MIN_ESCAPES = 2
@@ -190,6 +200,7 @@ def url_decoded_danger(text: str) -> float:
     danger = [
         t.score for t in scan_l1(normalized).threats
         if t.category in _URL_DANGER_CATEGORIES
+        or (t.score >= _URL_HIGH_SCORE and t.category not in _URL_EXCLUDE_CATEGORIES)
     ]
     return max(danger, default=0.0)
 
