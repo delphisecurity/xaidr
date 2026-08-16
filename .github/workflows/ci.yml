@@ -2,16 +2,16 @@ name: CI
 
 # Regression gate — HARD MERGE GATE. Runs the full pytest suite (Option-A smoke
 # coverage + the ReDoS/provenance security invariants + the TRUE-split A2A
-# oracle) on every PR and on every push to main. A failure BLOCKS the merge.
+# oracle) and the shell-corpus report on every PR and on every push to main. A
+# failure BLOCKS the merge.
 #
 # SECURITY: the trigger is `pull_request`, deliberately NOT
 # `pull_request_target`. `pull_request_target` checks out the contributor's
 # branch but runs it with the BASE repository's token and write permissions,
 # which hands any fork author a path to the repo's credentials. For a security
 # product that is not an acceptable trade for the convenience of secret access.
-# This workflow needs no secrets at all — the package has zero required runtime
-# dependencies and the tests are entirely local — so there is nothing
-# `pull_request_target` would buy.
+# This workflow needs no secrets at all (see the `corpus` job's rationale), so
+# there is nothing `pull_request_target` would buy.
 on:
   pull_request:
   push:
@@ -126,6 +126,43 @@ jobs:
       # verified suite count is measured with.
       - name: Run test suite
         run: python -m pytest -q
+
+  # ── The corpus report, printed into the log ────────────────────────────────
+  # A reviewer reading a rule PR should see what the rule did to the corpus
+  # without checking anything out, so the table goes in the job log. The script
+  # exits non-zero if a benign gate is violated (a benign command scored or
+  # blocked, or an undocumented prose entry blocked), which fails this job.
+  #
+  # NO SECRETS, and that is a property of the code rather than a promise: the
+  # package has zero required runtime dependencies, the corpus is a local
+  # fixture, and the script builds the sensor with a null reporter so nothing is
+  # emitted anywhere. Nothing here reads `secrets.*` or a token — which matters
+  # because a pull_request run from a fork gets none.
+  corpus:
+    name: corpus report (py${{ matrix.python-version }})
+    needs: versions
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ fromJSON(needs.versions.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      # The report needs the package and nothing else — no pytest, no extras.
+      - name: Install (zero third-party deps)
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+
+      - name: Corpus report (fails on a benign-gate violation)
+        run: python scripts/corpus_report.py
 
   # ── Rules-in-wheel guard (carries Step 1's package-data protection into CI) ─
   # A future change must never silently drop the rules/*.json package data and
