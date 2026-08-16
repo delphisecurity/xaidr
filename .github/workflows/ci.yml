@@ -1,33 +1,97 @@
 name: CI
 
-# Regression gate — HARD RELEASE GATE. Runs the full pytest suite (Option-A smoke
-# coverage + the ReDoS/provenance security invariants + the TRUE-split A2A oracle)
-# on every push and PR. A failure BLOCKS the merge. CI wiring only — no product
-# behavior changes here.
+# Regression gate — HARD MERGE GATE. Runs the full pytest suite (Option-A smoke
+# coverage + the ReDoS/provenance security invariants + the TRUE-split A2A
+# oracle) on every PR and on every push to main. A failure BLOCKS the merge.
+#
+# SECURITY: the trigger is `pull_request`, deliberately NOT
+# `pull_request_target`. `pull_request_target` checks out the contributor's
+# branch but runs it with the BASE repository's token and write permissions,
+# which hands any fork author a path to the repo's credentials. For a security
+# product that is not an acceptable trade for the convenience of secret access.
+# This workflow needs no secrets at all — the package has zero required runtime
+# dependencies and the tests are entirely local — so there is nothing
+# `pull_request_target` would buy.
 on:
-  push:
   pull_request:
+  push:
+    branches: [main]
 
 # Cancel superseded runs on the same ref to keep CI fast.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Read-only by default, set explicitly rather than inherited: no job here writes
+# to the repo, publishes a package, or posts a comment.
 permissions:
   contents: read
 
 jobs:
+  # ── Which Pythons do we claim to support? Ask pyproject, do not hardcode ────
+  # `requires-python` is the floor and the `Programming Language :: Python ::`
+  # classifiers are the explicit claim. The matrix is every classifier at or
+  # above the floor, so bumping either one in pyproject.toml moves CI with it
+  # and the two can never quietly disagree.
+  versions:
+    name: derive Python matrix from pyproject
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.derive.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Derive supported versions
+        id: derive
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, re, sys, tomllib
+
+          with open("pyproject.toml", "rb") as fh:
+              cfg = tomllib.load(fh)["project"]
+
+          spec = cfg["requires-python"]
+          m = re.search(r">=\s*(\d+)\.(\d+)", spec)
+          if not m:
+              sys.exit(f"no '>=' floor in requires-python: {spec!r}")
+          floor = (int(m.group(1)), int(m.group(2)))
+
+          claimed = sorted(
+              {tuple(int(p) for p in c.group(1, 2))
+               for c in (re.fullmatch(r"Programming Language :: Python :: (\d+)\.(\d+)", s)
+                         for s in cfg.get("classifiers", []))
+               if c}
+          )
+          versions = [f"{a}.{b}" for a, b in claimed if (a, b) >= floor]
+          if not versions:
+              versions = ["%d.%d" % floor]
+
+          print(f"requires-python = {spec!r} -> floor {floor[0]}.{floor[1]}", file=sys.stderr)
+          print(f"classifiers claim: {[f'{a}.{b}' for a, b in claimed]}", file=sys.stderr)
+          print(f"testing on: {versions}", file=sys.stderr)
+          print(f"matrix={json.dumps(versions)}")
+          PY
+
+      - name: Show the chosen matrix
+        run: echo "matrix = ${{ steps.derive.outputs.matrix }}"
+
   # ── Suite across the supported Python versions, in TWO install configs ──────
   # base = zero third-party deps (proves the core suite passes and the [trace]
   #        tests SKIP via importorskip, not fail).
   # full = base + [http,trace,dev] extras (runs the trace-context tests too).
   test:
     name: pytest (py${{ matrix.python-version }}, ${{ matrix.config }})
+    needs: versions
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ${{ fromJSON(needs.versions.outputs.matrix) }}
         config: [base, full]
     steps:
       - uses: actions/checkout@v4
@@ -54,8 +118,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install ".[http,trace,dev]"
 
+      # `python -m pytest`, NOT bare `pytest`: the -m form puts the working
+      # directory on sys.path, and tests/test_adi_fix_a.py imports
+      # `tests.adi_corpus_harness`. The console-script form does not, so it dies
+      # at collection with ModuleNotFoundError: No module named 'tests' against
+      # any non-editable install. This is also the invocation the README's
+      # verified suite count is measured with.
       - name: Run test suite
-        run: pytest -q
+        run: python -m pytest -q
 
   # ── Rules-in-wheel guard (carries Step 1's package-data protection into CI) ─
   # A future change must never silently drop the rules/*.json package data and
