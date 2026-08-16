@@ -1534,6 +1534,20 @@ without also stopping on `flagged`. The protected HTTP wrapper raises
 
 ---
 
+## Security
+
+To report a vulnerability, use [GitHub private vulnerability
+reporting](https://github.com/delphisecurity/xaidr/security/advisories/new) or
+email security@delphisecurity.ai. Please do not open a public issue for one.
+
+[SECURITY.md](SECURITY.md) has the details, including the distinction that
+matters for a detection tool: a **bypass** of a shipped rule is a vulnerability
+and goes private, while a **missed detection** is a known, measured, published
+gap and belongs in the public tracker. [Coverage and
+limitations](#coverage-and-limitations) is the honest account of which is which.
+
+---
+
 ## License
 
 Licensed under the [Apache License, Version 2.0](https://github.com/delphisecurity/xaidr/blob/main/LICENSE).

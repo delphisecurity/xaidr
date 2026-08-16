@@ -1,0 +1,139 @@
+name: Missed detection
+description: Something dangerous that xaidr does not catch, or catches too weakly
+title: "[missed] "
+labels: ["missed-detection"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this.
+
+        **A missed detection is not a security vulnerability.** The shipped
+        ruleset blocks 160 of 281 attacks in the committed corpus, and that
+        number is published so nobody has to discover it by surprise. A command
+        we do not catch is a known, measured, open gap, and it belongs here in
+        the open where it can be discussed and measured.
+
+        A **bypass** is different: input a shipped rule is meant to catch,
+        dressed up so it is not caught. That is a vulnerability. Please close
+        this form and use
+        [private reporting](https://github.com/delphisecurity/xaidr/security/advisories/new)
+        instead. If you are unsure which one you have, send it privately and we
+        will move it.
+
+  - type: textarea
+    id: payload
+    attributes:
+      label: What is not caught
+      description: >
+        The smallest input that shows it. A shell command, a SQL statement, a
+        prompt, or a tool call we can paste into a Python prompt.
+      placeholder: |
+        s.scan_tool_call("run_command", {"command": "..."})
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: What xaidr returned
+      description: >
+        Paste the verdict. `result.action`, `result.score`, `result.rules`, and
+        the impact class if you checked it.
+      placeholder: |
+        action=allowed  score=0.00  rules=[]
+        classify(...) -> ('unknown', 'medium')
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: What an attacker gets
+      description: >
+        One or two sentences. What goes wrong if an agent runs this, and why it
+        is worth catching.
+    validations:
+      required: true
+
+  - type: textarea
+    id: benign_lookalike
+    attributes:
+      label: A benign lookalike
+      description: >
+        REQUIRED, and this is the most important field on the form.
+
+        Give us the closest thing you can think of that is structurally similar
+        and completely legitimate: real work a real agent does that a careless
+        rule would also catch.
+
+        This is not busywork and it is not a test of your good faith. Our benign
+        gate exists because a set of rules once made ordinary prose about
+        dangerous commands block, 30 of 66 passages, and the obvious fix for it
+        would have been a bypass. A rule keyed on a spelling looks identical to
+        a rule keyed on behaviour until someone writes down the lookalike. Your
+        lookalike is what tells us which one a fix would be, and it usually ends
+        up in the corpus as a permanent assertion.
+
+        If you genuinely cannot think of one, say so and say why: "any use of
+        this flag is destructive" is a real answer, and it is a strong argument
+        for enforcing rather than classifying.
+      placeholder: |
+        e.g. for `rm -rf /`:  `rm -rf ./build`, `rm -rf node_modules`
+        e.g. for `DELETE FROM users WHERE 1=1`:  `DELETE FROM sessions WHERE expires_at < now()`
+    validations:
+      required: true
+
+  - type: dropdown
+    id: family
+    attributes:
+      label: Which family does this belong to
+      description: >
+        Best guess is fine. `infra_destruction` is classify-only by design, so a
+        report there is about classification or policy, not about blocking.
+      options:
+        - credential_access
+        - destructive_filesystem
+        - discovery
+        - escalate
+        - evade
+        - execute
+        - exfiltration
+        - infra_destruction
+        - obfuscation
+        - persist
+        - prompt injection / jailbreak
+        - A2A protocol abuse
+        - other or not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`python -c \"import xaidr; print(xaidr.__version__)\"`"
+      placeholder: "1.1.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: >
+        Configuration needed to reproduce, a policy file, related reports, or a
+        proposed rule if you have one.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you file
+      options:
+        - label: This is a missed detection, not a bypass of a rule that already exists.
+          required: true
+        - label: I have given a benign lookalike, or explained why there is not one.
+          required: true
