@@ -1600,5 +1600,110 @@
         }
       }
     ]
+  },
+  "sql_classifiers": {
+    "description": "Classifies raw SQL carried in a tool ARGUMENT VALUE, by its parsed shape (statement + object kind + bounding predicate) rather than by matching the raw string. Fed from xaidr.scanner.sql_parse.parse_sql. Rules are evaluated in order per STATEMENT; first match wins for that statement. The call's class is the highest-tier class across all statements, the same aggregation command_classifiers uses.\n\nWHY A SEPARATE SECTION. An agent that runs SQL does not go through a shell: it calls run_sql(query=...) and the statement arrives as a plain argument. The shell classifier asks 'what binary is this', which is right for `psql -c \"DROP TABLE users\"` and meaningless for `DROP TABLE users`. The two readers sit side by side and never overlap, because a value only reaches this one when it BEGINS with a SQL statement keyword.",
+    "match_fields": {
+      "statement": "glob list against the lowercased leading verb",
+      "object_kind": "glob list against the object the grammar names (table, database, schema, column, ...)",
+      "object": "glob list against the identifier, when one was found",
+      "predicate": "list of none|bounded|tautology; the bounding-predicate state of the statement",
+      "raw_pattern": "regex against the statement text, comments stripped (use sparingly)"
+    },
+    "aggregation": {
+      "rule": "The call's impact_class is the HIGHEST-TIER class found across ALL statements in the value.",
+      "tier_order": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "detection_rule": "Identical to command_classifiers: a rule carrying a `detect` block also produces a DETECTION finding on the tool-argument path and scores like an L1 threat under its impact_class. Rules WITHOUT `detect` classify only, so a policy can require approval, and never block on their own."
+    },
+    "design_note": "THE SPLIT, AND WHY IT SITS WHERE IT DOES. The sharp signal for DML is not the statement type, it is whether the statement is BOUNDED. `DELETE` is how an expired-session sweep is written; `UPDATE` is how a last-seen timestamp is set. Blocking on the verb would break both on day one. So DELETE and UPDATE are read through their predicate:\n  bounded    routine. Not classified destructive at all.\n  none       unbounded. Classified critical, CLASSIFY-ONLY, because clearing a table on purpose is real work (`DELETE FROM sessions`, `UPDATE feature_flags SET enabled = false`) and is structurally identical to the malicious version. This is the same argument infra_destruction makes.\n  tautology  unbounded while DISGUISED as bounded. BLOCKS. This is the one shape with no legitimate author: someone clearing a table writes no WHERE clause, and an ORM writes `WHERE id = ?`. A predicate that is always true is what you get when something wanted the effect of no predicate while looking like it had one.\n\nFor DDL there is no predicate and the statement type is the whole signal, so DROP and TRUNCATE classify at critical and never block. That is not leniency, it is PARITY: infra.database_drop already classifies `psql -c \"DROP TABLE users\"` as infra_destruction and lets it through, and a ruleset where the same statement blocks through run_sql but passes through psql is both incoherent and a bypass by refactoring.",
+    "rules": [
+      {
+        "id": "sql.schema_drop",
+        "impact_class": "infra_destruction",
+        "impact_tier": "critical",
+        "comment": "CLASSIFY-ONLY. `DROP TABLE`, `DROP DATABASE`, `DROP SCHEMA` are how a migration and a teardown are written, and only the operator knows which environment is expendable. Exact parity with infra.database_drop on the shell path, which draws the same line for the same reason. Gate with require_approval on impact_class=infra_destruction.",
+        "match": {
+          "statement": [
+            "drop"
+          ],
+          "object_kind": [
+            "table",
+            "database",
+            "schema",
+            "keyspace",
+            "index",
+            "view",
+            "materialized view",
+            "tablespace",
+            "sequence"
+          ]
+        }
+      },
+      {
+        "id": "sql.truncate",
+        "impact_class": "infra_destruction",
+        "impact_tier": "critical",
+        "comment": "CLASSIFY-ONLY. TRUNCATE empties a table irreversibly, and is also the standard way a test fixture resets and an ETL job reloads. infra.database_drop already lists `truncate table` as classify-only on the shell path; same fact, same answer.",
+        "match": {
+          "statement": [
+            "truncate"
+          ]
+        }
+      },
+      {
+        "id": "sql.tautological_mutation",
+        "impact_class": "delete",
+        "impact_tier": "critical",
+        "comment": "BLOCKS. A DELETE or UPDATE whose WHERE clause is always true: `WHERE 1=1`, `WHERE true`, `WHERE 'a'='a'`, `WHERE id = id`, `... OR 1=1`. Unbounded while wearing the costume of a bounded query. There is no legitimate author for this shape: an operator clearing a table writes no WHERE clause at all, and an ORM writes a real predicate. It is what an injected or hallucinated statement looks like when it wants the effect of no predicate. The tautology test runs on the WHERE CLAUSE ONLY, so `SET hits = hits + 1` in an ordinary increment is untouched.",
+        "match": {
+          "statement": [
+            "delete",
+            "update"
+          ],
+          "predicate": [
+            "tautology"
+          ]
+        },
+        "detect": {
+          "score": 0.9
+        }
+      },
+      {
+        "id": "sql.unbounded_mutation",
+        "impact_class": "delete",
+        "impact_tier": "critical",
+        "comment": "CLASSIFY-ONLY. A DELETE or UPDATE with no WHERE clause rewrites every row. `DELETE FROM sessions` (force a re-login) and `UPDATE feature_flags SET enabled = false` (a kill switch) are real operations an agent performs on purpose, and nothing in the statement distinguishes them from `UPDATE accounts SET balance = 0`. Same argument as infra_destruction: name the class at critical, let a policy decide. Deliberately ordered AFTER sql.tautological_mutation, which is the same family with a signal this one does not have.",
+        "match": {
+          "statement": [
+            "delete",
+            "update"
+          ],
+          "predicate": [
+            "none"
+          ]
+        }
+      },
+      {
+        "id": "sql.grant_privilege",
+        "impact_class": "escalate",
+        "impact_tier": "high",
+        "comment": "CLASSIFY-ONLY. GRANT and CREATE USER/ROLE hand out database privilege. Provisioning is a normal migration step, so this names the class for a policy rather than blocking. Listed after the destructive rules so a statement that is both is read as the destructive one.",
+        "match": {
+          "statement": [
+            "grant",
+            "create"
+          ],
+          "object_kind": [
+            "role",
+            "user"
+          ]
+        }
+      }
+    ]
   }
 }

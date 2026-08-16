@@ -24,7 +24,9 @@ from .authz import classify
 from .authz.classifier import (
     SHELL_ARG_KEYS as _SHELL_ARG_KEYS,
     classify_command_findings as _command_findings,
+    classify_sql_findings as _sql_findings,
     extract_shell_command as _extract_shell_command,
+    extract_sql as _extract_sql,
 )
 from .circuit_breaker import (
     CIRCUIT_OPEN_CATEGORY,
@@ -1174,6 +1176,26 @@ class DelphiSensor:
                 # destroy`, `systemctl enable`, `sudo`) stays a policy decision.
                 # Additive to `danger`, so this can only raise a verdict.
                 for f in _command_findings(shell_command):
+                    if f["rule"] in {x.rule for x in danger}:
+                        continue
+                    danger.append(_StructuralThreat(
+                        rule=f["rule"], category=f["impact_class"], score=f["score"]
+                    ))
+
+            # STRUCTURAL findings from SQL in an argument value. Deliberately
+            # OUTSIDE the `if shell_command:` block above: an agent runs SQL by
+            # calling run_sql(query=…), not through a shell, so gating this on the
+            # six SHELL_ARG_KEYS would make the whole surface unreachable, which
+            # is exactly the gap this closes. extract_sql looks at every key and
+            # gates on the VALUE beginning with a SQL statement instead.
+            #
+            # Same discipline as the command findings: only rules carrying a
+            # `detect` block appear, so a migration's `DROP TABLE` classifies for
+            # policy and does not block, and additive to `danger`, so this can
+            # only raise a verdict and never lower one.
+            sql_statement = _extract_sql(arguments or {})
+            if sql_statement:
+                for f in _sql_findings(sql_statement):
                     if f["rule"] in {x.rule for x in danger}:
                         continue
                     danger.append(_StructuralThreat(

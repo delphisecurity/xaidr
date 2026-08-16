@@ -350,6 +350,35 @@ relationship instead of the object, because what gets archived is unbounded and
 requiring a named sensitive path would miss the whole-filesystem case. It is
 asserted as a known cost in `tests/test_shell_egress.py`.
 
+**Destructive database statements.** An agent that runs SQL does not go through
+a shell — it calls `run_sql(query=...)` — so the statement arrives as an
+ordinary argument value and the shell reader never saw it. That surface is now
+read directly: SQL is classified by its parsed shape regardless of the tool's
+name or which argument key carries it. There is no conventional name for the key
+that carries SQL, and an allowlist of key names is a gate the caller picks the
+combination to. The gate is the *value*, which must begin with a SQL statement,
+so prose that merely mentions `DROP TABLE` and a `psql -c "..."` command are both
+left to the paths that already handle them.
+
+The same classify/block split applies here, for the same reason it applies
+above. `DROP` and `TRUNCATE` classify at critical and block nothing by default:
+dropping a table is how a migration and a teardown are both written, and only
+you know which database is expendable — the identical argument `terraform
+destroy` gets. A `DELETE` or `UPDATE` is read through its bounding predicate
+rather than its verb, because `DELETE FROM sessions WHERE expires_at < now()` is
+routine and blocking on the verb would break every application on day one;
+unbounded mutations classify at critical and are left to a policy. The one shape
+that blocks outright is a tautological `WHERE` — `WHERE 1=1`, `WHERE true`,
+`WHERE id = id`. It has no legitimate author: an operator clearing a table writes
+no `WHERE` at all, and an ORM writes a real predicate, so a predicate that is
+always true is what you get when something wanted the effect of no predicate
+while looking like it had one.
+
+Which statements fire is reported by family here and not enumerated, the same
+discipline the shell families follow. These cases are not part of the shell
+corpus and are not counted in the table above; they are asserted in
+`tests/test_sql_classes.py`.
+
 **What the corpus does not tell you.** It is a shell-command corpus. It says
 nothing about coverage of prompt injection, jailbreaks, or A2A abuse, which are
 exercised by other test files and are not reduced to a single number here. And a
@@ -1394,7 +1423,7 @@ differ; the table is the number to design against, not the best case.
 - **Malformed content is safe.** Badly formed input cannot turn the sensor into
   a denial-of-service risk.
 
-Verified with `python -m pytest -q` in a clean virtual environment: **2256
+Verified with `python -m pytest -q` in a clean virtual environment: **2354
 passed, 2 skipped**, identical across three consecutive runs with test ordering
 randomised. The suite covers the public scan APIs, wrappers, policy, provenance,
 reporters, telemetry schema, and resilience behavior.
