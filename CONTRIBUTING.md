@@ -8,7 +8,7 @@ request.
 Not here. `xaidr` is a security product, so a bypass filed in the public tracker
 is a bypass published. Use [GitHub private vulnerability
 reporting](https://github.com/delphisecurity/xaidr/security/advisories/new), or
-email security@delphisecurity.ai.
+email support@delphisecurity.ai.
 
 [SECURITY.md](SECURITY.md) draws the line that matters: a **bypass** is a
 vulnerability and goes private, a **missed detection** is a known measured gap
