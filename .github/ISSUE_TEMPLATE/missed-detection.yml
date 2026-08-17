@@ -114,7 +114,7 @@ body:
     attributes:
       label: Version
       description: "`python -c \"import xaidr; print(xaidr.__version__)\"`"
-      placeholder: "1.1.0"
+      placeholder: "1.2.0"
     validations:
       required: true
 

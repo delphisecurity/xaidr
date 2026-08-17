@@ -23,7 +23,7 @@ of `scripts/corpus_report.py`, both performed against this working tree.
 | cpu count | 10 |
 | python | CPython 3.12.2 |
 | package | `/Users/anirudhkotaru/opena2a/xaidr/__init__.py` (the repository tree, not an installed copy) |
-| version | 1.1.0 |
+| version | 1.2.0 |
 
 ## What was tested
 
@@ -51,25 +51,25 @@ three are shown, because the run-to-run spread is part of the answer:
 
 | repeat | median | p95 | p99 | max | n |
 |---|---:|---:|---:|---:|---:|
-| #1 | 0.39 | 0.56 | 0.61 | 0.93 | 700 |
-| #2 | 0.43 | 0.62 | 0.69 | 0.80 | 700 |
-| #3 | 0.40 | 0.57 | 0.61 | 0.72 | 700 |
+| #1 | 0.40 | 0.56 | 0.63 | 0.84 | 700 |
+| #2 | 0.40 | 0.56 | 0.60 | 0.97 | 700 |
+| #3 | 0.41 | 0.58 | 0.62 | 0.86 | 700 |
 
-**Median 0.39 ms, p95 0.56 ms, p99 0.61 ms**, taking the best of the three
-repeats. The three agree to within 0.08 ms at every percentile, so on this
+**Median 0.40 ms, p95 0.56 ms, p99 0.63 ms**, taking the best of the three
+repeats. The three agree to within 0.03 ms at every percentile, so on this
 machine the figure is stable rather than cherry-picked.
 
 Per shape, last repeat:
 
 | shape | median | p95 |
 |---|---:|---:|
-| read_file, short path | 0.13 | 0.16 |
-| run_sql, bounded delete | 0.35 | 0.38 |
-| short user prompt | 0.38 | 0.42 |
-| run_command, destructive | 0.39 | 0.43 |
+| read_file, short path | 0.13 | 0.15 |
+| run_sql, bounded delete | 0.36 | 0.42 |
+| short user prompt | 0.39 | 0.48 |
+| run_command, destructive | 0.40 | 0.44 |
 | brief model answer | 0.44 | 0.49 |
-| run_command, benign | 0.51 | 0.59 |
-| small delegation envelope | 0.55 | 0.60 |
+| run_command, benign | 0.52 | 0.59 |
+| small delegation envelope | 0.56 | 0.62 |
 
 ## False positives, beside detection
 

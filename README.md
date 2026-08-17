@@ -14,7 +14,7 @@ leaves your process by default.
 
 **Measured on the committed corpus and one benchmark run:** 160 of 281 shell
 attacks blocked, 0 of 74 benign commands blocked, 1 of 66 benign prose passages
-blocked. Scan latency median 0.39 ms, p95 0.56 ms on ordinary agent traffic.
+blocked. Scan latency median 0.40 ms, p95 0.56 ms on ordinary agent traffic.
 Read [Coverage and limitations](#coverage-and-limitations) and
 [BENCHMARKS.md](BENCHMARKS.md), or run `python scripts/corpus_report.py` yourself.
 
@@ -1467,13 +1467,13 @@ ordinary agent traffic, 700 timed calls per repeat, three repeats:
 
 | | measured | budget |
 |---|---:|---:|
-| Median scan | **0.39 ms** | — |
+| Median scan | **0.40 ms** | — |
 | p95 | **0.56 ms** | — |
-| p99 | **0.61 ms** | **3 ms** |
+| p99 | **0.63 ms** | **3 ms** |
 
 The 3 ms p99 is a **ceiling**, about five times the measured p99. It is the
 number to design against; the measured column is what one machine actually did,
-not a promise about yours. The three repeats agree to within 0.08 ms at every
+not a promise about yours. The three repeats agree to within 0.03 ms at every
 percentile, and [BENCHMARKS.md](BENCHMARKS.md) carries all three, the machine
 they ran on, and the per-shape breakdown. Latency scales with input size and is
 bounded by a hard input ceiling and a wall-clock budget, so a pathologically
@@ -1507,7 +1507,7 @@ detection ones.
 - **Malformed content is safe.** Badly formed input cannot turn the sensor into
   a denial-of-service risk.
 
-Verified with `python -m pytest -q` in a clean virtual environment: **2437
+Verified with `python -m pytest -q` in a clean virtual environment: **2466
 passed, 2 skipped**, identical across three consecutive runs with test ordering
 randomised. The suite covers the public scan APIs, wrappers, policy, provenance,
 reporters, telemetry schema, and resilience behavior.
