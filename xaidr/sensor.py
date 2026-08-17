@@ -100,6 +100,44 @@ NOT_SCANNABLE_RULE = "INPUT_NOT_SCANNABLE"
 SCAN_ERROR_CATEGORY = "scan_error"
 SCAN_ERROR_RULE = "SCAN_FAILED_OPEN"
 
+# ── Tool-argument L1 category filter (single source of truth) ────────────────
+# scan_tool_call runs the SAME L1 ruleset over tool-argument text, but a tool
+# argument is not user chat: some categories are always an attack there, some
+# are ambiguous (attack vs a quotation in a doc an agent legitimately sends), and
+# some do not belong on this surface at all. That judgement was previously three
+# copies of an inline tuple that grew a category at a time and silently diverged;
+# these frozensets are now the ONE place it lives.
+#
+# BLOCK-tier: no benign reading in a tool argument. A shell/code-exec pattern, a
+# credential-file read, or an injection directive reaching a tool IS the attack,
+# so it BLOCKS in block mode (subject to the documentary-prose cap below).
+_TOOL_ARG_BLOCK_CATEGORIES = frozenset({
+    "code_execution", "excessive_agency", "prompt_injection", "credential_access",
+})
+
+# FLAG-tier: a REAL signal, but one whose argument is sometimes an attack and
+# sometimes content ABOUT an attack — `llm_prompt(prompt="you are now DAN")` is
+# an attack; `send_email(body="example DAN prompt for the deck")` is a quotation.
+# A hard block would false-positive on the security-doc case (the documentary cap
+# only lifts backtick-fenced quotations, not plain prose), so these SURFACE for
+# review rather than block. `data_exfiltration` already sat in this tier by name;
+# the jailbreak/leak/encoding/DoS/forged-trust categories join it — each fires on
+# the content path and was, until now, DROPPED entirely on the tool path (a
+# 0.96-scoring DAN persona returned allowed 0.0 as a tool argument). Restoring
+# them as flag-default un-drops the detection without the FP blast radius of a
+# block. pii_detected is DELIBERATELY absent — a customer email in a send_email
+# argument is the tool doing its job; see the DLP note below. llm09/llm02/eva003
+# (model-output moderation) and supply_chain (legit dependency installs) stay
+# filtered on purpose — out of this sensor's action-layer remit.
+_TOOL_ARG_FLAG_CATEGORIES = frozenset({
+    "data_exfiltration", "jailbreak", "system_prompt_leak", "encoding_evasion",
+    "dos_attempt", "forged_trust",
+})
+
+# The KEEP filter for the tool-argument L1 scan: a threat in neither tier is
+# discarded (PII and the out-of-remit categories). Block ∪ flag.
+_TOOL_ARG_KEEP_CATEGORIES = _TOOL_ARG_BLOCK_CATEGORIES | _TOOL_ARG_FLAG_CATEGORIES
+
 
 def _resolve_provenance(
     agent_id: str,
@@ -1050,9 +1088,12 @@ class DelphiSensor:
         if not _documentary_mention(raw_text):
             return False
         residue = self._arg_normalizer().normalize(_strip_code_spans(raw_text))
+        # The cap only lifts when the prose OUTSIDE the code span carries no
+        # BLOCK-tier danger. Flag-tier categories are excluded here on purpose: a
+        # jailbreak/leak string left in the residue never blocks anyway, so it
+        # must not be what keeps a benign documentary quotation from being lifted.
         return not any(
-            t.category in ("code_execution", "excessive_agency", "prompt_injection",
-                           "credential_access")
+            t.category in _TOOL_ARG_BLOCK_CATEGORIES
             for t in _scan_l1(residue[:_L1_MAX_SCAN_CHARS]).threats
         )
 
@@ -1131,10 +1172,7 @@ class DelphiSensor:
             for _idx, _win in _iter_scan_windows(normalized_args, _arg_scan_start):
                 danger.extend(
                     t for t in _scan_l1(_win).threats
-                    if t.category in (
-                        "code_execution", "excessive_agency", "prompt_injection",
-                        "credential_access", "data_exfiltration",
-                    )
+                    if t.category in _TOOL_ARG_KEEP_CATEGORIES
                 )
             # STRUCTURAL RE-SCAN. Everything above regexed the argument STRING, so
             # it matches famous spellings rather than behaviour: `rm -rf /` blocks
@@ -1159,10 +1197,7 @@ class DelphiSensor:
                     rebuilt = self._arg_normalizer().normalize(rebuilt)
                     danger.extend(
                         t for t in _scan_l1(rebuilt[:_L1_MAX_SCAN_CHARS]).threats
-                        if t.category in (
-                            "code_execution", "excessive_agency", "prompt_injection",
-                            "credential_access", "data_exfiltration",
-                        )
+                        if t.category in _TOOL_ARG_KEEP_CATEGORIES
                         and t.rule not in {x.rule for x in danger}
                     )
                 # STRUCTURAL findings from the impact-class ruleset. Everything
@@ -1201,19 +1236,31 @@ class DelphiSensor:
                     danger.append(_StructuralThreat(
                         rule=f["rule"], category=f["impact_class"], score=f["score"]
                     ))
-            # data_exfiltration is surfaced too (BS2) but is FLAG-DEFAULT: agents
-            # make legit outbound calls constantly, so an exfil signal in a tool
-            # arg flags for review, it does not block by default. pii_detected
-            # stays FILTERED — a benign email/PII value in a send_email arg must
-            # not FP. The hard categories still block in block mode.
-            # credential_access is a HARD category: reading a private key or an
+            # The flag tier (_TOOL_ARG_FLAG_CATEGORIES) is surfaced but FLAG-
+            # DEFAULT: data_exfiltration (agents make legit outbound calls
+            # constantly) plus the ambiguous jailbreak/system_prompt_leak/
+            # encoding_evasion/dos_attempt/forged_trust categories, whose argument
+            # is as often a quotation in a doc as an attack. They flag for review,
+            # they do not block by default. pii_detected stays FILTERED entirely —
+            # a benign email/PII value in a send_email arg must not FP. The block
+            # tier still blocks in block mode.
+            # credential_access is a BLOCK category: reading a private key or an
             # instance-metadata credential endpoint out of a tool argument has no
             # benign reading. It reports under its own name rather than borrowing
             # excessive_agency, because the category string is what a customer's
             # SIEM rules key on and "excessive agency" would misdescribe the fact.
             if danger:
                 score = max(score, max(t.score for t in danger))
-                hard = [t for t in danger if t.category != "data_exfiltration"]
+                # A "hard" finding enforces a block; a flag-tier finding only
+                # surfaces. Structural command/SQL findings carry impact-class
+                # categories (destructive_filesystem, network, …) that are NOT in
+                # the flag set, so they stay hard exactly as before — the switch
+                # from `!= "data_exfiltration"` to the flag set is behaviour-
+                # preserving for every category that existed, and moves only the
+                # newly-admitted jailbreak/leak/encoding/DoS/forged-trust
+                # categories into the flag tier alongside data_exfiltration.
+                hard = [t for t in danger
+                        if t.category not in _TOOL_ARG_FLAG_CATEGORIES]
                 category = category or (hard[0].category if hard else danger[0].category)
                 rules = rules + [t.rule for t in danger if t.rule not in rules]
                 # Benign DOCUMENTARY-PROSE cap. This path runs raw L1 over the arg
@@ -1232,7 +1279,8 @@ class DelphiSensor:
                 ):
                     hard = []
                 # Only the hard (destructive/injection) categories enforce a block;
-                # data_exfiltration alone surfaces as a flag (monitor-default).
+                # the flag tier (data_exfiltration + the ambiguous model-directed
+                # categories) surfaces as a flag (monitor-default).
                 if hard and self.enforcement_mode == "block":
                     action = "blocked"
                 else:

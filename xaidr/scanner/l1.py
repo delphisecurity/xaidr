@@ -4,6 +4,7 @@ Loads rules from JSON at import time, compiles regex patterns once.
 Matches the npm sensor's l1-scanner.ts architecture.
 """
 
+import difflib
 import json
 import os
 import re
@@ -14,6 +15,41 @@ from typing import List
 from .dlp import _is_reserved_email
 
 _RULES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "rules")
+
+# The CANONICAL set of category strings an L1 rule is allowed to emit. This is
+# the authority the rest of the engine keys on: sensor.scan_tool_call filters
+# tool-argument threats BY CATEGORY, so a rule whose `category` is misspelled
+# ("jailbrake", "sytem_prompt_leak") loads cleanly, fires on the content path,
+# and is then SILENTLY DISCARDED on the tool path — a rule half-disabled by a
+# typo, exactly the failure class the ADV-2 policy-key validator exists to stop.
+# So an unrecognized category is rejected LOUDLY at load, not defaulted quietly.
+#
+# Deliberately an EXPLICIT allowlist, not `{r["category"] for r in rules}`: a set
+# derived from the file would happily contain the typo and validate it against
+# itself. Adding a genuinely new category is a one-line, reviewed edit here — the
+# same friction the tool-path keep/flag sets in sensor.py carry, on purpose.
+# Covers BOTH rule files: input (all-l1-rules.json) and output (output-l1-rules).
+_KNOWN_L1_CATEGORIES = frozenset({
+    # input categories (all-l1-rules.json)
+    "code_execution", "credential_access", "data_exfiltration", "dos_attempt",
+    "encoding_evasion", "eva003", "excessive_agency", "forged_trust",
+    "jailbreak", "llm02", "llm09", "pii_detected", "prompt_injection",
+    "supply_chain", "system_prompt_leak",
+    # output categories (output-l1-rules.json)
+    "out", "social_engineering",
+})
+
+
+class UnknownRuleCategory(ValueError):
+    """An L1 rule declares a category no code path recognizes.
+
+    Raised at LOAD (import) rather than defaulting quietly, because the effect of
+    a bad category is invisible at runtime: the rule still fires on the content
+    path but is dropped by the tool-path category filter, so the operator sees a
+    working rule that is in fact disarmed on one surface. Fail loudly at ship
+    time (CI imports the package) instead. Mirrors the ADV-2 precedent for
+    unknown policy keys (authz/policy.py) and unknown enforcement modes (sensor).
+    """
 
 # Maximum number of characters L1 will regex-scan. A megabyte-class input fed to
 # every compiled pattern causes catastrophic regex backtracking (an exploitable
@@ -136,12 +172,32 @@ def _load_and_compile(filename: str) -> list:
 
     compiled = []
     for r in raw:
+        # Category validation runs BEFORE the re.compile try/except and is NOT
+        # caught by it: a misspelled category is an authoring bug in a vendored
+        # rule that must fail the build, not a corrupt-asset condition to degrade
+        # around. A did-you-mean names the offending rule and category, matching
+        # the ADV-2 unknown-key message shape in authz/policy.py.
+        category = r.get("category")
+        if category not in _KNOWN_L1_CATEGORIES:
+            near = difflib.get_close_matches(
+                str(category), sorted(_KNOWN_L1_CATEGORIES), n=1, cutoff=0.6
+            )
+            did_you_mean = f" Did you mean {near[0]!r}?" if near else ""
+            raise UnknownRuleCategory(
+                f"[xaidr] rule {r.get('id')!r} in {filename} declares unknown "
+                f"category {category!r}.{did_you_mean} A rule with an "
+                f"unrecognized category fires on the content path but is SILENTLY "
+                f"DROPPED by the tool-path category filter — a rule half-disabled "
+                f"by a typo. Add the category to _KNOWN_L1_CATEGORIES (and the "
+                f"tool-path keep/flag sets in sensor.py) or fix the spelling. "
+                f"Valid categories: {', '.join(sorted(_KNOWN_L1_CATEGORIES))}."
+            )
         try:
             compiled.append({
                 "id": r["id"],
                 "pattern": re.compile(r["pattern"], re.IGNORECASE),
                 "score": r["score"],
-                "category": r["category"],
+                "category": category,
                 # Email PII rules set this so RFC-reserved documentation domains
                 # (example.com/.test/.invalid/...) don't fire as a PII leak.
                 "filter_reserved_email": bool(r.get("filter_reserved_email", False)),
