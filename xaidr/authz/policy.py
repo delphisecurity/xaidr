@@ -51,6 +51,16 @@ _MATCH_FIELDS = {
     "destination_type": ("resource", "destination_type"),
     "destination_identifier": ("resource", "destination_identifier"),
     "mcp_server": ("context", "mcp_server"),
+    # The DETECTION category the scan resolved for this action (`jailbreak`,
+    # `system_prompt_leak`, `prompt_injection`, …), not a property of the tool.
+    # It exists so a deployer can decide the enforcement level for a family the
+    # shipped default only FLAGS: the tool-argument scan surfaces the ambiguous
+    # model-directed categories rather than blocking them, and without this field
+    # "we flag it, you decide" is advice with no mechanism behind it.
+    #
+    # Absent (None) on any path that has not run a detection when the policy is
+    # consulted — the inert direction, matching `mcp_server` on a plain tool call.
+    "category": ("action", "category"),
 }
 
 # The keys `_rule_matches` reads out of a rule's `conditions:` block. Same
@@ -197,14 +207,21 @@ def build_request(
     destination_type: str,
     destination_identifier: str,
     context: Optional[dict] = None,
+    category: Optional[str] = None,
 ) -> dict:
-    """Build the AuthZEN-shaped evaluation request."""
+    """Build the AuthZEN-shaped evaluation request.
+
+    ``category`` is the detection category the scan resolved (None when the
+    caller has no detection verdict at this point). It feeds the ``category:``
+    match field; left unpassed, that field can never fire.
+    """
     return {
         "subject": {"agent_id": agent_id, "trust": trust},
         "action": {
             "tool_name": tool_name,
             "impact_class": impact_class,
             "impact_tier": impact_tier,
+            "category": category,
         },
         "resource": {
             "destination_type": destination_type,

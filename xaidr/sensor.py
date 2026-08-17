@@ -1353,6 +1353,16 @@ class DelphiSensor:
                 impact_tier=impact_tier,          # from the existing classifier
                 destination_type="mcp_server" if mcp_server else "tool_call",
                 destination_identifier=mcp_server or tool_name,
+                # Feeds the `category:` match field with the verdict the L1/DLP
+                # scan above just resolved — this is what makes the flag tier
+                # actionable. The newly-admitted model-directed categories
+                # (jailbreak, system_prompt_leak, …) only FLAG by default; a
+                # deployer who wants one of them BLOCKED writes
+                # `match: {category: ["jailbreak"]}, effect: block` and the
+                # stricter-wins composition below upgrades the verdict.
+                # Evaluated AFTER detection on purpose: before it, `category`
+                # is None and the field would be inert.
+                category=category,
                 # Feeds the `mcp_server:` match field, which reads from the
                 # request context. Without this it is silently inert.
                 # `least_privileged_tier` feeds the `min_chain_tier_above:`

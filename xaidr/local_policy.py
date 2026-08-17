@@ -39,8 +39,9 @@ Policy YAML format (mirrors the engine's action_policy structure)::
         match:
           destination_type: ["external_api"]
 
-Supported match fields: ``tools``, ``impact_class``, ``impact_tier``,
-``destination_type``, ``destination_identifier``. The ``trust_below`` condition
+Supported match fields: ``tools``, ``agents``, ``impact_class``,
+``impact_tier``, ``destination_type``, ``destination_identifier``,
+``mcp_server``, ``category``. The ``trust_below`` condition
 is NOT supported in this open distribution — it needs a per-agent trust score
 that only the platform tier computes, so a policy using it is REJECTED at load
 (with a clear error) rather than silently never firing.
@@ -144,6 +145,7 @@ def evaluate_policy(
     destination_type: str,
     destination_identifier: str,
     context: Optional[dict] = None,
+    category: Optional[str] = None,
 ) -> AuthzDecision:
     """Evaluate the local policy for one action. Never raises (engine is fail-safe).
 
@@ -155,6 +157,10 @@ def evaluate_policy(
     without it, a ``match: {mcp_server: [...]}`` rule reads an absent value and
     can never fire — an advertised control that silently does nothing. Callers
     with an MCP server in hand MUST pass it.
+
+    ``category`` is the same contract for the ``category:`` match field: the
+    caller must pass the detection category it has already resolved, or a rule
+    keyed on a category reads None and never fires.
     """
     request = build_request(
         agent_id=agent_id,
@@ -165,6 +171,7 @@ def evaluate_policy(
         destination_type=destination_type,
         destination_identifier=destination_identifier,
         context=context,
+        category=category,
     )
     return evaluate(policy, request)
 

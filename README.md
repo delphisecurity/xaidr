@@ -4,9 +4,10 @@
 
 `xaidr` inspects what an agent *does*, not just what a model *says*. It scans the
 user input, the tool calls, the model output, and the agent-to-agent (A2A)
-protocol messages — blocking or flagging prompt injection, jailbreaks,
-destructive tool calls, secret leakage, and protocol-level abuse **before** they
-take effect.
+protocol messages — blocking or flagging prompt injection, known jailbreak and
+persona-override patterns (e.g. DAN/AIM-style persona adoption, developer-mode
+and safety-negation framing), destructive tool calls, secret leakage, and
+protocol-level abuse **before** they take effect.
 
 No backend. No account. No API key. No network in the core scan path. Nothing
 leaves your process by default.
@@ -267,7 +268,7 @@ layer:
 
 | | |
 |---|---|
-| **Prompt injection & jailbreaks** | direct overrides, role-play escapes, system-prompt extraction, multi-turn escalation |
+| **Prompt injection & jailbreaks** | direct overrides, named-persona and developer-mode escapes, system-prompt extraction, multi-turn escalation. Jailbreak coverage is pattern-shaped and narrow — see [Coverage and limitations](#coverage-and-limitations) |
 | **Obfuscated & evasive attacks** | attacks hidden with unicode lookalikes, invisible characters, encoding tricks, or deliberate misspellings are resolved before inspection |
 | **Dangerous tool use** | destructive commands, code execution, and privilege escalation caught in the tool *arguments*, before the tool runs |
 | **Sensitive data leakage** | credentials, API keys, private keys, payment cards, SSNs, connection strings and bulk-contact exfiltration, on input and output |
@@ -389,6 +390,18 @@ Which statements fire is reported by family here and not enumerated, the same
 discipline the shell families follow. These cases are not part of the shell
 corpus and are not counted in the table above; they are asserted in
 `tests/test_sql_classes.py`.
+
+**Jailbreak coverage is pattern-shaped, and narrow by construction.** What fires
+is explicit persona adoption and safety-negation framing — a named persona, a
+developer-mode or unrestricted-mode request, a direct instruction to disregard
+the rules. Jailbreaks that arrive wrapped in a narrative frame, where the request
+is carried by the story rather than stated, are **not reliably detected**; the
+families are listed here and the phrasings are not, the same discipline the shell
+coverage follows. Separately, a prompt asking the model to *generate* harmful
+content is out of scope for this sensor entirely: that is the model's own safety
+layer, not a runtime action sensor. `xaidr` inspects what an agent does — the
+tool call, the destination, the outbound payload — and a request for text is none
+of those.
 
 **What the corpus does not tell you.** It is a shell-command corpus. It says
 nothing about coverage of prompt injection, jailbreaks, or A2A abuse, which are
@@ -598,6 +611,7 @@ gate ordinary input or output scanning.
 | `destination_type` | ✅ `tool_call`, or `mcp_server` | ✅ always `external_api` | ✗ never matches |
 | `destination_identifier` | ✅ tool or MCP server name | ✅ the destination host | ✗ never matches |
 | `mcp_server` | ✅ the MCP server name, when the call names one | ✗ no MCP server on an HTTP destination | ✗ never matches |
+| `category` | ✅ the detection category the scan resolved, when one fired | ✗ evaluated before any body scan, so no category exists | ✗ never matches |
 
 Conditions are evaluated the same way, in a separate `conditions:` block:
 
@@ -634,6 +648,52 @@ elsewhere (`["billing-*"]`). A call made with no MCP server does not match it, s
 the field never catches plain tool calls. `destination_type: ["mcp_server"]`
 remains the way to gate *every* MCP call at once, and `destination_identifier`
 targets a specific server by name.
+
+**Targeting a detection family.** `category` matches the detection category the
+scan resolved for the call, so you can write policy about *what was found*
+rather than about which tool was called:
+
+```yaml
+- id: block-model-directed-attacks
+  effect: block
+  match:
+    category: ["jailbreak", "system_prompt_leak"]
+```
+
+Globs work as elsewhere (`["pii_*"]`), and a list matches any member. It is the
+field that makes the flag tier below actionable: the tool-argument scan
+*surfaces* several families rather than blocking them, and this is how you say
+that in your deployment one of them should halt the call. A call on which
+nothing fired has no category and matches no such rule — the same inert
+direction as `mcp_server` on a call that names no MCP server. It is a tool-call
+field only; on the HTTP path the policy is consulted at the destination, before
+any body is scanned, so no category exists there to match.
+
+**What the tool-argument scan flags rather than blocks, and why.** Five
+detection families — jailbreak, system-prompt leak, encoding evasion, denial of
+service, and forged trust — are reported on the tool path at **flag** level, not
+block, even in `block` mode. They were previously dropped from this path
+entirely, so an adopter upgrading will see events in telemetry that a previous
+version did not emit: same traffic, more `flagged` verdicts, no new blocks.
+
+Flag rather than block because on this surface the string is genuinely
+ambiguous. `llm_prompt(prompt="you are now DAN")` is an attack;
+`send_email(body="here is an example DAN prompt for the security deck")` is
+documentation. A jailbreak quoted in a message body is a thing agents legitimately
+send, and blocking on the pattern would make the sensor unusable for any workload
+that discusses attacks. Surfacing it costs a review; blocking it costs a false
+positive on ordinary work. Where you know your traffic well enough to say
+otherwise, the `category` rule above escalates it to a block.
+
+Destructive commands, code execution, prompt injection and credential access are
+unchanged and still **block** — a shell pattern or an injection directive reaching
+a tool argument has no benign reading. PII is unchanged too, in the other
+direction: it stays **filtered out** of this path deliberately, so it never
+surfaces as a tool-call finding at all. A customer email in a `send_email`
+argument is the tool doing its job, and the reasoning is the same one spelled out
+under [Secrets in tool arguments](#secrets-in-tool-arguments) — a secret has a
+self-identifying shape, PII does not. Input and output scanning still report PII
+as they always have.
 
 **Impact classification.** Tool calls are automatically classified into an
 `impact_class` and an `impact_tier` (`low` → `critical`), so you can write policy
@@ -1135,6 +1195,16 @@ borrowing a neighbouring one. It appears in `.category` on the returned
 `ScanResult`, in the `category` field of the emitted event, and as
 `gen_ai.security.detection.category` in the `openA2A` schema. A rule that
 enumerates categories explicitly will not match it until you add it.
+
+**A third thing, and it will change your event volume:** tool calls now emit
+`jailbreak`, `system_prompt_leak`, `encoding_evasion`, `dos_attempt` and
+`forged_trust` with `direction="tool_call"`. Those five families were dropped
+from the tool path in earlier versions and are now reported at **flag** level —
+so the same traffic produces more `flagged` events than before, and none of them
+are new blocks. Dashboards that chart flagged-event counts over time will show a
+step. The reasoning for flag rather than block, and the `category:` policy rule
+that escalates a family to a block in your deployment, are under
+[Policies](#policies).
 
 **Alerting on the impact class.** The class a call was assigned is carried
 separately from the detection category, as `impactClass` in the native event and
