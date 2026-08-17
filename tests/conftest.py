@@ -91,3 +91,19 @@ def wait_events():
 @pytest.fixture
 def make_envelope():
     return _make_envelope
+
+
+def pytest_make_parametrize_id(config, val, argname):
+    """Keep generated payloads out of test IDs.
+
+    Several bounds tests parametrize on multi-hundred-kilobyte strings so the
+    input cap and scan budget are exercised on real volume. Pytest renders the
+    parameter value into the test ID, so one case can print a million
+    characters during collection and on every failure line.
+
+    Long values get a short descriptor. Returning None for everything else
+    leaves pytest's default naming untouched, so no other test ID moves.
+    """
+    if isinstance(val, (str, bytes)) and len(val) > 32:
+        return "{}_{}chars".format(argname, len(val))
+    return None
