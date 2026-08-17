@@ -288,7 +288,12 @@ Every number here is measured on the committed corpus at
 benign prose passages) and is reproducible from a clone with
 `python -m pytest tests/test_shell_egress.py tests/test_shell_classes_stage3.py
 tests/test_benign_prose.py`. The corpus is checked in, so you can read what is
-being claimed rather than taking the percentage on trust.
+being claimed rather than taking the percentage on trust. `python
+scripts/corpus_report.py` prints the detection and false-positive numbers side
+by side in one table; [BENCHMARKS.md](BENCHMARKS.md) carries a run of it, and
+[THREAT_MODEL.md](THREAT_MODEL.md) says what these controls defend against, what
+they do not, and why a manipulated agent and a compromised process are different
+problems.
 
 **Coverage is reported by family, not per command, and deliberately so.** A
 published list of which individual commands do and do not fire is an evasion map.
@@ -1410,6 +1415,12 @@ corpus, which is far more parse-heavy than real traffic: median 1.1 ms, p95
 2.6 ms, p99 3.7 to 5.5 ms across runs. Both sit inside the table above, so the
 published budget stands rather than needing restatement. Your hardware will
 differ; the table is the number to design against, not the best case.
+
+**Reproduce this yourself: `python scripts/benchmark.py`.** It prints the
+machine, the payload size, and median/p95/p99/max per boundary, and it asserts
+nothing. [BENCHMARKS.md](BENCHMARKS.md) carries a run of it on named hardware,
+measured over ordinary agent traffic, with the false-positive figures beside the
+detection ones.
 
 **Resilience properties, all exercised by the test suite:**
 
