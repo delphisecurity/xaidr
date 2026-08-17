@@ -13,7 +13,7 @@ reporting](https://github.com/delphisecurity/xaidr/security/advisories/new).**
 It keeps the report, the discussion, the fix and the CVE in one place, and it
 never exposes the details until an advisory is published.
 
-If you cannot use GitHub, email **security@delphisecurity.ai**. Please put
+If you cannot use GitHub, email **support@delphisecurity.ai**. Please put
 `xaidr` in the subject line.
 
 Do not open a public issue for a vulnerability.
