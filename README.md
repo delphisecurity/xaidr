@@ -11,6 +11,12 @@ take effect.
 No backend. No account. No API key. No network in the core scan path. Nothing
 leaves your process by default.
 
+**Measured on the committed corpus and one benchmark run:** 160 of 281 shell
+attacks blocked, 0 of 74 benign commands blocked, 1 of 66 benign prose passages
+blocked. Scan latency median 0.39 ms, p95 0.56 ms on ordinary agent traffic.
+Read [Coverage and limitations](#coverage-and-limitations) and
+[BENCHMARKS.md](BENCHMARKS.md), or run `python scripts/corpus_report.py` yourself.
+
 ```bash
 pip install xaidr
 ```
@@ -1386,35 +1392,32 @@ reason.
 
 ## Performance and resilience
 
-In-process, single core, no network call in the scan path:
+In-process, single core, no network call in the scan path. Seven shapes of
+ordinary agent traffic, 700 timed calls per repeat, three repeats:
 
-| | |
-|---|---|
-| Median scan | **2.7 ms** |
-| p95 | **4.7 ms** |
-| p99 | **6.3 ms** |
+| | measured | budget |
+|---|---:|---:|
+| Median scan | **0.39 ms** | — |
+| p95 | **0.56 ms** | — |
+| p99 | **0.61 ms** | **3 ms** |
 
-Measured over 1,000 scans of representative agent traffic. Latency scales with
-input size and is bounded by a hard input ceiling and a wall-clock budget, so a
-pathologically large input cannot hang your agent. Measure on your own traffic
-before enabling hard blocking on a latency-sensitive path.
+The 3 ms p99 is a **ceiling**, about five times the measured p99. It is the
+number to design against; the measured column is what one machine actually did,
+not a promise about yours. The three repeats agree to within 0.08 ms at every
+percentile, and [BENCHMARKS.md](BENCHMARKS.md) carries all three, the machine
+they ran on, and the per-shape breakdown. Latency scales with input size and is
+bounded by a hard input ceiling and a wall-clock budget, so a pathologically
+large input cannot hang your agent. Measure on your own traffic before enabling
+hard blocking on a latency-sensitive path.
 
 **Know the magnitude before you put this on an untrusted path.** Those
-millisecond figures describe agent-sized messages. A very large prompt is
-bounded but not fast: scan time grows roughly with input size up to the internal
-ceiling and then flattens, so a 250 KB input returns a verdict in **on the order
-of one to three seconds** depending on hardware, and a 500 KB input takes about
-the same because the ceiling has already been reached. Nothing is unbounded and
+sub-millisecond figures describe agent-sized messages. A very large prompt is
+bounded but not fast: cost is dominated by the regex layer and scales with byte
+count up to the internal ceiling, then flattens. 200 B of prose scans in about
+2.3 ms on the input path, and 256 KB in about **1.4 s**; larger inputs take about
+the same, because the cap has already been reached. Nothing is unbounded and
 nothing hangs, but if callers can hand you arbitrarily large text, either cap the
 input yourself before scanning or scan off the request path.
-
-Those figures are a **budget**, and shell command parsing plus classification
-runs inside it. Re-measured at this release on the same 1,000-scan mix: median
-1.0 ms, p95 2.1 ms, p99 2.5 ms. Measured separately over the 355-command shell
-corpus, which is far more parse-heavy than real traffic: median 1.1 ms, p95
-2.6 ms, p99 3.7 to 5.5 ms across runs. Both sit inside the table above, so the
-published budget stands rather than needing restatement. Your hardware will
-differ; the table is the number to design against, not the best case.
 
 **Reproduce this yourself: `python scripts/benchmark.py`.** It prints the
 machine, the payload size, and median/p95/p99/max per boundary, and it asserts
@@ -1434,7 +1437,7 @@ detection ones.
 - **Malformed content is safe.** Badly formed input cannot turn the sensor into
   a denial-of-service risk.
 
-Verified with `python -m pytest -q` in a clean virtual environment: **2354
+Verified with `python -m pytest -q` in a clean virtual environment: **2437
 passed, 2 skipped**, identical across three consecutive runs with test ordering
 randomised. The suite covers the public scan APIs, wrappers, policy, provenance,
 reporters, telemetry schema, and resilience behavior.
