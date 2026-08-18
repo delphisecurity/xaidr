@@ -1,6 +1,6 @@
 # xaidr
 
-**Runtime security for AI agents — local, in-process, zero required dependencies.**
+**Runtime security for AI agents — local, in-process, zero required dependencies, less than 1ms latency.**
 
 `xaidr` inspects what an agent *does*, not just what a model *says*. It scans the
 user input, the tool calls, the model output, and the agent-to-agent (A2A)
