@@ -125,7 +125,7 @@ current rather than aspirational.
 A false positive is not a vulnerability, but it is close to one in effect: the
 failure mode that gets a security tool switched off is the tool blocking work
 that was fine. We treat it as a first-class bug and CI gates on it, at 0 of 74
-benign commands scoring and at most 1 of 66 benign prose passages blocking, with
+benign commands scoring and at most 1 of 89 benign prose passages blocking, with
 that one documented by ID.
 
 It is also where the temptation to fix things the wrong way is strongest, and

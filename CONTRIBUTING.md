@@ -28,7 +28,7 @@ is a case.
   as first-class bugs, because the failure mode that gets a security tool
   switched off is the tool blocking something that was fine.
 - **A corpus entry.** `tests/fixtures/shell_corpus.json` holds 281 attacks, 74
-  benign commands and 66 benign prose passages. Adding to the benign side is as
+  benign commands and 89 benign prose passages. Adding to the benign side is as
   valuable as adding to the attack side and is a smaller change.
 - **Documentation.** If a number in `README.md` disagrees with what the code
   does, the number is the bug.

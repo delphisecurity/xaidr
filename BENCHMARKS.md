@@ -95,11 +95,12 @@ percentage, so a second one shows up as a new entry instead of as a rounding
 change. Both benign gates are asserted, and the script exits non-zero if either
 is violated.
 
-The prose corpus is 66 passages that quote a SHELL COMMAND plus 7
-(`bp-067`..`bp-073`) that carry a MODEL-DIRECTED payload — a named-persona
-jailbreak, a developer-mode request, a system-prompt extraction turn, an
-encoding-evasion payload, a rate-limit log that reads as denial of service, and a
-forged tool result. The second group exists because the first cannot exercise the
+The prose corpus is 89 passages in three groups. The first is 66 that quote a
+SHELL COMMAND. The second is 7 (`bp-067`..`bp-073`) that carry a MODEL-DIRECTED
+payload — a named-persona jailbreak, a developer-mode request, a system-prompt
+extraction turn, an encoding-evasion payload, a rate-limit log that reads as
+denial of service, and a forged tool result. That second group exists because the
+first cannot exercise the
 five families the 1.2.0 tool-argument scan newly admitted at flag level: every one
 of the 66 is a shell quotation, so the tool-path prose gate read 0 of 66 by never
 being tested on them. Each of the 7 carries its payload in plain prose rather than
