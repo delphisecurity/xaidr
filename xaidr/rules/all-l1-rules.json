@@ -440,7 +440,7 @@
   },
   {
     "id": "LLM01_encoded_instruction",
-    "pattern": "(?:backwards?|reversed?|ROT13|rot-?13|caesar\\s*cipher)\\s*:?\\s*.{10,}",
+    "pattern": "\\b(?:backwards?|reversed?|ROT13|rot-?13|caesar\\s*cipher)\\s*:\\s*\\S.{9,}",
     "score": 0.2,
     "category": "prompt_injection"
   },

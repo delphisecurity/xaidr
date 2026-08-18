@@ -13,7 +13,7 @@ No backend. No account. No API key. No network in the core scan path. Nothing
 leaves your process by default.
 
 **Measured on the committed corpus and one benchmark run:** 160 of 281 shell
-attacks blocked, 0 of 74 benign commands blocked, 1 of 73 benign prose passages
+attacks blocked, 0 of 74 benign commands blocked, 1 of 89 benign prose passages
 blocked. Scan latency median 0.40 ms, p95 0.56 ms on ordinary agent traffic.
 Read [Coverage and limitations](#coverage-and-limitations) and
 [BENCHMARKS.md](BENCHMARKS.md), or run `python scripts/corpus_report.py` yourself.
@@ -291,10 +291,11 @@ the list of what fired.
 ## Coverage and limitations
 
 Every number here is measured on the committed corpus at
-`tests/fixtures/shell_corpus.json` (281 shell attacks, 74 benign commands, 73
-benign prose passages — 66 that quote a shell command and 7 that carry a
+`tests/fixtures/shell_corpus.json` (281 shell attacks, 74 benign commands, 89
+benign prose passages — 66 that quote a shell command, 7 that carry a
 model-directed jailbreak / prompt-leak / encoding / DoS / forged-trust payload in
-plain prose) and is reproducible from a clone with
+plain prose, and 16 benign inversions that use safety-negation reframing
+vocabulary with no attack in them) and is reproducible from a clone with
 `python -m pytest tests/test_shell_egress.py tests/test_shell_classes_stage3.py
 tests/test_benign_prose.py`. The corpus is checked in, so you can read what is
 being claimed rather than taking the percentage on trust. `python
@@ -349,7 +350,7 @@ block.
   policy, but they are not caught by default.
 
 **False positives that exist today.** The benign gates are asserted on every
-run: 0 of 74 benign shell commands score above zero, and 1 of 73 benign prose
+run: 0 of 74 benign shell commands score above zero, and 1 of 89 benign prose
 passages blocks. That one is `bp-055`, and it is documented by ID with its cause
 in `tests/test_benign_prose.py`. It is prose that discusses credential
 exfiltration in wording that remains block-worthy after every quoted command is
@@ -1522,9 +1523,8 @@ detection ones.
 - **Malformed content is safe.** Badly formed input cannot turn the sensor into
   a denial-of-service risk.
 
-Verified with `python -m pytest -q` in a clean virtual environment: **2466
-passed, 2 skipped**, identical across three consecutive runs with test ordering
-randomised. The suite covers the public scan APIs, wrappers, policy, provenance,
+Verified with `python -m pytest -q` in a clean virtual environment: **2604
+passed, 2 skipped**, identical across three consecutive runs. The suite covers the public scan APIs, wrappers, policy, provenance,
 reporters, telemetry schema, and resilience behavior.
 
 That figure is a **source-tree** claim, not something you can reproduce from

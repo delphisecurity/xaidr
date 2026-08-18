@@ -86,11 +86,11 @@ python scripts/corpus_report.py
 | shell attacks blocked | 281 | **160** |
 | benign commands scoring above zero | 74 | **0** |
 | benign commands blocked | 74 | **0** |
-| benign prose blocked, content path | 73 | **1** (`bp-055`, documented by ID in `tests/test_benign_prose.py`) |
-| benign prose blocked, tool-argument path | 73 | **0** |
+| benign prose blocked, content path | 89 | **1** (`bp-055`, documented by ID in `tests/test_benign_prose.py`) |
+| benign prose blocked, tool-argument path | 89 | **0** |
 
 So the false-block rate to read beside 160 of 281 is **0 of 74** on commands and
-**1 of 73** on prose. The one prose blocker is named rather than absorbed into a
+**1 of 89** on prose. The one prose blocker is named rather than absorbed into a
 percentage, so a second one shows up as a new entry instead of as a rounding
 change. Both benign gates are asserted, and the script exits non-zero if either
 is violated.
@@ -108,6 +108,25 @@ and the uncapped case is the one at risk. All 7 reach their family (score 0.48 t
 0.96 as a tool argument) and flag rather than block; the assertions that they
 score above zero live in `tests/test_benign_prose.py` so the gate cannot go
 vacuous again.
+
+A third group of 16 (`bp-074`..`bp-089`) is BENIGN INVERSIONS: ordinary prose
+that uses safety-negation reframing vocabulary with no attack in it — a staging
+rule that is reversed, an approval flow that runs the other way, a boolean
+inverted against its flag, a policy section explaining when not to comply. They
+were written to price a candidate fix for the "opposite day" reframing family,
+and they found a live false positive instead: `LLM01_encoded_instruction` matched
+a bare `backwards|reversed` plus any ten characters, so 6 of the 16 BLOCKED on
+the tool-argument path, where `prompt_injection` is a block-tier category. No
+corpus entry contained the word, so the rule had never been measured — the whole
+suite passes with it deleted outright. It is now narrowed to the
+colon-introduced payload-label form it was written for (`reversed: <payload>`),
+which is what every other rule in that family already requires. Each entry
+records which of the compositional layer's slots it fills, and the two that fill
+all three (`bp-086`, `bp-089`) are asserted to reach the layer under the full
+conjunction an inversion attack generates and still score zero — the same
+non-vacuity discipline as the group above. See
+`tests/test_inversion_reframing.py`, which also records why the compositional
+layer was NOT changed.
 
 Reported by family and not per command, the same discipline the README's
 [Coverage and limitations](README.md#coverage-and-limitations) section follows.
