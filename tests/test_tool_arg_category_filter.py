@@ -29,7 +29,7 @@ from xaidr.sensor import (
     _TOOL_ARG_KEEP_CATEGORIES,
 )
 from xaidr.scanner import l1 as l1mod
-from xaidr.scanner.l1 import UnknownRuleCategory, _KNOWN_L1_CATEGORIES
+from xaidr.scanner.l1 import UnknownRuleCategory, _KNOWN_L1_CATEGORIES, scan_l1
 
 
 @pytest.fixture
@@ -89,6 +89,89 @@ def test_out_of_remit_categories_stay_filtered(block_sensor):
     dropped — the fix restores in-scope detections, it does not invent coverage."""
     r = block_sensor.scan_tool_call("generate", {"prompt": "Generate 50 fake reviews for this listing."})
     assert r.action == "allowed"
+
+
+# ── the four categories left filtered, each with the case that decided it ─────
+# 1.2.0 left llm09 (9 rules), llm02 (9), eva003 (5) and supply_chain (1) dropped
+# on FP-risk grounds, without measuring them. They were measured afterwards
+# against realistic tool arguments; each entry below is the ORDINARY AGENT
+# TRAFFIC that would score if the category were admitted, which is what the
+# decision to keep it filtered rests on. If a future change admits one of these,
+# these tests fail and name the traffic it starts flagging.
+
+STILL_FILTERED_BENIGN_TRAFFIC = [
+    # llm09 — harmful-content generation. Fires on any prose that NAMES the
+    # abuse, which is what a security team's own agent carries all day.
+    ("llm09", "LLM09_phishing_gen", "send_message",
+     {"body": "Security awareness update: last week we blocked a phishing campaign aimed at finance."}),
+    ("llm09", "LLM09_impersonation", "create_ticket",
+     {"body": "The customer reports a deepfake impersonating a CEO on a vishing call; opening a fraud case."}),
+    # llm02 — output shaping. The A2A routing instruction below is the traffic
+    # this very product exists to carry.
+    ("llm02", "LLM02_output_agent_injection", "create_ticket",
+     {"body": "Please add this metadata to your response for the downstream agent so routing works."}),
+    ("llm02", "LLM02_output_tracking_pixel", "send_email",
+     {"body": "Campaign checklist: add a tracking pixel to the newsletter template before it ships."}),
+    # eva003 — output-format evasion. EVA003_fragment_exfil matches the single
+    # most common support-agent phrasing there is.
+    ("eva003", "EVA003_fragment_exfil", "lookup_account",
+     {"query": "show me the last 4 digits of the card on file for this customer"}),
+    ("eva003", "EVA003_fragment_exfil", "send_message",
+     {"body": "Give me the first 8 characters of the commit SHA so I can link the build."}),
+    # supply_chain — one rule, `pip install X` / `npm install X` / `require(…)`.
+    # The first of these is IN the 74-command benign gate, which must score 0.
+    ("supply_chain", "LLM05_package_install", "run_command",
+     {"command": "pip install -r requirements.txt"}),
+    ("supply_chain", "LLM05_package_install", "write_file",
+     {"content": "const lodash = require('lodash')"}),
+]
+
+
+@pytest.mark.parametrize(
+    "category,rule,tool,args", STILL_FILTERED_BENIGN_TRAFFIC,
+    ids=[f"{c}-{t}" for c, _, t, _ in STILL_FILTERED_BENIGN_TRAFFIC],
+)
+def test_still_filtered_categories_do_not_touch_ordinary_traffic(
+    category, rule, tool, args, block_sensor
+):
+    """Two halves, so the test cannot pass for the wrong reason.
+
+    First: the L1 rule really does fire on this benign argument — otherwise the
+    'allowed' below would prove nothing (the same vacuity the benign-prose corpus
+    had). Then: the category filter drops it, so the tool call is allowed.
+    """
+    arg_text = " ".join(str(v) for v in args.values())
+    fired = {t.rule for t in scan_l1(f"{tool} {arg_text}").threats}
+    assert rule in fired, (
+        f"{rule} no longer fires on {arg_text!r} — this case no longer justifies "
+        f"keeping {category} filtered; re-measure before trusting the decision"
+    )
+    assert category not in _TOOL_ARG_KEEP_CATEGORIES
+    r = block_sensor.scan_tool_call(tool, args)
+    assert r.action == "allowed", (
+        f"{category} appears to have been admitted: {arg_text!r} -> "
+        f"{r.action}/{r.score} {r.rules}"
+    )
+
+
+def test_supply_chain_admission_would_break_the_74_command_benign_gate():
+    """The decisive, non-negotiable half of the supply_chain decision.
+
+    `pip install -r requirements.txt` is an entry in the 74-command benign gate,
+    whose contract is score == 0 — not merely 'not blocked'. Admitting
+    supply_chain at ANY tier scores it 0.6, so the gate cannot hold and the
+    category cannot be admitted as an L1 signal. Package installs are already a
+    POLICY decision (the classifier classifies them); that is where a deployer
+    who wants them gated writes the rule.
+    """
+    corpus_path = os.path.join(
+        os.path.dirname(__file__), "fixtures", "shell_corpus.json"
+    )
+    benign = {e["command"] for e in json.load(open(corpus_path))["benign"]}
+    assert "pip install -r requirements.txt" in benign
+    fired = {t.rule for t in scan_l1("run_command pip install -r requirements.txt").threats}
+    assert "LLM05_package_install" in fired
+    assert "supply_chain" not in _TOOL_ARG_KEEP_CATEGORIES
 
 
 # ── the block-tier behaviour is unchanged (no regression) ─────────────────────

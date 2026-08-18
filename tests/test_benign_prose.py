@@ -112,6 +112,74 @@ def test_entries_are_unique_and_identified():
     assert len(set(texts)) == len(texts), "duplicate benign_prose text"
 
 
+# ── (a2) NON-VACUITY: the gate must actually be exercised ────────────────────
+# The 66 shell-quotation entries above all carry a SHELL COMMAND, so they can
+# only exercise the command rules. The five categories the 1.2.0 tool-argument
+# scan newly admitted at flag level (jailbreak, system_prompt_leak,
+# encoding_evasion, dos_attempt, forged_trust) fire on model-directed English,
+# which no shell quotation contains — so the tool-path gate passed 0/66 by NEVER
+# BEING TESTED on them. bp-067..bp-073 close that: each carries one of those
+# payloads in a realistic passage.
+#
+# These assertions are the anti-vacuity half. "Did not block" is not evidence
+# when nothing fired: an entry that scores 0.0 proves only that the sensor never
+# looked at it. So the section is asserted to REACH its family — score > 0 and
+# the resolved category — on the TOOL path, which is the surface 1.2.0 changed.
+
+MODEL_DIRECTED = [e for e in PROSE if e.get("payload_family")]
+
+# The families the tool-argument scan admits at FLAG level and which therefore
+# need a benign counter-example. data_exfiltration is excluded: it predates the
+# 1.2.0 change and the shell-quotation entries already cover it.
+ADMITTED_FLAG_FAMILIES = {
+    "jailbreak", "system_prompt_leak", "encoding_evasion", "dos_attempt",
+    "forged_trust",
+}
+
+
+def test_every_newly_admitted_family_has_a_benign_counter_example():
+    covered = {e["payload_family"] for e in MODEL_DIRECTED}
+    missing = ADMITTED_FLAG_FAMILIES - covered
+    assert missing == set(), (
+        f"no benign prose exercises {sorted(missing)} — the tool-path gate would "
+        "pass on those families by not being tested"
+    )
+
+
+@pytest.mark.parametrize("entry", MODEL_DIRECTED, ids=[e["id"] for e in MODEL_DIRECTED])
+def test_model_directed_prose_carries_its_payload_outside_a_code_span(entry):
+    """The payload must sit in PLAIN PROSE, not inside backticks.
+
+    The documentary-prose cap only lifts backtick-fenced quotations, so a fenced
+    entry would be capped before the flag tier ever saw it and would test
+    nothing. The uncapped case is the one at risk, so it is the one measured.
+    """
+    assert "`" not in entry["text"], (
+        f"{entry['id']} fences its payload; the documentary cap would answer for "
+        "it and the flag tier would go untested"
+    )
+    assert entry["prose_payload"] in entry["text"] or entry["payload_family"] == "dos_attempt", (
+        f"{entry['id']}: prose_payload is not present verbatim in text"
+    )
+
+
+@pytest.mark.parametrize("entry", MODEL_DIRECTED, ids=[e["id"] for e in MODEL_DIRECTED])
+def test_model_directed_prose_reaches_its_family_on_the_tool_path(entry):
+    """NON-VACUITY: score > 0 and the family resolves — not merely "did not block"."""
+    s = _sensor("block")
+    r = _quiet(s.scan_tool_call, "send_message", {"body": entry["text"]})
+    assert r.score > 0, (
+        f"{entry['id']} scores 0.0 as a tool argument — it does not reach "
+        f"{entry['payload_family']}, so it proves nothing about the flag tier"
+    )
+    assert r.category == entry["payload_family"], (
+        f"{entry['id']} resolved to {r.category!r}, expected "
+        f"{entry['payload_family']!r} ({r.score} via {r.rules})"
+    )
+    # and the whole point: reaching the family must FLAG, never BLOCK.
+    assert r.action == "flagged", f"{entry['id']} -> {r.action}/{r.score} {r.rules}"
+
+
 # ── (b) THE BENIGN-PROSE GATE ────────────────────────────────────────────────
 
 @pytest.mark.parametrize("entry", PROSE, ids=[e["id"] for e in PROSE])

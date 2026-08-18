@@ -13,7 +13,7 @@ No backend. No account. No API key. No network in the core scan path. Nothing
 leaves your process by default.
 
 **Measured on the committed corpus and one benchmark run:** 160 of 281 shell
-attacks blocked, 0 of 74 benign commands blocked, 1 of 66 benign prose passages
+attacks blocked, 0 of 74 benign commands blocked, 1 of 73 benign prose passages
 blocked. Scan latency median 0.40 ms, p95 0.56 ms on ordinary agent traffic.
 Read [Coverage and limitations](#coverage-and-limitations) and
 [BENCHMARKS.md](BENCHMARKS.md), or run `python scripts/corpus_report.py` yourself.
@@ -291,8 +291,10 @@ the list of what fired.
 ## Coverage and limitations
 
 Every number here is measured on the committed corpus at
-`tests/fixtures/shell_corpus.json` (281 shell attacks, 74 benign commands, 66
-benign prose passages) and is reproducible from a clone with
+`tests/fixtures/shell_corpus.json` (281 shell attacks, 74 benign commands, 73
+benign prose passages — 66 that quote a shell command and 7 that carry a
+model-directed jailbreak / prompt-leak / encoding / DoS / forged-trust payload in
+plain prose) and is reproducible from a clone with
 `python -m pytest tests/test_shell_egress.py tests/test_shell_classes_stage3.py
 tests/test_benign_prose.py`. The corpus is checked in, so you can read what is
 being claimed rather than taking the percentage on trust. `python
@@ -347,13 +349,26 @@ block.
   policy, but they are not caught by default.
 
 **False positives that exist today.** The benign gates are asserted on every
-run: 0 of 74 benign shell commands score above zero, and 1 of 66 benign prose
+run: 0 of 74 benign shell commands score above zero, and 1 of 73 benign prose
 passages blocks. That one is `bp-055`, and it is documented by ID with its cause
 in `tests/test_benign_prose.py`. It is prose that discusses credential
 exfiltration in wording that remains block-worthy after every quoted command is
 removed, which is the residue guard behaving correctly rather than a pattern
 misfiring. It is listed rather than suppressed so that a second one shows up as a
 new entry instead of disappearing into a percentage.
+
+Two more shapes block on the CONTENT path (never on the tool path) and are worth
+knowing before you feed security documentation to an agent through `scan()`. A
+passage that quotes a base64 decode-and-run payload blocks at 0.75 even when the
+payload is fenced in backticks: the embedded-encoded-payload signal is applied
+after the documentary-prose cap, so unlike every other family that quotation has
+no way to be read as documentation. And a passage that reproduces a live
+extraction imperative aimed at the assistant itself blocks, because an unnegated
+"reveal/repeat …" targeting an AI secret vetoes the mention cap — that veto is the
+anti-bypass and removing it would let an attacker dampen a real extraction by
+prefixing "Red-team writeup:". Both are content-path only; as tool arguments the
+same passages flag. `bp-070` and `bp-071` carry these families in shapes that do
+not trip either case.
 
 There is also one enforcement over-reach worth knowing about: an archive stream
 piped into a raw network socket blocks whatever the source directory is, so an

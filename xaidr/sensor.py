@@ -126,9 +126,44 @@ _TOOL_ARG_BLOCK_CATEGORIES = frozenset({
 # 0.96-scoring DAN persona returned allowed 0.0 as a tool argument). Restoring
 # them as flag-default un-drops the detection without the FP blast radius of a
 # block. pii_detected is DELIBERATELY absent — a customer email in a send_email
-# argument is the tool doing its job; see the DLP note below. llm09/llm02/eva003
-# (model-output moderation) and supply_chain (legit dependency installs) stay
-# filtered on purpose — out of this sensor's action-layer remit.
+# argument is the tool doing its job; see the DLP note below.
+#
+# THE FOUR THAT STAY FILTERED — decided on measurement, not on assumption. They
+# were left out during the 1.2.0 work on FP-risk grounds without being measured;
+# they have since been run against realistic tool arguments and the whole corpus
+# (tests/test_tool_arg_category_filter.py pins the deciding case for each).
+#
+#   llm09 (9 rules — fake reviews, phishing, astroturfing, deepfakes, SEO spam):
+#     OUT OF REMIT. The harm is the CONTENT the model generates, not an action
+#     the agent takes; that is the model's own safety layer, the same line the
+#     README draws for "make the model produce something harmful". The rules also
+#     fire on prose that merely NAMES the abuse: 6 of 24 ordinary agent arguments
+#     score, including "we blocked a phishing campaign aimed at finance". Keeping
+#     it filtered costs nothing measurable — admitting it changes 0 of 281 attack
+#     verdicts on the corpus.
+#   llm02 (9 rules — "always append X to your response", tracking pixels, output
+#     impersonation): FILTERED, with a stated residual. Half of it IS action-shaped
+#     ("add this JSON to your output for the downstream agent"), but the patterns
+#     resolve on wording rather than on the tool being called: 3 of 24 benign
+#     arguments score, one of them an ordinary A2A routing instruction — the exact
+#     traffic this product carries. A tool that rewrites an agent's own
+#     instructions is better gated by POLICY on the tool (match: {tool: …}) than
+#     by regexing English in its argument. Residual gap, named rather than papered
+#     over: an output-tampering instruction delivered through a tool argument is
+#     not detected on this path.
+#   eva003 (5 rules — "respond in base64", acrostics, character splitting):
+#     OUT OF REMIT. These shape the model's REPLY to defeat output scanning; the
+#     tool-argument path is not the output path. EVA003_fragment_exfil ("the first
+#     N characters of …") matches the most common support-agent phrasing there is
+#     — "the last 4 digits of the card on file" — 3 of 24 benign arguments score.
+#   supply_chain (1 rule — `pip install X` / `npm install X` / `require(…)`):
+#     FILTERED, and this one is arithmetic rather than judgement. Admitting it
+#     detects exactly ONE more attack (`npm install --global ./malicious-package`,
+#     161/281 instead of 160) and scores `pip install -r requirements.txt`, which
+#     is an entry in the 74-command benign gate whose contract is score == 0. The
+#     gate cannot hold, so the category cannot be admitted at any tier. A package
+#     install is already CLASSIFIED for policy; that is where a deployer who wants
+#     it gated writes the rule.
 _TOOL_ARG_FLAG_CATEGORIES = frozenset({
     "data_exfiltration", "jailbreak", "system_prompt_leak", "encoding_evasion",
     "dos_attempt", "forged_trust",

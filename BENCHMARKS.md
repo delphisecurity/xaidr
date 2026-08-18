@@ -86,14 +86,28 @@ python scripts/corpus_report.py
 | shell attacks blocked | 281 | **160** |
 | benign commands scoring above zero | 74 | **0** |
 | benign commands blocked | 74 | **0** |
-| benign prose blocked, content path | 66 | **1** (`bp-055`, documented by ID in `tests/test_benign_prose.py`) |
-| benign prose blocked, tool-argument path | 66 | **0** |
+| benign prose blocked, content path | 73 | **1** (`bp-055`, documented by ID in `tests/test_benign_prose.py`) |
+| benign prose blocked, tool-argument path | 73 | **0** |
 
 So the false-block rate to read beside 160 of 281 is **0 of 74** on commands and
-**1 of 66** on prose. The one prose blocker is named rather than absorbed into a
+**1 of 73** on prose. The one prose blocker is named rather than absorbed into a
 percentage, so a second one shows up as a new entry instead of as a rounding
 change. Both benign gates are asserted, and the script exits non-zero if either
 is violated.
+
+The prose corpus is 66 passages that quote a SHELL COMMAND plus 7
+(`bp-067`..`bp-073`) that carry a MODEL-DIRECTED payload — a named-persona
+jailbreak, a developer-mode request, a system-prompt extraction turn, an
+encoding-evasion payload, a rate-limit log that reads as denial of service, and a
+forged tool result. The second group exists because the first cannot exercise the
+five families the 1.2.0 tool-argument scan newly admitted at flag level: every one
+of the 66 is a shell quotation, so the tool-path prose gate read 0 of 66 by never
+being tested on them. Each of the 7 carries its payload in plain prose rather than
+inside backticks, because the documentary-prose cap only lifts fenced quotations
+and the uncapped case is the one at risk. All 7 reach their family (score 0.48 to
+0.96 as a tool argument) and flag rather than block; the assertions that they
+score above zero live in `tests/test_benign_prose.py` so the gate cannot go
+vacuous again.
 
 Reported by family and not per command, the same discipline the README's
 [Coverage and limitations](README.md#coverage-and-limitations) section follows.
