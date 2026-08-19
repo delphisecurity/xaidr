@@ -311,13 +311,13 @@ What follows is the shape of the coverage.
 
 | | attacks | classified | blocked |
 |---|---:|---:|---:|
-| Total | 281 | 267 (95%) | 160 (57%) |
+| Total | 281 | 267 (95%) | 165 (59%) |
 
 Those two columns are different capabilities and the gap between them is the
 main thing to understand before you deploy this.
 
 **Classification is broad. Enforcement is narrow, on purpose.** 95% of the
-corpus is assigned an impact class and tier; 57% is blocked outright with no
+corpus is assigned an impact class and tier; 59% is blocked outright with no
 configuration. The difference is the set of operations that are genuinely
 ambiguous. A `terraform destroy`, a `systemctl enable`, a `sudo`, a
 `kubectl get secrets` are all real things a deploy agent does, so the shipped
@@ -422,7 +422,7 @@ of those.
 **What the corpus does not tell you.** It is a shell-command corpus. It says
 nothing about coverage of prompt injection, jailbreaks, or A2A abuse, which are
 exercised by other test files and are not reduced to a single number here. And a
-corpus is a sample: 57% on this one is not a claim about your traffic. Run
+corpus is a sample: 59% on this one is not a claim about your traffic. Run
 [monitor mode](#deployment-modes-and-tuning) against your own workload before
 enabling hard blocking.
 
@@ -1523,7 +1523,7 @@ detection ones.
 - **Malformed content is safe.** Badly formed input cannot turn the sensor into
   a denial-of-service risk.
 
-Verified with `python -m pytest -q` in a clean virtual environment: **2604
+Verified with `python -m pytest -q` in a clean virtual environment: **2616
 passed, 2 skipped**, identical across three consecutive runs. The suite covers the public scan APIs, wrappers, policy, provenance,
 reporters, telemetry schema, and resilience behavior.
 
@@ -1635,6 +1635,11 @@ from xaidr.reporters import (
 )
 from xaidr.integrations.langchain import delphi_middleware
 ```
+
+Sensors are designed to be long-lived — construct one per agent, not per
+request. If you do construct them per request, the telemetry worker now stops
+when the sensor is collected (1.3.0); `close_sync()` remains the explicit way to
+flush and stop one early.
 
 | Method | Purpose |
 |---|---|

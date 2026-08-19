@@ -281,6 +281,9 @@ MUST_BLOCK = [
     ("escalate", "nsenter -t 1 -m -u -i -n -p bash"),
     ("escalate", "echo 'attacker ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers"),
     ("escalate", "insmod /tmp/rootkit.ko"),
+    # uid 0 is not a privileged group, it IS root — split out of the dual-use
+    # escalate.user_admin into escalate.user_admin_uid_zero, which blocks.
+    ("escalate", "useradd -o -u 0 -g 0 backdoor"),
     # persist — the split half that blocks
     ("persist", "echo 'ssh-rsa AAAAB3...' >> ~/.ssh/authorized_keys"),
     ("persist", "cat key.pub >> ~/.ssh/authorized_keys"),
@@ -340,7 +343,6 @@ MUST_CLASSIFY_NOT_BLOCK = [
     ("escalate", "unshare -r /bin/bash"),
     ("escalate", "modprobe evil"),
     ("escalate", "usermod -aG sudo attacker"),
-    ("escalate", "useradd -o -u 0 -g 0 backdoor"),
     ("escalate", "visudo"),
     ("escalate", "mount -o bind / /mnt"),
     ("escalate",
