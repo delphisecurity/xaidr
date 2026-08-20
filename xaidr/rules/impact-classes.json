@@ -1741,5 +1741,91 @@
         }
       }
     ]
+  },
+  "url_classifiers": {
+    "description": "URL carried in a tool ARGUMENT VALUE. Peer of sql_classifiers: an agent fetches a URL by calling http_get(url=...), not by running a shell, so the shell reader's question ('what binary is this') never reaches it. Ordered narrowest-first, as the exec family is: the ENFORCING rules come before the classify-only address rule they sit inside, because first-match-wins decides enforcement and not just the class.",
+    "rules": [
+      {
+        "id": "net.metadata_link_local",
+        "impact_class": "credential_access",
+        "impact_tier": "critical",
+        "comment": "Cloud instance-metadata credential endpoints, by ADDRESS RANGE rather than by spelling. 169.254.0.0/16 is where every major cloud serves short-lived role credentials to whoever asks, and no ordinary agent call goes there: 0 of 30 realistic benign agent URLs land in it. BLOCKS. Replacing the four enumerated literals with the range is the whole point — the same address arrives as 0xA9FEA9FE, 2852039166, 0251.0376.0251.0376 and [::ffff:169.254.169.254], and a string list can only ever know the form someone wrote down. 169.254.170.2 (the ECS task-role endpoint) is inside the range and is MEANT to be: it serves role credentials too, which is routine for an SDK and is credential access when it is an agent's tool argument.",
+        "match": {
+          "address": [
+            "link_local"
+          ]
+        },
+        "detect": {
+          "score": 0.9
+        }
+      },
+      {
+        "id": "net.metadata_hostname",
+        "impact_class": "credential_access",
+        "impact_tier": "critical",
+        "comment": "The metadata endpoints reachable only by NAME. This one stays a string list and that is deliberate, not a shortcut: no parse can tell that metadata.google.internal is a metadata endpoint, because the fact lives in DNS. Resolving it here would put a network call inside a scanner, on attacker-controlled input, on the request path. So the ADDRESSES are parsed (above) and the NAMES are enumerated, and the split is stated rather than blurred. fd00:ec2::254 is listed here rather than caught by the range rule because it is unique-local (fc00::/7), not link-local. BLOCKS.",
+        "match": {
+          "host": [
+            "metadata.google.internal",
+            "metadata.azure.com",
+            "metadata.goog",
+            "metadata",
+            "100.100.100.200",
+            "fd00:ec2::254",
+            "instance-data",
+            "instance-data.ec2.internal"
+          ]
+        },
+        "detect": {
+          "score": 0.9
+        }
+      },
+      {
+        "id": "net.local_file_scheme",
+        "impact_class": "credential_access",
+        "impact_tier": "critical",
+        "comment": "file:// (and its jar:/netdoc: relatives) handed to a URL-fetching tool. The scheme turns a fetcher into a local file reader — SSRF collapsing to LFI — and the reason anyone does it is to reach credentials, so it reports credential_access rather than inventing a class. 0 of 30 benign agent URLs use a non-http scheme. BLOCKS.",
+        "match": {
+          "scheme": [
+            "file",
+            "netdoc",
+            "jar"
+          ]
+        },
+        "detect": {
+          "score": 0.85
+        }
+      },
+      {
+        "id": "net.scheme_smuggling",
+        "impact_class": "execute",
+        "impact_tier": "critical",
+        "comment": "gopher:/dict:/tftp:/ldap: handed to a URL-fetching tool. These let the fetcher speak an arbitrary line protocol to an internal service, which is how a fetcher is made to issue Redis or SMTP commands (gopher://10.0.0.5:6379/_FLUSHALL). The harm is that the TARGET executes something, so the class is execute. 0 of 30 benign agent URLs use one. BLOCKS.",
+        "match": {
+          "scheme": [
+            "gopher",
+            "dict",
+            "tftp",
+            "ldap",
+            "ldaps"
+          ]
+        },
+        "detect": {
+          "score": 0.85
+        }
+      },
+      {
+        "id": "net.internal_address",
+        "impact_class": "read",
+        "impact_tier": "medium",
+        "comment": "A private / loopback destination (RFC1918, 127/8, ::1). CLASSIFY ONLY — no detect block, so it never blocks on its own. Measured: 9 of 30 realistic benign agent URLs are private or loopback, a 30% false-positive rate, because in a service mesh the private address IS the normal case (http://10.2.14.7:8080/api/v1/orders, http://172.17.0.3:8080/ready, http://localhost:8000/health). The address alone cannot carry the distinction between an internal service call and a pivot, and the fact that would — whether the URL was configured or agent-generated — is not available at this seam. So it names its class for a policy to bind to and leaves the decision to the deployer, the same line terraform destroy sits on. Ordered LAST so the enforcing rules above win on an address that is both.",
+        "match": {
+          "address": [
+            "private",
+            "loopback"
+          ]
+        }
+      }
+    ]
   }
 }

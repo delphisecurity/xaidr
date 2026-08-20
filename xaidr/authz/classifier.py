@@ -95,6 +95,18 @@ def _load_ruleset() -> dict:
             print(f"[xaidr] Warning: sql classifier {entry.get('id')} regex failed: {exc}")
     sc["rules"] = compiled
     raw["sql_classifiers"] = sc
+
+    # And the URL classifiers. Same section-per-reader shape, same failure
+    # policy: one bad pattern costs that rule, not the feature.
+    uc = raw.get("url_classifiers") or {}
+    compiled = []
+    for entry in uc.get("rules") or []:
+        try:
+            compiled.append(_compile_command_entry(entry))
+        except re.error as exc:
+            print(f"[xaidr] Warning: url classifier {entry.get('id')} regex failed: {exc}")
+    uc["rules"] = compiled
+    raw["url_classifiers"] = uc
     return raw
 
 
@@ -546,6 +558,129 @@ def extract_sql(arguments: dict) -> Optional[str]:
         return None
 
 
+# ── URL carried in a tool argument ───────────────────────────────────────────
+# The peer of the SQL block above, for the same reason and with the same
+# contract. An agent fetches a URL by calling `http_get(url=...)`; the shell
+# reader asks "what binary is this" and never reaches it, and the only URL rule
+# that DID reach it got there by a regex accident one character wide (see
+# scanner/url_parse). First match wins, only rules carrying a `detect` block
+# enforce, nothing raises.
+
+
+def _url_matches(block: dict, shape) -> bool:
+    """Does one url_classifiers `match` block describe this URL?"""
+    if not isinstance(block, dict) or not block:
+        return False
+    scheme = block.get("scheme")
+    if scheme and not _glob_any(shape.scheme, scheme):
+        return False
+    host = block.get("host")
+    if host and not _glob_any(shape.host, host):
+        return False
+    address = block.get("address")
+    if address and shape.address not in address:
+        return False
+    raw_pattern = block.get("raw_pattern")
+    if raw_pattern is not None and not raw_pattern.search(shape.raw or ""):
+        return False
+    return True
+
+
+def _classify_url_shape(shape) -> Optional[tuple]:
+    """First matching URL rule for one URL -> (class, tier, rule_id)."""
+    for rule in (_RULESET.get("url_classifiers") or {}).get("rules") or []:
+        block = rule.get("match")
+        if isinstance(block, dict) and _url_matches(block, shape):
+            return (
+                rule.get("impact_class", "unknown"),
+                rule.get("impact_tier", "medium"),
+                rule.get("id"),
+            )
+    return None
+
+
+def classify_url(text: str) -> Optional[tuple]:
+    """Classify a URL-valued argument by its shape.
+
+    Returns ``(impact_class, impact_tier)`` or ``None`` when the value is not a
+    URL or no rule matched. Never raises.
+    """
+    try:
+        from ..scanner.url_parse import parse_url
+
+        shape = parse_url(text)
+        if shape is None:
+            return None
+        found = _classify_url_shape(shape)
+        return (found[0], found[1]) if found else None
+    except Exception:
+        return None
+
+
+def classify_url_findings(text: str) -> list:
+    """Structural DETECTION findings for a URL in a tool argument.
+
+    Same contract as ``classify_sql_findings``: only rules carrying a ``detect``
+    block appear, so the classify-only ``net.internal_address`` (a private or
+    loopback destination — the normal case in a service mesh, measured at 30% FP
+    if it enforced) names its class for a policy and never blocks on its own.
+
+    Never raises.
+    """
+    try:
+        from ..scanner.url_parse import parse_url
+
+        shape = parse_url(text)
+        if shape is None:
+            return []
+        findings = []
+        for rule in (_RULESET.get("url_classifiers") or {}).get("rules") or []:
+            block = rule.get("match")
+            if not isinstance(block, dict) or not _url_matches(block, shape):
+                continue
+            # First match wins, exactly as classification does, so rule ORDER
+            # decides enforcement and not just the class.
+            detect = rule.get("detect")
+            if isinstance(detect, dict):
+                findings.append({
+                    "rule": rule.get("id"),
+                    "impact_class": rule.get("impact_class", "unknown"),
+                    "impact_tier": rule.get("impact_tier", "medium"),
+                    "score": float(detect.get("score", 0.0)),
+                })
+            break
+        return findings
+    except Exception:
+        return []
+
+
+def extract_url(arguments: dict) -> Optional[str]:
+    """Pull a URL out of tool arguments, or None.
+
+    Looks at EVERY key, for the reason ``extract_sql`` already settled and
+    documented: "a key allowlist here would be a gate the attacker chooses the
+    combination to". ``url``, ``uri``, ``endpoint``, ``target``, ``href``,
+    ``webhook``, ``callback`` and ``src`` are all ordinary names for the argument
+    that carries one, and a custom tool may use anything at all.
+
+    The gate is the VALUE: ``url_parse.looks_like_url`` requires it to BE a URL —
+    a scheme with a host, or a bare address literal — with no embedded
+    whitespace. That is what keeps prose out ("we saw traffic to
+    http://evil.tld" is a sentence, not a destination) and keeps the shell path
+    separate (`curl http://…` starts with a binary name), without caring what the
+    argument is called.
+    """
+    try:
+        from ..scanner.url_parse import looks_like_url
+
+        for value in arguments.values():
+            if isinstance(value, str) and value.strip() and looks_like_url(value):
+                return value
+        return None
+    except Exception:
+        return None
+
+
 def _extract_command(arguments: dict) -> Optional[str]:
     """Pull a shell command line out of tool arguments, or None.
 
@@ -625,6 +760,21 @@ def classify(
                     sql_class, sql_tier = found
                     if _TIER_ORDER.get(sql_tier, -1) > _TIER_ORDER.get(tier, -1):
                         impact_class, tier = sql_class, sql_tier
+
+        # URL in an argument value. Same override discipline as SQL, and for the
+        # same reason: `http_get` matches the read.* family by NAME, so
+        # `http_get(url="http://169.254.169.254/…")` would keep `read`/medium —
+        # the tool's usual purpose overriding what this particular call does.
+        # Allowed to override only when the URL's tier is HIGHER, so a call can
+        # get more severe from reading its URL and never less.
+        if isinstance(arguments, dict) and arguments:
+            url_value = extract_url(arguments)
+            if url_value:
+                found = classify_url(url_value)
+                if found is not None:
+                    url_class, url_tier = found
+                    if _TIER_ORDER.get(url_tier, -1) > _TIER_ORDER.get(tier, -1):
+                        impact_class, tier = url_class, url_tier
 
         if isinstance(arguments, dict) and arguments:
             tier = _apply_escalations(tier, arguments)

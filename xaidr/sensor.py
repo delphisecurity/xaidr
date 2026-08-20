@@ -25,8 +25,10 @@ from .authz.classifier import (
     SHELL_ARG_KEYS as _SHELL_ARG_KEYS,
     classify_command_findings as _command_findings,
     classify_sql_findings as _sql_findings,
+    classify_url_findings as _url_findings,
     extract_shell_command as _extract_shell_command,
     extract_sql as _extract_sql,
+    extract_url as _extract_url,
 )
 from .circuit_breaker import (
     CIRCUIT_OPEN_CATEGORY,
@@ -536,6 +538,30 @@ class DelphiSensor:
                 type(exc).__name__, exc,
             )
 
+    def _breaker_delegation_tick(self) -> None:
+        """Count one OUTBOUND ``scan_a2a`` invocation toward the fan-out trigger.
+
+        OUTBOUND ONLY. ``scan_a2a(received=True)`` is work arriving FROM another
+        agent, and the receiving sensor did not choose to receive it. Counting
+        inbound would open the circuit of a popular shared agent — a billing
+        agent that fifty peers delegate to — for being popular, and a breaker
+        that halts a healthy service under load has manufactured the cascading
+        failure it exists to contain. Ingress flood control belongs at the
+        transport, not in a detection sensor.
+
+        This mirrors ``_breaker_tool_tick``: separate counter, separate
+        threshold, same fail-safe discipline (a fault degrades to "no breaker").
+        """
+        if self._breaker is None:
+            return
+        try:
+            self._breaker.record_delegation()
+        except Exception as exc:
+            logger.warning(
+                "xaidr: circuit_breaker delegation count failed (%s: %s)",
+                type(exc).__name__, exc,
+            )
+
     def _extract_a2a_content(self, body: Optional[dict], raw: Optional[str]) -> str:
         """Extract scannable text from a parsed A2A body (or raw fallback)."""
         if self._a2a_extractor is None:
@@ -833,14 +859,22 @@ class DelphiSensor:
 
         ``received=True`` marks this as a message this agent RECEIVED (inbound
         flow) rather than one it is SENDING (outbound, the default), so telemetry
-        records the correct interaction direction. It is a labelling-only flag —
-        the detection/verdict is identical either way.
+        records the correct interaction direction. It is a labelling-only flag
+        for detection — the verdict is identical either way — but it DOES decide
+        whether the call feeds the breaker's delegation-rate trigger: only an
+        OUTBOUND delegation counts. See ``_breaker_delegation_tick``.
+
+        This is the ONLY entry point that feeds that trigger. The tick happens
+        after the open-circuit check, mirroring ``scan_tool_call``, so calls
+        already rejected by an open circuit do not keep re-counting.
         """
         emit_direction = "a2a_inbound" if received else "a2a"
         if self._circuit_is_blocking():
             return self._emit_circuit_open_verdict(
                 emit_direction, destinationAgent=destination,
             )
+        if not received:
+            self._breaker_delegation_tick()
         try:
             return self._scan_a2a_impl(
                 message, destination, origin_context, parent_context, received
@@ -1196,7 +1230,8 @@ class DelphiSensor:
             # the arg path ran raw L1 with no normalizer. Additive: the normalizer
             # only folds obfuscation, so benign args are unchanged (its partial
             # folding is keyword-gated and never spells a keyword on benign text).
-            normalized_args = self._arg_normalizer().normalize(f"{tool_name} {arg_text}")
+            raw_args = f"{tool_name} {arg_text}"
+            normalized_args = self._arg_normalizer().normalize(raw_args)
             # Over-length tool args have the SAME truncation bypass as scan(): an
             # attacker pads an arg past L1_MAX_SCAN_CHARS to hide a payload after
             # the cap. Scan the full arg text in bounded overlapping windows (same
@@ -1209,6 +1244,21 @@ class DelphiSensor:
                     t for t in _scan_l1(_win).threats
                     if t.category in _TOOL_ARG_KEEP_CATEGORIES
                 )
+            # RAW VIEW, same reasoning as the content path (see
+            # scanner.local.scan_l1_dual_view): the normalizer's Latin-recovery
+            # folds rewrite a non-English token toward an English keyword, which
+            # destroys it for a rule written in the original language. Skipped
+            # when the two views agree — the ordinary ASCII case — so this costs
+            # nothing on the common path. Additive and deduped by rule, so it can
+            # only ADD a finding and never change one that already fired.
+            if normalized_args != raw_args:
+                _seen_rules = {t.rule for t in danger}
+                for _idx, _win in _iter_scan_windows(raw_args, _arg_scan_start):
+                    for _t in _scan_l1(_win).threats:
+                        if (_t.category in _TOOL_ARG_KEEP_CATEGORIES
+                                and _t.rule not in _seen_rules):
+                            _seen_rules.add(_t.rule)
+                            danger.append(_t)
             # STRUCTURAL RE-SCAN. Everything above regexed the argument STRING, so
             # it matches famous spellings rather than behaviour: `rm -rf /` blocks
             # and `r''m -r''f /` — the same command, quote-split — scores nothing.
@@ -1266,6 +1316,33 @@ class DelphiSensor:
             sql_statement = _extract_sql(arguments or {})
             if sql_statement:
                 for f in _sql_findings(sql_statement):
+                    if f["rule"] in {x.rule for x in danger}:
+                        continue
+                    danger.append(_StructuralThreat(
+                        rule=f["rule"], category=f["impact_class"], score=f["score"]
+                    ))
+
+            # STRUCTURAL findings from a URL in an argument value. OUTSIDE the
+            # `if shell_command:` block for the same reason SQL is: an agent
+            # fetches a URL by calling http_get(url=...), so gating this on the
+            # six SHELL_ARG_KEYS would make the whole surface unreachable.
+            # extract_url looks at every key and gates on the VALUE being a URL.
+            #
+            # This is what replaces the accident. `SHELL_cloud_metadata_
+            # credentials` reached tool arguments only because the literal scheme
+            # `http:` satisfied an alternation meant to name the HTTPie binary, so
+            # `https://169.254.169.254/latest/meta-data/` — one character apart —
+            # returned allowed 0.00. Nine of fifteen spellings of that one address
+            # were allowed. The parse answers by ADDRESS RANGE instead, so hex,
+            # octal, decimal, scheme-less and IPv6-mapped forms are the same fact.
+            #
+            # Same discipline as the command and SQL findings: only rules carrying
+            # a `detect` block appear, so a private/loopback destination (the
+            # normal case in a service mesh) classifies for policy and does not
+            # block, and additive to `danger`, so this can only raise a verdict.
+            url_value = _extract_url(arguments or {})
+            if url_value:
+                for f in _url_findings(url_value):
                     if f["rule"] in {x.rule for x in danger}:
                         continue
                     danger.append(_StructuralThreat(
