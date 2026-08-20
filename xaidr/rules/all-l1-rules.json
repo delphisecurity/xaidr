@@ -25,9 +25,10 @@
   },
   {
     "id": "LLM01_template_injection",
-    "pattern": "\\{\\{.*system.*\\}\\}|<\\|system\\|>|###\\s*(System|Instruction)",
+    "pattern": "<\\|system\\|>|###\\s*(System|Instruction)",
     "score": 0.93,
-    "category": "prompt_injection"
+    "category": "prompt_injection",
+    "comment": "CHAT-TEMPLATE / PROMPT-ROLE injection: a message trying to forge a role turn in the model's own chat template (<|system|>) or a markdown role header (### System). The rule id says 'template injection' and that has cost real false positives, because it reads as SERVER-SIDE template injection, which this is not and must not become. A third arm, \\{\\{.*system.*\\}\\}, was REMOVED: it matched any template variable whose NAME contains the substring 'system', so {{system_name}}, {{ config.system.timezone }}, {{ system.hostname }}, {{system_status}}, {{ ecosystem }} and {{ subsystem_id }} — six of six ordinary Jinja templates — BLOCKED at 0.93. Scored against 11 real SSTI payloads and 30 realistic templates it was 9% recall against 10% false positives, and it matched nothing at all in the attack corpus or in 8143 test string literals. Its one apparent catch, {% import os %}{{os.system('id')}}, matched on the literal 'system' inside os.system and is caught by LLM08_os_exec regardless. SSTI detection was deliberately NOT built to replace it: measured 64% recall at 10% FP across five incompatible grammars (Jinja, SpEL, ERB, Freemarker, Ruby), which is a phrase list, and the inversion bar rules those out."
   },
   {
     "id": "LLM01_authority_claim",
