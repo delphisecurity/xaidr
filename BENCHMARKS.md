@@ -23,7 +23,7 @@ of `scripts/corpus_report.py`, both performed against this working tree.
 | cpu count | 10 |
 | python | CPython 3.12.2 |
 | package | `/Users/anirudhkotaru/opena2a/xaidr/__init__.py` (the repository tree, not an installed copy) |
-| version | 1.2.0 |
+| version | 1.4.1 |
 
 ## What was tested
 
@@ -51,25 +51,28 @@ three are shown, because the run-to-run spread is part of the answer:
 
 | repeat | median | p95 | p99 | max | n |
 |---|---:|---:|---:|---:|---:|
-| #1 | 0.40 | 0.56 | 0.63 | 0.84 | 700 |
-| #2 | 0.40 | 0.56 | 0.60 | 0.97 | 700 |
-| #3 | 0.41 | 0.58 | 0.62 | 0.86 | 700 |
+| #1 | 0.44 | 0.60 | 0.69 | 0.88 | 700 |
+| #2 | 0.43 | 0.57 | 0.65 | 0.78 | 700 |
+| #3 | 0.43 | 0.57 | 0.62 | 1.28 | 700 |
 
-**Median 0.40 ms, p95 0.56 ms, p99 0.63 ms**, taking the best of the three
-repeats. The three agree to within 0.03 ms at every percentile, so on this
-machine the figure is stable rather than cherry-picked.
+**Median 0.43 ms, p95 0.57 ms, p99 0.62 ms**, taking the best of the three
+repeats. The three agree to within 0.01 ms at the median and 0.03 ms at p95, so
+on this machine the figure is stable rather than cherry-picked. The 1.28 ms max
+in repeat #3 is one sample out of 700 and is what a garbage collection looks
+like; it is left in because the methodology below says collections land in the
+numbers.
 
 Per shape, last repeat:
 
 | shape | median | p95 |
 |---|---:|---:|
-| read_file, short path | 0.13 | 0.15 |
-| run_sql, bounded delete | 0.36 | 0.42 |
-| short user prompt | 0.39 | 0.48 |
-| run_command, destructive | 0.40 | 0.44 |
-| brief model answer | 0.44 | 0.49 |
-| run_command, benign | 0.52 | 0.59 |
-| small delegation envelope | 0.56 | 0.62 |
+| read_file, short path | 0.15 | 0.17 |
+| run_command, destructive | 0.41 | 0.44 |
+| short user prompt | 0.41 | 0.43 |
+| run_sql, bounded delete | 0.42 | 0.45 |
+| brief model answer | 0.45 | 0.47 |
+| run_command, benign | 0.55 | 0.61 |
+| small delegation envelope | 0.56 | 0.60 |
 
 ## False positives, beside detection
 
@@ -83,13 +86,13 @@ python scripts/corpus_report.py
 
 | | n | result |
 |---|---:|---|
-| shell attacks blocked | 281 | **160** |
+| shell attacks blocked | 281 | **165** |
 | benign commands scoring above zero | 74 | **0** |
 | benign commands blocked | 74 | **0** |
 | benign prose blocked, content path | 89 | **1** (`bp-055`, documented by ID in `tests/test_benign_prose.py`) |
 | benign prose blocked, tool-argument path | 89 | **0** |
 
-So the false-block rate to read beside 160 of 281 is **0 of 74** on commands and
+So the false-block rate to read beside 165 of 281 is **0 of 74** on commands and
 **1 of 89** on prose. The one prose blocker is named rather than absorbed into a
 percentage, so a second one shows up as a new entry instead of as a rounding
 change. Both benign gates are asserted, and the script exits non-zero if either
@@ -131,7 +134,7 @@ layer was NOT changed.
 
 Reported by family and not per command, the same discipline the README's
 [Coverage and limitations](README.md#coverage-and-limitations) section follows.
-Read that section for what 160 of 281 does and does not mean.
+Read that section for what 165 of 281 does and does not mean.
 
 ## Methodology
 

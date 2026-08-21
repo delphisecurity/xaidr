@@ -77,8 +77,8 @@ to embed:
 
 **Not in scope, and this is the important half.**
 
-- **A missed detection is not a vulnerability.** The shipped ruleset blocks 160
-  of 281 attacks in the committed corpus, 57%, and that number is published in
+- **A missed detection is not a vulnerability.** The shipped ruleset blocks 165
+  of 281 attacks in the committed corpus, 59%, and that number is published in
   [Coverage and limitations](README.md#coverage-and-limitations) precisely so
   that nobody has to discover it by surprise. A command we do not catch is a
   known, measured, open gap. Please file it as a normal issue so it can be
@@ -112,10 +112,10 @@ alertable marker (`SCAN_FAILED_OPEN`) and a WARN log. A fault you can trigger
 deliberately is very much in scope. The fail-open response to it is not.
 
 **Enforcement is narrower than classification, and the gap is the product.** 95%
-of the corpus is assigned a class and tier; 57% is blocked with no
+of the corpus is assigned a class and tier; 59% is blocked with no
 configuration. The families that block well under half their cases are named in
-the README rather than hidden: `escalate` blocks 11 of 37 and `execute` blocks
-24 of 59. The genuinely weakest are `infra_destruction` at 0 of 8 and `discovery`
+the README rather than hidden: `escalate` blocks 12 of 37 and `execute` blocks
+28 of 59. The genuinely weakest are `infra_destruction` at 0 of 8 and `discovery`
 at 2 of 11. Those numbers are reproduced on every pull request by the `corpus`
 job in [`.github/workflows/ci.yml`](.github/workflows/ci.yml), so they are
 current rather than aspirational.

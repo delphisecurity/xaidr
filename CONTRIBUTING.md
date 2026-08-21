@@ -64,17 +64,23 @@ commit. A floor lowered to match a regression is a regression with paperwork.
 ## Where coverage is weak
 
 Current shipped behaviour, measured on the committed corpus: 267 of 281 attacks
-are classified (95%), 160 are blocked with no configuration (57%). Those are two
+are classified (95%), 165 are blocked with no configuration (59%). Those are two
 different capabilities and the gap between them is deliberate. Most of the
 ruleset names an impact class and leaves the decision to a policy you write.
+
+The full decomposition, because "165 of 281" on its own invites the wrong
+conclusion: **165 blocked, 103 recognised and left to a policy you write, 13 not
+recognised at all.** The 13 are the only ones that are simply missing, and they
+are named in [Coverage and limitations](README.md#coverage-and-limitations).
+Five of them are `exfiltration`, and those are misses rather than design.
 
 If you are looking for somewhere your work will matter:
 
 | family | blocked | why it is open |
 |---|---|---|
 | `discovery` | 2 of 11 | The genuinely weakest. Only 4 of 11 even classify. Enumeration overlaps almost entirely with ordinary operational inspection. |
-| `escalate` | 11 of 37 | Classifies fully, blocks under a third. |
-| `execute` | 24 of 59 | Same shape: the class is known, the enforcement is not. |
+| `escalate` | 12 of 37 | Classifies fully, blocks under a third. |
+| `execute` | 28 of 59 | Same shape: the class is known, the enforcement is not. |
 | `infra_destruction` | 0 of 8 | **By design, not a gap.** Destroying managed infrastructure is indistinguishable from a legitimate teardown at the command level, so every rule in the family is classify-only. Do not "fix" this by adding a `detect` block. Improving it means better classification, or a worked policy example. |
 
 Note what is *not* on that list. `persist` blocks 17 of 31, above the median,
