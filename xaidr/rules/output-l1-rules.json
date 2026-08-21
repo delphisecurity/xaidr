@@ -137,12 +137,14 @@
   },
   {
     "id": "OUT_code_sql",
-    "pattern": "\\bDROP\\s+TABLE|DELETE\\s+FROM|UNION\\s+SELECT|INSERT\\s+INTO\\s+.*VALUES",
+    "pattern": "\\bDROP\\s+TABLE|DELETE\\s+FROM|UNION\\s+SELECT|INSERT\\s+INTO\\s+[^\\n]{0,160}?VALUES",
     "score": 0.9,
     "category": "out",
     "severity": "critical",
     "owasp": "LLM02",
-    "description": "SQL injection pattern in output"
+    "description": "SQL injection pattern in output",
+    "_was": "\\bDROP\\s+TABLE|DELETE\\s+FROM|UNION\\s+SELECT|INSERT\\s+INTO\\s+.*VALUES",
+    "_why_changed": "Unbounded .* between two anchors is quadratic per start position (the engine runs it to end-of-text and backtracks, at every offset). Bounded to a single-line span; every real instance of this phrasing sits well inside the bound."
   },
   {
     "id": "OUT_code_destructive",
@@ -164,12 +166,15 @@
   },
   {
     "id": "OUT_code_pipe_exec",
-    "pattern": "\\bcurl\\s+.*\\|\\s*(?:bash|sh|zsh)\\b",
+    "pattern": "\\bcurl\\s+[^\\n|]{0,200}\\|\\s{0,8}(?:bash|sh|zsh)\\b",
     "score": 0.9,
     "category": "out",
     "severity": "critical",
     "owasp": "LLM02",
-    "description": "Curl-to-shell piping in output"
+    "description": "Curl-to-shell piping in output",
+    "_was": "\\bcurl\\s+.*\\|\\s*(?:bash|sh|zsh)\\b",
+    "_why_changed": "Unbounded .* before the pipe: on 'curl ' repeated through a 100k input the engine ran .* to end-of-text and backtracked, at every start \u2014 2.8s for one rule. The negated class excludes '|' itself, so the greedy run stops exactly at the pipe and there is no split to retry. Same idiom LLM08_pipe_exec already uses.",
+    "_bounds_tightened": "Cost of this shape is (start positions x wildcard bound); with the leading verb repeated through a 100k input the bound is the only lever. Tightened to keep one rule's worst case in the low hundreds of ms; still spans any real single-command invocation."
   },
   {
     "id": "OUT_code_reverse_shell",
@@ -290,12 +295,12 @@
   },
   {
     "id": "OUT_social_authority_credential_request",
-    "pattern": "(?:i\\s*am|i['’]?m|this\\s+is|we\\s+are|we['’]?re|as)(?:\\s+(?:the|your|an?|from))?\\s+(?:system\\s+admin(?:istrator)?|sysadmin|administrator|admin|security\\s+team|security\\s+department|it\\s+support|it\\s+department|it\\s+help\\s?desk|help\\s?desk)[\\s\\S]{0,60}?(?:provide|send|reply\\s+with|give|share|submit|forward|email|hand\\s+over|disclose)\\s+(?:(?:me|us|your|the)\\s+){0,3}(?:password|passphrase|api\\s*key|credentials?|login(?:\\s+(?:credentials?|details?|info))?|secret|token|pin|otp|access\\s+code)",
+    "pattern": "(?:i\\s*am|i['\u2019]?m|this\\s+is|we\\s+are|we['\u2019]?re|as)(?:\\s+(?:the|your|an?|from))?\\s+(?:system\\s+admin(?:istrator)?|sysadmin|administrator|admin|security\\s+team|security\\s+department|it\\s+support|it\\s+department|it\\s+help\\s?desk|help\\s?desk)[\\s\\S]{0,60}?(?:provide|send|reply\\s+with|give|share|submit|forward|email|hand\\s+over|disclose)\\s+(?:(?:me|us|your|the)\\s+){0,3}(?:password|passphrase|api\\s*key|credentials?|login(?:\\s+(?:credentials?|details?|info))?|secret|token|pin|otp|access\\s+code)",
     "score": 0.65,
     "category": "social_engineering",
     "severity": "high",
     "owasp": "LLM09",
-    "description": "Tier 1 (ASI09): output claims an authority (admin/security/IT) AND requests a credential/secret — authority-claim credential phishing. Requires BOTH the self-claim and the extraction request within a bounded window; mere advice to change a password does not fire."
+    "description": "Tier 1 (ASI09): output claims an authority (admin/security/IT) AND requests a credential/secret \u2014 authority-claim credential phishing. Requires BOTH the self-claim and the extraction request within a bounded window; mere advice to change a password does not fire."
   },
   {
     "id": "OUT_social_deceptive_link",
@@ -304,6 +309,6 @@
     "category": "social_engineering",
     "severity": "high",
     "owasp": "LLM09",
-    "description": "Tier 2 (ASI09): output pairs a deceptive verify/confirm/suspended/re-authenticate pretext with a link — deceptive-link phishing. Requires BOTH the pretext and a URL within a bounded window; a bare informational link does not fire."
+    "description": "Tier 2 (ASI09): output pairs a deceptive verify/confirm/suspended/re-authenticate pretext with a link \u2014 deceptive-link phishing. Requires BOTH the pretext and a URL within a bounded window; a bare informational link does not fire."
   }
 ]

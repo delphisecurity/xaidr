@@ -274,8 +274,9 @@
       },
       {
         "label": "harmful_request",
-        "pattern": "\\b(?:generate|create|write|produce|make|give\\s+me|show\\s+me|tell\\s+me\\s+how)\\b.*\\b(?:hack|exploit|attack|bypass|malware|phish|weapon|drug|kill|harm|steal|fraud|scam|fake|bomb|poison|terror)",
-        "role": "user"
+        "pattern": "\\b(?:generate|create|write|produce|make|give\\s+me|show\\s+me|tell\\s+me\\s+how)\\b[^\\n]{0,160}?\\b(?:hack|exploit|attack|bypass|malware|phish|weapon|drug|kill|harm|steal|fraud|scam|fake|bomb|poison|terror)",
+        "role": "user",
+        "_was": "\\b(?:generate|create|write|produce|make|give\\s+me|show\\s+me|tell\\s+me\\s+how)\\b.*\\b(?:hack|exploit|attack|bypass|malware|phish|weapon|drug|kill|harm|steal|fraud|scam|fake|bomb|poison|terror)"
       }
     ]
   },

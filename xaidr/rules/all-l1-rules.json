@@ -28,7 +28,7 @@
     "pattern": "<\\|system\\|>|###\\s*(System|Instruction)",
     "score": 0.93,
     "category": "prompt_injection",
-    "comment": "CHAT-TEMPLATE / PROMPT-ROLE injection: a message trying to forge a role turn in the model's own chat template (<|system|>) or a markdown role header (### System). The rule id says 'template injection' and that has cost real false positives, because it reads as SERVER-SIDE template injection, which this is not and must not become. A third arm, \\{\\{.*system.*\\}\\}, was REMOVED: it matched any template variable whose NAME contains the substring 'system', so {{system_name}}, {{ config.system.timezone }}, {{ system.hostname }}, {{system_status}}, {{ ecosystem }} and {{ subsystem_id }} — six of six ordinary Jinja templates — BLOCKED at 0.93. Scored against 11 real SSTI payloads and 30 realistic templates it was 9% recall against 10% false positives, and it matched nothing at all in the attack corpus or in 8143 test string literals. Its one apparent catch, {% import os %}{{os.system('id')}}, matched on the literal 'system' inside os.system and is caught by LLM08_os_exec regardless. SSTI detection was deliberately NOT built to replace it: measured 64% recall at 10% FP across five incompatible grammars (Jinja, SpEL, ERB, Freemarker, Ruby), which is a phrase list, and the inversion bar rules those out."
+    "comment": "CHAT-TEMPLATE / PROMPT-ROLE injection: a message trying to forge a role turn in the model's own chat template (<|system|>) or a markdown role header (### System). The rule id says 'template injection' and that has cost real false positives, because it reads as SERVER-SIDE template injection, which this is not and must not become. A third arm, \\{\\{.*system.*\\}\\}, was REMOVED: it matched any template variable whose NAME contains the substring 'system', so {{system_name}}, {{ config.system.timezone }}, {{ system.hostname }}, {{system_status}}, {{ ecosystem }} and {{ subsystem_id }} \u2014 six of six ordinary Jinja templates \u2014 BLOCKED at 0.93. Scored against 11 real SSTI payloads and 30 realistic templates it was 9% recall against 10% false positives, and it matched nothing at all in the attack corpus or in 8143 test string literals. Its one apparent catch, {% import os %}{{os.system('id')}}, matched on the literal 'system' inside os.system and is caught by LLM08_os_exec regardless. SSTI detection was deliberately NOT built to replace it: measured 64% recall at 10% FP across five incompatible grammars (Jinja, SpEL, ERB, Freemarker, Ruby), which is a phrase list, and the inversion bar rules those out."
   },
   {
     "id": "LLM01_authority_claim",
@@ -44,7 +44,9 @@
   },
   {
     "id": "LLM01_translate_smuggle",
-    "pattern": "translate\\s+.*to\\s+.*:\\s*.*(ignore|forget|override)",
+    "_was": "translate\\s+.*to\\s+.*:\\s*.*(ignore|forget|override)",
+    "_why_changed": "Three chained unbounded .* \u2014 the engine re-splits the same span at every offset, and each extra .* multiplies the work. Measured: did not finish in 5s on a 100k input. The first two spans cannot contain the ':' that anchors them, so a negated class makes those two splits deterministic and only one lazy span remains.",
+    "pattern": "translate\\b[^\\n:]{0,80}\\bto\\s+[^\\n:]{0,40}:[^\\n]{0,200}?\\b(?:ignore|forget|override)\\b",
     "score": 0.78,
     "category": "prompt_injection"
   },
@@ -62,15 +64,19 @@
   },
   {
     "id": "LLM06_outbound_exfil_sensitive_body",
-    "pattern": "(?:curl|wget|fetch|axios|requests|httpx|aiohttp|urllib3?|XMLHttpRequest|\\.(?:post|put|patch))\\b[^\\n]{0,160}?(?:-d\\b|--data(?:-\\w+)?|--post-data|--post-file|-F\\b|\\bdata\\s*[:=]|\\bbody\\s*[:=]|\\bjson\\s*=)[^\\n]{0,100}?(?:\\$\\(|@\\/|`[^`]*(?:cat|env|whoami)|\\bcat\\s+\\/|open\\s*\\(|os\\.environ|process\\.env|readFileSync|/etc/(?:passwd|shadow)|\\.ssh\\/|\\.aws\\/|id_rsa|\\benv\\b|secret|credential|password|api[_-]?key|token)",
+    "pattern": "(?:curl|wget|fetch|axios|requests|httpx|aiohttp|urllib3?|XMLHttpRequest|\\.(?:post|put|patch))\\b[^\\n]{0,100}?(?:-d\\b|--data(?:-\\w+)?|--post-data|--post-file|-F\\b|\\bdata\\s*[:=]|\\bbody\\s*[:=]|\\bjson\\s*=)[^\\n]{0,100}?(?:\\$\\(|@\\/|`[^`]*(?:cat|env|whoami)|\\bcat\\s+\\/|open\\s*\\(|os\\.environ|process\\.env|readFileSync|/etc/(?:passwd|shadow)|\\.ssh\\/|\\.aws\\/|id_rsa|\\benv\\b|secret|credential|password|api[_-]?key|token)",
     "score": 0.35,
-    "category": "data_exfiltration"
+    "category": "data_exfiltration",
+    "_bounds_tightened": "Cost of this shape is (start positions x wildcard bound); with the leading verb repeated through a 100k input the bound is the only lever. Tightened to keep one rule's worst case in the low hundreds of ms; still spans any real single-command invocation."
   },
   {
     "id": "LLM06_outbound_exfil_suspicious_dest",
-    "pattern": "(?:curl|wget|fetch|axios|requests|httpx|aiohttp|\\.(?:post|put))\\b[^\\n]{0,200}?(?:-X\\s*POST|--data|--post-data|-d\\b|\\bpost\\b)?[^\\n]{0,120}?(?:https?:\\/\\/)?(?:\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|(?:webhook\\.site|requestbin|pipedream\\.net|beeceptor\\.com|pastebin\\.com|hastebin\\.com|paste\\.ee|ngrok\\.io|burpcollaborator|oastify|interact\\.sh|dnslog|requestcatcher))",
+    "_was": "...\\b[^\\n]{0,200}?(?:-X\\s*POST|--data|--post-data|-d\\b|\\bpost\\b)?[^\\n]{0,120}?(?:https?://)?...",
+    "_why_changed": "Bound lowered 330->200: cost is (start positions x bound), and with the anchor verb repeated through a 100k input that was 1.0s for this one rule. 200 still spans any real curl/wget invocation between the verb and its destination.",
+    "pattern": "(?:curl|wget|fetch|axios|requests|httpx|aiohttp|\\.(?:post|put))\\b[^\\n]{0,120}?(?:https?:\\/\\/)?(?:\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|(?:webhook\\.site|requestbin|pipedream\\.net|beeceptor\\.com|pastebin\\.com|hastebin\\.com|paste\\.ee|ngrok\\.io|burpcollaborator|oastify|interact\\.sh|dnslog|requestcatcher))",
     "score": 0.45,
-    "category": "data_exfiltration"
+    "category": "data_exfiltration",
+    "_bounds_tightened": "Cost of this shape is (start positions x wildcard bound); with the leading verb repeated through a 100k input the bound is the only lever. Tightened to keep one rule's worst case in the low hundreds of ms; still spans any real single-command invocation."
   },
   {
     "id": "LLM01_code_injection",
@@ -140,7 +146,9 @@
   },
   {
     "id": "LLM01_dual_response",
-    "pattern": "two\\s+responses?.*one\\s+normal.*one\\s+(unfiltered|uncensored|without\\s+restrictions)",
+    "_was": "two\\s+responses?.*one\\s+normal.*one\\s+(unfiltered|uncensored|without\\s+restrictions)",
+    "_why_changed": "Two chained unbounded .*, quadratic per start position and 4.4s on a 100k input. Bounded, and the spans are anchored on the literal 'one' that follows them so the two lazy runs cannot claim each other's text.",
+    "pattern": "two\\s+responses?\\b[^\\n]{0,80}?one\\s+normal\\b[^\\n]{0,80}?one\\s+(unfiltered|uncensored|without\\s+restrictions)",
     "score": 0.91,
     "category": "jailbreak"
   },
@@ -255,9 +263,18 @@
   },
   {
     "id": "LLM04_repeat_loop",
-    "pattern": "(.{10,1000})\\1{4,}",
     "score": 0.88,
-    "category": "dos_attempt"
+    "category": "dos_attempt",
+    "detector": "phrase_repeat",
+    "detector_params": {
+      "min_unit": 10,
+      "max_unit": 1000,
+      "min_repeats": 5,
+      "collapse_whitespace": false,
+      "allow_newline_in_unit": false
+    },
+    "_retired_pattern": "(.{10,1000})\\1{4,}",
+    "_retired_because": "The worst offender in the whole rule set, and the audit's own battery missed it because every adversarial input tried was REPETITIVE, where this rule matches early and returns fast. Its worst case is ordinary non-repeating prose: a 991-wide variable capture re-tried at every one of 100k offsets, measured 2548ms on 100k of benign filler text. Same counting detector, 74ms on the same input, zero detection lost across 3378 differential cases."
   },
   {
     "id": "LLM08_exec_command",
@@ -423,9 +440,11 @@
   },
   {
     "id": "LLM06_medical_dump",
-    "pattern": "(?:database|data)\\s*(?:dump|export|backup)\\s+.*(?:healthcare|hospital|medical|patient|clinic)",
+    "pattern": "(?:database|data)\\s*(?:dump|export|backup)\\s+[^\\n]{0,160}?(?:healthcare|hospital|medical|patient|clinic)",
     "score": 0.28,
-    "category": "pii_detected"
+    "category": "pii_detected",
+    "_was": "(?:database|data)\\s*(?:dump|export|backup)\\s+.*(?:healthcare|hospital|medical|patient|clinic)",
+    "_why_changed": "Unbounded .* between two anchors is quadratic per start position (the engine runs it to end-of-text and backtracks, at every offset). Bounded to a single-line span; every real instance of this phrasing sits well inside the bound."
   },
   {
     "id": "LLM01_decode_and_execute",
@@ -519,7 +538,9 @@
   },
   {
     "id": "LLM04_phrase_repeat_overflow",
-    "pattern": "(.{5,50})\\s*(?:\\1\\s*){20,}",
+    "detector": "phrase_repeat",
+    "_retired_pattern": "(.{5,50})\\s*(?:\\1\\s*){20,}",
+    "_retired_because": "Catastrophic backtracking. The capture gave the engine 46 unit lengths at every offset and \\1 sat beside \\s*, so on whitespace both matched the same characters and the splits multiplied: 103 spaces matched instantly, 104 spaces did not finish in 60s. Replaced by the linear counting detector in scanner/repetition.py, which is exact on the same inputs.",
     "score": 0.25,
     "category": "dos_attempt"
   },
@@ -531,15 +552,26 @@
   },
   {
     "id": "LLM04_lorem_padding",
-    "pattern": "(?:Lorem\\s+ipsum\\s+.*){5,}",
+    "pattern": "(?:Lorem\\s+ipsum\\s+[^\\n]{0,200}){5,}",
     "score": 0.18,
-    "category": "dos_attempt"
+    "category": "dos_attempt",
+    "_was": "(?:Lorem\\s+ipsum\\s+.*){5,}",
+    "_why_changed": "Unbounded .* between two anchors is quadratic per start position (the engine runs it to end-of-text and backtracks, at every offset). Bounded to a single-line span; every real instance of this phrasing sits well inside the bound."
   },
   {
     "id": "LLM04_phrase_repeat",
-    "pattern": "(.{10,50})\\s*\\1{15,}",
     "score": 0.2,
-    "category": "dos_attempt"
+    "category": "dos_attempt",
+    "detector": "phrase_repeat",
+    "detector_params": {
+      "min_unit": 10,
+      "max_unit": 50,
+      "min_repeats": 16,
+      "collapse_whitespace": false,
+      "allow_newline_in_unit": false
+    },
+    "_retired_pattern": "(.{10,50})\\s*\\1{15,}",
+    "_retired_because": "Same backtracking family as LLM04_phrase_repeat_overflow: a variable-width capture re-split at every offset with \\1 beside \\s*. Polynomial rather than exponential here (289ms on a 100k near-miss input) but the same shape, and the same counting detector answers it exactly. min_repeats is 16 because the retired pattern required \\1 once plus {15,} more."
   },
   {
     "id": "LLM01_embedded_ai_instruction",
@@ -555,9 +587,11 @@
   },
   {
     "id": "LLM01_fake_authority_marker",
-    "pattern": "(?:DOCUMENT\\s*(?:PRIORITY|CLASSIFICATION)|TOP\\s*SECRET|AUTHORIZED\\s*(?:OVERRIDE|ACCESS))\\s*:?\\s*(?:\\d+|.*(?:supersede|override|priority))",
+    "pattern": "(?:DOCUMENT\\s*(?:PRIORITY|CLASSIFICATION)|TOP\\s*SECRET|AUTHORIZED\\s*(?:OVERRIDE|ACCESS))\\s*:?\\s*(?:\\d+|[^\\n]{0,160}?(?:supersede|override|priority))",
     "score": 0.28,
-    "category": "prompt_injection"
+    "category": "prompt_injection",
+    "_was": "(?:DOCUMENT\\s*(?:PRIORITY|CLASSIFICATION)|TOP\\s*SECRET|AUTHORIZED\\s*(?:OVERRIDE|ACCESS))\\s*:?\\s*(?:\\d+|.*(?:supersede|override|priority))",
+    "_why_changed": "Unbounded .* between two anchors is quadratic per start position (the engine runs it to end-of-text and backtracks, at every offset). Bounded to a single-line span; every real instance of this phrasing sits well inside the bound."
   },
   {
     "id": "LLM01_hidden_content_injection",
@@ -609,9 +643,11 @@
   },
   {
     "id": "LLM02_covert_output_modification",
-    "pattern": "(?:from\\s+now\\s+on|always|in\\s+every\\s+response)\\s*,?\\s*(?:append|include|add|insert)\\s+.*(?:without\\s+telling|silently|secretly|invisibly)",
+    "pattern": "(?:from\\s+now\\s+on|always|in\\s+every\\s+response)\\s*,?\\s*(?:append|include|add|insert)\\s+[^\\n]{0,160}?(?:without\\s+telling|silently|secretly|invisibly)",
     "score": 0.28,
-    "category": "llm02"
+    "category": "llm02",
+    "_was": "(?:from\\s+now\\s+on|always|in\\s+every\\s+response)\\s*,?\\s*(?:append|include|add|insert)\\s+.*(?:without\\s+telling|silently|secretly|invisibly)",
+    "_why_changed": "Unbounded .* between two anchors is quadratic per start position (the engine runs it to end-of-text and backtracks, at every offset). Bounded to a single-line span; every real instance of this phrasing sits well inside the bound."
   },
   {
     "id": "LLM02_output_impersonation",
@@ -771,7 +807,7 @@
   },
   {
     "id": "LLM01_agent_authority_impersonation",
-    "pattern": "(?:i\\s*am|i['’]?m|this\\s+(?:message\\s+)?is\\s+from|message\\s+from\\s*:|this\\s+is\\s+the|speaking\\s+as|on\\s+(?:the\\s+)?authority\\s+of)(?:\\s+(?:the|your|an?|a))?[^.!?\\n]{0,30}?\\b(?:administrator|admin|trusted|authoriz(?:ed|er)|verified|superuser|supervisor|privileged|root\\s+(?:controller|access|user|admin|privileged)|system\\s+admin(?:istrator)?|security\\s*admin(?:istrator)?)\\b",
+    "pattern": "(?:i\\s*am|i['\u2019]?m|this\\s+(?:message\\s+)?is\\s+from|message\\s+from\\s*:|this\\s+is\\s+the|speaking\\s+as|on\\s+(?:the\\s+)?authority\\s+of)(?:\\s+(?:the|your|an?|a))?[^.!?\\n]{0,30}?\\b(?:administrator|admin|trusted|authoriz(?:ed|er)|verified|superuser|supervisor|privileged|root\\s+(?:controller|access|user|admin|privileged)|system\\s+admin(?:istrator)?|security\\s*admin(?:istrator)?)\\b",
     "score": 0.72,
     "category": "prompt_injection"
   },
@@ -789,37 +825,37 @@
   },
   {
     "id": "LLM01_multilingual_russian",
-    "pattern": "(?:игнорируй|забудь|отбрось|отмени|проигнорируй|пропусти)\\s+(?:все\\s+)?(?:предыдущие|начальные|текущие|прежние)?\\s*(?:инструкции|правила|указания|ограничения|директивы|руководства)",
+    "pattern": "(?:\u0438\u0433\u043d\u043e\u0440\u0438\u0440\u0443\u0439|\u0437\u0430\u0431\u0443\u0434\u044c|\u043e\u0442\u0431\u0440\u043e\u0441\u044c|\u043e\u0442\u043c\u0435\u043d\u0438|\u043f\u0440\u043e\u0438\u0433\u043d\u043e\u0440\u0438\u0440\u0443\u0439|\u043f\u0440\u043e\u043f\u0443\u0441\u0442\u0438)\\s+(?:\u0432\u0441\u0435\\s+)?(?:\u043f\u0440\u0435\u0434\u044b\u0434\u0443\u0449\u0438\u0435|\u043d\u0430\u0447\u0430\u043b\u044c\u043d\u044b\u0435|\u0442\u0435\u043a\u0443\u0449\u0438\u0435|\u043f\u0440\u0435\u0436\u043d\u0438\u0435)?\\s*(?:\u0438\u043d\u0441\u0442\u0440\u0443\u043a\u0446\u0438\u0438|\u043f\u0440\u0430\u0432\u0438\u043b\u0430|\u0443\u043a\u0430\u0437\u0430\u043d\u0438\u044f|\u043e\u0433\u0440\u0430\u043d\u0438\u0447\u0435\u043d\u0438\u044f|\u0434\u0438\u0440\u0435\u043a\u0442\u0438\u0432\u044b|\u0440\u0443\u043a\u043e\u0432\u043e\u0434\u0441\u0442\u0432\u0430)",
     "score": 0.88,
     "category": "prompt_injection"
   },
   {
     "id": "LLM01_multilingual_portuguese",
-    "pattern": "(?:ignore|esqueça|descarte|abandone|desconsidere)\\s+(?:as\\s+)?(?:instruções|regras|diretrizes|restrições)\\s+(?:anteriores|iniciais|originais)",
+    "pattern": "(?:ignore|esque\u00e7a|descarte|abandone|desconsidere)\\s+(?:as\\s+)?(?:instru\u00e7\u00f5es|regras|diretrizes|restri\u00e7\u00f5es)\\s+(?:anteriores|iniciais|originais)",
     "score": 0.88,
     "category": "prompt_injection"
   },
   {
     "id": "LLM01_multilingual_japanese",
-    "pattern": "(?:以前の|前の|元の)(?:指示|命令|ルール|ガイドライン|制約|制限)(?:を|は)(?:無視|忘れ|破棄|取り消)",
+    "pattern": "(?:\u4ee5\u524d\u306e|\u524d\u306e|\u5143\u306e)(?:\u6307\u793a|\u547d\u4ee4|\u30eb\u30fc\u30eb|\u30ac\u30a4\u30c9\u30e9\u30a4\u30f3|\u5236\u7d04|\u5236\u9650)(?:\u3092|\u306f)(?:\u7121\u8996|\u5fd8\u308c|\u7834\u68c4|\u53d6\u308a\u6d88)",
     "score": 0.88,
     "category": "prompt_injection"
   },
   {
     "id": "LLM01_multilingual_chinese",
-    "pattern": "(?:忽略|无视|忘记|放弃|丢弃|取消)(?:所有|之前的|先前的|原始的)?(?:指令|指示|规则|准则|限制|约束|说明)",
+    "pattern": "(?:\u5ffd\u7565|\u65e0\u89c6|\u5fd8\u8bb0|\u653e\u5f03|\u4e22\u5f03|\u53d6\u6d88)(?:\u6240\u6709|\u4e4b\u524d\u7684|\u5148\u524d\u7684|\u539f\u59cb\u7684)?(?:\u6307\u4ee4|\u6307\u793a|\u89c4\u5219|\u51c6\u5219|\u9650\u5236|\u7ea6\u675f|\u8bf4\u660e)",
     "score": 0.88,
     "category": "prompt_injection"
   },
   {
     "id": "LLM01_multilingual_korean",
-    "pattern": "(?:이전|원래|기존)(?:의)?\\s*(?:지시|명령|규칙|가이드라인|제약|제한)(?:을|를)?\\s*(?:무시|잊어|취소|폐기)",
+    "pattern": "(?:\uc774\uc804|\uc6d0\ub798|\uae30\uc874)(?:\uc758)?\\s*(?:\uc9c0\uc2dc|\uba85\ub839|\uaddc\uce59|\uac00\uc774\ub4dc\ub77c\uc778|\uc81c\uc57d|\uc81c\ud55c)(?:\uc744|\ub97c)?\\s*(?:\ubb34\uc2dc|\uc78a\uc5b4|\ucde8\uc18c|\ud3d0\uae30)",
     "score": 0.88,
     "category": "prompt_injection"
   },
   {
     "id": "LLM01_multilingual_arabic",
-    "pattern": "(?:تجاهل|انسَ|تخلَّ عن|ألغِ|اترك)\\s*(?:جميع\\s+)?(?:التعليمات|القواعد|التوجيهات|القيود|الأوامر)\\s*(?:السابقة|الأولية|الأصلية)",
+    "pattern": "(?:\u062a\u062c\u0627\u0647\u0644|\u0627\u0646\u0633\u064e|\u062a\u062e\u0644\u064e\u0651 \u0639\u0646|\u0623\u0644\u063a\u0650|\u0627\u062a\u0631\u0643)\\s*(?:\u062c\u0645\u064a\u0639\\s+)?(?:\u0627\u0644\u062a\u0639\u0644\u064a\u0645\u0627\u062a|\u0627\u0644\u0642\u0648\u0627\u0639\u062f|\u0627\u0644\u062a\u0648\u062c\u064a\u0647\u0627\u062a|\u0627\u0644\u0642\u064a\u0648\u062f|\u0627\u0644\u0623\u0648\u0627\u0645\u0631)\\s*(?:\u0627\u0644\u0633\u0627\u0628\u0642\u0629|\u0627\u0644\u0623\u0648\u0644\u064a\u0629|\u0627\u0644\u0623\u0635\u0644\u064a\u0629)",
     "score": 0.88,
     "category": "prompt_injection"
   },
@@ -903,9 +939,10 @@
   },
   {
     "id": "LLM08_pipe_exec",
-    "pattern": "\\b(?:curl|wget)\\s+[^\\n|]{0,300}\\|\\s*(?:bash|sh|zsh|dash|python\\d?|perl|ruby|node|php|pwsh)\\b|\\b(?:base64\\s+(?:-d|-D|--decode)|openssl\\s+(?:base64|enc)[^\\n|]{0,60}?-d|xxd\\s+-r|gunzip|zcat|gzip\\s+-d)\\b[^\\n|]{0,120}\\|\\s*(?:bash|sh|zsh|dash|python\\d?|perl|ruby|node|php|pwsh)\\b|\\beval\\s+[\"']?\\$\\([^)]{0,300}(?:base64\\s+(?:-d|--decode)|xxd\\s+-r|openssl\\s+(?:base64|enc)[^)]{0,40}?-d)",
+    "pattern": "\\b(?:curl|wget)\\s+[^\\n|]{0,200}\\|\\s*(?:bash|sh|zsh|dash|python\\d?|perl|ruby|node|php|pwsh)\\b|\\b(?:base64\\s+(?:-d|-D|--decode)|openssl\\s+(?:base64|enc)[^\\n|]{0,60}?-d|xxd\\s+-r|gunzip|zcat|gzip\\s+-d)\\b[^\\n|]{0,120}\\|\\s*(?:bash|sh|zsh|dash|python\\d?|perl|ruby|node|php|pwsh)\\b|\\beval\\s+[\"']?\\$\\([^)]{0,300}(?:base64\\s+(?:-d|--decode)|xxd\\s+-r|openssl\\s+(?:base64|enc)[^)]{0,40}?-d)",
     "score": 0.9,
-    "category": "code_execution"
+    "category": "code_execution",
+    "_bounds_tightened": "Cost of this shape is (start positions x wildcard bound); with the leading verb repeated through a 100k input the bound is the only lever. Tightened to keep one rule's worst case in the low hundreds of ms; still spans any real single-command invocation."
   },
   {
     "id": "LLM08_reverse_shell",
@@ -921,21 +958,24 @@
   },
   {
     "id": "ADI_forged_tool_result",
-    "pattern": "(?:\\[?\\s*(?:tool|function)[_\\s-]?(?:call[_\\s-]?)?(?:result|output|response)\\s*(?:\\([^)]{0,80}\\))?\\s*\\]?\\s*[:\\]=]|<\\s*(?:tool|function)[_\\s-]?(?:result|output)\\s*>)[\\s\\S]{0,200}?\\b(?:access[_\\s-]?level|privileges?|permissions?|role|auth(?:enticated|orized|orization)?|is[_\\s-]?admin|admin[_\\s-]?access|clearance|trust[_\\s-]?level|verified|approval[_\\s-]?status|mfa|status)\\b\\s*[:=]?\\s*[\"']?(?:admin|root|superuser|system|elevated|granted|approved|full|unrestricted|true|verified|success|bypassed)\\b",
+    "_why_changed": "Every \\s* before a required literal was unbounded, so on a whitespace flood the engine consumed the whole run, failed the literal, and gave back one character at a time \u2014 at every start offset. Did not finish in 5s on 100k of whitespace. Bounding each run to {0,8} makes the per-start cost a constant; no real tool-result header has eight consecutive spaces.",
+    "pattern": "(?:\\[?\\s{0,8}(?:tool|function)[_\\s-]?(?:call[_\\s-]?)?(?:result|output|response)\\s{0,8}(?:\\([^)]{0,80}\\))?\\s{0,8}\\]?\\s{0,8}[:\\]=]|<\\s{0,8}(?:tool|function)[_\\s-]?(?:result|output)\\s{0,8}>)[\\s\\S]{0,200}?\\b(?:access[_\\s-]?level|privileges?|permissions?|role|auth(?:enticated|orized|orization)?|is[_\\s-]?admin|admin[_\\s-]?access|clearance|trust[_\\s-]?level|verified|approval[_\\s-]?status|mfa|status)\\b\\s*[:=]?\\s*[\"']?(?:admin|root|superuser|system|elevated|granted|approved|full|unrestricted|true|verified|success|bypassed)\\b",
     "score": 0.48,
     "category": "forged_trust"
   },
   {
     "id": "SHELL_fetch_pipe_exec_variants",
-    "pattern": "\\b(?:ba|z|k|da)?sh\\s*<\\(\\s*(?:curl|wget|fetch)\\b|(?:eval|(?:ba|z|k|da)?sh\\s+-c)\\s+[\\\"']?\\$\\(\\s*(?:curl|wget)\\b|`\\s*(?:curl|wget)\\s+[^`]{0,200}`\\s*\\|?\\s*(?:ba|z|k|da)?sh\\b|\\b(?:curl|wget)\\s+[^\\n|]{0,300}\\|\\s*(?:sudo\\s+|doas\\s+)(?:ba|z|k|da)?sh\\b|(?:ba|z|k|da)?sh\\s*<<<\\s*[\\\"'][^\\\"']{0,200}\\|\\s*(?:ba|z|k|da)?sh",
+    "pattern": "\\b(?:ba|z|k|da)?sh\\s*<\\(\\s*(?:curl|wget|fetch)\\b|(?:eval|(?:ba|z|k|da)?sh\\s+-c)\\s+[\\\"']?\\$\\(\\s*(?:curl|wget)\\b|`\\s*(?:curl|wget)\\s+[^`]{0,200}`\\s*\\|?\\s*(?:ba|z|k|da)?sh\\b|\\b(?:curl|wget)\\s+[^\\n|]{0,200}\\|\\s*(?:sudo\\s+|doas\\s+)(?:ba|z|k|da)?sh\\b|(?:ba|z|k|da)?sh\\s*<<<\\s*[\\\"'][^\\\"']{0,200}\\|\\s*(?:ba|z|k|da)?sh",
     "score": 0.9,
-    "category": "code_execution"
+    "category": "code_execution",
+    "_bounds_tightened": "Cost of this shape is (start positions x wildcard bound); with the leading verb repeated through a 100k input the bound is the only lever. Tightened to keep one rule's worst case in the low hundreds of ms; still spans any real single-command invocation."
   },
   {
     "id": "SHELL_credential_file_read",
-    "pattern": "(?i)\\b(?:cat|bat|head|tail|less|more|nl|od|xxd|strings|cp|scp|rsync|mv|tar|zip|gzip|base64|openssl|curl|wget|python\\d?|perl|ruby|node)\\b[^\\n]{0,120}?(?:(?:~|/root|/home/[^/\\s]+)?/?\\.ssh/id_(?:rsa|dsa|ecdsa|ed25519)|/etc/(?:shadow|gshadow)\\b|\\.aws/credentials\\b|\\.git-credentials\\b|\\.pgpass\\b|\\.netrc\\b|\\.npmrc\\b|\\.pypirc\\b|\\.docker/config\\.json|\\.kube/config\\b|/proc/[^/\\s]+/environ\\b|/var/run/secrets/kubernetes\\.io/serviceaccount|(?:^|[\\s'\\\"=/])\\.env(?:\\.[a-z0-9_-]+)?(?:[\\s'\\\"]|$))",
+    "pattern": "(?i)\\b(?:cat|bat|head|tail|less|more|nl|od|xxd|strings|cp|scp|rsync|mv|tar|zip|gzip|base64|openssl|curl|wget|python\\d?|perl|ruby|node)\\b[^\\n]{0,80}?(?:(?:~|/root|/home/[^/\\s]+)?/?\\.ssh/id_(?:rsa|dsa|ecdsa|ed25519)|/etc/(?:shadow|gshadow)\\b|\\.aws/credentials\\b|\\.git-credentials\\b|\\.pgpass\\b|\\.netrc\\b|\\.npmrc\\b|\\.pypirc\\b|\\.docker/config\\.json|\\.kube/config\\b|/proc/[^/\\s]+/environ\\b|/var/run/secrets/kubernetes\\.io/serviceaccount|(?:^|[\\s'\\\"=/])\\.env(?:\\.[a-z0-9_-]+)?(?:[\\s'\\\"]|$))",
     "score": 0.9,
-    "category": "credential_access"
+    "category": "credential_access",
+    "_bounds_tightened": "Cost of this shape is (start positions x wildcard bound); with the leading verb repeated through a 100k input the bound is the only lever. Tightened to keep one rule's worst case in the low hundreds of ms; still spans any real single-command invocation."
   },
   {
     "id": "SHELL_credential_file_redirect",

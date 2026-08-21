@@ -13,8 +13,17 @@ from dataclasses import dataclass
 from typing import List
 
 from .dlp import _is_reserved_email
+from .repetition import find_phrase_repeat
 
 _RULES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "rules")
+
+# Non-regex rule bodies, addressed by name from the rule JSON's "detector" field.
+# A rule belongs here when the thing it asks is not a pattern-matching question —
+# see repetition.py for why phrase repetition is a counting problem and what the
+# regex formulation of it cost.
+_DETECTORS = {
+    "phrase_repeat": find_phrase_repeat,
+}
 
 # The CANONICAL set of category strings an L1 rule is allowed to emit. This is
 # the authority the rest of the engine keys on: sensor.scan_tool_call filters
@@ -40,6 +49,15 @@ _KNOWN_L1_CATEGORIES = frozenset({
 })
 
 
+class UnknownRuleDetector(ValueError):
+    """An L1 rule names a detector callable no code path provides.
+
+    Same posture as ``UnknownRuleCategory``: fail at LOAD. A rule pointing at a
+    missing detector would compile fine and simply never fire, which is the
+    failure mode that is invisible in production and obvious in CI.
+    """
+
+
 class UnknownRuleCategory(ValueError):
     """An L1 rule declares a category no code path recognizes.
 
@@ -61,11 +79,59 @@ class UnknownRuleCategory(ValueError):
 # the same way so L2/DLP/compositional are bounded too.
 L1_MAX_SCAN_CHARS = 100_000
 
-# Defense-in-depth wall-clock budget for one L1 scan. If the cumulative time
-# spent in the rule loop exceeds this, remaining rules are skipped with a warning
-# so a single pathological pattern can never hang the whole scan. Thread-safe
-# (no signals): checked between rules.
+# Defense-in-depth wall-clock budget for one L1 scan. Checked BETWEEN rules, and
+# that limitation is fundamental rather than a shortcut: in CPython a running
+# ``re.search`` is a single C call, so no signal handler and no thread can
+# interrupt it. A budget can therefore only ever observe that a pattern WAS
+# pathological — it cannot stop one. That is why the real fix for a backtracker
+# is always a linear pattern (see repetition.py) and never a timeout.
 _L1_SCAN_BUDGET_SEC = 0.5
+
+# Per-rule wall-clock above which ONE pattern is treated as having behaved
+# pathologically on this input. Calibrated from the audit, not guessed: with every
+# pattern now linear, the slowest single rule on a full-size 100k adversarial
+# input measures 376ms, so 1.0s leaves ~2.7x headroom for a loaded machine. The
+# separation from a real backtracker is not close — the one this finding exists
+# for did not finish in 60 seconds on 105 characters — so a wide margin costs
+# nothing in detection and removes any chance of firing on honest work.
+_L1_RULE_SLOW_SEC = 1.0
+
+# WHAT HAPPENS WHEN A BOUND IS BLOWN — AND WHY NEITHER IS A TIMEOUT.
+#
+# Both used to be a bare `print`: rules were skipped, nothing was recorded, and
+# the scan returned whatever the rules before the slow one had found. That is a
+# DETECTION-LOSS path an attacker controls, and this scanner also fails OPEN on an
+# unexpected exception (sensor._emit_scan_error returns `allowed` with
+# SCAN_FAILED_OPEN), so "make the scanner slow" and "make the scanner throw" would
+# both reduce a verdict. Neither may stay silent.
+#
+# They are DIFFERENT FAILURES and get different verdicts, which is the whole of
+# the calibration:
+#
+#   PATHOLOGICAL PATTERN — one rule alone exceeded _L1_RULE_SLOW_SEC. With every
+#   pattern audited linear, no honest rule can do this at any input size; it means
+#   a pattern has re-entered super-linear behaviour on attacker-chosen structure.
+#   BLOCK BAND. This is what makes slowness unusable as a bypass: an input crafted
+#   to make the scanner grind now blocks BECAUSE it made the scanner grind, so the
+#   attacker's lever raises the verdict instead of lowering it.
+#
+#   SCAN BUDGET — the rule LOOP ran long without any single rule misbehaving.
+#   After the audit this means one thing only: the input is very large and 160
+#   linear rules over it add up. That is ordinary work on a big document, not an
+#   attack, and this engine has a standing decision that large input is SURFACED
+#   and never hard-blocked (LLM01_oversized_input, and
+#   test_truncation_bypass.test_benign_large_input_flagged_not_blocked, which is
+#   what caught an earlier version of this change blocking a 150k benign
+#   document). FLAG BAND — visible, attributable, and not a new false positive.
+#   The detection loss it admits is the pre-existing, deliberate windowing
+#   trade-off; what is new is that it is now reported instead of printed.
+SCAN_DEGRADED_CATEGORY = "dos_attempt"
+
+PATHOLOGICAL_PATTERN_RULE = "LLM04_pathological_pattern"
+PATHOLOGICAL_PATTERN_SCORE = 0.65
+
+SCAN_DEGRADED_RULE = "LLM04_scan_budget_exceeded"
+SCAN_DEGRADED_SCORE = 0.25
 
 # --- Over-length windowing (truncation-bypass fix) ---------------------------
 # Truncating to the first L1_MAX_SCAN_CHARS silently dropped everything past the
@@ -192,10 +258,44 @@ def _load_and_compile(filename: str) -> list:
                 f"tool-path keep/flag sets in sensor.py) or fix the spelling. "
                 f"Valid categories: {', '.join(sorted(_KNOWN_L1_CATEGORIES))}."
             )
+        # A rule may name a DETECTOR instead of carrying a regex. Some questions
+        # are not regex questions: "is a 5-50 character unit repeated 21 times"
+        # is a counting problem, and the regex that expressed it
+        # (`(.{5,50})\s*(?:\1\s*){20,}`) was a catastrophic backtracker — 104
+        # spaces did not finish in 60 seconds. See scanner/repetition.py. An
+        # unknown detector name fails at LOAD for the same reason an unknown
+        # category does: a rule that silently does nothing is worse than a build
+        # error.
+        detector_name = r.get("detector")
+        if detector_name is not None:
+            fn = _DETECTORS.get(detector_name)
+            if fn is None:
+                raise UnknownRuleDetector(
+                    f"[xaidr] rule {r.get('id')!r} in {filename} names unknown "
+                    f"detector {detector_name!r}. A rule with an unrecognized "
+                    f"detector would load and never fire. Valid detectors: "
+                    f"{', '.join(sorted(_DETECTORS))}."
+                )
+            params = r.get("detector_params") or {}
+            if not isinstance(params, dict):
+                raise UnknownRuleDetector(
+                    f"[xaidr] rule {r.get('id')!r} in {filename} has a non-object "
+                    f"detector_params."
+                )
+            compiled.append({
+                "id": r["id"],
+                "pattern": None,
+                "detector": (lambda f, kw: lambda text: f(text, **kw))(fn, params),
+                "score": r["score"],
+                "category": category,
+                "filter_reserved_email": False,
+            })
+            continue
         try:
             compiled.append({
                 "id": r["id"],
                 "pattern": re.compile(r["pattern"], re.IGNORECASE),
+                "detector": None,
                 "score": r["score"],
                 "category": category,
                 # Email PII rules set this so RFC-reserved documentation domains
@@ -207,8 +307,28 @@ def _load_and_compile(filename: str) -> list:
     return compiled
 
 
-INPUT_RULES = _load_and_compile("all-l1-rules.json")
-OUTPUT_RULES = _load_and_compile("output-l1-rules.json")
+def _detectors_first(rules: list) -> list:
+    """Stable partition putting the non-regex DETECTOR rules at the front.
+
+    The rule loop abandons remaining rules when it blows its budget, and on a
+    huge input that is exactly the family you least want to skip: the detectors
+    ARE the flood rules, and a flood is what exhausts a budget. Measured on 100k
+    of "curl " repeated — a repetition flood — the expensive destination rules ran
+    first, the budget went, and the LLM04 family (positions 42-89 in file order)
+    never ran: the input came back flagged/0.25 on the degradation signal alone
+    instead of blocked on the repetition it plainly was.
+
+    Detectors are the cheapest rules in the set and their cost is bounded by
+    input length alone, so running them first costs the common path nothing and
+    guarantees the flood family always gets its say. Stable within each group, so
+    file order still decides everything else.
+    """
+    return ([r for r in rules if r["detector"] is not None]
+            + [r for r in rules if r["detector"] is None])
+
+
+INPUT_RULES = _detectors_first(_load_and_compile("all-l1-rules.json"))
+OUTPUT_RULES = _detectors_first(_load_and_compile("output-l1-rules.json"))
 
 
 def scan_l1(text: str, output: bool = False) -> L1Result:
@@ -222,15 +342,41 @@ def scan_l1(text: str, output: bool = False) -> L1Result:
     if len(text) > L1_MAX_SCAN_CHARS:
         text = text[:L1_MAX_SCAN_CHARS]
 
+    # Two distinct degradations, deliberately not merged (see the comment on
+    # PATHOLOGICAL_PATTERN_RULE): `pathological` is one rule misbehaving and
+    # blocks; `budget_blown` is the loop running long on a large input and flags.
+    pathological = None
+    budget_blown = False
+
     for rule in rules:
         # Wall-clock guard (defense in depth): never let one bad pattern hang the
-        # scan. With the size cap + linear patterns this should never trip.
+        # scan. With the size cap + linear patterns this should never trip — and
+        # if it does, it produces a FINDING rather than silence (see
+        # SCAN_DEGRADED_RULE above).
         if time.perf_counter() - start > _L1_SCAN_BUDGET_SEC:
             print(
                 f"[xaidr] Warning: L1 scan budget exceeded "
                 f"({_L1_SCAN_BUDGET_SEC}s); skipping remaining rules"
             )
+            budget_blown = True
             break
+
+        if rule["detector"] is not None:
+            rule_start = time.perf_counter()
+            span = rule["detector"](text)
+            if time.perf_counter() - rule_start > _L1_RULE_SLOW_SEC:
+                pathological = pathological or rule["id"]
+            if span:
+                threats.append(ThreatDetail(
+                    rule=rule["id"],
+                    category=rule["category"],
+                    score=rule["score"],
+                    matched=str(span)[:100],
+                ))
+                if rule["score"] > max_score:
+                    max_score = rule["score"]
+            continue
+
         if rule.get("filter_reserved_email"):
             # Email PII rule: drop RFC-reserved documentation-domain matches and
             # fire only if a real (non-reserved) email remains. Linear: findall +
@@ -248,7 +394,15 @@ def scan_l1(text: str, output: bool = False) -> L1Result:
                     max_score = rule["score"]
             continue
 
+        rule_start = time.perf_counter()
         match = rule["pattern"].search(text)
+        if time.perf_counter() - rule_start > _L1_RULE_SLOW_SEC:
+            # This pattern took pathologically long ON THIS INPUT. It cannot be
+            # interrupted (a C-level re.search is uninterruptible in CPython), so
+            # this is observed after the fact — but it is still recorded, because
+            # the alternative is a scanner that gets slower and quieter at the
+            # same time.
+            pathological = pathological or rule["id"]
         if match:
             threats.append(ThreatDetail(
                 rule=rule["id"],
@@ -258,6 +412,23 @@ def scan_l1(text: str, output: bool = False) -> L1Result:
             ))
             if rule["score"] > max_score:
                 max_score = rule["score"]
+
+    if pathological is not None:
+        threats.append(ThreatDetail(
+            rule=PATHOLOGICAL_PATTERN_RULE,
+            category=SCAN_DEGRADED_CATEGORY,
+            score=PATHOLOGICAL_PATTERN_SCORE,
+            matched=f"rule={pathological}",
+        ))
+        max_score = max(max_score, PATHOLOGICAL_PATTERN_SCORE)
+    if budget_blown:
+        threats.append(ThreatDetail(
+            rule=SCAN_DEGRADED_RULE,
+            category=SCAN_DEGRADED_CATEGORY,
+            score=SCAN_DEGRADED_SCORE,
+            matched="rule loop exceeded its budget; remaining rules skipped",
+        ))
+        max_score = max(max_score, SCAN_DEGRADED_SCORE)
 
     categories = set(t.category for t in threats)
     if len(categories) >= 2:
