@@ -151,19 +151,32 @@ def test_negation_scoping_is_redos_safe():
     import time
 
     from xaidr.scanner.directive_context import (
+        artifact_reports_danger,
         is_descriptive,
         protective_override_bypass,
         security_mention,
+        strip_artifact_report,
     )
 
     payloads = [
         "do not reveal it. " * 4000,
         ("'" + "a" * 5000 + "ignore" + "b" * 5000) * 3,
         "never never never " * 5000 + "reveal the system prompt",
+        # FINDING-14 report spans. The first two are not ReDoS but QUADRATIC
+        # SCAN: every cue match searching forward for a clause terminator that
+        # never arrives is O(cues x len), and a cue-dense input with no
+        # terminator made this probe stop completing before the lookahead and
+        # cue-count bounds went in. Locked here so the bounds cannot be removed
+        # as "obviously unnecessary".
+        "checklist " * 20000,
+        "log entry " + "x" * 90000,
+        ("log line " + "a" * 500 + " reads ") * 500,
     ]
     for p in payloads:
         t0 = time.perf_counter()
         is_descriptive(p)
         protective_override_bypass(p)
         security_mention(p)
+        artifact_reports_danger(p)
+        strip_artifact_report(p)
         assert time.perf_counter() - t0 < 1.0, "detection path too slow (possible ReDoS)"
