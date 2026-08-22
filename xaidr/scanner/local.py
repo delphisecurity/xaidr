@@ -15,14 +15,14 @@ from .directive_context import (
     active_extraction,
     artifact_reports_danger,
     descriptive_frame,
+    descriptive_frame_residues,
     documentary_mention,
     has_quoted_attack,
     is_descriptive,
     security_artifact_cue,
+    security_artifact_residues,
     span_is_predicate,
     strip_artifact_report,
-    strip_descriptive_frame,
-    strip_security_artifact,
     protective_override_bypass,
     strip_code_spans,
 )
@@ -144,7 +144,7 @@ def _frame_is_disarmed(threats, text: str, block_threshold: float) -> bool:
     blocked).
     """
     return _carries_live_command(
-        threats, text, block_threshold, strip_descriptive_frame
+        threats, text, block_threshold, descriptive_frame_residues
     )
 
 
@@ -152,13 +152,14 @@ def _carries_live_command(
     threats,
     text: str,
     block_threshold: float,
-    strip_cue,
+    cue_residues,
     include_directive_attacks: bool = False,
 ) -> bool:
     """The shared COMMAND-vs-TOPIC test both mention dampeners now use.
 
-    ``strip_cue`` is the dampener's own cue-removal function, so each caller
-    supplies its own vocabulary and neither test ever inspects WHICH cue matched.
+    ``cue_residues`` is the dampener's own residue FAMILY function, so each
+    caller supplies its own vocabulary and neither test ever inspects WHICH cue
+    matched.
     ``include_directive_attacks`` is False for the descriptive frame, whose caller
     exempts those rules from dampening anyway, and True for the security-artifact
     arm, which has no such exemption — a literal "ignore all previous
@@ -180,16 +181,29 @@ def _carries_live_command(
     # residue. A cue wedged INSIDE a predicate rule's span splits it — "print your
     # FOR EXAMPLE system prompt" no longer matches ``print your system prompt`` —
     # so the predicate evidence disappears for a text whose command is still
-    # perfectly legible. Re-scan with the cue removed and ask again. Only reached
-    # when the span test already failed, so it costs one extra L1 pass on the rare
-    # framed-and-block-band input, never on the common path.
-    residue = strip_cue(text)
-    if not residue.strip() or residue == text:
-        return False
-    return any(
-        span_is_predicate(getattr(t, "matched", "") or "")
-        for t in _considered(scan_l1(residue).threats)
-    )
+    # perfectly legible. Re-scan with the cue removed and ask again.
+    #
+    # A FAMILY, not one residue. A cue's regex match is the part that identifies
+    # the frame, and it is routinely shorter than the phrase written around it
+    # ("function that evaluates" out of "function that evaluates a string"); the
+    # unmatched tail stays wedged in the span and the single-residue re-scan
+    # restores nothing. The family removes the match, then the match plus one
+    # following word, and so on to a declared bound — see
+    # directive_context.FRAME_RESIDUE_MAX_EXTRA_WORDS for what the bound does and
+    # does not promise.
+    #
+    # Ordered cheapest-first and short-circuited, so the common path still costs
+    # the single extra L1 pass it always did; the additional passes happen only
+    # on a framed, block-band input whose first residue did not answer, which is
+    # the rare case this guard exists for. Extra members can only ADD predicate
+    # evidence, so this can never dampen something that was blocking.
+    for residue in cue_residues(text):
+        if any(
+            span_is_predicate(getattr(t, "matched", "") or "")
+            for t in _considered(scan_l1(residue).threats)
+        ):
+            return True
+    return False
 
 
 # Live command-form signals that must NEVER be capped into the flag band by the
@@ -686,7 +700,7 @@ class LocalScanner:
             (*l1_threats, *l2_threats),
             scan_text,
             self.block_threshold,
-            strip_security_artifact,
+            security_artifact_residues,
             include_directive_attacks=True,
         ):
             return True  # (1) the danger is a topic, not a command

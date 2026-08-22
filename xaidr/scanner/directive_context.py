@@ -533,10 +533,139 @@ def strip_descriptive_frame(text: str) -> str:
     it costs nothing on text where the cue is not wedged into a command.
 
     Never raises; empty input returns empty.
+
+    NOT SUFFICIENT ON ITS OWN — see ``descriptive_frame_residues``. A cue regex
+    matches the part of a phrase that identifies it as a cue, which is routinely
+    SHORTER than the phrase a person writes: ``_CODE_AS_DOCS`` matches "function
+    that evaluates" out of "function that evaluates a string", ``_DESCRIPTIVE``
+    matches "refers to" out of "refers to a string". The unmatched tail stays in
+    the residue and keeps the span split, so this function alone restores nothing
+    for the very inputs the residue guard exists to catch. Kept as the extra=0
+    member of the residue family and as the public single-residue accessor.
     """
     if not text:
         return ""
     return _CODE_AS_DOCS.sub(" ", _DESCRIPTIVE.sub(" ", text))
+
+
+# ── THE RESIDUE FAMILY (the fourth appearance of one root cause) ─────────────
+# Every previous fix in this file removed an ENUMERATION from a guard. This one
+# removes the last one hiding in the residue guard itself: the assumption that a
+# cue's REGEX MATCH and a cue's PHRASE are the same string.
+#
+# They are not, and cannot be made so. A cue regex is written to identify a frame
+# from its distinctive head ("refers to", "function that evaluates", "is when").
+# The phrase continues into a complement whose extent is ordinary English — an
+# object noun phrase of unbounded length. Extending each alternation to swallow
+# its complement would be exactly the enumeration this file keeps deleting: it
+# would work for "a string", miss "a string of source text", and hand the next
+# reviewer the same bug with a longer example.
+#
+# So the strip is not made perfect. It is made PLURAL. The guard tries the cue
+# match, then the cue match plus one following word, plus two, and so on to a
+# DECLARED bound, and asks its question of each. Restoring a predicate span in
+# ANY member disarms the frame.
+#
+# WHAT THE BOUND MEANS, stated rather than implied. An attacker who wedges a cue
+# plus MORE than FRAME_RESIDUE_MAX_EXTRA_WORDS words of complement into the
+# middle of a command still splits the span in every member of the family. The
+# bound is a real limit, not a proof. Three things make it the right shape:
+#   * it is one number in one place, not a vocabulary to keep in sync;
+#   * every word past the bound has to sit INSIDE the command, so the text an
+#     attacker must write drifts further from the sentence they wanted; and
+#   * the direction of failure is a MISS, never a false block — an extra residue
+#     can only ever ADD predicate evidence, and adding evidence keeps an attack
+#     caught. It can never dampen something that was blocking.
+# Measured leftovers on the corpus that motivated this run to 3 words; the bound
+# is 4. See tests/test_descriptive_frame_matrix.py for the cross product.
+FRAME_RESIDUE_MAX_EXTRA_WORDS = 4
+
+# One whitespace-delimited word. Used to walk forward from a cue match; a plain
+# scan rather than a widened alternation, so this adds NO new regex surface and
+# no new backtracking behaviour to any shipped cue pattern.
+_ONE_WORD_AFTER = re.compile(r"\s+\S+")
+
+
+def _strip_with_complement(text: str, patterns, extra: int) -> str:
+    """``text`` with every match of ``patterns`` — plus ``extra`` following
+    words — replaced by a space.
+
+    Overlapping and adjacent spans are merged, so two cues next to each other
+    cannot produce a residue that drops text between them twice.
+    """
+    spans = []
+    for pattern in patterns:
+        for m in pattern.finditer(text):
+            end = m.end()
+            for _ in range(extra):
+                nxt = _ONE_WORD_AFTER.match(text, end)
+                if not nxt:
+                    break
+                end = nxt.end()
+            spans.append((m.start(), end))
+    if not spans:
+        return text
+    spans.sort()
+    out, last = [], 0
+    for start, end in spans:
+        if start < last:
+            last = max(last, end)
+            continue
+        out.append(text[last:start])
+        out.append(" ")
+        last = end
+    out.append(text[last:])
+    return "".join(out)
+
+
+def _residue_family(text: str, patterns, first: str) -> list[str]:
+    """The bounded residue family for one cue vocabulary.
+
+    ``first`` is the vocabulary's own single-residue function applied to
+    ``text``, so member 0 is byte-identical to the behaviour that shipped and
+    this change can only ADD members. Deduplicated and ordered cheapest-first:
+    the caller stops at the first member that answers its question, so the
+    common case costs exactly what it did before.
+    """
+    if not text:
+        return []
+    out, seen = [], set()
+    for candidate in (
+        first,
+        *(
+            _strip_with_complement(text, patterns, extra)
+            for extra in range(1, FRAME_RESIDUE_MAX_EXTRA_WORDS + 1)
+        ),
+    ):
+        if candidate != text and candidate.strip() and candidate not in seen:
+            seen.add(candidate)
+            out.append(candidate)
+    return out
+
+
+def descriptive_frame_residues(text: str) -> list[str]:
+    """Residue family for the DESCRIPTIVE + CODE-AS-DOCS vocabularies.
+
+    Both are stripped together because ``descriptive_frame`` accepts either as
+    the same "descriptive" verdict — a frame that grants dampening must be
+    removable before the check on that dampening is judged, or it both opens the
+    door and hides the fact that it did.
+    """
+    return _residue_family(
+        text, (_DESCRIPTIVE, _CODE_AS_DOCS), strip_descriptive_frame(text)
+    )
+
+
+def security_artifact_residues(text: str) -> list[str]:
+    """Residue family for the SECURITY-ARTIFACT vocabulary (FINDING-14's arm).
+
+    Every branch of ``_SECURITY_ARTIFACT`` is a complete noun phrase, so member 0
+    already strips it whole and the extra members are usually duplicates that
+    dedupe away. It gets the family anyway: the property that matters is that no
+    vocabulary is exempt from the rule, so a future branch with a complement
+    cannot silently reintroduce this defect in the arm nobody re-checked.
+    """
+    return _residue_family(text, (_SECURITY_ARTIFACT,), strip_security_artifact(text))
 
 
 def span_is_predicate(matched: str) -> bool:
