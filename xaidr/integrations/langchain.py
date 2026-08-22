@@ -85,6 +85,8 @@ def delphi_middleware(
     agent_id: str = "langchain-agent",
     enforcement_mode: str = "monitor",
     reporter: Any = None,
+    *,
+    sensor: Any = None,
     **sensor_kwargs: Any,
 ) -> Any:
     """Factory returning a full-boundary LangChain middleware.
@@ -117,6 +119,14 @@ def delphi_middleware(
         agent_id: identifier for this agent (appears in telemetry).
         enforcement_mode: "monitor" (default, never blocks) or "block".
         reporter: optional telemetry reporter; defaults to the sensor default.
+        sensor: an EXISTING sensor to scan with, instead of constructing one.
+            ``xaidr.protect()`` passes this so the middleware boundary and every
+            other boundary it instruments share one sensor — one agent_id, one
+            reporter, one policy, one circuit breaker. Without it, a
+            ``protect()`` that also injected this middleware would emit under a
+            second sensor and split the audit trail in two. When given,
+            ``agent_id`` / ``enforcement_mode`` / ``reporter`` /
+            ``**sensor_kwargs`` are ignored; the sensor's own values win.
         **sensor_kwargs: forwarded to DelphiSensor (e.g. policy_file=, schema=).
     """
     try:
@@ -128,12 +138,15 @@ def delphi_middleware(
             "Install with: pip install 'xaidr[langchain]'"
         ) from exc
 
-    sensor = DelphiSensor(
-        agent_id=agent_id,
-        enforcement_mode=enforcement_mode,
-        reporter=reporter,
-        **sensor_kwargs,
-    )
+    if sensor is None:
+        sensor = DelphiSensor(
+            agent_id=agent_id,
+            enforcement_mode=enforcement_mode,
+            reporter=reporter,
+            **sensor_kwargs,
+        )
+    else:
+        agent_id = sensor.agent_id
 
     # Both "blocked" and "approval_required" HALT the turn, but they are
     # different states and must read differently: a block is a denial, an
