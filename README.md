@@ -486,7 +486,82 @@ enabling hard blocking.
 
 ## Drop-in protection
 
-If you would rather not place scan calls by hand, three wrappers do it for you.
+If you would rather not place scan calls by hand, three wrappers do it for you —
+or one call wires all three for you.
+
+### One line: `xaidr.protect()`
+
+```python
+import httpx, langchain_core.tools          # import your frameworks FIRST
+import xaidr
+
+print(xaidr.protect(agent_id="support-agent", enforcement_mode="block"))
+```
+
+`protect()` looks at what this process has **already imported**, instruments
+every boundary it can reach with one shared `Sensor`, and returns a manifest:
+
+```
+xaidr.protect() manifest — agent_id='support-agent' mode='block'
+  PRESENT BUT NOT PATCHED (1) — THESE BOUNDARIES ARE UNPROTECTED
+    x langgraph        langgraph.graph.StateGraph  [input+output]
+        a StateGraph's nodes are callables YOU supply; there is no library-owned
+        call site between the graph and your node functions to wrap. ...
+  PATCHED (3)
+    + httpx            httpx.Client.send  [egress]
+    + langchain_core   langchain_core.tools.BaseTool.run  [tool]
+    + langchain_core   langchain_core.tools.BaseTool.arun  [tool]
+  NOT PRESENT (8) — not in sys.modules, nothing to patch
+    - autogen-core, autogen-legacy, crewai, langchain, llama-index, mcp, ...
+```
+
+The manifest is also a mapping (`manifest["patched"]`, `manifest.to_dict()`) and
+the reversal handle (`manifest.unprotect()`). Four rules govern it:
+
+| Rule | What it means |
+|---|---|
+| **Patches only what is in `sys.modules`** | `protect()` never imports a framework to instrument it. That is what keeps `pip install xaidr` a zero-dependency install. |
+| **Explicit call only** | Importing `xaidr` patches nothing. There is no import hook and no `.pth` magic — a control with no call site cannot be audited. |
+| **Loud about gaps** | A framework that is present but *not* patched raises `XaidrProtectionWarning`, prints to stderr, and heads the manifest. Silence about an unprotected boundary is the one outcome ruled out. |
+| **Idempotent** | A second `protect()` reports each site as `already_patched` rather than double-wrapping — which makes "call it again after importing more" a supported workflow. |
+
+**Coverage today**, and where each one enforces:
+
+| Framework | Patch site | Boundaries |
+|---|---|---|
+| `httpx` | `Client.send`, `AsyncClient.send` | destination policy (every verb), request body, response DLP |
+| `requests` | `Session.send` | same |
+| `langchain-core` | `BaseTool.run` / `.arun` | tool — also covers LangGraph's `ToolNode` and bare tool calls |
+| `langchain` | `agents.create_agent` | input + output + tool, via `delphi_middleware` injection |
+| `openai-agents` | `Runner.run` / `.run_sync` | input + output |
+| `crewai` | `tools.BaseTool.run`, `Crew.kickoff` | tool + crew input |
+| `autogen-core` / `autogen` | `BaseTool.run_json`, `ConversableAgent.execute_function` | tool |
+| `llama-index` | `FunctionTool.call` / `.acall` | tool |
+| `mcp` | `ClientSession.call_tool` | tool arguments + the server's returned content |
+
+**Known limits, in the manifest rather than the footnotes.** A framework
+imported *after* `protect()` is not patched — call `protect()` again. A
+module-function seam (`create_agent`) does not reach a name already bound by
+`from langchain.agents import create_agent`; a class-method seam (everything
+else) does. LangGraph's own graph boundary, the OpenAI Agents SDK's per-instance
+`FunctionTool.on_invoke_tool`, and LlamaIndex's non-`FunctionTool` types have no
+patchable call site — each is reported as `found_unpatchable` with the reason and
+the manual alternative (`sensor.protect_tools(...)`).
+
+**Enforcement shape.** Tool boundaries return a `[BLOCKED]` / `[APPROVAL
+REQUIRED]` string the agent can read and recover from. Transport and entrypoint
+boundaries raise `DelphiBlockedError` — there is no in-band way for an HTTP send
+to say "refused".
+
+`protect()` wires **boundaries only**. Telemetry, policy loading, and the circuit
+breaker stay where they already are — the `Sensor` constructor — and everything
+you pass beyond `agent_id` / `enforcement_mode` is forwarded to it verbatim
+(`reporter=`, `policy_file=`, `circuit_breaker=`, `blocked_urls=`, …). The
+breaker in particular stays opt-in: it changes availability, and a one-line
+"protect me" call must never quietly add a new way for your app to stop serving.
+
+The three wrappers below are still the right tool when you want a specific
+boundary, or a boundary `protect()` reports it cannot reach.
 
 ### Protect your tools
 
@@ -1707,7 +1782,7 @@ flush and stop one early.
 | `set_policy(dict)` | programmatic policy |
 | `block_tools(names)` / `unblock_tools(names)` | operator tool blocklist |
 | `block_urls(urls)` / `unblock_urls(urls)` | operator destination blocklist |
-| `protect_tools(tools)` | wrap tools with enforcement |
+| `protect_tools(tools)` | wrap tools with enforcement (idempotent — a tool already wrapped is returned unchanged) |
 | `protect_http(client)` | wrap an `httpx.Client` |
 | `privilege_tier` | this sensor's configured [tier](#agent-privilege-tiers) (property; read-only, set at construction) |
 | `circuit_state` | `"closed"` / `"open"` (property; always `"closed"` with no breaker) |
