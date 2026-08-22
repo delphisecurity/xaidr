@@ -1686,8 +1686,8 @@ detection ones.
 - **Malformed content is safe.** Badly formed input cannot turn the sensor into
   a denial-of-service risk.
 
-Verified with `python -m pytest -q` in a clean virtual environment: **3348
-passed, 2 skipped**, identical across three consecutive runs. The suite covers the public scan APIs, wrappers, policy, provenance,
+Verified with `python -m pytest -q` in a clean virtual environment: **7414
+passed, 2 skipped**, identical across three consecutive serial runs. The suite covers the public scan APIs, wrappers, policy, provenance,
 reporters, telemetry schema, and resilience behavior.
 
 That figure is a **source-tree** claim, not something you can reproduce from
