@@ -1626,6 +1626,16 @@ class DelphiSensor:
             protected = sensor.protect_tools([query_db, send_email])
             agent = create_agent(model=llm, tools=protected)
 
+        IDEMPOTENT: a tool this method has already wrapped is returned
+        unchanged rather than wrapped again. Double-wrapping was never a
+        correctness bug — the inner wrapper's verdict is identical and the outer
+        one halts first — but it scanned the same call twice and emitted two
+        telemetry events for one action, which makes event counts lie. Since
+        ``xaidr.protect()`` can reach the same tool as a manual
+        ``protect_tools`` call, "wrapped twice" is now an ordinary situation
+        rather than a mistake, so it is handled here rather than left to the
+        caller to avoid.
+
         Args:
             tools: LangChain ``@tool`` objects or plain callables.
 
@@ -1641,6 +1651,10 @@ class DelphiSensor:
             original_func = getattr(t, "func", None)
             if original_func is None and callable(t):
                 original_func = t
+
+            if getattr(original_func, "_xaidr_protect_tools", False):
+                wrapped.append(t)
+                continue
 
             def make_wrapper(orig_func, tname):
                 def wrapper(*args, **kwargs):
@@ -1686,6 +1700,8 @@ class DelphiSensor:
                 return wrapper
 
             new_func = make_wrapper(original_func, tool_name)
+            # The idempotency marker, read at the top of the next pass.
+            new_func._xaidr_protect_tools = True
 
             # Preserve LangChain tool metadata (name, description, args_schema)
             # by copying the original tool with only `func` replaced. model_copy
