@@ -297,7 +297,11 @@ Every number here is measured on the committed corpus at
 benign prose passages — 66 that quote a shell command, 7 that carry a
 model-directed jailbreak / prompt-leak / encoding / DoS / forged-trust payload in
 plain prose, and 16 benign inversions that use safety-negation reframing
-vocabulary with no attack in them) and is reproducible from a clone with
+vocabulary with no attack in them). Note what that corpus is *about*: shell
+commands, mostly quoted. It measures nothing about prose discussing
+prompt-injection topics — see [what the benign-prose corpus does not
+cover](#coverage-and-limitations) below. Everything here is reproducible from a
+clone with
 `python -m pytest tests/test_shell_egress.py tests/test_shell_classes_stage3.py
 tests/test_benign_prose.py`. The corpus is checked in, so you can read what is
 being claimed rather than taking the percentage on trust. `python
@@ -427,6 +431,33 @@ anti-bypass and removing it would let an attacker dampen a real extraction by
 prefixing "Red-team writeup:". Both are content-path only; as tool arguments the
 same passages flag. `bp-070` and `bp-071` carry these families in shapes that do
 not trip either case.
+
+**What the benign-prose corpus does not cover.** Those 89 passages are prose
+about **shell commands**, and 64 of them carry a code span, which is what routes
+them through the documentary-prose cap. They say nothing about
+prose that discusses *prompt-injection* topics: a system prompt, developer mode,
+a jailbreak persona. That is a different surface with a different acceptance
+path, and until recently nothing measured it.
+
+It fails in **both directions**, and both are known limits rather than
+speculation:
+
+- **Under-scored.** Text that discusses one of these topics inside a documentary
+  frame can be scored below its threat level. A frame cue anywhere in the input
+  can dampen a gated signal whose rule reported a bare topic noun rather than a
+  command, because the guard that bounds the dampener has no command to find.
+- **Over-scored.** The same rules assign a block-band score to the topic noun on
+  its own, so a sentence that merely *mentions* one of these topics — with no
+  frame cue to dampen it — can block outright. Ordinary incident reports,
+  runbooks and policy documents fall in here.
+
+The two are the same root cause seen from opposite sides: a keyword carries a
+block-band verdict, the dampener exists to undo that, and the guard exists to
+bound the dampener. `tests/test_descriptive_topic_fp_pool.py` carries the corpus
+for the over-scored direction and names each affected text rather than counting
+them; it records the current behaviour and explicitly does not endorse it. If
+you feed security documentation about prompt injection to an agent through
+`scan()`, read that file first.
 
 There is also one enforcement over-reach worth knowing about: an archive stream
 piped into a raw network socket blocks whatever the source directory is, so an
