@@ -1,0 +1,275 @@
+"""``xaidr.protect()`` — one explicit call that instruments every agent boundary
+this process can actually reach.
+
+    import xaidr
+    print(xaidr.protect(agent_id="support-agent", enforcement_mode="block"))
+
+Read the four rules before changing anything here; they are the product, not
+implementation detail.
+
+1. **Only what is already imported.** ``protect()`` patches modules found in
+   ``sys.modules`` and imports nothing. A framework you have not imported is
+   reported in ``not_present``, never pulled in. This is what keeps
+   ``pip install xaidr`` a zero-dependency install.
+2. **Explicit call.** Nothing installs itself at import time. A security control
+   that appears without a call site cannot be audited, and being auditable is
+   half of what this is for.
+3. **Loud manifest.** A framework that is PRESENT but UNPATCHED is a warning, a
+   stderr line, and the first section of the printed manifest. Silence about an
+   unprotected boundary is the one outcome this design does not permit.
+4. **Idempotent.** Calling ``protect()`` twice does not double-wrap; the second
+   call reports each site as ``already_patched``. That is what makes "call it
+   again after importing more frameworks" a supported workflow rather than a
+   bug.
+
+WHAT protect() DOES NOT DO — and why (the boundaries-only decision):
+
+It constructs a ``Sensor`` from the kwargs you pass and puts it at boundaries.
+It does NOT separately wire telemetry, policy loading, or the circuit breaker,
+because the Sensor constructor already owns all three and already has deliberate
+defaults: a ``StdoutReporter`` when no ``reporter=`` is given, an auto-load of
+``./xaidr-policy.yaml`` when no ``policy_file=`` is given, and a circuit breaker
+that is ENTIRELY inert unless one is passed. Re-deciding any of those inside
+``protect()`` would create a second way to configure one thing and a precedence
+question nobody can answer from the call site. The circuit breaker in particular
+stays opt-in: it changes availability, and a one-line "protect me" call must
+never quietly introduce a new way for the host application to stop serving
+traffic. So everything non-boundary is forwarded verbatim as ``**sensor_kwargs``
+— which is a real decision about who owns configuration, not a punt.
+"""
+
+from __future__ import annotations
+
+import sys
+from typing import Any, Iterable, Optional
+
+from .core import PatchContext, PatchUnavailable, exempt
+from .frameworks import TARGETS, TARGETS_BY_NAME
+from .manifest import (
+    PatchRecord,
+    ProtectionManifest,
+    XaidrProtectionWarning,
+    _shout,
+)
+
+__all__ = [
+    "protect",
+    "unprotect",
+    "exempt",
+    "ProtectionManifest",
+    "PatchRecord",
+    "XaidrProtectionWarning",
+    "active_manifests",
+]
+
+#: Every manifest whose patches are still installed, oldest first.
+_ACTIVE: list[ProtectionManifest] = []
+
+DEFAULT_AGENT_ID = "xaidr-protected-agent"
+
+
+def active_manifests() -> list[ProtectionManifest]:
+    """The manifests whose patches are currently installed."""
+    return [m for m in _ACTIVE if m.is_active]
+
+
+def protect(
+    agent_id: str = DEFAULT_AGENT_ID,
+    enforcement_mode: str = "monitor",
+    *,
+    sensor: Any = None,
+    targets: Optional[Iterable[str]] = None,
+    quiet: bool = False,
+    raise_on_config_error: bool = True,
+    **sensor_kwargs: Any,
+) -> ProtectionManifest:
+    """Instrument every agent boundary reachable in this process. Returns a manifest.
+
+    Args:
+        agent_id: identifier recorded on every event. Defaults to a placeholder
+            and says so in the manifest notes — a nameless agent in a security
+            log is a real cost, so it is visible rather than silent.
+        enforcement_mode: ``"monitor"`` (default, observes and flags) or
+            ``"block"``. Forwarded to the Sensor, which owns the semantics.
+        sensor: an existing ``Sensor`` to instrument with, instead of building
+            one. When given, ``agent_id`` / ``enforcement_mode`` /
+            ``sensor_kwargs`` are ignored and the sensor's own values are used.
+        targets: optional allowlist of framework names (see
+            ``xaidr.autopatch.frameworks.TARGETS``). Everything else is skipped
+            and reported as skipped, not silently dropped.
+        quiet: suppress the clean startup banner. It does NOT suppress warnings
+            about a present-but-unpatched framework — nothing does.
+        raise_on_config_error: when True (default) an invalid ``agent_id`` /
+            ``enforcement_mode`` raises, exactly as ``Sensor(...)`` does. Patch
+            failures never raise regardless. See "failure policy" below.
+
+    Failure policy, deliberately split in two:
+
+    * A **patching** failure (a framework at a version we do not recognise, a
+      moved attribute, a framework that raises during wrapping) never
+      propagates. It lands in ``found_unpatchable``, warns, and the host
+      application keeps running.
+    * A **configuration** failure — you passed ``enforcement_mode="blcok"`` —
+      raises by default. That is your typo, not the environment's drift, and a
+      security control that silently is not running because of a typo is the
+      worst of the available outcomes. Pass ``raise_on_config_error=False`` for
+      the strict never-raise behaviour; you then get a manifest with ``error``
+      set and ``patched`` empty.
+
+    Frameworks imported AFTER this call are NOT patched: no import hook is
+    installed, deliberately, because an import hook is exactly the invisible
+    self-installing machinery rule 2 exists to forbid. Call ``protect()`` again
+    afterwards — rule 4 makes that safe.
+    """
+    manifest = ProtectionManifest(agent_id=agent_id, enforcement_mode=enforcement_mode)
+
+    # ── phase 1: the sensor (configuration errors are yours) ─────────────
+    try:
+        if sensor is None:
+            from ..sensor import DelphiSensor
+
+            sensor = DelphiSensor(
+                agent_id=agent_id,
+                enforcement_mode=enforcement_mode,
+                **sensor_kwargs,
+            )
+            if agent_id == DEFAULT_AGENT_ID:
+                manifest.notes.append(
+                    f"agent_id was not set; every event will be attributed to "
+                    f"{DEFAULT_AGENT_ID!r}. Pass agent_id= to make your telemetry "
+                    f"identifiable."
+                )
+        else:
+            if sensor_kwargs:
+                manifest.notes.append(
+                    "an existing sensor= was passed, so these kwargs were IGNORED: "
+                    + ", ".join(sorted(sensor_kwargs))
+                )
+        manifest.agent_id = sensor.agent_id
+        manifest.enforcement_mode = sensor.enforcement_mode
+        manifest.sensor = sensor
+    except Exception as exc:
+        manifest.error = f"{type(exc).__name__}: {exc}"
+        manifest.announce(quiet=quiet)
+        if raise_on_config_error:
+            raise
+        return manifest
+
+    # ── phase 2: discovery + dispatch (nothing here may raise) ───────────
+    try:
+        _dispatch(manifest, sensor, targets)
+    except Exception as exc:  # a bug in our own dispatcher must not be fatal
+        manifest.error = (
+            f"dispatch aborted after {len(manifest.patched)} patch(es) "
+            f"({type(exc).__name__}: {exc})"
+        )
+
+    if manifest._sites:
+        # Only a call that actually installed something needs unwinding; a
+        # fully-idempotent repeat call owns no sites and must not appear active.
+        _ACTIVE.append(manifest)
+    manifest.announce(quiet=quiet)
+    return manifest
+
+
+def _dispatch(
+    manifest: ProtectionManifest,
+    sensor: Any,
+    targets: Optional[Iterable[str]],
+) -> None:
+    selected = None
+    if targets is not None:
+        selected = set(targets)
+        unknown = selected - set(TARGETS_BY_NAME)
+        if unknown:
+            manifest.notes.append(
+                "targets= named frameworks this build does not know about: "
+                + ", ".join(sorted(unknown))
+            )
+
+    # Rule 1 is checked, not merely intended: if any patcher causes an import,
+    # the manifest says which module appeared.
+    before_modules = set(sys.modules)
+
+    skipped: list[str] = []
+    for target in TARGETS:
+        if selected is not None and target.name not in selected:
+            # Not attempted — and named, because a framework this call chose not
+            # to look at is exactly as unprotected as one it could not patch.
+            skipped.append(target.name)
+            continue
+        if not target.present():
+            manifest.not_present.append(target.name)
+            continue
+        ctx = PatchContext(manifest, sensor, target.name)
+        try:
+            target.apply(ctx)
+        except PatchUnavailable as exc:
+            ctx.unpatchable(f"{target.name} (whole framework)", target.summary,
+                            str(exc))
+        except Exception as exc:
+            ctx.unpatchable(
+                f"{target.name} (whole framework)", target.summary,
+                f"unexpected error while instrumenting "
+                f"({type(exc).__name__}: {exc})",
+            )
+
+    if skipped:
+        manifest.notes.append(
+            "targets= limited this call; NOT attempted (and therefore NOT "
+            "instrumented, whether or not they are imported): "
+            + ", ".join(sorted(skipped))
+        )
+
+    appeared = sorted(set(sys.modules) - before_modules)
+    # Our own submodules are not framework imports; everything else is a rule-1
+    # violation and gets named.
+    foreign = [m for m in appeared if not m.startswith("xaidr")]
+    if foreign:
+        manifest.notes.append(
+            "RULE 1 VIOLATION: patching caused these modules to be imported, "
+            "which protect() must never do — " + ", ".join(foreign)
+        )
+        _shout("protect() imported modules while patching: " + ", ".join(foreign))
+
+    if manifest.not_present:
+        manifest.notes.append(
+            "protect() patches only what is ALREADY in sys.modules and installs "
+            "no import hook. Anything listed under NOT PRESENT that you import "
+            "later will be UNINSTRUMENTED until you call xaidr.protect() again "
+            "(which is idempotent and will only add the new sites)."
+        )
+    if manifest.patched and all(r.already_patched for r in manifest.patched):
+        manifest.notes.append(
+            "every site was ALREADY instrumented by an earlier protect(), so "
+            "this call's sensor is attached to nothing. If you meant to re-point "
+            "instrumentation at a new sensor, call xaidr.unprotect() first."
+        )
+    if manifest.patched:
+        manifest.notes.append(
+            "enforcement: TOOL boundaries return a refusal string the agent can "
+            "read and recover from; TRANSPORT and ENTRYPOINT boundaries raise "
+            "xaidr.DelphiBlockedError, because there is no in-band way for an "
+            "HTTP send or a runner entrypoint to say 'refused'."
+        )
+
+
+def unprotect(manifest: Optional[ProtectionManifest] = None,
+              close_sensor: bool = False) -> list[str]:
+    """Reverse ``protect()``. With no argument, reverses every active manifest.
+
+    Returns the list of restored patch sites. Never raises: a site someone else
+    has since patched over is left alone and reported loudly, because silently
+    uninstalling a third party's instrumentation would be worse than leaving
+    ours in place.
+    """
+    if manifest is not None:
+        restored = manifest.unprotect(close_sensor=close_sensor)
+        if manifest in _ACTIVE:
+            _ACTIVE.remove(manifest)
+        return restored
+    restored: list[str] = []
+    for m in list(reversed(_ACTIVE)):
+        restored.extend(m.unprotect(close_sensor=close_sensor))
+    _ACTIVE.clear()
+    return restored

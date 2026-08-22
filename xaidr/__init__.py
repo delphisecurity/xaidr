@@ -12,12 +12,23 @@ from .provenance_chain import (
     begin_flow, inject_context, extract_context, clear_flow,
 )
 from .types import DelphiBlockedError, ScanResult
+# Auto-instrumentation. Importing this binds names and NOTHING else — no
+# framework is imported, no boundary is patched, nothing runs. Instrumentation
+# happens only when someone calls xaidr.protect(), which is the whole point:
+# a security control with no visible call site cannot be audited.
+from .autopatch import (
+    protect, unprotect, ProtectionManifest, XaidrProtectionWarning,
+)
 
 __version__ = "1.4.1"
 
 __all__ = [
     "Sensor",
     "ProtectedHttpClient",
+    "protect",
+    "unprotect",
+    "ProtectionManifest",
+    "XaidrProtectionWarning",
     "ScanResult",
     "DelphiBlockedError",
     "CircuitBreaker",
