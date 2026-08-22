@@ -176,6 +176,16 @@ class WebhookReporter:
             timeout=httpx.Timeout(timeout),
             headers={"Content-Type": "application/json", **(headers or {})},
         )
+        # Exempt this client from xaidr.protect()'s egress patch. Without it,
+        # once httpx.Client.send is patched, THIS POST gets scanned, that scan
+        # enqueues an event, that event is flushed as another POST, and the
+        # sensor talks to itself for as long as the process lives. Set as a
+        # plain attribute rather than importing the autopatch package, so
+        # reporters.py stays free of that dependency edge.
+        try:
+            self._client._xaidr_exempt = True
+        except Exception:  # pragma: no cover — httpx.Client accepts attributes
+            pass
 
     def report(self, events: list[dict[str, Any]]) -> None:
         try:
