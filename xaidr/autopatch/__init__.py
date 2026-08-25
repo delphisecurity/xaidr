@@ -170,6 +170,14 @@ def protect(
       then get a manifest with ``error`` set and ``patched`` empty — which means
       NOTHING is protected, so read it.
 
+    COST. This call is cheap (sub-millisecond) with one exception, and it is
+    worth knowing before a one-line call goes into an import path:
+    ``enable_nano=True`` loads a 130 MB ONNX artifact EAGERLY at construction.
+    Measured on a 10-core laptop: ``protect()`` 0.2 ms without it and 1130 ms
+    with it, once per process (the model is a singleton, so a second
+    ``protect()`` or ``Sensor()`` pays nothing). Load it during startup, never
+    on a request path.
+
     Frameworks imported AFTER this call are NOT patched: no import hook is
     installed, deliberately, because an import hook is exactly the invisible
     self-installing machinery rule 2 exists to forbid. Call ``protect()`` again

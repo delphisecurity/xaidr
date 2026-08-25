@@ -7,6 +7,7 @@ flag / block); enforcement_mode gates whether a block verdict actually blocks.
 """
 
 import time
+from typing import Optional
 from uuid import uuid4
 
 from ..types import ScanResult
@@ -279,6 +280,12 @@ def scan_l1_dual_view(normalized: str, raw: str, output: bool = False):
     )
 
 
+# Nano's substantive-input floor. Below this there is not enough text for a
+# semantic judgement to mean anything, and short phatic turns ("thanks", "ok
+# sounds good") are the bulk of what would otherwise pay the model's latency.
+NANO_MIN_WORDS = 4
+
+
 def _FLAG_BAND_CAP(block_threshold: float, flag_threshold: float) -> float:
     """A score strictly inside the flag band [flag_threshold, block_threshold):
     just below the block threshold so a benign mention SURFACES (flag) without
@@ -301,6 +308,8 @@ class LocalScanner:
         shadow_mode: bool = False,
         dlp_enabled: bool = True,
         enforcement_mode: str = "monitor",
+        nano_enabled: bool = False,
+        nano_model_dir: Optional[str] = None,
     ):
         self.block_threshold = block_threshold
         self.flag_threshold = flag_threshold
@@ -310,6 +319,27 @@ class LocalScanner:
         self.enforcement_mode = "monitor" if shadow_mode else enforcement_mode
         self._normalizer = TypoNormalizer()
         self._compositional = CompositionalScanner()
+
+        # --- Nano: opt-in ML signal for the rules-silent band (see nano.py) ---
+        # OFF unless explicitly enabled AND the optional extra is installed.
+        # Loaded EAGERLY when enabled, deliberately: the artifact is hash-pinned,
+        # and a missing or altered artifact must be a loud failure at
+        # construction rather than a surprise on some later scan. A lazy load
+        # would have to choose, mid-scan, between raising into the caller and
+        # quietly disabling itself — and quietly disabling a security signal the
+        # operator believes is running is the outcome this ordering exists to
+        # prevent.
+        self.nano_enabled = nano_enabled
+        self._nano = None
+        if nano_enabled:
+            from .nano import DelphiNano       # ImportError => missing extra
+            # auto_download=False on purpose. This package's whole identity is
+            # "no account, no backend, no network", and reaching out for 130 MB
+            # as a side effect of constructing a scanner would break that quietly
+            # at the worst moment. A missing artifact is a LOUD failure naming
+            # the fetch step; fetching it is a separate, deliberate act
+            # (nano.resolve_model_dir(auto_download=True)).
+            self._nano = DelphiNano.get(nano_model_dir, auto_download=False)
 
     def scan(
         self,
@@ -580,6 +610,70 @@ class LocalScanner:
             # Always surface the over-length signal in telemetry.
             oversize_rules.append(OVERSIZED_INPUT_RULE)
 
+        # --- Nano: the rules-silent band only (opt-in, flag-only) --------------
+        # Placed HERE, immediately before the verdict, so `score == 0.0` means the
+        # WHOLE rules pipeline found nothing: L1/L2/DLP, compositional fusion, the
+        # descriptive dampener, both flag-band caps, the protective-override
+        # bypass, the encoded-payload signal, the URL decode-and-rescan, the
+        # degradation findings, and the over-length tail floor have all run and
+        # each returned 0.0. Nano speaks only into that silence.
+        #
+        # CONTAINMENT (tests/test_nano_containment.py). The contribution is capped
+        # at _FLAG_BAND_CAP, strictly below block_threshold, and every assignment
+        # to `score` above is min()/max() with an independent value — `score` is
+        # never multiplied in this method — so a nano-derived score cannot be
+        # amplified and `blocked` is unreachable from this path. T-P4c asserts the
+        # no-multiplication property against this source so a future fusion bonus
+        # cannot invalidate it silently.
+        #
+        # The gate is deliberately NOT the paid sensor's: it has no
+        # `is_descriptive` term. Measured, that term hides ~21% of benign traffic
+        # from the model at the SAME false-positive rate it admits, while
+        # discarding real attacks the model scores >= 0.71. It is a volume filter,
+        # not a precision filter. Do not add one here for symmetry with paid.
+        #
+        # Scoped to inbound chat text. Nano's accepted numbers were measured on
+        # chat-shaped input only; a2a and output are out of scope until measured.
+        nano_score = None
+        nano_raw = None
+        if (
+            self.nano_enabled
+            and score == 0.0
+            and direction == "input"
+            and len(scan_text.split()) >= NANO_MIN_WORDS
+        ):
+            nano_raw, nano_score = self._run_nano(scan_text)
+            # D2: the caller's `score` contract is preserved below the flag
+            # threshold — a sub-threshold nano reading leaves an allowed scan at
+            # score 0.0, exactly as today. The reading is still reported, via the
+            # nano_score/nano_raw fields, so nothing is lost for tuning.
+            #
+            # ABOVE the threshold, `score` gets the flag-band FLOOR, not the
+            # remapped model reading. This is M1 expressed in the field a human
+            # actually sorts by, and it is a deliberate change from the reviewed
+            # patch, which wrote the reading itself (0.55 at the operating point).
+            #
+            # M1 says the model's number is a detection signal and not calibrated
+            # confidence, and instructs a reviewer not to rank a queue by it. A
+            # queue is ranked by `score`, not by `nanoScore`, so writing 0.55
+            # there put every nano flag ABOVE most genuine rule flags (an L2
+            # intent corroborator flags at 0.25) and made M1's own failure mode
+            # reachable through the field M1 did not mention: trivia at the top
+            # of the queue. Measured on the 2000-prompt benign sample, 44 inputs
+            # reach the flag band this way and the highest-scoring of them are a
+            # chess game, a riddle and a DISK BOOT FAILURE troubleshooting note.
+            #
+            # The floor keeps the VERDICT identical (`flagged`; the band is
+            # [flag_threshold, block_threshold)) and makes nano the lowest-
+            # priority flag in any score-ordered queue, which is where an
+            # uncalibrated signal belongs. Nothing is lost: the reading itself is
+            # carried verbatim on `nano_score`/`nano_raw`, which is the field
+            # that carries the warning about how to read it. Containment is
+            # strengthened rather than weakened — the floor is far below
+            # _FLAG_BAND_CAP, so `blocked` remains unreachable a fortiori.
+            if nano_score >= self.flag_threshold:
+                score = self.flag_threshold
+
         # 3-state local verdict (no backend, no escalation)
         if score >= self.block_threshold:
             verdict = "block"
@@ -650,6 +744,8 @@ class LocalScanner:
             category=category,
             rules=all_rules,
             latency_ms=int(scan_time_ms),
+            nano_score=None if nano_score is None else round(nano_score, 4),
+            nano_raw=None if nano_raw is None else round(nano_raw, 4),
         )
 
     def _mention_frame_is_earned(
@@ -810,6 +906,31 @@ class LocalScanner:
                     + [d.get("rule") for d in comp.get("details", []) if d.get("rule")]
                 )
         return max_score, rules, category
+
+    def _run_nano(self, scan_text: str):
+        """Score one rules-silent input. Returns (raw P, capped scanner score).
+
+        Fail-OPEN on any inference error: a model fault must never break a scan
+        or change a verdict, so a failure returns 0.0 and the rules-only result
+        stands. This is the INFERENCE path only — a missing or altered artifact
+        is caught at construction and is loud (see __init__), because the two
+        failures deserve opposite treatment: an inference hiccup should be
+        invisible, a tampered artifact must not be.
+
+        The cap comes from _FLAG_BAND_CAP rather than a local constant so it can
+        never drift from the scanner's own flag-band ceiling — the containment
+        argument depends on the two being the same number.
+        """
+        from .nano import remap                       # lazy: keeps nano optional
+        try:
+            p_raw = self._nano.classify(scan_text).p_raw
+        except Exception:
+            return 0.0, 0.0
+        capped = min(
+            remap(p_raw, self.flag_threshold, self.block_threshold),
+            _FLAG_BAND_CAP(self.block_threshold, self.flag_threshold),
+        )
+        return p_raw, capped
 
     def _compute_composite(
         self, l1_score: float, l2_score: float, dlp_score: float

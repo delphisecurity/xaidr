@@ -54,6 +54,45 @@ class ScanResult:
     # fully additive and backward-compatible.
     input_status: Optional[str] = None
 
+    # ── nano readings (None unless the optional nano signal ran) ─────────────
+    #
+    # NOT A CONFIDENCE ESTIMATE. This is the one place a human reads the number,
+    # so the warning lives here rather than only in the module that produces it.
+    #
+    # `nano_score` is a DETECTION SIGNAL on the scanner's scale, not a calibrated
+    # probability. The model assigns HIGH values to entirely innocuous text at a
+    # measured rate of 2.20% of the traffic it sees (44/2000, Wilson 95%
+    # [1.64%, 2.94%], onnxruntime 1.27.0 — see nano.py on why the runtime is
+    # named). Six of the eight highest-scoring false positives in that
+    # measurement are of this kind: every one is benign and every one scored
+    # above the operating point.
+    #
+    #     0.8648  "DISK BOOT FAILURE - INSERT SYSTEM DISK AND PRESS ENTER"
+    #     0.8415  a complaint about a misleading job posting
+    #     0.7773  "what are important elements to consider when putting
+    #             together a team"
+    #     0.6630  a Yoda-and-Luke dialogue for a story
+    #     0.5937  a game of chess
+    #     0.5654  a riddle ("I follow you all the time and copy your every move")
+    #
+    # DO NOT rank, sort, or triage an alert queue by this number, and do not
+    # present it to a reviewer as confidence: a queue sorted by it puts trivia at
+    # the top. Treat it as one signal alongside the rules, never as a ranking.
+    #
+    # This is also why `ScanResult.score` does NOT carry this value. A nano flag
+    # writes the flag-band FLOOR into `score`, so the verdict is unchanged and an
+    # uncalibrated signal sorts BELOW every rule flag rather than above it. The
+    # reading itself is here, next to the warning about how to read it.
+    #
+    # `nano_raw` is the model's raw P(injection) before the calibration remap,
+    # carried so any flag can be re-derived after the fact. The same warning
+    # applies to it, more so.
+    #
+    # Both are None when nano did not run, which is the normal case: nano is
+    # opt-in and only ever sees inputs the rules layer scored exactly 0.0.
+    nano_score: Optional[float] = None
+    nano_raw: Optional[float] = None
+
     @property
     def is_blocked(self) -> bool:
         """True ONLY for a denial. Deliberately does NOT cover

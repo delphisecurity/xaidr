@@ -237,6 +237,8 @@ class DelphiSensor:
         self,
         agent_id: str,
         enforcement_mode: str = "monitor",
+        enable_nano: bool = False,
+        nano_model_dir: Optional[str] = None,
         shadow_mode: bool = False,
         dlp_enabled: bool = True,
         block_threshold: float = 0.60,
@@ -295,6 +297,12 @@ class DelphiSensor:
             shadow_mode=shadow_mode,
             dlp_enabled=dlp_enabled,
             enforcement_mode=self.enforcement_mode,
+            # Opt-in ML signal for the rules-silent band. OFF by default; needs
+            # BOTH this flag and `pip install xaidr[nano]`. A missing extra or a
+            # hash-mismatched artifact raises HERE, at construction — never a
+            # silent downgrade of a signal the operator asked for.
+            nano_enabled=enable_nano,
+            nano_model_dir=nano_model_dir,
         )
         self._scanner_mode = "local"
 
@@ -817,6 +825,24 @@ class DelphiSensor:
             data["provenance"] = prov
         if parent_context is not None:
             data["traceParent"] = parent_context.as_metadata()
+        # Nano readings ride as their OWN fields. `score` keeps its existing
+        # contract — an allowed scan still reports 0.0 — so a consumer reading
+        # `score > 0` as "something fired" is not broken by a sub-threshold
+        # model reading. NOT a confidence value: see ScanResult.nano_score for
+        # what this number is and, more importantly, what it is not.
+        if result.nano_score is not None:
+            data["nanoScore"] = result.nano_score
+            data["nanoRaw"] = result.nano_raw
+            # M1 rides WITH the number. The warning used to live only in a Python
+            # docstring, which is not what a reviewer reads: they read the event,
+            # in a SIEM, and they sort by whatever number is in it. Two machine-
+            # readable fields, so a consumer can act on them rather than needing
+            # to have read our source.
+            data["nanoCalibrated"] = False
+            data["nanoNote"] = (
+                "detection signal, NOT calibrated confidence; do not rank or "
+                "triage by this value (see xaidr ScanResult.nano_score)"
+            )
         self._telemetry.enqueue({
             "type": "scan",
             "agentId": self.agent_id,

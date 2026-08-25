@@ -217,6 +217,22 @@ def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
         if error_type:
             out["gen_ai.security.detection.error_type"] = error_type
 
+    # --- nano (the optional ML signal), when it ran -------------------------
+    # Emitted with an EXPLICIT calibration attribute beside it, not as two bare
+    # numbers. M1 (see ScanResult.nano_score) says this reading is a detection
+    # signal and NOT calibrated confidence, and that a reviewer must not rank a
+    # queue by it; a SIEM is exactly where somebody ranks by whatever numeric
+    # field is present, and the warning lived only in a Python docstring that no
+    # SIEM ever reads. `calibrated=false` travels with the value so the caveat
+    # arrives at the same place and time as the number it is about.
+    nano_score = data.get("nanoScore")
+    if nano_score is not None:
+        out["gen_ai.security.detection.nano_score"] = nano_score
+        out["gen_ai.security.detection.nano_calibrated"] = False
+        nano_raw = data.get("nanoRaw")
+        if nano_raw is not None:
+            out["gen_ai.security.detection.nano_raw"] = nano_raw
+
     # derived + additive (no raw content): a human-readable one-line summary and
     # a stable severity enum. Both are composed from the NAMES above (action,
     # category, agent, rules, score) so the content-stays-hashed invariant holds

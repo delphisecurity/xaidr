@@ -52,6 +52,27 @@ http = ["httpx>=0.24"]
 # parent as additive telemetry metadata. opentelemetry-api ONLY — never the SDK,
 # never a TracerProvider/exporter. Keeps zero required deps. `pip install xaidr[trace]`.
 trace = ["opentelemetry-api>=1.20"]
+# Optional ML detection signal for the rules-silent band (scanner/nano.py).
+# OFF unless BOTH installed and explicitly enabled via Sensor(enable_nano=True).
+# onnxruntime + tokenizers only — deliberately no torch, no transformers, and
+# nothing that loads a pickle: the artifact is a hash-pinned ONNX file and the
+# tokenizer is data. `pip install xaidr[nano]`.
+#
+# THE RUNTIME IS NOT PINNED WITH `==`, AND THAT IS A DECISION, NOT AN OVERSIGHT.
+# The hash pin fixes which bytes load; it does not fix what they compute, because
+# an int8/int4 graph is executed by onnxruntime kernels that change between
+# releases. Measured: the same hash-verified artifact scores 8 of 400 real-benign
+# prompts differently across runtimes, and the false-positive rate moves from
+# 37/2000 to 44/2000. An `==` pin was considered and rejected for three reasons:
+# the acceptance record names NO runtime version, so there is no accepted version
+# to pin to; an exact pin in a library's extra becomes a resolver conflict in
+# every adopter environment that already has onnxruntime; and it would freeze a
+# security package out of onnxruntime's own security updates. The control instead
+# is that the published false-positive figure NAMES the runtime it was measured
+# on (nano.MEASURED_ON), every loaded instance records the runtime actually in
+# use (DelphiNano.onnxruntime_version), and a different runtime means re-running
+# the battery. The floor stays at the oldest version known to load the artifact.
+nano = ["onnxruntime>=1.17", "tokenizers>=0.15", "numpy>=1.24", "huggingface-hub>=0.23"]
 # Local YAML policy loading (local_policy.py) — parses a `./xaidr-policy.yaml`
 # via `yaml.safe_load`. Referenced by the code's own error message
 # ("Install with: pip install xaidr[policy]"). `pip install xaidr[policy]`.
