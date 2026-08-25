@@ -73,6 +73,58 @@ def active_manifests() -> list[ProtectionManifest]:
     return [m for m in _ACTIVE if m.is_active]
 
 
+def _reject_unknown_sensor_kwargs(sensor_kwargs: dict) -> None:
+    """Fail on a keyword the Sensor constructor does not accept, and NAME it.
+
+    Why this is checked here rather than left to Python's own TypeError. The
+    forwarding contract (``**sensor_kwargs``, see the module docstring) is what
+    lets ``protect()`` stay a one-line call, and its cost is that a misspelled
+    keyword is indistinguishable from a keyword this build does not have yet.
+    The failure it produces is real but nearly unreadable at a call site:
+
+        TypeError: DelphiSensor.__init__() got an unexpected keyword argument
+        'nano_enabled'
+
+    That message does not tell an operator that ``enable_nano`` is the spelling
+    they wanted, and the two differ by a transposition. A security control that
+    is not running because of a transposition is the outcome this package spends
+    its whole configuration surface avoiding (see the unknown-category and
+    unknown-policy-key validators, which fail the same way for the same reason).
+
+    So the check runs BEFORE the constructor, names the offending keyword, and
+    offers the nearest accepted one. It does not change WHETHER protect() raises
+    — that is still ``raise_on_config_error``'s decision, unchanged — only what
+    the operator reads when it does.
+    """
+    if not sensor_kwargs:
+        return
+    import difflib
+    import inspect
+
+    from ..sensor import DelphiSensor
+
+    accepted = {
+        name for name, p in inspect.signature(DelphiSensor.__init__).parameters.items()
+        if name != "self" and p.kind is not inspect.Parameter.VAR_KEYWORD
+    }
+    unknown = sorted(set(sensor_kwargs) - accepted)
+    if not unknown:
+        return
+    hints = []
+    for name in unknown:
+        near = difflib.get_close_matches(name, sorted(accepted), n=1, cutoff=0.6)
+        hints.append(f"{name!r}" + (f" (did you mean {near[0]!r}?)" if near else ""))
+    raise TypeError(
+        "xaidr.protect() was given keyword(s) the Sensor does not accept: "
+        + ", ".join(hints)
+        + ". Nothing was instrumented. protect() forwards every non-boundary "
+        "keyword to Sensor(...) verbatim, so a misspelling here disables the "
+        "sensor entirely rather than being ignored. Accepted keywords: "
+        + ", ".join(sorted(accepted))
+        + "."
+    )
+
+
 def protect(
     agent_id: str = DEFAULT_AGENT_ID,
     enforcement_mode: str = "monitor",
@@ -109,12 +161,14 @@ def protect(
       moved attribute, a framework that raises during wrapping) never
       propagates. It lands in ``found_unpatchable``, warns, and the host
       application keeps running.
-    * A **configuration** failure — you passed ``enforcement_mode="blcok"`` —
-      raises by default. That is your typo, not the environment's drift, and a
-      security control that silently is not running because of a typo is the
-      worst of the available outcomes. Pass ``raise_on_config_error=False`` for
-      the strict never-raise behaviour; you then get a manifest with ``error``
-      set and ``patched`` empty.
+    * A **configuration** failure — you passed ``enforcement_mode="blcok"``, or
+      a keyword the Sensor does not accept — raises by default, and the message
+      names the keyword and the nearest accepted spelling. That is your typo,
+      not the environment's drift, and a security control that silently is not
+      running because of a typo is the worst of the available outcomes. Pass
+      ``raise_on_config_error=False`` for the strict never-raise behaviour; you
+      then get a manifest with ``error`` set and ``patched`` empty — which means
+      NOTHING is protected, so read it.
 
     Frameworks imported AFTER this call are NOT patched: no import hook is
     installed, deliberately, because an import hook is exactly the invisible
@@ -128,6 +182,7 @@ def protect(
         if sensor is None:
             from ..sensor import DelphiSensor
 
+            _reject_unknown_sensor_kwargs(sensor_kwargs)
             sensor = DelphiSensor(
                 agent_id=agent_id,
                 enforcement_mode=enforcement_mode,
@@ -150,6 +205,7 @@ def protect(
         manifest.sensor = sensor
     except Exception as exc:
         manifest.error = f"{type(exc).__name__}: {exc}"
+        manifest.error_is_fatal = bool(raise_on_config_error)
         manifest.announce(quiet=quiet)
         if raise_on_config_error:
             raise

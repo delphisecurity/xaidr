@@ -85,6 +85,11 @@ class ProtectionManifest:
         self.not_present: list[str] = []
         self.notes: list[str] = []
         self.error: Optional[str] = None
+        # True when the caller left raise_on_config_error at its default, so the
+        # banner below is followed by an exception. Only the banner reads it; it
+        # exists so that message cannot claim the host was left running when it
+        # was not.
+        self.error_is_fatal: bool = False
         # Reversal state: (owner, attr, original, installed, owner_had_own_attr)
         self._sites: list[tuple] = []
         self._reverted = False
@@ -196,8 +201,21 @@ class ProtectionManifest:
 
         if self.error:
             L.append(f"  !! protect() FAILED: {self.error}")
-            L.append("  !! NOTHING IS INSTRUMENTED. The host application was not "
-                     "interrupted.")
+            # The second line used to assert unconditionally that the host was
+            # "not interrupted". For a CONFIGURATION error under the default
+            # raise_on_config_error=True that is false: this banner is printed
+            # and then the call raises. Saying otherwise in the one message a
+            # deployer reads at startup is worse than saying nothing, so the
+            # claim is now made only by the path that can honour it (see
+            # announce()).
+            L.append("  !! NOTHING IS INSTRUMENTED.")
+            if self.error_is_fatal:
+                L.append("  !! This call is RAISING; the host application IS "
+                         "interrupted. Pass raise_on_config_error=False to get "
+                         "a manifest instead of an exception.")
+            else:
+                L.append("  !! The host application was not interrupted "
+                         "(raise_on_config_error=False).")
 
         # UNPROTECTED first: it is the section a reader must not scroll past.
         if self.found_unpatchable:
