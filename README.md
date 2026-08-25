@@ -532,9 +532,12 @@ the acceptance corpus is 23 of 26 rules-silent paraphrase attacks.
 fixes which bytes load, not what they compute: an int8/int4 graph runs on
 onnxruntime kernels that change between releases, and the same verified artifact
 scores 8 of 400 prompts differently across two of them. The figures above were
-measured on **xaidr 1.5.0 with onnxruntime 1.27.0**; every loaded instance
-records `DelphiNano.onnxruntime_version`, and a different runtime means those
-figures do not transfer. An earlier acceptance record reported 1.85% on an
+measured on **xaidr 1.6.0 with onnxruntime 1.27.0**, and re-measured
+identically (44/2000, 23/26) on **onnxruntime 1.29.0**, which is what a fresh
+`pip install xaidr[nano]` resolves today. Every loaded instance records
+`DelphiNano.onnxruntime_version`. Two runtimes agreeing is not a guarantee that
+a third will: if yours differs from both, the figures above are unverified for
+it and the battery is worth re-running. An earlier acceptance record reported 1.85% on an
 unnamed runtime; that figure is not published here because no shipped
 configuration reproduces it.
 
@@ -1791,9 +1794,18 @@ detection ones.
 - **Malformed content is safe.** Badly formed input cannot turn the sensor into
   a denial-of-service risk.
 
-Verified with `python -m pytest -q` in a clean virtual environment: **7414
-passed, 2 skipped**, identical across three consecutive serial runs. The suite covers the public scan APIs, wrappers, policy, provenance,
-reporters, telemetry schema, and resilience behavior.
+Verified with `python -m pytest -q` in a clean virtual environment with **no
+optional extras installed**: **7453 passed, 6 skipped**, identical across three
+consecutive serial runs. The suite covers the public scan APIs, wrappers, policy,
+provenance, reporters, telemetry schema, and resilience behavior.
+
+The configuration matters, so it is named: four of those six skips are the
+`nano` tests that need `onnxruntime` and a local model artifact. Install the
+extra and point `XAIDR_NANO_TEST_ARTIFACTS` at a verified artifact directory and
+the same suite reports **7457 passed, 2 skipped** — the same tests, four of them
+executing instead of skipping. Neither number is more correct than the other;
+the first is what a contributor sees on a fresh clone, which is why it is the
+one quoted.
 
 That figure is a **source-tree** claim, not something you can reproduce from
 what you installed: the wheel and the sdist ship the `xaidr` package only, with

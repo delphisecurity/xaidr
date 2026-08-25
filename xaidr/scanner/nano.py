@@ -181,7 +181,9 @@ PINNED_SHA256 = {
 #
 #   false positives   44/2000 = 2.20%, Wilson 95% [1.64%, 2.94%]
 #   recovery          23/26 at t_op, unchanged, same three misses, no flips
-#   measured on       xaidr 1.5.0 + onnxruntime 1.27.0, macOS arm64
+#   measured on       xaidr 1.6.0 + onnxruntime 1.27.0, macOS arm64
+#   re-measured on    onnxruntime 1.29.0 (what `pip install xaidr[nano]`
+#                     resolves today): 44/2000 and 23/26, identical
 #
 # The recovery side did not move. The drift is asymmetric and lands on the
 # false-positive side, which is the side an adopter pays for.
