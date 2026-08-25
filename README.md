@@ -459,6 +459,47 @@ them; it records the current behaviour and explicitly does not endorse it. If
 you feed security documentation about prompt injection to an agent through
 `scan()`, read that file first.
 
+**Educational and analytical writing about AI security is the largest
+false-positive surface in this product.** Documentation, training material,
+policy documents, academic writing, incident reports and product copy that
+discuss prompt injection, jailbreaks or agent security are likely to score above
+the block threshold. That is not an edge case reached by unusual phrasing; it is
+the ordinary behaviour of the rules that carry these families, because those
+rules match the topic itself rather than a request. The sentence "the system
+prompt is stored in config.yaml" blocks at 1.00, and "developer mode is off in
+production" blocks at 0.90.
+
+Measured on this tree: **30 of the 38 texts in
+`tests/test_descriptive_topic_fp_pool.py` block**, and that file names each of
+the 30 by id, so what blocks is readable rather than summarised. Those 38 cover
+nine genres of security prose. A held-out spot check of 20 further texts written
+in genres that file does not contain (academic abstract, contract clause, news
+copy, marketing page, job advertisement, release notes, API reference, meeting
+minutes, procurement questionnaire, regulatory filing) blocks **19 of 20**. The
+spot check is not part of the committed corpus and is not offered as a corpus
+number; the pool test is the measurement to run.
+
+**What to do about it.** If an agent's job includes reading or writing about AI
+security, run its content scans in [monitor
+mode](#deployment-modes-and-tuning), where a block-band verdict is still emitted,
+scored and logged and nothing is stopped, or bind the decision to a policy you
+write instead of the shipped default. The expectation to plan for is that most
+ordinary security documents reach the block band on the content path, at the two
+rates above. This is largely a content-path effect: passed as a tool argument the
+same texts flag rather than block, 37 of the 38 in the pool and 19 of the 20 in
+the spot check.
+
+**Why it is this way, and why it is documented rather than scheduled.** For a
+text whose entire dangerous content is a topic noun, the difference between using
+that topic and mentioning it is not present in the text as a lexical signal. A
+request that names a protected topic and a policy document that forbids naming it
+produce the same rule, the same score and the same matched span, so a scanner
+that reads keywords is choosing which side to fail on, not distinguishing between
+them. The shipped choice fails toward the block, which is the correct default for
+a runtime action sensor and the wrong one for a documentation pipeline. Treat it
+as a boundary of the approach that you deploy around, in the same way as the
+`infra_destruction` family above, rather than as a defect awaiting a patch.
+
 There is also one enforcement over-reach worth knowing about: an archive stream
 piped into a raw network socket blocks whatever the source directory is, so an
 operator's own `tar` over `netcat` backup is blocked too. That rule keys on the
