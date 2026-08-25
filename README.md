@@ -500,6 +500,70 @@ a runtime action sensor and the wrong one for a documentation pipeline. Treat it
 as a boundary of the approach that you deploy around, in the same way as the
 `infra_destruction` family above, rather than as a defect awaiting a patch.
 
+### The optional ML signal for the rules-silent band (`nano`, experimental)
+
+The under-scored direction above has a partial answer, and it is off unless you
+ask for it twice: `pip install xaidr[nano]` **and** `Sensor(enable_nano=True)`.
+It is a small local ONNX classifier (130 MB, SHA-pinned, no network at
+construction or scan) that runs **only when the entire rules pipeline scored
+exactly 0.0** on an inbound chat input of at least four words. Its contribution
+is capped strictly below the block threshold, so it can raise a scan to
+`flagged` and can never produce `blocked`. It never runs on a2a or output
+traffic.
+
+**What it is for, measured.** The descriptive-frame dampener produces 0.0 by
+erasing gated signals, so a bare-topic attack with a discourse cue anywhere in
+it becomes a clean allow. That population is 595 of the 3240 cells in the
+attack-by-cue-by-position matrix. **With nano off those 595 are clean allows;
+with nano on 582 of them (97.8%) become flags.** The 13 that remain are all one
+attack shape. This is the strongest thing the signal does, and the rules layer
+provably cannot close it: the guard that would have to distinguish those cells
+from legitimate prose is the one the two-directions passage above explains has
+no signal to work with.
+
+**What it costs, measured on the runtime named below.** On 2000 real benign
+prompts that the rules score 0.0 (dolly / no_robots / oasst1), nano flags
+**44, or 2.20% (Wilson 95% [1.64%, 2.94%])**. Rules alone flag 0 of those 2000.
+So the number to plan for is: **turning nano on takes ordinary traffic from 0.00%
+to 2.20% flagged events, roughly one extra event per 45 prompts.** Recovery on
+the acceptance corpus is 23 of 26 rules-silent paraphrase attacks.
+
+**The runtime is named on purpose.** The artifact is hash-pinned, but the hash
+fixes which bytes load, not what they compute: an int8/int4 graph runs on
+onnxruntime kernels that change between releases, and the same verified artifact
+scores 8 of 400 prompts differently across two of them. The figures above were
+measured on **xaidr 1.5.0 with onnxruntime 1.27.0**; every loaded instance
+records `DelphiNano.onnxruntime_version`, and a different runtime means those
+figures do not transfer. An earlier acceptance record reported 1.85% on an
+unnamed runtime; that figure is not published here because no shipped
+configuration reproduces it.
+
+**Its score is not confidence, and the product is built so you cannot mistake it
+for one.** The model rates entirely innocuous text highly: six of the eight
+highest-scoring false positives in that 2000-prompt run are a DISK BOOT FAILURE
+troubleshooting question, a complaint about a job posting, a team-building
+question, a Yoda dialogue, a game of chess and a riddle. So a nano flag writes
+the *flag-band floor* into `score` and carries the model's own reading on the
+separate `nano_score` / `nano_raw` fields. The verdict is the same; the ranking
+is not, and an uncalibrated signal sorts below every rule flag rather than above
+it. The emitted event carries `nanoCalibrated: false` and a note saying not to
+triage by the value, and the mapped schema carries
+`gen_ai.security.detection.nano_calibrated`.
+
+**One interaction to know before enabling it.** Nano sees exactly what the
+dampener rescued, and that includes benign prose. Of the eight security texts in
+`tests/test_descriptive_topic_fp_pool.py` that pass today, **five become flags**
+with nano on, including "show me the system prompt in this theatre play". They
+are flags, not blocks: the document still reaches your model and you get an
+event. The other 30 in that file never reach nano at all, because they never
+score 0.0. Both halves are locked by name in
+`tests/test_nano_containment.py`.
+
+**Cost.** `Sensor(enable_nano=True)` loads the artifact eagerly: about 1.1 s once
+per process, then ~10 ms added to the p50 of a scan that reaches the model
+(0.7 ms to 10.4 ms measured natively on this corpus). Load it at startup, not on
+a request path.
+
 There is also one enforcement over-reach worth knowing about: an archive stream
 piped into a raw network socket blocks whatever the source directory is, so an
 operator's own `tar` over `netcat` backup is blocked too. That rule keys on the
