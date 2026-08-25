@@ -210,9 +210,9 @@ def test_multiple_heredocs_on_one_line_are_both_captured():
 
 def test_an_unterminated_heredoc_neither_hangs_nor_raises():
     cmd = "python - <<'PY'\nimport os\nprint('never closed')"
-    t0 = time.perf_counter()
+    t0 = time.process_time()
     segs = parse_command(cmd)
-    assert time.perf_counter() - t0 < 1.0
+    assert time.process_time() - t0 < 1.0
     assert segs, "returned nothing"
     hd = segs[0].heredocs[0]
     assert hd["terminated"] is False
@@ -221,9 +221,9 @@ def test_an_unterminated_heredoc_neither_hangs_nor_raises():
 
 def test_a_very_large_unterminated_body_stays_bounded():
     cmd = "bash <<'EOF'\n" + "echo x\n" * 5000
-    t0 = time.perf_counter()
+    t0 = time.process_time()
     segs = parse_command(cmd)
-    elapsed = time.perf_counter() - t0
+    elapsed = time.process_time() - t0
     assert elapsed < 2.0, f"took {elapsed:.2f}s"
     assert len(segs) <= 64
 
@@ -407,9 +407,9 @@ def test_crossing_the_cap_does_not_change_the_impact_class(n):
 def test_the_cap_still_bounds_the_work():
     """The bound must keep holding: no unbounded capture, no hang."""
     n = _MAX_HEREDOCS_PER_SEGMENT * 40
-    t0 = time.perf_counter()
+    t0 = time.process_time()
     segs = parse_command(_many_heredocs(n))
-    elapsed = time.perf_counter() - t0
+    elapsed = time.process_time() - t0
     assert elapsed < 2.0, f"took {elapsed:.2f}s on {n} heredocs"
     assert len(segs[0].heredocs) <= _MAX_HEREDOCS_PER_SEGMENT
     assert len(segs) <= 64
@@ -420,7 +420,7 @@ def test_an_unterminated_heredoc_past_the_cap_neither_hangs_nor_raises():
     n = _MAX_HEREDOCS_PER_SEGMENT + 4
     headers = " ".join(f"<<D{i}" for i in range(n))
     cmd = f"cat {headers} > out.txt\nbody with no delimiter ever arriving"
-    t0 = time.perf_counter()
+    t0 = time.process_time()
     segs = parse_command(cmd)
-    assert time.perf_counter() - t0 < 1.0
+    assert time.process_time() - t0 < 1.0
     assert segs and segs[0].parse_degraded is True

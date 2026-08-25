@@ -346,9 +346,9 @@ def test_the_reader_is_bounded_and_never_raises():
 def test_a_pathological_value_stays_inside_the_budget():
     """Bounded, not merely finite. The cap is what keeps cost flat."""
     payload = "DELETE FROM t WHERE " + ("a = 1 OR " * 20_000) + "1=1"
-    start = time.perf_counter()
+    start = time.process_time()
     shapes = parse_sql(payload)
-    elapsed = time.perf_counter() - start
+    elapsed = time.process_time() - start
     assert elapsed < 1.0, f"parse took {elapsed:.3f}s"
     assert len(payload) > MAX_SQL_CHARS
     assert shapes  # still readable, just truncated
@@ -356,9 +356,9 @@ def test_a_pathological_value_stays_inside_the_budget():
 
 def test_a_semicolon_heavy_blob_does_not_explode():
     payload = "; ".join(["SELECT 1"] * 5_000)
-    start = time.perf_counter()
+    start = time.process_time()
     shapes = parse_sql("SELECT 1; " + payload)
-    elapsed = time.perf_counter() - start
+    elapsed = time.process_time() - start
     assert elapsed < 1.0, f"parse took {elapsed:.3f}s"
     assert len(shapes) <= 32, f"statement cap not honoured: {len(shapes)}"
 

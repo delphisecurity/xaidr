@@ -618,18 +618,18 @@ def test_fuzz_corpus_is_actually_adversarial():
 
 def test_input_at_the_cap_is_handled_promptly():
     cmd = "cat " + "a" * (_MAX_INPUT_CHARS - 10)
-    t0 = time.perf_counter()
+    t0 = time.process_time()
     segs = parse_command(cmd)
-    elapsed = time.perf_counter() - t0
+    elapsed = time.process_time() - t0
     assert segs and segs[0].name == "cat"
     assert elapsed < 1.0, f"took {elapsed:.3f}s at the input cap"
 
 
 def test_input_beyond_the_cap_is_truncated_and_marked_degraded():
     cmd = "cat " + "b" * (_MAX_INPUT_CHARS * 4)
-    t0 = time.perf_counter()
+    t0 = time.process_time()
     segs = parse_command(cmd)
-    elapsed = time.perf_counter() - t0
+    elapsed = time.process_time() - t0
     assert segs, "over-cap input produced nothing"
     assert segs[0].parse_degraded is True, "truncation was not reported"
     assert elapsed < 1.0, f"took {elapsed:.3f}s past the input cap"
@@ -637,9 +637,9 @@ def test_input_beyond_the_cap_is_truncated_and_marked_degraded():
 
 def test_segment_count_is_bounded():
     cmd = " | ".join(["whoami"] * (_MAX_SEGMENTS * 4))
-    t0 = time.perf_counter()
+    t0 = time.process_time()
     segs = parse_command(cmd)
-    elapsed = time.perf_counter() - t0
+    elapsed = time.process_time() - t0
     assert len(segs) <= _MAX_SEGMENTS, f"{len(segs)} segments exceeds cap {_MAX_SEGMENTS}"
     assert elapsed < 1.0, f"took {elapsed:.3f}s on a {_MAX_SEGMENTS * 4}-stage pipeline"
 
@@ -654,9 +654,9 @@ def test_tokens_per_segment_are_bounded():
 
 def test_pathological_nesting_returns_promptly():
     cmd = "$(" * 5000 + "cat /etc/shadow" + ")" * 5000
-    t0 = time.perf_counter()
+    t0 = time.process_time()
     parse_command(cmd)
-    assert time.perf_counter() - t0 < 1.0
+    assert time.process_time() - t0 < 1.0
 
 
 # EVERY bound, in one table. The heredocs-per-segment cap was the one that did

@@ -151,6 +151,6 @@ def test_batch_c_redos_safe():
         "wget --post-data=" + "$" * 200_000,
     ]
     for p in payloads:
-        t0 = time.perf_counter()
+        t0 = time.process_time()
         scan_l1(p)
-        assert time.perf_counter() - t0 < 1.5, "Batch-C exfil pattern too slow (possible ReDoS)"
+        assert time.process_time() - t0 < 1.5, "Batch-C exfil pattern too slow (possible ReDoS)"

@@ -89,6 +89,6 @@ def test_batch_b_redos_safe():
         "base64 -d | " * 50_000,
     ]
     for p in payloads:
-        t0 = time.perf_counter()
+        t0 = time.process_time()
         scan_l1(p)
-        assert time.perf_counter() - t0 < 1.5, "Batch-B pattern too slow (possible ReDoS)"
+        assert time.process_time() - t0 < 1.5, "Batch-B pattern too slow (possible ReDoS)"

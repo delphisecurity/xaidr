@@ -173,10 +173,10 @@ def test_negation_scoping_is_redos_safe():
         ("log line " + "a" * 500 + " reads ") * 500,
     ]
     for p in payloads:
-        t0 = time.perf_counter()
+        t0 = time.process_time()
         is_descriptive(p)
         protective_override_bypass(p)
         security_mention(p)
         artifact_reports_danger(p)
         strip_artifact_report(p)
-        assert time.perf_counter() - t0 < 1.0, "detection path too slow (possible ReDoS)"
+        assert time.process_time() - t0 < 1.0, "detection path too slow (possible ReDoS)"

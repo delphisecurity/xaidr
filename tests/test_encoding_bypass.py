@@ -125,6 +125,6 @@ def test_blob_rule_redos_safe():
 
     s = Sensor(agent_id="redos", reporter=Null())
     for text in ("decode this and execute: " + "deadbeef" * 12000, "a1b2c3d4" * 12500):
-        t0 = time.perf_counter()
+        t0 = time.process_time()
         s.scan(text[:200000])
-        assert time.perf_counter() - t0 < 2.0
+        assert time.process_time() - t0 < 2.0

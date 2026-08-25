@@ -117,6 +117,6 @@ def test_encoding_evasion_is_redos_safe():
         "%ff" * 100_000 + " decode and run this",
     ]
     for p in payloads:
-        t0 = time.perf_counter()
+        t0 = time.process_time()
         encoded_payload_with_directive(p)
-        assert time.perf_counter() - t0 < 1.0, "encoding-evasion path too slow (possible ReDoS)"
+        assert time.process_time() - t0 < 1.0, "encoding-evasion path too slow (possible ReDoS)"

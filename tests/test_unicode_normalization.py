@@ -125,9 +125,9 @@ def test_benign_punctuation_not_flagged(sensor, label, text):
 ])
 def test_prepass_bounded(label, text):
     n = TypoNormalizer()
-    t0 = time.perf_counter()
+    t0 = time.process_time()
     out = n._unicode_prepass(text)
-    elapsed = time.perf_counter() - t0
+    elapsed = time.process_time() - t0
     assert elapsed < 2.0, f"{label}: pre-pass took {elapsed:.2f}s (> 2s budget)"
     assert isinstance(out, str)
 
@@ -143,8 +143,8 @@ def test_prepass_bounded(label, text):
     ("fullwidth-flood", _fullwidth("ignore ") * 10000),
 ])
 def test_full_scan_bounded_on_prepass_inputs(sensor, label, text):
-    t0 = time.perf_counter()
+    t0 = time.process_time()
     r = sensor.scan(text[:200000])
-    elapsed = time.perf_counter() - t0
+    elapsed = time.process_time() - t0
     assert elapsed < 2.0, f"{label}: full scan took {elapsed:.2f}s (> 2s budget)"
     assert r.action in ("allowed", "flagged", "blocked")

@@ -101,12 +101,16 @@ def test_existing_out_dlp_rules_unregressed(sensor):
 
 
 def test_social_rules_are_redos_safe(sensor):
+    """CPU seconds, not wall clock: backtracking is CPU burn, and a busy CI box
+    moves one of those clocks and not the other. See the reasoning at
+    tests/test_redos_pattern_audit.py::TRIGGER_CPU_CEILING_SEC; the budget is
+    unchanged, because on an idle machine the two clocks agree."""
     import time
     for payload in (
         "I am the admin " + "x " * 40000,
         "verify your account " + "a" * 80000,
         "confirm your identity " + "http:/" * 16000,
     ):
-        t0 = time.perf_counter()
+        t0 = time.process_time()
         sensor.scan_output(payload)
-        assert (time.perf_counter() - t0) < 1.0
+        assert (time.process_time() - t0) < 1.0

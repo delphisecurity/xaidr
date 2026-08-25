@@ -20,9 +20,13 @@ the three shapes that backtrack, with a per-pattern ceiling.
 Two bounds are asserted, and NEITHER subsumes the other — the non-vacuity run
 showed each catching rules the other missed:
 
-  * a per-pattern WALL CLOCK on adversarial input. This is what catches
+  * a per-pattern CPU CEILING on adversarial input. This is what catches
     ``LLM04_repeat_loop``, whose curve is only ~n^1.35 in the tested range but
-    whose constant is enormous (495ms at 20k, 2548ms at the 100k cap).
+    whose constant is enormous (495ms at 20k, 2548ms at the 100k cap). Every time
+    bound in this file is CPU time rather than wall clock, and the reason is
+    recorded at TRIGGER_CPU_CEILING_SEC: wall clock measures the CI box as much
+    as the code, and this file had already produced two unexplained failures
+    because of it.
   * a GROWTH RATIO across a 4x size step. This is what catches the six rules that
     are cheap at small sizes and quadratic or worse above them —
     ``LLM01_translate_smuggle``, ``LLM01_dual_response``, ``ADI_forged_tool_result``
@@ -124,12 +128,23 @@ ALL_RULES = list(L1.INPUT_RULES) + list(L1.OUTPUT_RULES)
 
 
 def _run(rule, text: str) -> float:
-    t0 = time.perf_counter()
+    """CPU seconds one pattern spends on one input.
+
+    ``process_time`` and not ``perf_counter``, for the reason set out at
+    TRIGGER_CPU_CEILING_SEC below: backtracking is CPU burn, and CPU is the only
+    one of the two clocks that a busy neighbour cannot move. Measured on a
+    10-core box with three busy loops per core, the worst pattern in this battery
+    reads 318ms by wall clock and 86ms by CPU; the ceiling is 250ms, so the wall
+    form failed on a machine where nothing about the pattern had changed. Both
+    numbers here and both thresholds are unchanged from the wall-clock version,
+    because on an idle box the two clocks agree to within a millisecond.
+    """
+    t0 = time.process_time()
     if rule["detector"] is not None:
         rule["detector"](text)
     else:
         rule["pattern"].search(text)
-    return time.perf_counter() - t0
+    return time.process_time() - t0
 
 
 # ── 1. every pattern, bounded ────────────────────────────────────────────────
@@ -244,24 +259,108 @@ TRIGGERS = {
     "line-repeat": "GET /api/v1/search 429\n" * 200,
 }
 
-TRIGGER_CEILING_SEC = 0.5
+# ── WHY THIS BOUND IS CPU TIME AND NOT WALL CLOCK ────────────────────────────
+# It used to be `time.perf_counter() < 0.5`, and that assertion measured the
+# machine as much as the code. Measured on a 10-core box, worst trigger, content
+# path: 264ms idle, 446ms with one busy loop per core, 1182ms with three per
+# core. The last one FAILS, and nothing about the scanner changed between the
+# three runs. A test that reddens because a CI box is busy teaches people to
+# re-run rather than to read, and this one had already produced two unexplained
+# failures in this project before the cause was identified.
+#
+# The quantity the bound is actually about is CPU BURN. A catastrophically
+# backtracking pattern is expensive because it executes an enormous number of
+# match steps, and `time.process_time()` counts exactly those: it is this
+# process's own user+system CPU, so busy loops on other cores do not enter it.
+# Wall clock was only ever a proxy for it, and a poor one on a shared machine.
+# Same three runs, same worst trigger, by CPU: 264ms, 282ms, 316ms. A 3x
+# oversubscribed machine moves it by 1.2x, against 4.5x for wall clock.
+#
+# TWO ALTERNATIVES WERE MEASURED AND REJECTED, recorded here so the next person
+# does not have to re-run them:
+#
+#   * RELATIVE TO A KNOWN-LINEAR BASELINE scanned in the same process. The
+#     obvious candidate, on the theory that contention scales both sides. It does
+#     not: contention adds a per-scheduling-event OFFSET, not a multiplier, so
+#     the shortest inputs inflate hardest. The worst trigger-to-baseline ratio
+#     went 4.6 idle, 6.9 at 1x load, 37.0 at 3x load, and every threshold that
+#     survived the third run was loose enough to be meaningless. It is worse than
+#     the absolute wall clock it would replace.
+#   * A MACHINE-DERIVED WALL BUDGET, calibrated by timing a fixed linear scan in
+#     this process. That one does hold (utilisation 0.59 / 0.86 / 0.81 across the
+#     three runs) because the calibration inflates alongside the measurement. It
+#     is kept, but only as the BACKSTOP below, because a budget that grows with
+#     load also grows the hole a moderately slow pattern can hide in.
+#
+# So the bound that DECIDES is CPU, and the wall clock is retained at a bound
+# derived from the machine, wide enough never to fire on contention and narrow
+# enough to catch a stall that burns no CPU (a lock, a sleep, an I/O wait) which
+# the CPU bound cannot see. Its floor is the engine's own documented per-scan
+# latency ceiling.
+TRIGGER_CPU_CEILING_SEC = 0.5
+WALL_BACKSTOP_FLOOR_SEC = 2.0
+WALL_BACKSTOP_MULTIPLE = 6
+
+# A fixed unit of known-linear work, used only to ask how fast this machine is
+# right now. Ordinary prose at the audit size: every pattern pays a full pass and
+# none of them backtracks on it.
+_CALIB_TEXT = ("The quarterly report is attached for review by the team. "
+               * (AUDIT_N // 56 + 1))[:AUDIT_N]
+
+
+def _timed(sensor, text: str, tool: bool = False):
+    """(wall, cpu) for one scan. Both clocks are read around the same call, so
+    the pair is directly comparable."""
+    w0, c0 = time.perf_counter(), time.process_time()
+    _scan(sensor, text, tool=tool)
+    return time.perf_counter() - w0, time.process_time() - c0
+
+
+@pytest.fixture(scope="module")
+def wall_backstop(sensor):
+    """The wall-clock backstop, in seconds, derived from THIS machine under the
+    conditions of THIS run. Best of three, so one descheduled sample cannot
+    shrink the budget."""
+    best = min(_timed(sensor, _CALIB_TEXT)[0] for _ in range(3))
+    return max(WALL_BACKSTOP_FLOOR_SEC, WALL_BACKSTOP_MULTIPLE * best)
 
 
 @pytest.mark.parametrize("name", sorted(TRIGGERS))
-def test_trigger_and_variants_scan_in_bounded_time(sensor, name):
+def test_trigger_and_variants_scan_in_bounded_time(sensor, name, wall_backstop):
     """Every repetition shape, on the CONTENT path and the TOOL path — the report
-    was filed against one and both were vulnerable."""
+    was filed against one and both were vulnerable.
+
+    CPU time is the assertion; wall clock is a backstop scaled to the machine.
+    Non-vacuity is not a matter of opinion here: restoring the retired pattern
+    `(.{5,50})\\s*(?:\\1\\s*){20,}` makes `reported-104-spaces` fail this test
+    under both bounds, on an idle box and a loaded one alike.
+    """
     text = TRIGGERS[name]
-    t0 = time.perf_counter()
-    _scan(sensor, text)
-    content = time.perf_counter() - t0
+    content_wall, content_cpu = _timed(sensor, text)
+    tool_wall, tool_cpu = _timed(sensor, text, tool=True)
 
-    t0 = time.perf_counter()
-    _scan(sensor, text, tool=True)
-    tool = time.perf_counter() - t0
-
-    assert content < TRIGGER_CEILING_SEC, f"{name}: content path {content:.2f}s"
-    assert tool < TRIGGER_CEILING_SEC, f"{name}: tool path {tool:.2f}s"
+    assert content_cpu < TRIGGER_CPU_CEILING_SEC, (
+        f"{name}: content path burned {content_cpu:.2f}s of CPU "
+        f"(ceiling {TRIGGER_CPU_CEILING_SEC}s, wall {content_wall:.2f}s)"
+    )
+    assert tool_cpu < TRIGGER_CPU_CEILING_SEC, (
+        f"{name}: tool path burned {tool_cpu:.2f}s of CPU "
+        f"(ceiling {TRIGGER_CPU_CEILING_SEC}s, wall {tool_wall:.2f}s)"
+    )
+    assert content_wall < wall_backstop, (
+        f"{name}: content path took {content_wall:.2f}s of wall clock against a "
+        f"machine-derived backstop of {wall_backstop:.2f}s, while burning only "
+        f"{content_cpu:.2f}s of CPU, so the scan stalled on something other "
+        f"than "
+        f"regex work"
+    )
+    assert tool_wall < wall_backstop, (
+        f"{name}: tool path took {tool_wall:.2f}s of wall clock against a "
+        f"machine-derived backstop of {wall_backstop:.2f}s, while burning only "
+        f"{tool_cpu:.2f}s of CPU, so the scan stalled on something other "
+        f"than "
+        f"regex work"
+    )
 
 
 # ── 4. the replaced rules still detect what they were written for ────────────

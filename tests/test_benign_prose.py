@@ -404,6 +404,6 @@ def test_code_span_matching_is_bounded_on_adversarial_input(text):
 
     from xaidr.scanner.directive_context import documentary_mention
 
-    start = time.perf_counter()
+    start = time.process_time()
     documentary_mention(text)
-    assert time.perf_counter() - start < 1.0
+    assert time.process_time() - start < 1.0

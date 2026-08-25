@@ -109,6 +109,6 @@ def test_bs5_normalizer_redos_safe():
         "x " * 200_000,
     ]
     for p in payloads:
-        t0 = time.perf_counter()
+        t0 = time.process_time()
         n.normalize(p)
-        assert time.perf_counter() - t0 < 1.0, "normalizer too slow (possible ReDoS)"
+        assert time.process_time() - t0 < 1.0, "normalizer too slow (possible ReDoS)"

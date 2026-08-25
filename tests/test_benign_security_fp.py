@@ -210,6 +210,6 @@ def test_redos_safe_on_pathological_input(sensor):
         "exfiltrate " + "z" * 20000,
     ]
     for p in payloads:
-        t0 = time.perf_counter()
+        t0 = time.process_time()
         sensor.scan(p)
-        assert time.perf_counter() - t0 < 1.0, f"scan too slow on {p[:20]!r}"
+        assert time.process_time() - t0 < 1.0, f"scan too slow on {p[:20]!r}"

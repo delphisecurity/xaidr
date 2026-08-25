@@ -124,8 +124,12 @@ def test_batch_a_patterns_redos_safe():
         "sk-" + "a-" * 100_000,
         "4242 " * 80_000,
     ]
+    # CPU seconds, not wall clock. Same reasoning as every other time bound in
+    # this suite (written out once, at tests/test_redos_pattern_audit.py): a
+    # backtracking pattern burns CPU, and CPU is the clock a busy neighbour
+    # cannot move. Budget unchanged.
     for p in payloads:
-        t0 = time.perf_counter()
+        t0 = time.process_time()
         scan_l1(p)
         scan_dlp(p)
-        assert time.perf_counter() - t0 < 1.5, "Batch-A pattern too slow (possible ReDoS)"
+        assert time.process_time() - t0 < 1.5, "Batch-A pattern too slow (possible ReDoS)"

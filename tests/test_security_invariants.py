@@ -43,9 +43,17 @@ CATASTROPHIC_CEILING_S = 30.0
 
 
 def _timed(fn, text):
-    t0 = time.perf_counter()
+    """(result, CPU seconds). CPU, not wall clock, and for the reason set out at
+    length in tests/test_redos_pattern_audit.py: the quantity these ceilings are
+    about is BACKTRACKING WORK, and ``time.process_time`` counts exactly that
+    while a busy neighbour cannot move it. Measured there on a 10-core box with
+    three busy loops per core, the worst case in that battery reads 318ms by
+    wall clock and 86ms by CPU. This file's own comment above already documents
+    a ceiling that had to be widened 16x because ambient load broke it; that is
+    the same defect, and this is the fix rather than another wider number."""
+    t0 = time.process_time()
     r = fn(text)
-    return r, time.perf_counter() - t0
+    return r, time.process_time() - t0
 
 
 # ── 1. ReDoS guards ──────────────────────────────────────────────────────────
@@ -118,6 +126,11 @@ def test_normalizer_path_has_no_catastrophic_blowup(sensor):
     window, so one timing check is still worth having. It is set at a ceiling no
     ambient load can reach (see CATASTROPHIC_CEILING_S) rather than at a tight
     budget that races with the machine.
+
+    Now measured in CPU seconds (see ``_timed``), which is what made the wide
+    ceiling necessary in the first place. The width is kept anyway: it costs
+    nothing against an exponential blowup, and two independent reasons not to
+    flake are better than one.
     """
     _, e1 = _timed(sensor.scan, "a@b.com " * 125000)
     _, e2 = _timed(sensor.scan_output, "a@b.com " * 125000)

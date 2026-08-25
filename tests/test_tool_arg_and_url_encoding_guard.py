@@ -148,6 +148,6 @@ def test_url_decode_is_redos_safe():
         "https://x/" + "%2F" * 200_000,
     ]
     for p in payloads:
-        t0 = time.perf_counter()
+        t0 = time.process_time()
         url_decoded_danger(p)
-        assert time.perf_counter() - t0 < 1.0, "url decode-and-rescan too slow (possible ReDoS)"
+        assert time.process_time() - t0 < 1.0, "url decode-and-rescan too slow (possible ReDoS)"

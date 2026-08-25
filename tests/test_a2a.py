@@ -191,6 +191,6 @@ def test_id_content_check_is_redos_safe():
     import time
     v = A2AStructuralValidator()
     for payload in ("." * 40000, "/" * 40000 + "..", "..%2f" * 16000):
-        t0 = time.perf_counter()
+        t0 = time.process_time()
         v._id_content_category(payload)
-        assert (time.perf_counter() - t0) < 0.5
+        assert (time.process_time() - t0) < 0.5

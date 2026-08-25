@@ -87,21 +87,30 @@ def test_tool_call_boundary_past_cap_caught(sensor):
 
 # ── 4. ReDoS still bounded (the constraint) ──────────────────────────────────
 
+# Both bounds below are CPU seconds (``time.process_time``), not wall clock. The
+# reasoning is written out once, at tests/test_redos_pattern_audit.py, and it
+# applies here with extra force: the second test is a DIFFERENTIAL between two
+# measurements, and contention adds a per-scheduling-event offset rather than a
+# multiplier, so a differential of wall clocks is the single most load-sensitive
+# shape in the suite. Measured, the worst trigger-to-baseline wall-clock ratio in
+# that file went 4.6 idle / 6.9 at one busy loop per core / 37.0 at three, while
+# the CPU equivalent stayed flat. Thresholds are unchanged.
+
 def test_separator_bomb_at_cap_unchanged(sensor):
-    # A <=100k input is a single window — behaviour (and latency) is unchanged.
-    t = time.perf_counter()
+    # A <=100k input is a single window — behaviour (and cost) is unchanged.
+    t = time.process_time()
     sensor.scan(_bomb(CAP))
-    assert time.perf_counter() - t < 2.0
+    assert time.process_time() - t < 2.0
 
 
 def test_large_adversarial_input_is_bounded_and_does_not_scale(sensor):
     # 1MB and 5MB adversarial bombs must both stay within a fixed ceiling — the
-    # total-budget cap means latency does NOT scale with input size.
+    # total-budget cap means work does NOT scale with input size.
     def timed(mb):
         b = _bomb(mb * 10 * CAP)
-        t = time.perf_counter()
+        t = time.process_time()
         sensor.scan(b)
-        return time.perf_counter() - t
+        return time.process_time() - t
 
     e1, e5 = timed(1), timed(5)
     assert e1 < 2.5, f"1MB bomb took {e1:.2f}s"
