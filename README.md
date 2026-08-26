@@ -91,7 +91,8 @@ coverage is worse than one that has less of it.
 ## Install
 
 ```bash
-pip install xaidr                # core — ZERO required dependencies
+pip install xaidr                # core, rules only: ZERO required dependencies
+pip install "xaidr[nano]"        # adds the optional local ML signal, off until you enable it
 ```
 
 Optional extras are installed only when you use the matching feature:
@@ -103,6 +104,13 @@ Optional extras are installed only when you use the matching feature:
 | `xaidr[http]` | `protect_http` / `ProtectedHttpClient`, `WebhookReporter` | `httpx` |
 | `xaidr[otel]` | `OTelReporter` (emit events as OTel log records) | `opentelemetry-api` |
 | `xaidr[trace]` | read an inbound `traceparent` / active OTel span | `opentelemetry-api` |
+| `xaidr[nano]` | the optional local ML signal for the rules-silent band (experimental, off by default) | `onnxruntime`, `tokenizers`, `numpy`, `huggingface-hub` |
+
+The `nano` extra installs the runtime, **not the model**. The 130 MB artifact is
+a separate deliberate fetch on the first `Sensor(enable_nano=True)`, or a
+directory you point `XAIDR_NANO_MODEL` at. Installing the extra alone changes no
+verdict: see [The optional ML signal for the rules-silent
+band](#the-optional-ml-signal-for-the-rules-silent-band-nano-experimental).
 
 Requires Python 3.10+. The core install has **no** required runtime dependencies —
 `pip install xaidr` pulls in nothing at all.
@@ -288,6 +296,17 @@ signal alone stays quiet while corroborating signals escalate together.
 
 You interact with the result, not the layers: one `.action`, one `.score`, and
 the list of what fired.
+
+**One more layer is optional and off by default.** A small local ML signal
+(`nano`) runs only where the whole rules pipeline scored exactly nothing, and
+turning it on takes two deliberate acts: `pip install "xaidr[nano]"` **and**
+`Sensor(enable_nano=True)`. On the one attack population the rules provably
+cannot reach, it converts 97.8% of what would otherwise be clean allows into
+flags. It is experimental, it can flag but never block, and its score is **not
+calibrated confidence**, so do not triage by the number it reports. The false
+positive cost, the runtime caveat and the rest of the detail are in [The
+optional ML signal for the rules-silent
+band](#the-optional-ml-signal-for-the-rules-silent-band-nano-experimental).
 
 
 ## Coverage and limitations
