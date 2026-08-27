@@ -75,6 +75,50 @@ _ID_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _ID_INJECTION = re.compile(r"[;|&$`<>()\n\r\t]")
 
 
+def _a2a_message(body: dict):
+    """The A2A ``Message`` object inside ``body``, wherever it sits.
+
+    Three placements, all real:
+
+    * ``params.message`` — a JSON-RPC REQUEST (``message/send``).
+    * ``result`` — a JSON-RPC RESPONSE, whose result IS a Message.
+    * ``body`` itself — a BARE Message with no envelope, which is what a
+      framework holds in process before serialization. CrewAI's A2A client
+      builds one of these (a2a-sdk ``Message``) and hands it to the transport.
+
+    The bare case was previously invisible here: ``_message`` only read
+    ``params.message``, so a top-level Message reached the scanner with its
+    parts, role, metadata and ``taskId``/``contextId`` unexamined. Content was
+    still scanned by the text extractor, so nothing failed loudly — the
+    structural and id-smuggling checks just never ran, which is the worst way
+    for a control to be absent.
+    """
+    params = body.get("params")
+    if isinstance(params, dict):
+        message = params.get("message")
+        if isinstance(message, dict):
+            return message
+    if _is_bare_message(body):
+        return body
+    result = body.get("result")
+    if _is_bare_message(result):
+        return result
+    return None
+
+
+def _is_bare_message(node) -> bool:
+    """``kind: "message"`` plus a real ``parts`` list — the A2A Message shape.
+
+    Both conditions required, for the same false-positive reason as the
+    matching check in ``xaidr/integrations/_a2a_detect.py``.
+    """
+    return (
+        isinstance(node, dict)
+        and node.get("kind") == "message"
+        and isinstance(node.get("parts"), list)
+    )
+
+
 class A2AStructuralValidator:
     """Stateless structural/wire-format validator for A2A JSON-RPC messages."""
 
@@ -270,9 +314,12 @@ class A2AStructuralValidator:
         params = body.get("params")
         if isinstance(params, dict):
             containers.append(params)
-            message = params.get("message")
-            if isinstance(message, dict):
-                containers.append(message)
+        # `_a2a_message` covers params.message, a bare top-level Message, and a
+        # response whose `result` is one — so the id fields of an unenveloped
+        # Message (messageId/taskId/contextId) are read here too.
+        message = _a2a_message(body)
+        if isinstance(message, dict) and not any(message is c for c in containers):
+            containers.append(message)
         for container in containers:
             for key, value in container.items():
                 if not isinstance(value, str) or not value:
@@ -281,12 +328,7 @@ class A2AStructuralValidator:
                     yield value
 
     # -- helpers -----------------------------------------------------------
-    @staticmethod
-    def _message(body: dict):
-        params = body.get("params")
-        if isinstance(params, dict):
-            return params.get("message")
-        return None
+    _message = staticmethod(_a2a_message)
 
     def _iter_parts(self, body: dict):
         """Yield every part dict from request and response shapes."""
@@ -535,12 +577,7 @@ class A2AIdTracker:
             return self._str_or_none(params.get("contextId"))
         return None
 
-    @staticmethod
-    def _message(body: dict):
-        params = body.get("params")
-        if isinstance(params, dict):
-            return params.get("message")
-        return None
+    _message = staticmethod(_a2a_message)
 
     @staticmethod
     def _is_followup_shape(body: dict) -> bool:

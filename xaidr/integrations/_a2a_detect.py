@@ -43,6 +43,28 @@ def _content_type_is_a2a_hint(headers: Optional[dict]) -> bool:
     return False
 
 
+def _is_message_object(node: object) -> bool:
+    """True for a bare A2A ``Message`` object — ``kind: "message"`` + ``parts[]``.
+
+    This is the a2a-sdk ``Message.model_dump()`` shape, and it is what a
+    framework holds IN PROCESS before the JSON-RPC frame goes on. CrewAI's A2A
+    client (``crewai/a2a/utils/delegation.py``) builds exactly this object and
+    hands it to the transport, so an integration scanning at the object level
+    rather than at the wire sees no ``jsonrpc``, no ``method`` and no
+    ``params`` — only ``{"kind": "message", "role": ..., "parts": [...],
+    "messageId": ..., "contextId": ..., "taskId": ...}``.
+
+    Both conditions are required. ``kind == "message"`` alone would claim any
+    JSON with a stray ``kind`` field; a ``parts`` list alone is the
+    false-positive shape the caller's docstring already rules out.
+    """
+    return (
+        isinstance(node, dict)
+        and node.get("kind") == "message"
+        and isinstance(node.get("parts"), list)
+    )
+
+
 def _is_a2a_shape(body: dict) -> bool:
     """Authoritative payload-shape check against the A2A/JSON-RPC signature.
 
@@ -54,6 +76,10 @@ def _is_a2a_shape(body: dict) -> bool:
     """
     # --- JSON-RPC 2.0 marker (primary signal) --------------------------------
     if body.get("jsonrpc") == "2.0" and isinstance(body.get("method"), str):
+        return True
+
+    # --- Bare Message object, no envelope at all -----------------------------
+    if _is_message_object(body):
         return True
 
     # --- Real A2A content paths (transport-independent, no JSON-RPC marker) ---
@@ -73,6 +99,12 @@ def _is_a2a_shape(body: dict) -> bool:
     # --- Response shape: result.artifacts[].parts[] --------------------------
     result = body.get("result")
     if isinstance(result, dict):
+        # A JSON-RPC RESPONSE carries no `method`, so the marker above does not
+        # fire; when its `result` IS a Message (the a2a-sdk returns one from
+        # message/send) there is no `result.message` either. Same shape, one
+        # level in.
+        if _is_message_object(result):
+            return True
         rmsg = result.get("message")
         if isinstance(rmsg, dict) and isinstance(rmsg.get("parts"), list):
             return True

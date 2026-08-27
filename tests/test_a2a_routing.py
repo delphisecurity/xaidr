@@ -206,3 +206,95 @@ def test_timing_heuristic_is_gone():
         if "_delphi_parent_agents" in path.read_text(encoding="utf-8"):
             offenders.append(str(path))
     assert offenders == [], f"timing heuristic still referenced in: {offenders}"
+
+
+# ── 7. A BARE A2A Message — no envelope — is detected and structurally checked ─
+#
+# The shape a framework holds IN PROCESS, before the JSON-RPC frame goes on:
+# a2a-sdk `Message.model_dump()`. CrewAI's A2A client builds exactly this
+# (crewai/a2a/utils/delegation.py) and hands it to the transport.
+#
+# The regression this pins: `_is_a2a_shape` recognised only a JSON-RPC frame or
+# `params.message.parts`, and `A2AStructuralValidator._message` read only
+# `params.message`. A bare Message therefore routed to the GENERIC scan, so its
+# content was still read (nothing failed loudly) while every structural and
+# id-provenance check silently did not run. Silence is the failure mode.
+
+def _bare_message(text, *, task_id=None, context_id=None):
+    """a2a-sdk Message.model_dump(mode="json") — camelCase ids, kind, parts[]."""
+    body = {
+        "kind": "message",
+        "role": "user",
+        "messageId": "msg-abc-123",
+        "parts": [{"kind": "text", "text": text}],
+    }
+    if task_id is not None:
+        body["taskId"] = task_id
+    if context_id is not None:
+        body["contextId"] = context_id
+    return body
+
+
+def test_bare_a2a_message_is_detected_as_a2a():
+    body = _bare_message("please summarize the quarterly sales report")
+    is_a2a, parsed = looks_like_a2a(body)
+    assert is_a2a is True
+    assert parsed == body
+
+    # Same through the serialized form the transport would carry.
+    is_a2a, parsed = looks_like_a2a(json.dumps(body))
+    assert is_a2a is True
+    assert parsed == body
+
+    # And it ROUTES to scan_a2a, not to the generic scan.
+    spy = SpySensor(_Result())
+    _, routed_a2a = route_inbound_scan(spy, json.dumps(body), "recv-agent")
+    assert routed_a2a is True
+    assert len(spy.scan_a2a_calls) == 1
+    assert len(spy.scan_calls) == 0
+
+
+def test_bare_a2a_message_runs_the_id_provenance_checks():
+    """The checks that were silently absent. Content scanning was never the gap."""
+    sensor = _real_sensor()
+    body = _bare_message(
+        "please summarize the quarterly sales report",
+        task_id="task-never-issued-to-us",
+        context_id="ctx-never-issued-to-us",
+    )
+    result = sensor.scan_a2a(body, destination="remote-agent")
+
+    # contextId is unconditional: an unissued context id is smuggling.
+    assert "context_id_smuggling" in result.rules, result.rules
+    # taskId with NO JSON-RPC method cannot be told apart from a client-minted
+    # new-task id, so the conservative signal is correct here — asserting
+    # task_id_smuggling on an unenveloped message would be the overclaim.
+    assert "unverified_task_reference" in result.rules, result.rules
+
+
+def test_a_jsonrpc_response_whose_result_is_a_message_is_detected():
+    """A response carries no `method`, and no `result.message` either."""
+    body = {"jsonrpc": "2.0", "id": "1", "result": _bare_message("all done")}
+    is_a2a, parsed = looks_like_a2a(json.dumps(body))
+    assert is_a2a is True
+    assert parsed == body
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # `kind` present but no parts list — not a Message.
+        {"kind": "message", "role": "user", "text": "hello"},
+        # A parts list but no `kind` — the pre-existing false-positive shape.
+        {"role": "user", "parts": [{"text": "hello"}]},
+        # Someone else's `kind`.
+        {"kind": "task", "parts": [{"kind": "text", "text": "hello"}]},
+        # `parts` present but not a list.
+        {"kind": "message", "parts": {"kind": "text", "text": "hello"}},
+    ],
+)
+def test_message_lookalikes_are_not_detected(body):
+    """Both conditions are required — widening detection must not widen FPs."""
+    is_a2a, parsed = looks_like_a2a(json.dumps(body))
+    assert is_a2a is False
+    assert parsed is None
