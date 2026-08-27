@@ -14,6 +14,7 @@ for exactly how far these tests do and do not generalise to the real libraries.
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 import warnings
@@ -43,12 +44,26 @@ def _clean_patch_state():
     fakes.uninstall(FAKE_PREFIXES)
 
 
+#: httpx is the ONE real library these tests can exercise, but it is an
+#: optional extra (`xaidr[http]`) and CI's `base` config deliberately installs
+#: no extras at all — that config is the only standing proof that the core suite
+#: runs with zero third-party dependencies, which is this package's headline
+#: promise. So an httpx-dependent case SKIPS there, exactly as the trace-context
+#: tests already do via importorskip. It must never be fixed by adding httpx to
+#: the base install: that would delete the check that caught this.
+HAVE_HTTPX = importlib.util.find_spec("httpx") is not None
+requires_httpx = pytest.mark.skipif(
+    not HAVE_HTTPX,
+    reason="needs the [http] extra — `pip install 'xaidr[http]'` to run",
+)
+
+
 def _absent() -> set[str]:
     """Framework names genuinely not importable in this interpreter.
 
-    httpx IS installed (it is the [http] extra), and other test modules import
-    it, so "not present" is a property of the environment rather than a
-    constant. Computing it keeps these tests order-independent.
+    Whether httpx is present depends on which extras are installed, so "not
+    present" is a property of the environment rather than a constant. Computing
+    it keeps these tests order-independent AND install-config-independent.
     """
     return {
         name for name, target in TARGETS_BY_NAME.items() if not target.present()
@@ -138,17 +153,24 @@ def test_a_present_package_with_an_unimported_submodule_is_not_reached():
 
 
 def test_the_rule_1_self_check_fires_when_a_patcher_imports(monkeypatch):
-    """The detector that keeps rule 1 honest is itself non-vacuous."""
+    """The detector that keeps rule 1 honest is itself non-vacuous.
+
+    Keyed on a FAKE framework rather than httpx. All this test needs is a
+    module that is present so the target dispatches; it asserts nothing about
+    httpx, and using it would have made the case skip in the zero-dependency
+    config for no reason.
+    """
     import xaidr.autopatch.frameworks as fw
+
+    fakes.install_langchain_core()
 
     def rogue(ctx):
         import textwrap  # noqa: F401 — a module protect() had no business loading
         sys.modules["definitely_not_imported_before"] = sys.modules["textwrap"]
 
-    target = fw.FrameworkTarget("httpx", ("httpx",), rogue, "rogue")
+    target = fw.FrameworkTarget("langchain_core", ("langchain_core",), rogue, "rogue")
     monkeypatch.setattr(fw, "TARGETS", (target,))
     monkeypatch.setattr("xaidr.autopatch.TARGETS", (target,))
-    import httpx  # noqa: F401
 
     try:
         manifest = _protect()
@@ -167,24 +189,53 @@ def test_importing_xaidr_patches_nothing():
 
     Run in a subprocess so this cannot be confused by patches an earlier test
     in this process installed.
+
+    The httpx identity check is the STRONGEST form of this — a real library,
+    really patchable, demonstrably untouched — so it is included whenever the
+    [http] extra is present. It is not the whole assertion though, and the rest
+    holds with zero third-party dependencies: importing xaidr must leave no
+    active manifest and must not drag a framework into sys.modules. Both still
+    run and still assert in the zero-dependency config.
     """
-    code = (
-        "import httpx, sys;"
-        "before = httpx.Client.send;"
-        "import xaidr;"
-        "assert httpx.Client.send is before, 'xaidr patched httpx at import time';"
-        "assert not xaidr.autopatch.active_manifests();"
-        "assert callable(xaidr.protect);"
-        "print('clean')"
-    )
+    lines = ["import sys"]
+    if HAVE_HTTPX:
+        # Imported BEFORE the snapshot: the test importing httpx is not xaidr
+        # importing httpx, and only the latter is the thing being ruled out.
+        lines += [
+            "import httpx",
+            "before_send = httpx.Client.send",
+        ]
+    lines += [
+        "before_modules = set(sys.modules)",
+        "import xaidr",
+        "assert not xaidr.autopatch.active_manifests(), 'a manifest existed at import'",
+        "assert callable(xaidr.protect)",
+        # Importing xaidr must not pull in anything it patches.
+        "appeared = {m.split('.')[0] for m in set(sys.modules) - before_modules}",
+        "leaked = appeared & {'httpx', 'requests', 'langchain', 'langchain_core',"
+        " 'langgraph', 'crewai', 'autogen', 'autogen_core', 'llama_index', 'mcp'}",
+        "assert not leaked, f'importing xaidr pulled in {sorted(leaked)}'",
+    ]
+    if HAVE_HTTPX:
+        lines.append(
+            "assert httpx.Client.send is before_send,"
+            " 'xaidr patched httpx at import time'"
+        )
+    lines.append("print('clean')")
+
     out = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, check=False
+        [sys.executable, "-c", ";".join(lines)],
+        capture_output=True, text=True, check=False,
     )
     assert out.returncode == 0, out.stderr
     assert "clean" in out.stdout
 
 
+@requires_httpx
 def test_protect_is_the_only_thing_that_patches():
+    """Genuinely httpx-specific: it asserts on `httpx.Client.send` identity
+    before, during and after protect(). The fake-framework equivalent is
+    test_unprotect_restores_every_original_by_identity, which runs everywhere."""
     import httpx
 
     before = httpx.Client.send
@@ -609,14 +660,19 @@ def test_4b_a_framework_imported_after_protect_is_not_patched_and_says_so():
 
 
 def test_4c_a_patcher_that_raises_never_reaches_the_host(monkeypatch, capsys):
+    # Keyed on a FAKE framework: this asserts that a patcher which RAISES is
+    # contained, which has nothing to do with httpx. It only needs a present
+    # module for the target to dispatch on.
     import xaidr.autopatch.frameworks as fw
+
+    fakes.install_langchain_core()
 
     def exploding(ctx):
         raise RuntimeError("the framework's own __getattr__ blew up")
 
-    target = fw.FrameworkTarget("httpx", ("httpx",), exploding, "egress")
+    target = fw.FrameworkTarget("langchain_core", ("langchain_core",), exploding,
+                                "egress")
     monkeypatch.setattr("xaidr.autopatch.TARGETS", (target,))
-    import httpx  # noqa: F401
 
     with pytest.warns(XaidrProtectionWarning):
         manifest = xaidr.protect(agent_id="a", quiet=True)
