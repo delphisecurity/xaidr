@@ -100,6 +100,9 @@ langchain = ["langchain>=1.0", "langchain-core>=1.0"]
 # `pip install xaidr[crewai]`.
 crewai = ["crewai>=1.0"]
 # Dev/test tooling — the base pytest regression suite. `pip install xaidr[dev]`.
+# tests/test_real_frameworks.py additionally exercises the REAL langchain and
+# crewai when they are present, and skips cleanly when they are not — install
+# `xaidr[dev,langchain]` / `xaidr[dev,crewai]` to run those.
 dev = ["pytest"]
 
 [project.urls]
