@@ -1863,18 +1863,49 @@ detection ones.
 - **Malformed content is safe.** Badly formed input cannot turn the sensor into
   a denial-of-service risk.
 
-Verified with `python -m pytest -q` in a clean virtual environment with **no
-optional extras installed**: **7453 passed, 6 skipped**, identical across three
-consecutive serial runs. The suite covers the public scan APIs, wrappers, policy,
-provenance, reporters, telemetry schema, and resilience behavior.
+Verified with `python -m pytest -q`. **The figure quoted here is the `base`
+configuration — `pip install .` plus `pytest`, no extras at all: 7406 passed,
+45 skipped, 0 failed**, identical across three consecutive serial runs. That
+configuration is quoted because it is the one that proves the headline claim:
+the core suite runs with **zero third-party dependencies**. The suite covers the
+public scan APIs, wrappers, policy, provenance, reporters, telemetry schema, and
+resilience behavior.
 
-The configuration matters, so it is named: four of those six skips are the
-`nano` tests that need `onnxruntime` and a local model artifact. Install the
-extra and point `XAIDR_NANO_TEST_ARTIFACTS` at a verified artifact directory and
-the same suite reports **7457 passed, 2 skipped** — the same tests, four of them
-executing instead of skipping. Neither number is more correct than the other;
-the first is what a contributor sees on a fresh clone, which is why it is the
-one quoted.
+Both configurations CI runs, measured on this commit:
+
+| CI job | install | result |
+|---|---|---|
+| `base` | `pip install .` && `pip install pytest` | **7406 passed, 45 skipped** |
+| `full` | `pip install ".[http,trace,dev]"` | **7462 passed, 24 skipped** |
+| `corpus` | `pip install .` && `python scripts/corpus_report.py` | benign gates **PASS**, exit 0 |
+
+Adding an agent framework on top of `full` runs the real-framework tests:
+`.[crewai]` → **7473 passed, 13 skipped**; `.[langchain]` → **7474 passed, 17
+skipped**. The configurations genuinely differ, so all of them are given rather
+than picking the flattering one.
+
+**A correction, because this paragraph was wrong through 1.6.1 and the CI it
+described was red.** It claimed "no optional extras installed: 7453 passed, 6
+skipped". Two things were untrue. The number came from `.[http,trace,dev]`, not
+from an extras-free venv. And an extras-free venv did not report 7453 passed —
+it reported **21 failures**, because httpx-dependent tests imported `httpx`
+unguarded instead of skipping. CI's `base` job had been failing on every push
+since 1.5.0 and nobody noticed, because the `corpus` job stayed green. Those
+tests now skip, which is what the job's own contract always said they should do;
+the fix was never to add httpx to `base`, since that job is the only standing
+proof of the zero-dependency claim and is what caught this.
+
+What the 45 `base` skips are, since a large skip count should never be left
+vague:
+
+| skips | why | how to run them |
+|---:|---|---|
+| 20 | needs the `[http]` extra (17 marked + 3 `importorskip`) | `pip install ".[http]"` |
+| 11 | real CrewAI not installed | `pip install ".[crewai]"` |
+| 6 | real LangChain not installed | `pip install ".[langchain]"` |
+| 5 | `nano` needs `onnxruntime` + a local artifact | `pip install ".[nano]"` and set `XAIDR_NANO_TEST_ARTIFACTS` |
+| 1 | `[trace]` not installed | `pip install ".[trace]"` |
+| 2 | one pre-existing LangChain-dependent test, one superseded duplicate | — |
 
 That figure is a **source-tree** claim, not something you can reproduce from
 what you installed: the wheel and the sdist ship the `xaidr` package only, with
