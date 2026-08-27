@@ -282,8 +282,22 @@ def test_optin_a_disabled_is_byte_identical_and_carries_no_nano_fields():
     off.close()
 
 
+@_needs_artifacts
 def test_optin_b_enabled_without_the_extra_raises_at_construction():
     """No silent degradation: asking for nano without the extra is an error.
+
+    NEEDS AN ARTIFACT, which is not obvious and is why this was red in CI since
+    1.5.0. ``LocalScanner`` calls ``DelphiNano.get(dir, auto_download=False)``,
+    and ``get`` RESOLVES the artifact directory BEFORE constructing anything —
+    so the onnxruntime import this test is about is only reached once
+    resolution succeeds. With no artifact anywhere, ``resolve_model_dir``
+    raises FileNotFoundError first and the asserted ImportError never happens.
+
+    It passed on developer machines for an accidental reason: a populated
+    default cache at ``~/.delphi/models/wolf-small-int8int4`` satisfied
+    resolution, so the import was reached. A CI runner has no such cache, so it
+    failed there and only there. Guarding it the same way as the other
+    artifact-dependent tests makes the dependency explicit instead of ambient.
 
     Blocks exactly one key rather than using mock.patch.dict(sys.modules, ...):
     that snapshots and restores the WHOLE module table, so anything imported
