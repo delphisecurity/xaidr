@@ -1663,10 +1663,17 @@ class DelphiSensor:
         caller to avoid.
 
         Args:
-            tools: LangChain ``@tool`` objects or plain callables.
+            tools: LangChain ``@tool`` objects, CrewAI ``BaseTool`` objects, or
+                plain callables. A CrewAI tool is wrapped at ``_run``, which
+                covers both its public ``run()`` and the
+                ``to_structured_tool().invoke()`` an agent uses — though for
+                CrewAI ``xaidr.protect()`` is the better answer, since it
+                registers the framework's own ``before_tool_call`` hook and
+                needs no list of tools at all.
 
         Returns:
-            List of wrapped tools with scanning + blocking enforcement.
+            List of wrapped tools with scanning + blocking enforcement. The
+            caller's own tool objects are never modified in place.
         """
         wrapped = []
         for t in tools:
@@ -1677,6 +1684,21 @@ class DelphiSensor:
             original_func = getattr(t, "func", None)
             if original_func is None and callable(t):
                 original_func = t
+
+            # CrewAI's BaseTool is a THIRD shape: no `.func`, and the object is
+            # not itself callable — the implementation is `_run`. Passing one in
+            # used to fall through to the plain-callable branch, which returned
+            # a bare function with no `.run`, so the caller got an object that
+            # raised AttributeError on first use. Wrapping `_run` instead covers
+            # BOTH ways a CrewAI tool is invoked with one wrapper: the public
+            # `run()` calls `self._run`, and `to_structured_tool()` binds
+            # `func=self._run`, which is the agent path.
+            crewai_run = None
+            if original_func is None and not callable(t):
+                candidate = getattr(t, "_run", None)
+                if callable(candidate):
+                    crewai_run = candidate
+                    original_func = candidate
 
             if getattr(original_func, "_xaidr_protect_tools", False):
                 wrapped.append(t)
@@ -1728,6 +1750,28 @@ class DelphiSensor:
             new_func = make_wrapper(original_func, tool_name)
             # The idempotency marker, read at the top of the next pass.
             new_func._xaidr_protect_tools = True
+
+            # CrewAI first: it also has model_copy, but its implementation hangs
+            # off `_run`, not `func`, so the LangChain branch below would build a
+            # copy carrying a `func` attribute nothing reads. Copy-then-shadow
+            # keeps the caller's own tool object unmodified, as every other
+            # branch here does.
+            if crewai_run is not None:
+                new_tool = t.model_copy() if hasattr(t, "model_copy") else t
+                try:
+                    setattr(new_tool, "_run", new_func)
+                except Exception as exc:
+                    # A build that forbids shadowing `_run` would leave an
+                    # UNPROTECTED tool looking protected. Refuse to pretend.
+                    raise TypeError(
+                        f"protect_tools: {tool_name!r} looks like a CrewAI "
+                        f"BaseTool but its `_run` could not be wrapped, so it "
+                        f"was NOT protected. Use xaidr.protect() (which "
+                        f"registers CrewAI's before_tool_call hook and covers "
+                        f"every agent-driven call) instead."
+                    ) from exc
+                wrapped.append(new_tool)
+                continue
 
             # Preserve LangChain tool metadata (name, description, args_schema)
             # by copying the original tool with only `func` replaced. model_copy

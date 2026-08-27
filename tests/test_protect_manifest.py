@@ -419,6 +419,41 @@ def test_a_second_protect_does_not_register_the_crewai_hook_twice(cap, wait_even
     assert crewai.hooks.get_before_tool_call_hooks() == []
 
 
+def test_protect_tools_covers_a_crewai_tool_on_both_paths(cap):
+    """The claim that 'protect_tools covers it' — measured, not asserted.
+
+    A CrewAI tool is a third shape: no ``.func``, not itself callable, the
+    implementation on ``_run``. Wrapping ``_run`` covers the direct ``run()``
+    AND the ``to_structured_tool().invoke()`` the agent uses.
+    """
+    crewai = fakes.install_crewai()
+    sensor = xaidr.Sensor(agent_id="pt-crew", enforcement_mode="block", reporter=cap)
+
+    executed = []
+    tool = crewai.tools.BaseTool("run_command", lambda **kw: executed.append(kw) or "ran")
+    protected = sensor.protect_tools([tool])[0]
+    assert protected is not tool, "the caller's own tool object was mutated"
+    assert hasattr(protected, "run"), "protect_tools returned something with no .run"
+
+    assert protected.run(command="ls -la") == "ran"
+    assert executed == [{"command": "ls -la"}]
+
+    executed.clear()
+    out = protected.run(command="rm -rf / --no-preserve-root")
+    assert out.startswith("[BLOCKED]"), out
+    assert not executed, "the destructive direct call executed anyway"
+
+    # ...and the agent path through the same wrapped tool.
+    out = protected.to_structured_tool().invoke(
+        {"command": "rm -rf / --no-preserve-root"}
+    )
+    assert out.startswith("[BLOCKED]"), out
+    assert not executed
+
+    # Idempotent, like every other shape protect_tools accepts.
+    assert sensor.protect_tools([protected])[0] is protected
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # unprotect / the returned handle
 # ═══════════════════════════════════════════════════════════════════════
