@@ -2,11 +2,11 @@
 
 WHY THESE ARE FAKES, stated plainly so nobody reads more into the green ticks
 than is there: none of LangChain, LangGraph, the OpenAI Agents SDK, CrewAI,
-AutoGen, LlamaIndex, ``requests`` or the MCP SDK is installed in this
-environment, and it has no working package installer, so the real libraries
-cannot be exercised here. Each module below reproduces the call site
-``protect()`` patches — the class, the method name, the parameter order, the
-sync/async-ness, the return type — taken from that library's public API.
+AutoGen, LlamaIndex, ``requests`` or the MCP SDK is a dependency of this
+package, so the real libraries are not present in the default test environment.
+Each module below reproduces the call site ``protect()`` patches — the class,
+the method name, the parameter order, the sync/async-ness, the return type —
+taken from that library's public API.
 
 What these tests therefore DO prove:
   * discovery, dispatch, idempotency, reversal, manifest content and the
@@ -18,8 +18,66 @@ version you are running. That is precisely why every patcher records a
 ``found_unpatchable`` entry on a shape mismatch instead of assuming — and why
 the manifest is the thing to read after a framework upgrade.
 
-``httpx`` is the exception: it IS installed, so its tests run against the real
-library through ``httpx.MockTransport``.
+``httpx`` is the exception here: it IS installed (the ``[http]`` extra), so its
+tests run against the real library through ``httpx.MockTransport``. For
+LangChain and CrewAI, ``tests/test_real_frameworks.py`` runs against the real
+library when it is installed and skips cleanly when it is not.
+
+WHAT A FAKE COSTS WHEN IT IS WRONG, because this file has already paid it once.
+The CrewAI fake defined ``BaseTool.run`` as the tool implementation. The real
+framework binds ``CrewStructuredTool(func=self._run)`` and routes every
+agent-driven call through ``_run``, stepping over ``run`` entirely. 107 tests
+passed against that fiction while the shipped patch caught nothing and the
+manifest claimed full coverage. A fake is worth exactly its fidelity to the
+call path, and the question to ask of each one is not "does this method exist"
+but "is it on the path the framework itself takes".
+
+AUDIT, 2026-08-26 — every seam below checked against the real library at the
+version named. "on-path" is the second question, asked explicitly:
+
+  requests 2.34.2        Session.send exists; Session.request routes through
+                         self.send(), so get/post/... all reach it.        OK
+  langchain-core 1.6.0   BaseTool.run/.arun exist; BaseTool.invoke calls
+                         self.run(), so the ToolNode agent path reaches it. OK
+  langgraph 1.2.11       No own seam, by design; covered transitively via
+                         langchain_core.BaseTool.run (ToolNode).           OK
+  openai-agents 0.22.0   Runner.run/.run_sync present, both classmethods,
+                         run async + run_sync sync as modelled;
+                         RunResult.final_output is a dataclass FIELD (not a
+                         class attribute — the fake models the instance);
+                         FunctionTool.on_invoke_tool is a per-instance
+                         dataclass field, which is why it is unpatchable.   OK
+  autogen-core 0.7.5     BaseTool.run_json exists, async, and AssistantAgent
+                         calls it.                                          OK
+  llama-index-core       FunctionTool.call/.acall exist; the workflow agents
+    0.14.24              call tool.acall(**input). GAP: CodeActAgent pulls
+                         `tool.real_fn` and bypasses both (codeact_agent.py).
+  mcp 2.1.1              ClientSession.call_tool exists, async. NOTE: the real
+                         CallToolResult field is `is_error` with ALIAS
+                         `isError`; the fake exposes `isError` as a plain
+                         attribute. The production patch only ever CONSTRUCTS
+                         with the alias (which works) and reads `.content[].text`
+                         (which is right), so the patch is correct — but do not
+                         read `.isError` off a real result.
+  crewai 1.15.17         See install_crewai below. The seam MOVED; the tool
+                         boundary is now the before_tool_call hook.
+  autogen (legacy)       Verified against pyautogen==0.2.35, the version the
+                         seam was written for: execute_function(self,
+                         func_call, verbose=False) -> Tuple[bool, Dict], sync,
+                         reads func_call["name"] and json.loads the arguments —
+                         the fake matches (its extra `call_id=None` parameter
+                         is harmless, the wrapper takes *args/**kwargs).
+                         GAP: the ASYNC reply path
+                         (a_generate_tool_calls_reply -> _a_execute_tool_call
+                         -> a_execute_function) does NOT go through
+                         execute_function, and a_execute_function is NOT
+                         patched. Async legacy-AutoGen tool calls are
+                         uninstrumented and the manifest does not say so.
+                         NOT installable from current PyPI under that name:
+                         `pyautogen` 0.10.0 is a shim over autogen-agentchat
+                         with no `autogen` module, and `ag2` 1.0.2 no longer
+                         exposes ConversableAgent. Verifying it means pinning
+                         the old release.
 """
 
 from __future__ import annotations
@@ -255,26 +313,228 @@ def install_openai_agents(*, with_runner: bool = True) -> types.ModuleType:
 
 
 def install_crewai() -> types.ModuleType:
+    """CrewAI's REAL tool path — which does not go through ``BaseTool.run``.
+
+    Shape verified by reading the installed ``crewai==1.15.17``, not the docs.
+    The three facts that matter, and that an earlier version of this fake got
+    wrong:
+
+    1. ``BaseTool._run`` is the implementation; ``BaseTool.run`` is a public
+       wrapper that only DEVELOPER code calls directly.
+    2. ``BaseTool.to_structured_tool()`` binds ``CrewStructuredTool(func=self._run)``
+       — note ``_run``, not ``run``. Every agent-driven call therefore goes
+       ``CrewStructuredTool.invoke()`` -> ``func`` -> ``_run`` and steps straight
+       over ``BaseTool.run``. A patch on ``BaseTool.run`` sees NONE of it.
+    3. Before executing a tool for an agent, CrewAI builds a
+       ``ToolCallHookContext(tool_name, tool_input, tool, agent, task, crew)``
+       and runs the registered ``before_tool_call`` hooks. A hook returning
+       ``False`` blocks execution (the dispatcher maps it to ``HookAborted``)
+       and the executor returns a "blocked by hook" message instead of calling
+       the tool. See ``crewai/utilities/tool_utils.py::execute_tool_and_check_finality``
+       and ``crewai/hooks/tool_hooks.py::run_before_tool_call_hooks``.
+
+    The previous fake defined ``BaseTool.run`` as the implementation and had no
+    hook registry at all, so it modelled a CrewAI that has never existed. It
+    certified the ``BaseTool.run`` patch green while ``rm -rf /`` ran on the
+    real framework. Keeping the divergence written down here is the point: the
+    fake is only worth what its fidelity to these call paths is worth.
+    """
     mod = _mod("crewai")
     tools = _mod("crewai.tools")
+    hooks = _mod("crewai.hooks")
+    _mod("crewai.utilities")
+    tool_utils = _mod("crewai.utilities.tool_utils")
+
+    # ── the sanctioned hook seam (crewai.hooks) ──────────────────────────
+    class HookAborted(Exception):
+        """Raised inside the dispatcher when a before-hook returns False."""
+
+        def __init__(self, reason: str = "") -> None:
+            super().__init__(reason)
+            self.reason = reason
+
+    class ToolCallHookContext:
+        """Field-for-field the real ``crewai.hooks.tool_hooks`` context.
+
+        ``tool_input`` is a MUTABLE dict the hook may edit in place — that is
+        the documented contract, and it is why this is a dict and not a frozen
+        mapping.
+        """
+
+        def __init__(self, tool_name, tool_input, tool, agent=None, task=None,
+                     crew=None, tool_result=None, raw_tool_result=None):
+            self.tool_name = tool_name
+            self.tool_input = tool_input
+            self.tool = tool
+            self.agent = agent
+            self.task = task
+            self.crew = crew
+            self.tool_result = tool_result
+            self.raw_tool_result = raw_tool_result
+
+    _before_tool_call_hooks: list = []
+    _after_tool_call_hooks: list = []
+
+    def register_before_tool_call_hook(hook):
+        _before_tool_call_hooks.append(hook)
+
+    def unregister_before_tool_call_hook(hook) -> bool:
+        try:
+            _before_tool_call_hooks.remove(hook)
+            return True
+        except ValueError:
+            return False
+
+    def get_before_tool_call_hooks() -> list:
+        return list(_before_tool_call_hooks)
+
+    def clear_before_tool_call_hooks() -> None:
+        _before_tool_call_hooks.clear()
+
+    def register_after_tool_call_hook(hook):
+        _after_tool_call_hooks.append(hook)
+
+    def unregister_after_tool_call_hook(hook) -> bool:
+        try:
+            _after_tool_call_hooks.remove(hook)
+            return True
+        except ValueError:
+            return False
+
+    def get_after_tool_call_hooks() -> list:
+        return list(_after_tool_call_hooks)
+
+    def run_before_tool_call_hooks(context) -> bool:
+        """True when a hook BLOCKED the call. Mirrors the real return polarity."""
+        for hook in list(_before_tool_call_hooks):
+            if hook(context) is False:
+                return True
+        return False
+
+    def run_after_tool_call_hooks(context):
+        """A hook returning a string REPLACES the result. Real reducer semantics."""
+        for hook in list(_after_tool_call_hooks):
+            replacement = hook(context)
+            if isinstance(replacement, str):
+                context.tool_result = replacement
+        return context.tool_result
+
+    hooks.HookAborted = HookAborted
+    hooks.ToolCallHookContext = ToolCallHookContext
+    hooks.register_before_tool_call_hook = register_before_tool_call_hook
+    hooks.unregister_before_tool_call_hook = unregister_before_tool_call_hook
+    hooks.get_before_tool_call_hooks = get_before_tool_call_hooks
+    hooks.clear_before_tool_call_hooks = clear_before_tool_call_hooks
+    hooks.register_after_tool_call_hook = register_after_tool_call_hook
+    hooks.unregister_after_tool_call_hook = unregister_after_tool_call_hook
+    hooks.get_after_tool_call_hooks = get_after_tool_call_hooks
+    hooks.run_after_tool_call_hooks = run_after_tool_call_hooks
+
+    # ── the tool objects ─────────────────────────────────────────────────
+    class CrewStructuredTool:
+        """What the executor actually holds. ``func`` is ``BaseTool._run``."""
+
+        def __init__(self, name, func):
+            self.name = name
+            self.func = func
+
+        def invoke(self, input=None, **kwargs):
+            args = dict(input or {})
+            args.update(kwargs)
+            return self.func(**args)
 
     class BaseTool:
+        """Deliberately NOT callable and with no ``.func``.
+
+        The real one is a Pydantic model whose implementation is ``_run``; it
+        exposes ``model_copy`` and nothing else ``protect_tools`` keys on. Both
+        properties are load-bearing — they are what makes a CrewAI tool a third
+        shape rather than a LangChain tool or a plain callable.
+        """
+
         def __init__(self, name, fn):
             self.name = name
             self.fn = fn
 
-        def run(self, *args, **kwargs):
+        def _run(self, *args, **kwargs):
             return self.fn(*args, **kwargs)
 
+        def run(self, *args, **kwargs):
+            # Public wrapper. Reachable ONLY from developer code that calls the
+            # tool itself — never from an agent, which uses to_structured_tool().
+            return self._run(*args, **kwargs)
+
+        def model_copy(self, update=None):
+            clone = BaseTool(self.name, self.fn)
+            for key, value in (update or {}).items():
+                setattr(clone, key, value)
+            return clone
+
+        def to_structured_tool(self):
+            structured = CrewStructuredTool(name=self.name, func=self._run)
+            structured._original_tool = self
+            return structured
+
+    # ── the agent-driven execution path ──────────────────────────────────
+    def execute_tool_and_check_finality(tool, tool_input=None, agent=None,
+                                        task=None, crew=None):
+        """Condensed ``crewai.utilities.tool_utils`` path: hooks, then invoke.
+
+        Only the two behaviours ``protect()`` depends on are reproduced — the
+        hook context is built before execution, and a blocking hook returns the
+        blocked message WITHOUT invoking the tool.
+        """
+        tool_input = dict(tool_input or {})
+        context = ToolCallHookContext(
+            tool_name=tool.name, tool_input=tool_input, tool=tool,
+            agent=agent, task=task, crew=crew,
+        )
+        if run_before_tool_call_hooks(context):
+            result = f"Tool execution blocked by hook. Tool: {tool.name}"
+        else:
+            # NOTE: `.invoke()`, so `func` (= BaseTool._run) is what runs.
+            result = tool.to_structured_tool().invoke(context.tool_input)
+        # The after-hooks run even on a BLOCKED call — verified in all four of
+        # the real executor's dispatch sites, which set the blocked message and
+        # then fall through to run_after_tool_call_hooks. Monitoring hooks
+        # therefore still fire, and a hook may restate the result.
+        after_context = ToolCallHookContext(
+            tool_name=tool.name, tool_input=context.tool_input, tool=tool,
+            agent=agent, task=task, crew=crew,
+            tool_result=result, raw_tool_result=result,
+        )
+        modified = run_after_tool_call_hooks(after_context)
+        return modified if modified is not None else result
+
+    tool_utils.execute_tool_and_check_finality = execute_tool_and_check_finality
+
     class Crew:
-        def __init__(self, runner=None):
+        """``kickoff`` is the real public entrypoint; ``tool_calls`` stands in
+        for the tool calls an LLM would emit during the run."""
+
+        def __init__(self, runner=None, agents=None, tasks=None, tool_calls=None):
             self.runner = runner or (lambda inputs: f"ran with {inputs}")
+            self.agents = list(agents or ())
+            self.tasks = list(tasks or ())
+            self.tool_calls = list(tool_calls or ())
+            self.tool_results: list = []
 
         def kickoff(self, inputs=None):
+            for tool, args in self.tool_calls:
+                self.tool_results.append(
+                    execute_tool_and_check_finality(
+                        tool, args,
+                        agent=self.agents[0] if self.agents else None,
+                        task=self.tasks[0] if self.tasks else None,
+                        crew=self,
+                    )
+                )
             return self.runner(inputs)
 
     tools.BaseTool = BaseTool
+    tools.CrewStructuredTool = CrewStructuredTool
     mod.Crew = Crew
+    mod.BaseTool = BaseTool
     return mod
 
 
