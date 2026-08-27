@@ -510,9 +510,13 @@ def _patch_crewai(ctx: PatchContext) -> None:
         "own code is not an agent boundary and is covered by protect_tools()."
     )
     ctx.note(
-        "crewai: agent OUTPUT is not scanned — CrewAI has no single return-path "
-        "seam that carries the model's text; use a task callback with "
-        "handle.sensor.scan_output()."
+        "crewai: agent OUTPUT is not scanned by protect() — CrewAI's output "
+        "seam is Task(guardrail=...), which is PER-TASK and has no registry, so "
+        "protect() cannot install it for you. Pass "
+        "xaidr.integrations.crewai.delphi_guardrail(handle.sensor) to every "
+        "Task whose output you want scanned. Note CrewAI RAISES when a "
+        "guardrail finally fails, rather than returning a refusal the agent can "
+        "recover from."
     )
 
 

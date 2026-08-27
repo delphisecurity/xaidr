@@ -223,6 +223,31 @@ class TestRealCrewAI:
             "whether the BaseTool.run seam is reachable again"
         )
 
+    def test_task_guardrail_blocks_a_leaked_secret(self, crew_bits):
+        """The OUTPUT boundary. Per-Task, and CrewAI RAISES on final failure."""
+        from xaidr.integrations.crewai import delphi_guardrail
+
+        build, _ = crew_bits
+        sensor = xaidr.Sensor(agent_id="real-crew-out", enforcement_mode="block")
+        leak = f"Thought: done.\nFinal Answer: {LEAKED_SECRET}"
+        crew = build([leak], guardrail=delphi_guardrail(sensor),
+                     guardrail_max_retries=1)
+
+        # Documented behaviour, not a bug: after the retries are exhausted
+        # CrewAI raises rather than returning a refusal the agent can recover
+        # from. Asserted so the README's claim stays true.
+        with pytest.raises(Exception, match="guardrail"):
+            crew.kickoff()
+
+    def test_task_guardrail_lets_benign_output_through(self, crew_bits):
+        from xaidr.integrations.crewai import delphi_guardrail
+
+        build, _ = crew_bits
+        sensor = xaidr.Sensor(agent_id="real-crew-out", enforcement_mode="block")
+        crew = build(["Thought: done.\nFinal Answer: the disk is 40% full"],
+                     guardrail=delphi_guardrail(sensor))
+        assert "40%" in str(crew.kickoff())
+
     def test_the_agent_reads_the_refusal_in_this_package_s_vocabulary(self, crew_bits):
         """CrewAI writes its own generic text for ANY blocking hook.
 

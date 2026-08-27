@@ -1,7 +1,7 @@
 """CrewAI integration for the OpenA2A (xaidr) Sensor — standalone, no backend.
 
 CrewAI has no middleware concept, so this is not a mirror of
-``integrations/langchain.py``. It wires the seam CrewAI actually sanctions:
+``integrations/langchain.py``. It wires the two seams CrewAI actually sanctions:
 
 * **TOOL boundary** — ``crewai.hooks.register_before_tool_call_hook``. The hook
   receives a ``ToolCallHookContext`` carrying ``tool_name: str`` and
@@ -9,6 +9,8 @@ CrewAI has no middleware concept, so this is not a mirror of
   loss. Returning ``False`` blocks execution; CrewAI's dispatcher maps that to
   ``HookAborted`` and the executor returns a blocked message WITHOUT invoking
   the tool.
+* **OUTPUT boundary** — ``Task(guardrail=...)``. Per-task, not global; see
+  :func:`delphi_guardrail` for what that costs you.
 
 WHY A HOOK AND NOT A PATCH, since this package patches internals elsewhere.
 ``BaseTool.to_structured_tool()`` binds ``CrewStructuredTool(func=self._run)``.
@@ -177,3 +179,66 @@ def install_tool_hooks(sensor: Any) -> Callable[[], None]:
         raise
 
     return uninstall
+
+
+def delphi_guardrail(sensor: Any) -> Callable[[Any], tuple[bool, Any]]:
+    """A ``Task(guardrail=...)`` callable that DLP-scans the task's output.
+
+    Usage::
+
+        from xaidr.integrations.crewai import delphi_guardrail
+
+        Task(description=..., expected_output=...,
+             guardrail=delphi_guardrail(sensor))
+
+    TWO THINGS THIS IS NOT, both of which matter before you rely on it.
+
+    1. **It is per-Task, not global.** Unlike the tool hooks there is no
+       registry — you attach it to every ``Task`` whose output you want
+       scanned, and a Task you forget is a Task that is not scanned. This is
+       CrewAI's shape, not a choice made here; ``protect()`` therefore cannot
+       install it for you and does not pretend to.
+    2. **CrewAI RAISES when a guardrail finally fails.** After
+       ``guardrail_max_retries`` the crew does not return a refusal the agent
+       can read and recover from — it raises ``Exception("Task failed guardrail
+       validation after N retries...")``. That is a harder stop than the
+       ``[BLOCKED]`` string the tool boundary returns, and than the refusal
+       message the LangChain output boundary returns. Catch it at your
+       ``kickoff()`` call site if a hard stop is not what you want.
+
+    Fails OPEN on an internal fault: returns ``(True, output)`` unchanged.
+    """
+
+    def guardrail(output: Any) -> tuple[bool, Any]:
+        try:
+            text = getattr(output, "raw", None)
+            if not isinstance(text, str):
+                text = str(output)
+            if not text.strip():
+                return (True, output)
+            result = sensor.scan_output(text)
+            if getattr(result, "must_halt", False):
+                return (
+                    False,
+                    f"Output blocked by xaidr security policy "
+                    f"({result.category or 'policy'}; "
+                    f"rules: {', '.join(result.rules) or 'none'}).",
+                )
+            return (True, output)
+        except Exception:
+            return (True, output)
+
+    # CrewAI VALIDATES this annotation when the Task is CONSTRUCTED
+    # (``crewai/task.py::_validate_guardrail``): it requires
+    # ``get_origin(return_annotation) is tuple`` with args ``(bool, Any|str|
+    # TaskOutput)``. This module uses ``from __future__ import annotations``, so
+    # the annotation would otherwise be the STRING ``"tuple[bool, Any]"`` —
+    # ``get_origin`` of a string is ``None``, and ``Task(guardrail=...)`` raises
+    # a pydantic ValidationError before anything runs. Binding the real objects
+    # keeps the annotation both accurate documentation and valid input.
+    #
+    # Found by tests/test_real_frameworks.py, not by review: an unannotated
+    # stand-in passes this validator, so only the real Task constructor could
+    # surface it.
+    guardrail.__annotations__["return"] = tuple[bool, Any]
+    return guardrail
