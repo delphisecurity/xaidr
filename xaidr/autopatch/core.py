@@ -59,6 +59,13 @@ class Halt:
 
 _MISSING = object()
 
+#: Registry-hook targets this process has already registered into. The
+#: idempotency rule (rule 4) applies to a framework's callback registry exactly
+#: as it does to a patched attribute, but a registry has no wrapper to stamp
+#: with PATCH_TOKEN — so the record lives here instead. Entries are removed by
+#: the teardown installed alongside them.
+_INSTALLED_REGISTRY_HOOKS: set[str] = set()
+
 #: Attribute marking an HTTP client whose traffic the egress patches must ignore.
 EXEMPT_ATTR = "_xaidr_exempt"
 
@@ -288,6 +295,80 @@ class PatchContext:
                 detail=detail,
             )
         )
+
+    # ── the second primitive: a framework's OWN callback registry ────────
+
+    def install_registry_hook(
+        self,
+        target: str,
+        boundary: str,
+        register: Callable[[], Callable[[], None]],
+        detail: str = "",
+    ) -> bool:
+        """Instrument via a framework's sanctioned hook registry, not a patch.
+
+        ``register()`` installs the hook and returns the callable that removes
+        it again; that callable is stored on the manifest so ``unprotect()``
+        undoes this exactly as it undoes a monkeypatch.
+
+        Preferred over :meth:`install` wherever a framework offers one. A patch
+        is a bet that a private call path will not move; a registry is a
+        contract the framework maintains. CrewAI is the worked example: its
+        agent tool path stopped going through ``BaseTool.run`` and the patch
+        went silently dead while the manifest still claimed coverage.
+
+        Idempotency cannot use the wrapper token here — there is no wrapper to
+        stamp — so it keys on a process-wide record of which registries this
+        package has already registered into. Records exactly one manifest entry
+        either way, like :meth:`install`. Returns whether a hook was installed.
+        """
+        if target in _INSTALLED_REGISTRY_HOOKS:
+            self.manifest.patched.append(
+                PatchRecord(
+                    framework=self.framework,
+                    target=target,
+                    boundary=boundary,
+                    detail="already registered by an earlier xaidr.protect(); "
+                           "left as-is (not registered twice)",
+                    already_patched=True,
+                )
+            )
+            return False
+        try:
+            uninstall = register()
+        except Exception as exc:
+            self.unpatchable(
+                target, boundary,
+                f"the framework's hook registry rejected our hook "
+                f"({type(exc).__name__}: {exc})",
+            )
+            return False
+        if not callable(uninstall):
+            self.unpatchable(
+                target, boundary,
+                "hook registration returned no uninstall callable, so this "
+                "could not be made reversible and was not kept",
+            )
+            return False
+
+        _INSTALLED_REGISTRY_HOOKS.add(target)
+
+        def teardown() -> None:
+            try:
+                uninstall()
+            finally:
+                _INSTALLED_REGISTRY_HOOKS.discard(target)
+
+        self.manifest._teardowns.append((target, teardown))
+        self.manifest.patched.append(
+            PatchRecord(
+                framework=self.framework,
+                target=target,
+                boundary=boundary,
+                detail=detail,
+            )
+        )
+        return True
 
     def try_install(self, module_name: str, dotted: str, boundary: str,
                     factory: Callable[[Callable], Callable], detail: str = "") -> bool:

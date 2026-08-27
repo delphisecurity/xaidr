@@ -444,23 +444,24 @@ def _patch_openai_agents(ctx: PatchContext) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# CrewAI — its own BaseTool, plus the crew entrypoint.
+# CrewAI — the sanctioned before_tool_call hook, plus the crew entrypoint.
+#
+# THE TOOL BOUNDARY IS A HOOK, NOT A PATCH, AND THAT IS A CORRECTION.
+# xaidr <= 1.6.1 patched ``crewai.tools.BaseTool.run`` here and the manifest
+# said "every CrewAI tool invocation is scan_tool_call'd before it executes".
+# That claim was false. ``BaseTool.to_structured_tool()`` binds
+# ``CrewStructuredTool(func=self._run)``, so an agent's tool call runs
+# ``invoke()`` -> ``func`` -> ``_run`` and never touches ``BaseTool.run``.
+# Measured against crewai 1.15.17: the patch fired on 0 of 3 agent-driven paths
+# (Crew.kickoff, Crew.kickoff_async, Agent.kickoff) while a destructive command
+# executed, and the manifest reported the boundary as covered throughout. The
+# only path it uniquely saw was a developer calling ``tool.run()`` with no
+# agent — not an agent boundary, and already covered by protect_tools().
 # ─────────────────────────────────────────────────────────────────────────
 
 
 def _patch_crewai(ctx: PatchContext) -> None:
     ctx.module("crewai")
-
-    def tool_factory(orig: Callable) -> Callable:
-        def before(args: tuple, kwargs: dict) -> Optional[Halt]:
-            tool = args[0] if args else None
-            name = getattr(tool, "name", None) or "unknown_tool"
-            arguments = dict(kwargs)
-            for i, v in enumerate(args[1:]):
-                arguments[f"arg{i}"] = v
-            return scan_tool_boundary(ctx.sensor, name, arguments)
-
-        return make_wrapper(orig, before=before)
 
     def kickoff_factory(orig: Callable) -> Callable:
         def before(args: tuple, kwargs: dict) -> Optional[Halt]:
@@ -473,13 +474,40 @@ def _patch_crewai(ctx: PatchContext) -> None:
 
         return make_wrapper(orig, before=before)
 
-    ctx.try_install(
-        "crewai.tools", "BaseTool.run", "tool", tool_factory,
-        "every CrewAI tool invocation is scan_tool_call'd before it executes",
-    )
+    # ── TOOL boundary — crewai.hooks, the framework's own registry ───────
+    # ctx.module() first so a build without the hook API is reported as
+    # unpatchable rather than triggering an import (rule 1).
+    try:
+        ctx.module("crewai.hooks")
+    except PatchUnavailable as exc:
+        ctx.unpatchable(
+            "crewai.hooks.register_before_tool_call_hook", "tool",
+            f"{exc}. Without the hook registry there is NO usable tool seam on "
+            "this build: BaseTool.run is bypassed by the agent path "
+            "(to_structured_tool binds func=BaseTool._run), so patching it "
+            "would report coverage that does not exist. Scan tool calls "
+            "explicitly with sensor.protect_tools(...) instead.",
+        )
+    else:
+        from ..integrations.crewai import install_tool_hooks
+
+        ctx.install_registry_hook(
+            "crewai.hooks.register_before_tool_call_hook", "tool",
+            lambda: install_tool_hooks(ctx.sensor),
+            "AGENT-DRIVEN tool calls are scan_tool_call'd before they execute "
+            "(Crew.kickoff, Crew.kickoff_async and Agent.kickoff all dispatch "
+            "this hook). Does NOT cover a direct tool.run() from your own code "
+            "with no agent — wrap those with sensor.protect_tools(...).",
+        )
+
     ctx.try_install(
         "crewai", "Crew.kickoff", "input", kickoff_factory,
         "scans the string values of the kickoff inputs before the crew runs",
+    )
+    ctx.note(
+        "crewai: the tool boundary is a registered before_tool_call HOOK, not a "
+        "patch. It covers agent-driven calls only; a direct tool.run() in your "
+        "own code is not an agent boundary and is covered by protect_tools()."
     )
     ctx.note(
         "crewai: agent OUTPUT is not scanned — CrewAI has no single return-path "

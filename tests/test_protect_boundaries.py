@@ -228,9 +228,20 @@ def _attack_openai_agents_async():
     return asyncio.run(agents.Runner.run("agent", INJECTION))
 
 
-def _attack_crewai_tool():
-    tools = sys.modules["crewai.tools"]
-    return tools.BaseTool("run_command", _victim).run(command=EXFIL_ATTACK)
+def _attack_crewai_agent_tool():
+    """The path an AGENT takes — which never touches ``BaseTool.run``.
+
+    ``Crew.kickoff`` drives the tool call the way the real executor does:
+    build the hook context, run the before-tool-call hooks, then
+    ``to_structured_tool().invoke()``. A patch on ``BaseTool.run`` is invisible
+    here, which is exactly the bug this boundary exists to catch.
+    """
+    import crewai
+
+    tool = crewai.tools.BaseTool("run_command", _victim)
+    crew = crewai.Crew(tool_calls=[(tool, {"command": EXFIL_ATTACK})])
+    crew.kickoff()
+    return crew.tool_results[-1]
 
 
 def _attack_crewai_kickoff():
@@ -304,8 +315,8 @@ BOUNDARIES: list[Boundary] = [
              _attack_openai_agents_output, "output", {}),
     Boundary("openai-agents", ["openai-agents"], fakes.install_openai_agents,
              _attack_openai_agents_async, "input:async", {}),
-    Boundary("crewai", ["crewai"], fakes.install_crewai, _attack_crewai_tool,
-             "tool", {}),
+    Boundary("crewai", ["crewai"], fakes.install_crewai, _attack_crewai_agent_tool,
+             "tool:agent-driven", {}),
     Boundary("crewai", ["crewai"], fakes.install_crewai, _attack_crewai_kickoff,
              "input", {}),
     Boundary("autogen-core", ["autogen-core"], fakes.install_autogen_core,

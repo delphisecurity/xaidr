@@ -91,6 +91,14 @@ otel = ["opentelemetry-api>=1.20"]
 # middleware's own error message ("Install with: pip install 'xaidr[langchain]'").
 # `pip install xaidr[langchain]`.
 langchain = ["langchain>=1.0", "langchain-core>=1.0"]
+# CrewAI hooks + guardrail (integrations/crewai.py) — imports `crewai.hooks`.
+# Referenced by the integration's own error message ("Install with: pip install
+# 'xaidr[crewai]'"). The floor is 1.0 because `crewai.hooks` (the
+# before_tool_call registry this integrates with) does not exist before it; the
+# integration reports a build without it as unpatchable rather than falling back
+# to patching `BaseTool.run`, which the agent tool path does not go through.
+# `pip install xaidr[crewai]`.
+crewai = ["crewai>=1.0"]
 # Dev/test tooling — the base pytest regression suite. `pip install xaidr[dev]`.
 dev = ["pytest"]
 

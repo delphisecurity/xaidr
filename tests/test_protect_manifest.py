@@ -63,6 +63,26 @@ def _protect(**kwargs) -> ProtectionManifest:
         return xaidr.protect(**kwargs)
 
 
+def crewai_hook_registered() -> bool:
+    """True when protect() has an xaidr before_tool_call hook on CrewAI.
+
+    The CrewAI tool boundary is a REGISTERED HOOK, not a patched attribute, so
+    ``is_xaidr_wrapper(crewai.tools.BaseTool.run)`` is the wrong question — and
+    was the wrong question before the seam changed, because the agent path
+    never went through ``BaseTool.run`` in the first place. Asking the registry
+    is the only reading of "is the tool boundary instrumented" that can be
+    wrong in a way that matters.
+    """
+    hooks = sys.modules.get("crewai.hooks")
+    if hooks is None:
+        return False
+    return any(
+        getattr(h, "__name__", "") == "before_tool_call"
+        and getattr(h, "__module__", "").endswith("integrations.crewai")
+        for h in hooks.get_before_tool_call_hooks()
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # C1 — patch only what is already in sys.modules
 # ═══════════════════════════════════════════════════════════════════════
@@ -318,11 +338,11 @@ def test_a_third_protect_after_a_new_import_adds_only_the_new_sites():
     first = _protect(targets=scope)
     assert {r.framework for r in first.patched} == {"langchain_core"}
 
-    crewai = fakes.install_crewai()
+    fakes.install_crewai()
     second = _protect(targets=scope)
     fresh = [r for r in second.patched if not r.already_patched]
     assert {r.framework for r in fresh} == {"crewai"}
-    assert is_xaidr_wrapper(crewai.tools.BaseTool.run)
+    assert crewai_hook_registered()
 
 
 def test_protect_tools_is_idempotent_too(cap, wait_events):
@@ -342,6 +362,64 @@ def test_protect_tools_is_idempotent_too(cap, wait_events):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# The ONE path CrewAI's hook does not see, and what covers it instead
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_protect_does_not_cover_a_direct_crewai_tool_run():
+    """A bare ``tool.run()`` is not an agent boundary, and protect() says so.
+
+    CrewAI dispatches ``before_tool_call`` from its executors. Developer code
+    calling the tool object itself goes through none of them, so the hook does
+    not fire — and this test exists so that stays a KNOWN, stated limit rather
+    than a discovered one. The manifest entry names it; ``protect_tools`` (next
+    test) is the answer.
+    """
+    crewai = fakes.install_crewai()
+    manifest = _protect(targets=["crewai"], enforcement_mode="block")
+    tool_record = next(r for r in manifest.patched if r.boundary == "tool")
+    assert "Does NOT cover a direct tool.run()" in tool_record.detail
+    assert "protect_tools" in tool_record.detail
+
+    executed = []
+    tool = crewai.tools.BaseTool("run_command", lambda **kw: executed.append(kw))
+    tool.run(command="rm -rf / --no-preserve-root")
+    assert executed, "the direct path is expected to run — the hook is not on it"
+
+
+def test_a_second_protect_does_not_register_the_crewai_hook_twice(cap, wait_events):
+    """Rule 4 for a registry, proved by telemetry rather than by identity.
+
+    A registered hook has no ``__xaidr_patch__`` token to check, so idempotency
+    is tracked separately — and the way that goes wrong is a SECOND hook that
+    scans the same call again and emits a second event, making counts lie.
+    """
+    crewai = fakes.install_crewai()
+    first = _protect(targets=["crewai"], reporter=cap)
+    second = _protect(targets=["crewai"], reporter=cap)
+
+    assert [r.already_patched for r in second.patched
+            if r.boundary == "tool"] == [True]
+    assert len(crewai.hooks.get_before_tool_call_hooks()) == 1
+
+    tool = crewai.tools.BaseTool("lookup", lambda **kw: "ok")
+    crew = crewai.Crew(tool_calls=[(tool, {"query": "a customer record"})])
+    crew.kickoff()
+    assert crew.tool_results == ["ok"]
+
+    wait_events(cap, 1)
+    tool_events = [e for e in cap.events if e["data"].get("toolName") == "lookup"]
+    assert len(tool_events) == 1, tool_events
+
+    # And the FIRST manifest still owns the teardown, so unprotecting it is
+    # what removes the hook.
+    second.unprotect()
+    assert len(crewai.hooks.get_before_tool_call_hooks()) == 1
+    first.unprotect()
+    assert crewai.hooks.get_before_tool_call_hooks() == []
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # unprotect / the returned handle
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -352,17 +430,20 @@ def test_unprotect_restores_every_original_by_identity():
     originals = {
         "lc_run": tools.BaseTool.run,
         "lc_arun": tools.BaseTool.arun,
-        "crew_run": crewai.tools.BaseTool.run,
         "kickoff": crewai.Crew.kickoff,
     }
     manifest = _protect()
     assert manifest.is_active
+    assert crewai_hook_registered(), "the CrewAI tool hook was never registered"
     restored = manifest.unprotect()
 
     assert tools.BaseTool.run is originals["lc_run"]
     assert tools.BaseTool.arun is originals["lc_arun"]
-    assert crewai.tools.BaseTool.run is originals["crew_run"]
     assert crewai.Crew.kickoff is originals["kickoff"]
+    # Reversal covers the registry hook too, not just patched attributes.
+    assert not crewai_hook_registered(), "unprotect() left the CrewAI hook behind"
+    assert not crewai.hooks.get_before_tool_call_hooks()
+    assert not crewai.hooks.get_after_tool_call_hooks()
     assert len(restored) == len(manifest.patched)
     assert not manifest.is_active
 
@@ -484,7 +565,10 @@ def test_4b_a_framework_imported_after_protect_is_not_patched_and_says_so():
     assert any("call xaidr.protect() again" in n for n in manifest.notes)
 
     crewai = fakes.install_crewai()
-    assert not is_xaidr_wrapper(crewai.tools.BaseTool.run), (
+    assert not crewai_hook_registered(), (
+        "a late import was instrumented — an import hook must not have been installed"
+    )
+    assert not is_xaidr_wrapper(crewai.Crew.kickoff), (
         "a late import was patched — an import hook must not have been installed"
     )
 

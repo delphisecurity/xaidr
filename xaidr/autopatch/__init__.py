@@ -228,9 +228,11 @@ def protect(
             f"({type(exc).__name__}: {exc})"
         )
 
-    if manifest._sites:
+    if manifest._sites or manifest._teardowns:
         # Only a call that actually installed something needs unwinding; a
         # fully-idempotent repeat call owns no sites and must not appear active.
+        # Registry hooks count: they are instrumentation this call owns and must
+        # remove, even though they patched no attribute.
         _ACTIVE.append(manifest)
     manifest.announce(quiet=quiet)
     return manifest

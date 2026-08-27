@@ -92,6 +92,11 @@ class ProtectionManifest:
         self.error_is_fatal: bool = False
         # Reversal state: (owner, attr, original, installed, owner_had_own_attr)
         self._sites: list[tuple] = []
+        # Reversal state for instrumentation that is NOT a monkeypatch — a
+        # framework-sanctioned callback registry, where "undo" means calling
+        # the framework's own unregister rather than restoring an attribute.
+        # (label, uninstall_callable)
+        self._teardowns: list[tuple[str, Any]] = []
         self._reverted = False
 
     # ── the dict contract ────────────────────────────────────────────────
@@ -140,8 +145,8 @@ class ProtectionManifest:
 
     @property
     def is_active(self) -> bool:
-        """True while this handle's patches are installed."""
-        return bool(self._sites) and not self._reverted
+        """True while this handle's instrumentation is installed."""
+        return bool(self._sites or self._teardowns) and not self._reverted
 
     # ── reversal ─────────────────────────────────────────────────────────
 
@@ -159,6 +164,16 @@ class ProtectionManifest:
         """
         restored: list[str] = []
         stranded: list[str] = []
+        # Registry-based instrumentation first: it sits ABOVE the patched call
+        # sites (a hook runs before the executor reaches the tool), so it comes
+        # out first, mirroring the reverse-install-order rule below.
+        for label, uninstall in reversed(self._teardowns):
+            try:
+                uninstall()
+                restored.append(label)
+            except Exception as exc:  # never fatal
+                stranded.append(f"{label} ({type(exc).__name__})")
+        self._teardowns = []
         # Unwind in reverse install order.
         for owner, attr, original, installed, had_own in reversed(self._sites):
             label = f"{_owner_label(owner)}.{attr}"
