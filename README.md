@@ -100,6 +100,7 @@ Optional extras are installed only when you use the matching feature:
 | Extra | Unlocks | Pulls in |
 |---|---|---|
 | `xaidr[langchain]` | LangChain middleware (all three boundaries) | `langchain`, `langchain-core` |
+| `xaidr[crewai]` | CrewAI `before_tool_call` hook + `Task(guardrail=…)` | `crewai` |
 | `xaidr[policy]` | loading a YAML policy **file** (`set_policy(dict)` needs nothing) | `PyYAML` |
 | `xaidr[http]` | `protect_http` / `ProtectedHttpClient`, `WebhookReporter` | `httpx` |
 | `xaidr[otel]` | `OTelReporter` (emit events as OTel log records) | `opentelemetry-api` |
@@ -692,7 +693,7 @@ the reversal handle (`manifest.unprotect()`). Four rules govern it:
 | `langchain-core` | `BaseTool.run` / `.arun` | tool — also covers LangGraph's `ToolNode` and bare tool calls |
 | `langchain` | `agents.create_agent` | input + output + tool, via `delphi_middleware` injection |
 | `openai-agents` | `Runner.run` / `.run_sync` | input + output |
-| `crewai` | `tools.BaseTool.run`, `Crew.kickoff` | tool + crew input |
+| `crewai` | `hooks.register_before_tool_call_hook` (a **hook**, not a patch), `Crew.kickoff` | agent-driven tool calls + crew input |
 | `autogen-core` / `autogen` | `BaseTool.run_json`, `ConversableAgent.execute_function` | tool |
 | `llama-index` | `FunctionTool.call` / `.acall` | tool |
 | `mcp` | `ClientSession.call_tool` | tool arguments + the server's returned content |
@@ -705,6 +706,55 @@ else) does. LangGraph's own graph boundary, the OpenAI Agents SDK's per-instance
 `FunctionTool.on_invoke_tool`, and LlamaIndex's non-`FunctionTool` types have no
 patchable call site — each is reported as `found_unpatchable` with the reason and
 the manual alternative (`sensor.protect_tools(...)`).
+
+**CrewAI is a hook, and the coverage claim is narrower than it was.** Through
+1.6.1 this table said `crewai` → `tools.BaseTool.run` → "tool", and the manifest
+said "every CrewAI tool invocation is `scan_tool_call`'d before it executes".
+**That claim was false and the published 1.6.1 wheel still carries it.**
+`BaseTool.to_structured_tool()` binds `CrewStructuredTool(func=self._run)`, so an
+agent's tool call runs `invoke()` → `func` → `_run` and never touches
+`BaseTool.run`. Measured against crewai 1.15.17: the patch fired on **0 of 3**
+agent-driven paths (`Crew.kickoff`, `Crew.kickoff_async`, `Agent.kickoff`) while
+a destructive command executed, and the manifest reported the boundary covered
+throughout. It shipped because every `protect()` test ran against a hand-written
+fake whose `BaseTool.run` *was* the implementation — a CrewAI that never existed.
+
+What replaces it is CrewAI's own `before_tool_call` registry, which fires on all
+three of those paths and has a documented block contract. What that does **not**
+cover, said plainly rather than left to be discovered:
+
+* a direct `tool.run()` from your own code with no agent — not an agent
+  boundary; `sensor.protect_tools(...)` covers it, including CrewAI's tool shape;
+* **output**, which `protect()` cannot reach at all. CrewAI's output seam is
+  `Task(guardrail=...)`, which is per-`Task` with no registry, so you attach it
+  yourself and a `Task` you forget is a `Task` that is not scanned:
+
+  ```python
+  from xaidr.integrations.crewai import delphi_guardrail
+  Task(description=..., expected_output=..., guardrail=delphi_guardrail(sensor))
+  ```
+
+  Note CrewAI **raises** once `guardrail_max_retries` is exhausted, rather than
+  returning a refusal the agent can recover from — a harder stop than every
+  other boundary here. Catch it at your `kickoff()` call site if that is not
+  what you want.
+
+Both facts are now pinned by `tests/test_real_frameworks.py`, which imports the
+real framework and skips when it is absent.
+
+**Two more gaps, found by asking the same question of every other seam.** The
+CrewAI bug turned on "is this method on the path the framework itself takes",
+not "does this method exist", so each remaining fake was re-checked against the
+real library at a named version. Two boundaries fail that question. Neither is
+fixed here; both are now reported in the manifest as `found_unpatchable` with
+the mechanism, which is where an unprotected boundary belongs:
+
+| Framework | What is uninstrumented | Mechanism |
+|---|---|---|
+| `autogen` (0.2 legacy) | **async** tool calls | the async reply path is `a_generate_tool_calls_reply` → `_a_execute_tool_call` → **`a_execute_function`**, a separate method that does not go through the patched `execute_function`. The sync path is covered. Verified against `pyautogen==0.2.35`. |
+| `llama-index` | `CodeActAgent` | it collects `tool.real_fn` and calls the underlying function directly, bypassing **both** `FunctionTool.call` and `FunctionTool.acall`. The workflow agents call `tool.acall(**input)` and are covered. Verified against `llama-index-core==0.14.24`. |
+
+For either, wrap the underlying functions with `sensor.protect_tools([...])`.
 
 **Enforcement shape.** Tool boundaries return a `[BLOCKED]` / `[APPROVAL
 REQUIRED]` string the agent can read and recover from. Transport and entrypoint

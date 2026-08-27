@@ -573,12 +573,25 @@ def _patch_autogen_legacy(ctx: PatchContext) -> None:
 
     ctx.install(
         "autogen", "ConversableAgent.execute_function", "tool", factory,
-        "every AutoGen 0.2 function dispatch is scanned before it executes",
+        "SYNC function dispatch is scanned before it executes. The ASYNC path "
+        "is NOT covered — see the note below.",
     )
     ctx.note(
         "autogen (0.2): this is the legacy pyautogen line. Its function-call "
         "shape has changed across 0.2.x minor releases; if the manifest stops "
         "listing this target after an upgrade, the boundary is uninstrumented."
+    )
+    # KNOWN GAP, stated because a manifest that is loud about a boundary it does
+    # not have is the failure this package exists to avoid. Verified against
+    # pyautogen 0.2.35.
+    ctx.unpatchable(
+        "autogen.ConversableAgent.a_execute_function", "tool",
+        "ASYNC tool calls are UNINSTRUMENTED. The async reply path is "
+        "a_generate_tool_calls_reply -> _a_execute_tool_call -> "
+        "a_execute_function, which is a separate method that does NOT go "
+        "through the patched execute_function. Only the sync path is covered. "
+        "Scan async dispatches with handle.sensor.scan_tool_call(), or wrap the "
+        "functions themselves with protect_tools().",
     )
 
 
@@ -616,6 +629,16 @@ def _patch_llama_index(ctx: PatchContext) -> None:
         "their own call() overrides rather than FunctionTool's, so patching "
         "FunctionTool does not reach them. Wrap them with "
         "handle.sensor.protect_tools([...]) if you use them.",
+    )
+    # KNOWN GAP. Verified against llama-index-core 0.14.24: the workflow agents
+    # call tool.acall(**input) and ARE covered; this one agent is not.
+    ctx.unpatchable(
+        "llama_index.core.agent.workflow.codeact_agent", "tool",
+        "CodeActAgent is UNINSTRUMENTED. It collects `tool.real_fn` and calls "
+        "the underlying function directly, bypassing BOTH FunctionTool.call and "
+        "FunctionTool.acall, so the patches above never see its tool calls. "
+        "Wrap the functions with handle.sensor.protect_tools([...]) before "
+        "building the tools if you use this agent.",
     )
 
 
