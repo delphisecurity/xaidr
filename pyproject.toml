@@ -61,12 +61,15 @@ trace = ["opentelemetry-api>=1.20"]
 # THE RUNTIME IS NOT PINNED WITH `==`, AND THAT IS A DECISION, NOT AN OVERSIGHT.
 # The hash pin fixes which bytes load; it does not fix what they compute, because
 # an int8/int4 graph is executed by onnxruntime kernels that change between
-# releases. Measured: the same hash-verified artifact scores 8 of 400 real-benign
-# prompts differently across runtimes, and the false-positive rate moves from
-# 37/2000 to 44/2000. An `==` pin was considered and rejected for three reasons:
-# the acceptance record names NO runtime version, so there is no accepted version
-# to pin to; an exact pin in a library's extra becomes a resolver conflict in
-# every adopter environment that already has onnxruntime; and it would freeze a
+# releases. Measured on the 2000-prompt acceptance sample: the same hash-verified
+# artifact scores 15 of 2000 real-benign prompts differently on onnxruntime
+# 1.29.0 than the acceptance record did. Only 2 of those cross the operating
+# point and they cross in opposite directions, so the published false-positive
+# figure is 37/2000 on both — but that is this sample being lucky, not a
+# guarantee. An `==` pin was considered and rejected for three reasons: the
+# acceptance record names NO runtime version, so there is no accepted version to
+# pin to; an exact pin in a library's extra becomes a resolver conflict in every
+# adopter environment that already has onnxruntime; and it would freeze a
 # security package out of onnxruntime's own security updates. The control instead
 # is that the published false-positive figure NAMES the runtime it was measured
 # on (nano.MEASURED_ON), every loaded instance records the runtime actually in
