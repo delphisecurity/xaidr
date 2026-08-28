@@ -164,6 +164,13 @@ jobs:
       - name: Corpus report (fails on a benign-gate violation)
         run: python scripts/corpus_report.py
 
+      # The published figure. Reported, not gated — it asserts nothing, exactly
+      # like the attack half of corpus_report.py. It is in CI so the denominator
+      # and every entry excluded from it are printed into the log of every pull
+      # request, where a reviewer can see a `detection_intent` mark being added.
+      - name: Intent metrics (catch rate + its denominator, reported not gated)
+        run: python scripts/intent_metrics.py
+
   # ── Rules-in-wheel guard (carries Step 1's package-data protection into CI) ─
   # A future change must never silently drop the rules/*.json package data and
   # ship a wheel that loads 0 rules. Build the wheel, assert all 7 JSON files are
