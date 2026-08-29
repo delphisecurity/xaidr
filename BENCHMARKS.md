@@ -11,7 +11,8 @@ python scripts/benchmark.py
 ```
 
 Every figure on this page comes from a single run of that script, plus one run
-of `scripts/corpus_report.py`, both performed against this working tree.
+each of `scripts/intent_metrics.py` and `scripts/corpus_report.py`, all
+performed against this working tree.
 
 ## The machine
 
@@ -77,26 +78,100 @@ Per shape, last repeat:
 ## False positives, beside detection
 
 A detection rate on its own means nothing, because a detector that blocks
-everything scores 100%. Both halves, from one run of `scripts/corpus_report.py`
-against the committed corpus at `tests/fixtures/shell_corpus.json`:
+everything scores 100%. Both halves, from one run of each script against the
+committed corpus at `tests/fixtures/shell_corpus.json`:
 
 ```bash
-python scripts/corpus_report.py
+python scripts/intent_metrics.py     # the catch rate and its denominator
+python scripts/corpus_report.py      # the raw counts and the benign gates
 ```
+
+**Detection.** A catch is `blocked` **or** `flagged`, and the denominator is the
+attacks we intend to catch — the corpus minus the 95 entries marked
+`detection_intent: INTENDED`, which are recognised, genuinely dual-use, and
+deliberately left to a policy the deployer writes. Every one of those 95 carries
+its reason in the fixture, and `intent_metrics.py` prints them all before it
+prints a percentage.
+
+| | denominator | catches |
+|---|---:|---|
+| rules only, tool path | 186 | **165** (88.7%) |
+| rules only, content path | 186 | **105** (56.5%) |
+| rules only, either path | 186 | **167** (89.8%) |
+| with `nano`, either path | 186 | **172** (92.5%) |
+
+**Raw counts, unchanged, from `corpus_report.py`.** These are the evidence and
+they stay. They are *not* a detection rate: `blocked / 281` counts every
+deliberately classify-only entry as a failure, which is why it is no longer
+published as one.
 
 | | n | result |
 |---|---:|---|
+| shell attacks classified | 281 | **267** |
+| shell attacks detected (score > 0) | 281 | **165** |
 | shell attacks blocked | 281 | **165** |
+
+**False positives, same run, same sensor.**
+
+| | n | result |
+|---|---:|---|
 | benign commands scoring above zero | 74 | **0** |
 | benign commands blocked | 74 | **0** |
 | benign prose blocked, content path | 89 | **1** (`bp-055`, documented by ID in `tests/test_benign_prose.py`) |
 | benign prose blocked, tool-argument path | 89 | **0** |
+| benign prose **flagged**, content path | 89 | **50** (56 with `nano` on) |
+| benign prose **flagged**, tool-argument path | 89 | **43** |
+| benign templates blocked, either path | 12 | **0** |
+| benign templates flagged, either path | 12 | **0** (1 with `nano` on) |
+| ordinary DevOps operations blocked or flagged | 38 | **0** |
+| real benign prompts flagged, rules only | 2000 | **0** (0.00%) |
+| real benign prompts flagged, `nano` on | 2000 | **37** (1.85%, Wilson 95% [1.35%, 2.54%]) |
 
-So the false-block rate to read beside 165 of 281 is **0 of 74** on commands and
-**1 of 89** on prose. The one prose blocker is named rather than absorbed into a
+So the false-block rate to read beside 167 of 186 is **0 of 74** on commands,
+**1 of 89** on prose, **0 of 12** on templates and **0 of 38** on ordinary
+DevOps operations. The one prose blocker is named rather than absorbed into a
 percentage, so a second one shows up as a new entry instead of as a rounding
-change. Both benign gates are asserted, and the script exits non-zero if either
-is violated.
+change. Both benign gates are asserted, and `corpus_report.py` exits non-zero if
+either is violated.
+
+**But read the flag rows.** The catch rate counts a flag as a catch, so this side
+has to count a flag as a false positive, and the honest pairing is: benign prose
+— incident reports, runbooks and policy documents that *quote* a dangerous
+command — blocks at 1 of 89 and **flags at roughly half**. Those flags are the
+design working: the passage surfaces for review and nothing is interrupted, which
+is why the committed gate is blocking-only. They are also the price of the
+headline number. If your deployment only acts on blocks, the figure to read is
+the tool-path block count, not the combined catch rate. An agent whose job
+includes reading security documents will generate flag volume at that rate;
+see [monitor mode](README.md#deployment-modes-and-tuning). Everything else —
+commands, templates, ordinary DevOps operations — is 0 on both columns.
+
+The 2000-prompt rows were measured on **xaidr 1.7.0 with onnxruntime 1.29.0**
+with `python scripts/intent_metrics.py --nano --real-benign`. The sample is
+pinned **by identity**, not by a seed: `tests/fixtures/nano_fp_sample.json` names
+2000 prompts by SHA-256 and the script rebuilds them from dolly / no_robots /
+oasst1 at run time (hashes rather than text because no_robots is CC-BY-NC-4.0).
+It is the sample the model acceptance used, and it is disjoint from the prompt
+sets the model was selected and calibrated against.
+
+**This quantity had three published values and now has one.** 1.85% is the
+acceptance record's own figure and is what the shipped configuration reproduces
+today, prompt for prompt. **2.20% (44/2000) is withdrawn and was wrong, not
+merely stale**: the acceptance evidence file stores each prompt truncated to 200
+characters as a preview, 331 of the 2000 are longer, and the re-measurement that
+produced 2.20% scored the previews — feeding the 200-character cut through the
+current runtime moves the count 37 → 43 on its own, which is the entire gap that
+was previously attributed to onnxruntime drift. **1.65% (33/2000) is withdrawn**
+as a different sample: a freshly drawn seeded one overlapping this by 128 of
+2000 and not disjoint from the tuning sets, which biases the rate downward.
+Runtime drift is real — 15 of 2000 raw scores differ from the record on 1.29.0 —
+but only 2 cross the operating point and they cross in opposite directions, so
+the figure is 37/2000 either way. Treat that as this sample being lucky.
+
+**This figure rests on public datasets that a public model may have seen.** We
+did not train the nano model; that its authors' stated training mix excludes
+these three datasets is their statement, not something we verified, and
+contamination cannot be ruled out.
 
 The prose corpus is 89 passages in three groups. The first is 66 that quote a
 SHELL COMMAND. The second is 7 (`bp-067`..`bp-073`) that carry a MODEL-DIRECTED
@@ -134,7 +209,15 @@ layer was NOT changed.
 
 Reported by family and not per command, the same discipline the README's
 [Coverage and limitations](README.md#coverage-and-limitations) section follows.
-Read that section for what 165 of 281 does and does not mean.
+Read that section for what 167 of 186 does and does not mean — in particular,
+which 95 attacks are excluded from that 186 and why.
+
+**What none of these numbers cover.** The corpus is shell commands. It says
+nothing about prompt-shaped attacks, nothing about the A2A path, and nothing
+about the output boundary; those have their own tests and their own gaps, and
+this figure must not be quoted as if it spoke for them. The content-path row is
+also a synthetic case for shell — in a real agent the command arrives as a tool
+argument, so the tool-path row is the operational one.
 
 ## Methodology
 
@@ -145,6 +228,39 @@ Read that section for what 165 of 281 does and does not mean.
 * garbage collection left on. Collections land in the numbers
 * null telemetry reporter, so no emit cost is inside the numbers
 * single process, single thread, no concurrency, no network
+
+## Reproducing the detection table, from scratch
+
+Nothing here should be taken on trust. The whole detection table is one command,
+and it prints the denominator and its definition above the percentage:
+
+```bash
+python scripts/intent_metrics.py                        # rules only
+python scripts/intent_metrics.py --nano                 # + the ML signal
+python scripts/intent_metrics.py --nano --real-benign   # + the published FP figure
+```
+
+The first two are deterministic: three consecutive runs are byte-identical, and
+they were checked that way. The third needs `huggingface_hub` and `pandas`,
+downloads the three public datasets, and rebuilds the pinned 2000-prompt sample
+by hash; it fails loudly rather than reporting a number from a short sample if
+an upstream snapshot has moved.
+
+To confirm the numbers are a property of the shipped package and not of this
+working tree, install the published wheel into a fresh virtualenv and point the
+script at it from an unrelated directory. `--installed` is what stops the script
+shadowing site-packages with the checkout; the fixture still comes from the
+checkout, because it is not in the wheel:
+
+```bash
+python -m venv /tmp/xaidr-verify
+/tmp/xaidr-verify/bin/pip install 'xaidr[nano]==1.7.0'
+cd /                                                  # a neutral working directory
+/tmp/xaidr-verify/bin/python /path/to/xaidr/scripts/intent_metrics.py --installed --nano
+```
+
+Done on **published 1.7.0, Python 3.14, onnxruntime 1.29.0**, the
+output below the provenance header is byte-identical to the working-tree run.
 
 ## Getting your own
 

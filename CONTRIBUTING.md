@@ -43,12 +43,22 @@ look completely different in the corpus report. So detection changes are
 measured, not eyeballed:
 
 ```
-python scripts/corpus_report.py
+python scripts/corpus_report.py      # raw counts + the benign gates
+python scripts/intent_metrics.py     # the catch rate, and the denominator it is over
 ```
 
-Run it before your change and again after, and put both tables in the pull
+Run both before your change and again after, and put all four tables in the pull
 request. The header names the package and version that produced each table, so a
-reviewer can confirm the two runs measured the same tree.
+reviewer can confirm the runs measured the same tree.
+
+The two answer different questions and you need both. `corpus_report.py` prints
+the raw classified / detected / blocked / total counts and is what fails the
+build when a benign gate breaks. `intent_metrics.py` prints the number we
+publish: catches (blocked **or** flagged) over the attacks we intend to catch,
+with every entry excluded from that denominator listed and reasoned. If your
+change adds a `detection_intent: INTENDED` mark to a corpus entry, it is raising
+the published percentage by shrinking the denominator — say so explicitly in the
+pull request and expect the reason on the entry to be read closely.
 
 This is not a convention you are trusted to follow. The `corpus` job in
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the same script on
@@ -63,25 +73,30 @@ commit. A floor lowered to match a regression is a regression with paperwork.
 
 ## Where coverage is weak
 
-Current shipped behaviour, measured on the committed corpus: 267 of 281 attacks
-are classified (95%), 165 are blocked with no configuration (59%). Those are two
-different capabilities and the gap between them is deliberate. Most of the
-ruleset names an impact class and leaves the decision to a policy you write.
+Current shipped behaviour, measured on the committed corpus: **167 of the 186
+attacks we intend to catch are caught — blocked or flagged — 89.8%, and 19 are
+missed.** The other 95 attacks in the corpus are recognised and deliberately left
+to a policy you write, so they are not a place to contribute enforcement; the
+reason is written on each one in `tests/fixtures/shell_corpus.json`.
 
-The full decomposition, because "165 of 281" on its own invites the wrong
-conclusion: **165 blocked, 103 recognised and left to a policy you write, 13 not
-recognised at all.** The 13 are the only ones that are simply missing, and they
-are named in [Coverage and limitations](README.md#coverage-and-limitations).
-Five of them are `exfiltration`, and those are misses rather than design.
+The raw counts behind that, which `corpus_report.py` still prints: 267 of 281
+classified, 165 blocked. Do not quote `165 / 281` as a detection rate — that is
+the figure this project retired, and it counts `terraform destroy` as a failure.
+
+**The 19 misses are the work.** They are marked `detection_intent: GAP` in the
+fixture and named in
+[Coverage and limitations](README.md#coverage-and-limitations); the five
+`exfiltration` cases among them are the best place to start.
 
 If you are looking for somewhere your work will matter:
 
-| family | blocked | why it is open |
+| family | GAP entries | why it is open |
 |---|---|---|
-| `discovery` | 2 of 11 | The genuinely weakest. Only 4 of 11 even classify. Enumeration overlaps almost entirely with ordinary operational inspection. |
-| `escalate` | 12 of 37 | Classifies fully, blocks under a third. |
-| `execute` | 28 of 59 | Same shape: the class is known, the enforcement is not. |
-| `infra_destruction` | 0 of 8 | **By design, not a gap.** Destroying managed infrastructure is indistinguishable from a legitimate teardown at the command level, so every rule in the family is classify-only. Do not "fix" this by adding a `detect` block. Improving it means better classification, or a worked policy example. |
+| `exfiltration` | 5 of 22 | The clearest misses in the corpus. Bulk copy to a remote host, DNS tunnelling, `git push --mirror` to an attacker remote. Not dual-use in these shapes. |
+| `obfuscation` | 5 of 10 | Quote-splitting, variable-splicing and hex-decode-and-pipe forms that hide the object from a rule that would otherwise enforce. `$IFS$()cat$IFS/etc/shadow` IS blocked, which shows the shape is reachable. |
+| `execute` | 5 of 59 | Windows LOLBins (`rundll32 javascript:`, `mshta http://`), `powershell -enc`, and a fetch in command-substitution position. |
+| `discovery` | 3 of 11 | `ls -la /root`, whole-filesystem SUID enumeration, and `id && whoami && hostname` — the chain is visible in one call and we do not read it. |
+| `infra_destruction` | 0 of 8 | **By design, not a gap.** Destroying managed infrastructure is indistinguishable from a legitimate teardown at the command level, so every rule in the family is classify-only and all 8 are marked `INTENDED`. Do not "fix" this by adding a `detect` block. Improving it means better classification, or a worked policy example. |
 
 Note what is *not* on that list. `persist` blocks 17 of 31, above the median,
 and `evade` blocks 29 of 30. Please do not open work against those on the

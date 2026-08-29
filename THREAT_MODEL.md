@@ -128,7 +128,10 @@ ends up over-trusted, so:
 
 Nothing on this page should be taken on trust either.
 
-* detection and false positives, by family, from the committed corpus:
+* the catch rate and the denominator it is over, with every attack excluded from
+  that denominator listed and reasoned:
+  `python scripts/intent_metrics.py`
+* raw classified / detected / blocked counts by family, and the benign gates:
   `python scripts/corpus_report.py`
 * latency at every boundary, on your hardware:
   `python scripts/benchmark.py`, and see [BENCHMARKS.md](BENCHMARKS.md)

@@ -77,17 +77,24 @@ to embed:
 
 **Not in scope, and this is the important half.**
 
-- **A missed detection is not a vulnerability.** The shipped ruleset blocks 165
-  of 281 attacks in the committed corpus, 59%, and that number is published in
-  [Coverage and limitations](README.md#coverage-and-limitations) precisely so
-  that nobody has to discover it by surprise. A command we do not catch is a
+- **A missed detection is not a vulnerability.** The shipped ruleset catches —
+  blocks or flags — 167 of the 186 attacks in the committed corpus that it
+  *intends* to catch, 89.8%, and misses 19. That number and the 19 are published
+  in [Coverage and limitations](README.md#coverage-and-limitations) precisely so
+  that nobody has to discover them by surprise. A command we do not catch is a
   known, measured, open gap. Please file it as a normal issue so it can be
   discussed and measured in public.
 - **A classify-only rule that does not block is working as designed.** Large
   parts of the ruleset deliberately name an impact class and leave the decision
-  to a policy you write. `infra_destruction` blocks 0 of 8 corpus cases on
-  purpose, because destroying managed infrastructure is indistinguishable from a
-  legitimate teardown at the command level. See the same README section.
+  to a policy you write — 95 of the 281 corpus attacks, each one marked
+  `detection_intent: INTENDED` in `tests/fixtures/shell_corpus.json` with the
+  reason written next to the command. `infra_destruction` blocks 0 of 8 corpus
+  cases on purpose, because destroying managed infrastructure is
+  indistinguishable from a legitimate teardown at the command level:
+  `terraform destroy` is the documented inverse of `terraform apply`. Those 95
+  are excluded from the catch rate above rather than counted as failures. If you
+  think a specific entry is marked wrongly, the reason is on the entry — open an
+  issue against it.
 - **Running with detection and no policy.** If you have not bound a
   `require_approval` rule to the classify-only families, they are observed and
   allowed. That is documented behaviour, not a flaw.
@@ -111,14 +118,17 @@ attack. It is not a silent allow: the event is emitted with a distinct,
 alertable marker (`SCAN_FAILED_OPEN`) and a WARN log. A fault you can trigger
 deliberately is very much in scope. The fail-open response to it is not.
 
-**Enforcement is narrower than classification, and the gap is the product.** 95%
-of the corpus is assigned a class and tier; 59% is blocked with no
+**Enforcement is narrower than classification, and the gap is the product.** 267
+of the 281 corpus attacks are assigned a class and tier; 165 are blocked with no
 configuration. The families that block well under half their cases are named in
 the README rather than hidden: `escalate` blocks 12 of 37 and `execute` blocks
 28 of 59. The genuinely weakest are `infra_destruction` at 0 of 8 and `discovery`
-at 2 of 11. Those numbers are reproduced on every pull request by the `corpus`
-job in [`.github/workflows/ci.yml`](.github/workflows/ci.yml), so they are
-current rather than aspirational.
+at 2 of 11. **Read those as raw counts, not as a detection rate.** Most of the
+difference is deliberate — `infra_destruction` is 0 of 8 by design — which is why
+the headline figure is the catch rate over the 186 we intend to catch and not
+`blocked / 281`. Both are reproduced on every pull request by the `corpus` job in
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml), so they are current
+rather than aspirational.
 
 ## A note on false positives
 

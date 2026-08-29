@@ -11,8 +11,19 @@ misses and a rule that over-blocks both look the same in a patch; they look
 completely different here. Run this before and after a rule change and put the
 two tables in the pull request.
 
-WHAT THIS SCRIPT IS NOT: it does not own any threshold. The attack numbers below
-are reported, never asserted — no floor, no target, no "coverage must be N%".
+WHAT THIS SCRIPT IS NOT, PART ONE: it does not publish a detection rate. The
+attack table below is RAW COUNTS — classified, detected, blocked, total — and
+those are the evidence a rule change is read against. They are not a detection
+or accuracy figure, and `blocked / total` in particular is not one: large parts
+of the ruleset name an impact class and deliberately decline to block, so that
+ratio counts `terraform destroy` as a failure. The published figure is the catch
+rate over the attacks the ruleset INTENDS to catch, and it lives in
+scripts/intent_metrics.py, which prints its denominator and every entry excluded
+from it. Run both.
+
+WHAT THIS SCRIPT IS NOT, PART TWO: it does not own any threshold. The attack
+numbers below are reported, never asserted — no floor, no target, no "coverage
+must be N%".
 The regression floors live in the test suite (tests/test_benign_prose.py's
 ATTACK_BASELINE_* and the per-class tests in tests/test_shell_classes_stage3.py)
 and that is deliberate: one place to argue about, and it is the place that gates
@@ -245,7 +256,13 @@ def print_report(results, documented, doc_note) -> bool:
         f"{_cell(totals['blocked'], total_n):>14}"
     )
     print()
-    print("  Reported, not asserted. The regression floors live in the test suite.")
+    print("  RAW COUNTS. Reported, not asserted; the regression floors live in the")
+    print("  test suite. The percentages above are each column over n, and NONE of")
+    print("  them is a detection or accuracy rate — `blocked / n` in particular is")
+    print("  not, because much of the ruleset classifies on purpose and declines to")
+    print("  block (infra_destruction is 0 of 8 by design). For the published")
+    print("  figure — catches over the attacks we INTEND to catch, with the")
+    print("  denominator printed — run:  python scripts/intent_metrics.py")
     print()
 
     ok = True
