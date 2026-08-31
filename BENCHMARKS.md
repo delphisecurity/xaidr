@@ -100,6 +100,18 @@ prints a percentage.
 | rules only, either path | 186 | **167** (89.8%) |
 | with `nano`, either path | 186 | **172** (92.5%) |
 
+**The `nano` row is the whole of what this repository measures about nano's
+detection.** The five it adds are 5 of the 21 `GAP` entries; the other 16 either
+never reach it or are not recovered, and `intent_metrics.py --nano` names each
+one. Two larger recovery figures were previously published for nano (23 of 26 on
+an acceptance corpus, and 582 of 595 frame cells). Both are **withdrawn**:
+neither regenerates from the shipped package, the corpora behind them are not in
+this repository, and one of them was scored against an older pinned ruleset. No
+replacement figures are given, for the same reason 1.85% below was not simply
+adjusted. The prompt-shaped band nano was built for is **not currently measured
+here**; see
+[the nano section](README.md#the-optional-ml-signal-for-the-rules-silent-band-nano-experimental).
+
 **Raw counts, unchanged, from `corpus_report.py`.** These are the evidence and
 they stay. They are *not* a detection rate: `blocked / 281` counts every
 deliberately classify-only entry as a failure, which is why it is no longer

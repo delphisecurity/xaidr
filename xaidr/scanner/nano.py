@@ -76,6 +76,16 @@ Model: patronus-studio/wolf-defender-prompt-injection-small, the
 measurements taken against a frozen 111-item corpus plus 2000 real benign
 prompts; published numbers were not used.
 
+THE 111-ITEM CORPUS IS NOT IN THIS REPOSITORY. Only the 2000-prompt benign
+sample is (``tests/fixtures/nano_fp_sample.json``, by identity), which is why
+the false-positive figures below can be regenerated here and the detection
+figures cannot. Every recovery number that once appeared in this module was
+measured on that external corpus against an older pinned ruleset, and is
+withdrawn; see the note above ``NANO_T_OP``. What this repository can
+demonstrate about detection is in the shell corpus: nano recovers 5 of the 21
+``GAP`` entries, taking the catch rate from 167 to 172 of 186, via
+``python scripts/intent_metrics.py --nano``.
+
 Accepted on CURVE BEHAVIOUR rather than score-parity, which is a deliberate
 departure from the usual quantization-parity gate. Parity presumes we performed
 the quantization and can diff our own output against our own fp32 reference; this
@@ -289,7 +299,17 @@ PINNED_SHA256 = {
 }
 
 # Operating point on the model's RAW P(injection), from the acceptance record.
-# Recovery 23/26 (open view), intent-based social-engineering 4/5.
+#
+# THE RECOVERY FIGURES THAT USED TO SIT HERE ARE WITHDRAWN. This comment read
+# "Recovery 23/26 (open view), intent-based social-engineering 4/5". That corpus
+# is in a separate bench repository, not in this one and not in the wheel, and it
+# was scored there against a pinned older ruleset rather than against shipped
+# code. Re-derived with shipped code the denominator holds at 26 and the catch
+# count does not reproduce, and it moves with the onnxruntime version, which is
+# the same drift documented below for false positives showing up on the
+# detection side. No replacement is written here: a number from a corpus the
+# reader cannot obtain is exactly the failure MEASURED_IN exists to prevent.
+# The operating point itself is unchanged; only the claim about it is.
 #
 # ONE SAMPLE, ONE METHOD, TWO FIGURES — because the runtime decides which one you
 # get. See "FOUR FIGURES HAVE EXISTED" above for what 1.85%, 2.20% and 1.65% were
@@ -302,7 +322,8 @@ PINNED_SHA256 = {
 #   scored through    the shipped Sensor(enable_nano=True) at the shipped
 #                     operating point (NANO_T_OP), full prompt text, not the
 #                     truncated previews in the acceptance evidence file
-#   recovery          23/26 at t_op, unchanged
+#   recovery          not measured in this repository; see the withdrawal note
+#                     above the operating point
 #   reproduce         python scripts/intent_metrics.py --nano --real-benign
 #
 # THE FIGURE IS A RANGE AND THE RUNTIME IS PART OF IT. Each end below was

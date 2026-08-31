@@ -318,12 +318,14 @@ the list of what fired.
 **One more layer is optional and off by default.** A small local ML signal
 (`nano`) runs only where the whole rules pipeline scored exactly nothing, and
 turning it on takes two deliberate acts: `pip install "xaidr[nano]"` **and**
-`Sensor(enable_nano=True)`. On the one attack population the rules provably
-cannot reach, it converts 97.8% of what would otherwise be clean allows into
-flags. It is experimental, it can flag but never block, and its score is **not
-calibrated confidence**, so do not triage by the number it reports. The false
-positive cost, the runtime caveat and the rest of the detail are in [The
-optional ML signal for the rules-silent
+`Sensor(enable_nano=True)`. What it demonstrably buys on a corpus in this
+repository is **5 of the 21 `GAP` entries in the shell corpus, taking the catch
+rate from 167 to 172 of 186**. The prompt-shaped population it was actually
+built for is **not currently measured in this repository**; see the section
+below for what was withdrawn and why. It is experimental, it can flag but never
+block, and its score is **not calibrated confidence**, so do not triage by the
+number it reports. The false positive cost, the runtime caveat and the rest of
+the detail are in [The optional ML signal for the rules-silent
 band](#the-optional-ml-signal-for-the-rules-silent-band-nano-experimental).
 
 
@@ -362,10 +364,11 @@ a scored, logged event a deployer sees.
 
 The opt-in
 [`nano`](#the-optional-ml-signal-for-the-rules-silent-band-nano-experimental)
-signal takes that to 172 of 186 (92.5%), which is **five commands** and is not
-the reason nano exists. Nano's case is prompt-shaped attacks in the band the
-rules cannot reach — 582 of 595 frame cells recovered — and it never runs on the
-tool path at all. Do not evaluate it on this corpus.
+signal takes that to 172 of 186 (92.5%), which is **five commands**. It is also,
+at the moment, the only nano recovery figure this repository can regenerate. The
+case nano was built on is prompt-shaped attacks in the band the rules cannot
+reach, and that population has no committed corpus or derivation here, so there
+is no number for it to quote. Nano never runs on the tool path at all.
 
 **Counting flags cuts both ways, and here is the cost.** Benign prose — incident
 reports, runbooks and policy documents that *quote* a dangerous command — blocks
@@ -640,27 +643,52 @@ is capped strictly below the block threshold, so it can raise a scan to
 `flagged` and can never produce `blocked`. It never runs on a2a or output
 traffic.
 
-**What it is for, and this is where it earns its place.** The descriptive-frame
-dampener produces 0.0 by erasing gated signals, so a bare-topic attack with a
-discourse cue anywhere in it becomes a clean allow. That population is 595 of the
-3240 cells in the attack-by-cue-by-position matrix. **With nano off those 595 are
-clean allows; with nano on 582 of them (97.8%) become flags.** The 13 that remain
-are all one attack shape. That is the case for this signal: prompt-shaped attacks
-in the band the rules provably cannot reach, because the guard that would have to
-distinguish those cells from legitimate prose is the one the two-directions
-passage above explains has no signal to work with.
+**What it is for.** The descriptive-frame dampener produces 0.0 by erasing gated
+signals, so a bare-topic attack with a discourse cue anywhere in it becomes a
+clean allow. That band is what nano was built for: prompt-shaped attacks the
+rules provably cannot reach, because the guard that would have to distinguish
+those inputs from legitimate prose is the one the two-directions passage above
+explains has no signal to work with.
 
-**It is not a shell-corpus feature, and the shell numbers should not be read as
-its case.** On the shell corpus nano moves the catch rate from 167 of 186 to
-**172 of 186 — five commands**. It can only act where the whole rules pipeline
-scored 0.0, and it never runs on the tool path, which is the path a real agent
-uses for shell; there it changes nothing at all. Of the 21 attacks marked `GAP`,
-8 reach nano and it recovers 5: `rsync -az … attacker@…`, the
-`nohup … while true; do curl …` beacon, `sudo env PATH=/tmp bash`,
-`FOO=bar AWS_PROFILE=prod aws s3 ls` and `echo -e '\x72\x6d…' | sh`. It does not
-recover `aws s3 sync /home/ s3://…`, `id && whoami && hostname` or
-`find / -perm -4000 -type f`. If you are evaluating nano, evaluate it on the 582
-of 595; +5 of 186 is a side effect.
+**That population is not currently measured in this repository, and the figures
+that used to appear here are withdrawn.** Two numbers stood in this section: a
+recovery count of 23 of 26 on an acceptance corpus, and 582 of 595 frame cells
+recovered. Neither regenerates from the shipped package.
+
+  * **582 of 595 frame cells: withdrawn, no derivation exists.** The committed
+    generator in `tests/test_descriptive_frame_matrix.py` produces **4320**
+    cells, not 3240, and on 1.7.0 **all 4320 block**, so there are **0** clean
+    allows for nano to recover. Re-run against that file as it stood at
+    `9cc9f41`, the commit that first published the figure, it already produced
+    4320 cells and the same result. The 595 population is bare-topic attack
+    shapes, and no such corpus has ever been committed to this repository. The
+    figure survived only as prose.
+  * **23 of 26 recovery: withdrawn, measured elsewhere against other rules.**
+    That corpus lives in a separate bench repository, not in this one and not in
+    the wheel, and it was scored there against a pinned older ruleset rather
+    than against shipped code. Re-derived with shipped code the denominator is
+    26, and the catch count is neither 23 nor stable: it moves with the
+    onnxruntime version, the same drift documented below for false positives,
+    on the detection side where nobody had looked. No replacement number is
+    published here, because a figure from a corpus you cannot obtain is how the
+    first one went wrong.
+
+Both are withdrawn rather than corrected. When a corpus for this band is
+committed to this repository, with a script that regenerates the number, the
+figure comes back with its environment attached and not before.
+
+**What it does buy, on a corpus you have.** On the shell corpus nano moves the
+catch rate from 167 of 186 to **172 of 186, five commands**. It can only act
+where the whole rules pipeline scored 0.0, and it never runs on the tool path,
+which is the path a real agent uses for shell; there it changes nothing at all.
+Of the 21 attacks marked `GAP`, 8 reach nano and it recovers 5:
+`rsync -az … attacker@…`, the `nohup … while true; do curl …` beacon,
+`sudo env PATH=/tmp bash`, `FOO=bar AWS_PROFILE=prod aws s3 ls` and
+`echo -e '\x72\x6d…' | sh`. It does not recover `aws s3 sync /home/ s3://…`,
+`id && whoami && hostname` or `find / -perm -4000 -type f`. Regenerate it with
+`python scripts/intent_metrics.py --nano`. Five of 186 is a small return, and
+until the band above is measured here it is the whole measured case for the
+feature.
 
 **What it costs, and why it is a range.** On the 2000-prompt real-benign sample,
 nano flags **35 (1.75%, Wilson 95% [1.26%, 2.42%]) on onnxruntime ≤ 1.23, and 67
@@ -672,8 +700,7 @@ from 0.00% to somewhere between 1.75% and 3.35% flagged events — one extra eve
 per 57 prompts at the low end, one per 30 at the high end.**
 
 `pip install xaidr[nano]` resolves the newer runtime today, so **expect the 3.35%
-end unless you have pinned onnxruntime yourself.** Recovery on the acceptance
-corpus is 23 of 26 rules-silent paraphrase attacks.
+end unless you have pinned onnxruntime yourself.**
 
 **Do not plan against our number — measure yours.** The figure moves with a
 dependency you control and we do not:
