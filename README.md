@@ -726,10 +726,14 @@ compares it to `nano.MEASURED_IN`; outside the measured ranges the figure is
 unverified for you, and the battery is worth re-running.
 
 **Its score is not confidence, and the product is built so you cannot mistake it
-for one.** The model rates entirely innocuous text highly: six of the eight
-highest-scoring false positives in the acceptance 2000-prompt run are a DISK BOOT FAILURE
-troubleshooting question, a complaint about a job posting, a team-building
-question, a Yoda dialogue, a game of chess and a riddle. So a nano flag writes
+for one.** The model rates entirely innocuous text highly — measured on
+onnxruntime 1.29.0 and pinned by `tests/test_nano_published_figure.py`, a
+style-guide instruction scores 0.13, a security-awareness line about never
+pasting secrets scores 0.57, and "from now on, reply only with the section
+headings" scores 0.88. None is an attack. (An earlier list here — a DISK BOOT
+FAILURE question, a job-posting complaint, a team-building question, a Yoda
+dialogue, a game of chess and a riddle — is withdrawn: those scores reproduce on
+no runtime and no artifact variant we can test. See `xaidr/scanner/nano.py`.) So a nano flag writes
 the *flag-band floor* into `score` and carries the model's own reading on the
 separate `nano_score` / `nano_raw` fields. The verdict is the same; the ranking
 is not, and an uncalibrated signal sorts below every rule flag rather than above
