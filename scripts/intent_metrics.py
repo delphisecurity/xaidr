@@ -111,6 +111,47 @@ def _frac(hit: int, total: int, dp: int = 1) -> str:
     return f"{hit}/{total} = {100.0 * hit / total:.{dp}f}%"
 
 
+def _version_key(v: str) -> tuple:
+    """(1, 29, 0) from '1.29.0'. Non-numeric tails are dropped, not guessed."""
+    out = []
+    for part in str(v).split("."):
+        digits = ""
+        for ch in part:
+            if not ch.isdigit():
+                break
+            digits += ch
+        if not digits:
+            break
+        out.append(int(digits))
+    return tuple(out)
+
+
+def _print_env_verdict() -> None:
+    """Say which end of the published range THIS environment corresponds to.
+
+    The whole failure this range exists to fix was a figure published without
+    the runtime that produced it, so the script refuses to print the range
+    without also printing where the reader is standing in it.
+    """
+    try:
+        import onnxruntime
+        from xaidr.scanner import nano
+    except Exception:
+        return
+    live = onnxruntime.__version__
+    key = _version_key(live)
+    for k, n, lo, hi, (r_lo, r_hi) in nano.MEASURED_FP_RANGE:
+        if _version_key(r_lo) <= key <= _version_key(r_hi):
+            print(f"    YOUR RUNTIME: onnxruntime {live} — inside the measured "
+                  f"range {r_lo}-{r_hi},")
+            print(f"    where the published figure is {k}/{n} = "
+                  f"{100.0 * k / n:.2f}%  [{lo:.2f}%, {hi:.2f}%].")
+            return
+    print(f"    YOUR RUNTIME: onnxruntime {live} — OUTSIDE every measured range.")
+    print("    The published figures are UNVERIFIED for it. The number this run")
+    print("    just printed is the evidence for your environment; ours is not.")
+
+
 def _wilson(hit: int, n: int, z: float = 1.96) -> tuple:
     """Wilson score interval — the right one for proportions near 0."""
     if n == 0:
@@ -734,9 +775,22 @@ def print_report(args, corpus, devops):
         else:
             print("    nano ON: not measured (pass --nano)")
         print()
-        print("    THREE FIGURES EXISTED FOR THIS ONE QUANTITY. Reconciled:")
-        print("      1.85%  37/2000  the acceptance record — and what the shipped")
-        print("                      configuration reproduces today, exactly.")
+        print("    THE PUBLISHED FIGURE IS A RANGE, AND YOUR RUNTIME PICKS THE END:")
+        print("      1.75%  35/2000  onnxruntime <= 1.23   Wilson 95% [1.26%, 2.42%]")
+        print("      3.35%  67/2000  onnxruntime 1.26-1.29 Wilson 95% [2.65%, 4.23%]")
+        print("    Same sample, same artifact, same code. The runtime nearly")
+        print("    doubles the rate; `pip install xaidr[nano]` resolves the newer")
+        print("    one today. THE NUMBER ABOVE, FROM YOUR ENVIRONMENT, IS THE ONE")
+        print("    THAT APPLIES TO YOU — that is why this script exists.")
+        _print_env_verdict()
+        print()
+        print("    THREE EARLIER FIGURES ARE WITHDRAWN:")
+        print("      1.85%  37/2000  WITHDRAWN. Published without the fact that")
+        print("                      determines it: measured on an onnxruntime the")
+        print("                      record never named, then labelled 1.29.0 — a")
+        print("                      runtime on which this sample gives 67/2000.")
+        print("                      The claim that it lands on 37/2000 'either")
+        print("                      way' is false.")
         print("      2.20%  44/2000  WITHDRAWN. Measured against the 200-character")
         print("                      previews stored in the acceptance evidence")
         print("                      file rather than the full prompts. 331 of the")
@@ -746,10 +800,10 @@ def print_report(args, corpus, devops):
         print("                      draw overlapping this one by 128 of 2000, and")
         print("                      not disjoint from the sets the model was tuned")
         print("                      against, which biases it downward.")
-        print("    Runtime drift is real but does not move this figure: 15 of 2000")
-        print("    raw scores differ from the recorded ones on onnxruntime 1.29.0,")
-        print("    2 of them cross the operating point, and they cross in opposite")
-        print("    directions. See xaidr/scanner/nano.py.")
+        print("    Ruled out as causes, by measurement: tokenizers 0.20-0.23 give")
+        print("    bit-identical scores, numpy 1.26/2.5 likewise, the fp32 sibling")
+        print("    agrees with the shipped artifact, and the artifact hashes have")
+        print("    never moved. Only onnxruntime moves it. See xaidr/scanner/nano.py.")
     print()
 
     # ── the silence list ──

@@ -61,21 +61,26 @@ class ScanResult:
     #
     # `nano_score` is a DETECTION SIGNAL on the scanner's scale, not a calibrated
     # probability. The model assigns HIGH scores to entirely innocuous text at a
-    # measured rate of 1.85% of the traffic it sees (37/2000, Wilson 95%
-    # [1.35%, 2.54%], onnxruntime 1.29.0 — see nano.py on why the runtime is
-    # named). Six of the eight highest-scoring false positives in that
-    # measurement are of this kind: every one is benign and every one scored
-    # above the operating point.
+    # measured rate of 1.75% TO 3.35% of the traffic it sees, and which end you
+    # get is decided by YOUR onnxruntime version, not by your traffic:
     #
-    # THE FIGURE LIVES IN ONE PLACE: `nano.MEASURED_FP` and `nano.MEASURED_ON`
-    # are the canonical values and this comment restates them. If they disagree,
-    # nano.py wins. Two other figures once existed for this quantity, 2.20% and
-    # 1.65%; both are withdrawn, and "THREE FIGURES ONCE EXISTED" in nano.py says
-    # what each was and why neither survived.
+    #     onnxruntime <= 1.23     35/2000 = 1.75%   Wilson 95% [1.26%, 2.42%]
+    #     onnxruntime 1.26-1.29   67/2000 = 3.35%   Wilson 95% [2.65%, 4.23%]
     #
-    # The DISK BOOT FAILURE score below is the acceptance record's; on
-    # onnxruntime 1.29.0 the same prompt reads 0.7565 — still far above the
-    # operating point.
+    # Same artifact, same sample, same code. `pip install xaidr[nano]` resolves
+    # the newer runtime today, so expect the 3.35% end unless you have pinned
+    # otherwise. To measure your own environment instead of reading ours:
+    #     python scripts/intent_metrics.py --nano --real-benign
+    #
+    # THE FIGURE LIVES IN ONE PLACE: `nano.MEASURED_FP_RANGE` is canonical and
+    # this comment restates it; `nano.MEASURED_IN` records the environment each
+    # end was measured in. If they disagree, nano.py wins. Three other figures
+    # have existed for this quantity — 1.85%, 2.20% and 1.65% — and all three are
+    # withdrawn; "FOUR FIGURES HAVE EXISTED" in nano.py says what each was and
+    # why none survived.
+    #
+    # What that rate looks like in practice — benign text scoring above the
+    # operating point, six of the eight highest in one 2000-prompt measurement:
     #
     #     0.8648  "DISK BOOT FAILURE - INSERT SYSTEM DISK AND PRESS ENTER"
     #     0.8415  a complaint about a misleading job posting

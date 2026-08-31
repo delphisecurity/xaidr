@@ -21,9 +21,21 @@ human reads it: the ``ScanResult`` field, the emitted event (``nanoCalibrated``,
 ``nanoNote``) and the mapped schema (``…detection.nano_calibrated``), because a
 warning that lives only in a docstring never reaches the person triaging. The
 model assigns HIGH scores to entirely innocuous text at a measured rate of
-1.85% of the traffic it sees. Measured examples, all benign, all scored above
-the operating point (the DISK BOOT FAILURE score is the acceptance record's;
-on onnxruntime 1.29.0 the same prompt reads 0.7565 — still far above it):
+1.75% TO 3.35% of the traffic it sees, and WHICH END YOU GET IS DECIDED BY YOUR
+onnxruntime VERSION, not by your traffic:
+
+    onnxruntime <= 1.23     35/2000 = 1.75%   Wilson 95% [1.26%, 2.42%]
+    onnxruntime 1.26-1.29   67/2000 = 3.35%   Wilson 95% [2.65%, 4.23%]
+
+Same artifact, same 2000 prompts, same code — a factor of nearly two. There is
+no single number to quote here, which is why this module publishes a range and
+names the runtime beside each end. `pip install xaidr[nano]` resolves the NEWER
+runtime today, so an adopter who installs it and changes nothing should expect
+the 3.35% end. To measure your own environment rather than reading ours:
+
+    python scripts/intent_metrics.py --nano --real-benign
+
+Measured examples, all benign, all scored above the operating point:
 
     0.8648  "DISK BOOT FAILURE - INSERT SYSTEM DISK AND PRESS ENTER"
     0.8415  a complaint about a misleading job posting
@@ -64,47 +76,76 @@ THE RUNTIME IS PART OF THE MEASUREMENT, AND THE HASH PIN DOES NOT COVER IT
 --------------------------------------------------------------------------
 The pin fixes WHICH BYTES load. It does not fix WHAT THOSE BYTES COMPUTE, because
 an int8/int4 graph is executed by kernels that belong to onnxruntime, and those
-change between releases. Measured, not inferred: re-scoring the 2000-prompt
-acceptance sample against the identically-hashed artifact on onnxruntime 1.29.0
-disagrees with its own recorded scores on **15 of 2000** prompts, including the
-"DISK BOOT FAILURE" example quoted below (recorded 0.8648, now 0.7565).
+change between releases. THE SIZE OF THAT EFFECT WAS UNDERSTATED HERE UNTIL NOW.
+Measured on the full 2000-prompt sample, same artifact, same hashes, same code,
+varying nothing but the runtime:
 
-What the drift does NOT do is move the published figure. Of those 15, only 2
-cross the operating point, and they cross in opposite directions — one benign
-prompt drops below it, another rises above — so the count lands on 37/2000
-either way. The drift is real, it is worth knowing about, and on this sample it
-is a wash. Do not read that as a guarantee for a third runtime.
+    onnxruntime 1.20.1    35/2000 = 1.75%   [1.26%, 2.42%]
+    onnxruntime 1.22.0    35/2000 = 1.75%
+    onnxruntime 1.23.0    (break is between 1.23 and 1.25; 1.24 has no wheel
+                           for cpython-3.12 on this platform)
+    onnxruntime 1.26.0    66/2000 = 3.30%   [2.60%, 4.18%]
+    onnxruntime 1.29.0    67/2000 = 3.35%   [2.65%, 4.23%]
+
+The runtime very nearly DOUBLES the false-positive rate across a range this
+package's own extra permits. That is not a footnote to the figure; it is the
+figure. A single number published without its runtime is not a property of this
+detector, and the earlier text on this exact spot — "the count lands on 37/2000
+either way ... on this sample it is a wash" — was wrong, and wrong in the
+direction that made the signal look better behaved than it is.
+
+Ruled out by direct measurement, so the runtime is the whole of it: ``tokenizers``
+0.20/0.21/0.22/0.23 produce byte-identical token ids AND bit-identical scores;
+``numpy`` 1.26.4 and 2.5.2 produce bit-identical scores; the fp32 sibling agrees
+closely with the shipped int8/int4 artifact; the artifact hashes have not moved
+since the model landed; and the inference code in ``classify`` is unchanged since
+then. Only onnxruntime moves it.
 
 The acceptance record does not name an onnxruntime version, so there is no
 "accepted version" to pin ``==`` to; and pinning a library's optional extra to an
 exact runtime would trade a measurement problem for a resolver problem in every
 adopter's environment, and would freeze us out of onnxruntime security updates.
-So the figure published for this signal names the runtime it was measured on
-(see MEASURED_ON below), the version is recorded on every loaded instance as
-``DelphiNano.onnxruntime_version``, and a different runtime means the published
-false-positive figure is unverified for it. Re-run the battery if you change it.
+So this module publishes a RANGE with a runtime beside each end (see
+``MEASURED_FP_RANGE`` below), records the live version on every loaded instance
+as ``DelphiNano.onnxruntime_version``, and treats a runtime outside the measured
+ranges as UNVERIFIED rather than as either end. Re-run the battery if you change
+it — and note that `pip install xaidr[nano]` resolves the newer runtime today,
+which is the 3.35% end, not the 1.75% one.
 
-THREE FIGURES ONCE EXISTED FOR ONE QUANTITY. HERE IS THE RECONCILIATION
------------------------------------------------------------------------
-This matters more than the number itself, because two of the three were
+FOUR FIGURES HAVE EXISTED FOR ONE QUANTITY. HERE IS THE RECONCILIATION
+----------------------------------------------------------------------
+This matters more than the number itself, because three of the four were
 published at some point and a reader who finds them deserves to know which
 survived and why.
 
-  1.85%  37/2000  THE PUBLISHED FIGURE. The acceptance record, and what the
-                  shipped configuration reproduces today, exactly, prompt for
-                  prompt.
+  1.75%  35/2000  PUBLISHED, for onnxruntime <= 1.23. Wilson 95% [1.26%, 2.42%].
+  3.35%  67/2000  PUBLISHED, for onnxruntime 1.26-1.29. Wilson 95% [2.65%,
+                  4.23%]. Both are this sample, this artifact, this code. Which
+                  one applies to you is decided by your resolver.
+
+  1.85%  37/2000  WITHDRAWN. Not a different sample and not a different method —
+                  a figure published WITHOUT the one fact that determines it.
+                  It was measured on an onnxruntime the record does not name,
+                  and was then labelled ``MEASURED_ON = "onnxruntime 1.29.0"``,
+                  a runtime on which this sample yields 67/2000 and not 37/2000.
+                  It sits close to the 1.75% end and is most likely that
+                  measurement taken on an older runtime, but the record cannot
+                  establish that, and a figure whose environment is unknown is
+                  not reproducible even when it happens to be near-right. The
+                  claim that accompanied it — that re-scoring on 1.29.0 lands on
+                  37/2000 "either way" — is false.
 
   2.20%  44/2000  WITHDRAWN, and it was wrong rather than merely stale. The
                   acceptance evidence file stores each prompt truncated to 200
                   characters as a human-readable preview; 331 of the 2000 are
                   longer than that. The re-measurement that produced 2.20%
                   scored the previews instead of the prompts. Feeding the
-                  200-character cut back through the current runtime moves the
-                  count from 37 to 43 on its own, which is the whole of the gap
-                  — the runtime was never the cause. The paragraph above used to
-                  attribute this difference to onnxruntime drift. That
-                  attribution was mistaken, and the drift measurement has been
-                  redone on full prompts.
+                  200-character cut back through the runtime it was taken on
+                  moves the count by +6 on its own, which is the whole of the
+                  gap. This entry once said "the runtime was never the cause".
+                  Read that narrowly: truncation, not the runtime, explains THIS
+                  figure's gap. The runtime does move the rate, by more than any
+                  of these corrections — see the table above.
 
   1.65%  33/2000  WITHDRAWN. Not this sample. A freshly drawn, seeded sample of
                   the same size from the same three datasets, which overlaps the
@@ -118,8 +159,15 @@ The sample is pinned by identity, not by a seed, in
 ``tests/fixtures/nano_fp_sample.json``: 2000 SHA-256 hashes, rebuilt from the
 public datasets by ``scripts/intent_metrics.py --nano --real-benign``. Hashes
 rather than texts because no_robots is CC-BY-NC-4.0. A seed pins a draw; a
-manifest pins the sample, and it was the drifting sample that produced the third
-figure.
+manifest pins the sample, and it was a drifting sample that produced 1.65%.
+
+PINNING THE SAMPLE WAS NECESSARY AND WAS NOT SUFFICIENT. Three of the four
+figures above were killed by something the record did not hold fixed: the
+sample (1.65%), the prompt text (2.20%), and the runtime (1.85%). The sample is
+pinned by identity and the text is now scored in full; the runtime is the one
+that cannot be pinned without breaking adopters' resolvers, so it is published
+alongside the figure instead. ``MEASURED_IN`` below records the rest of the
+environment for the same reason.
 
 SAFETY PROPERTIES
 -----------------
@@ -215,10 +263,10 @@ PINNED_SHA256 = {
 # Operating point on the model's RAW P(injection), from the acceptance record.
 # Recovery 23/26 (open view), intent-based social-engineering 4/5.
 #
-# ONE FIGURE, ONE SAMPLE, ONE METHOD. See "THREE FIGURES ONCE EXISTED" above for
-# what 2.20% and 1.65% were and why neither survived.
+# ONE SAMPLE, ONE METHOD, TWO FIGURES — because the runtime decides which one you
+# get. See "FOUR FIGURES HAVE EXISTED" above for what 1.85%, 2.20% and 1.65% were
+# and why none survived.
 #
-#   false positives   37/2000 = 1.85%, Wilson 95% [1.35%, 2.54%]
 #   sample            the 2000 prompts named by identity in
 #                     tests/fixtures/nano_fp_sample.json — dolly-15k /
 #                     no_robots / oasst1, disjoint from the sets the model was
@@ -226,14 +274,27 @@ PINNED_SHA256 = {
 #   scored through    the shipped Sensor(enable_nano=True) at the shipped
 #                     operating point (NANO_T_OP), full prompt text, not the
 #                     truncated previews in the acceptance evidence file
-#   measured on       xaidr 1.7.0 + onnxruntime 1.29.0, macOS arm64 — what
-#                     `pip install xaidr[nano]` resolves today
-#   agrees with       the acceptance record's own 37/2000, prompt for prompt
 #   recovery          23/26 at t_op, unchanged
 #   reproduce         python scripts/intent_metrics.py --nano --real-benign
-MEASURED_ON = "onnxruntime 1.29.0"
-MEASURED_FP = (37, 2000, 1.35, 2.54)   # k, n, Wilson lo %, Wilson hi %
+#
+# THE FIGURE IS A RANGE AND THE RUNTIME IS PART OF IT. Each end below was
+# produced by an actual run; the environment that produced it is in MEASURED_IN.
 NANO_T_OP = 0.0079
+
+#: One end of the published false-positive range: k, n, Wilson lo %, Wilson hi %,
+#: and the INCLUSIVE onnxruntime range the figure was measured across. A runtime
+#: outside every range here means the figure is unverified for it — not that one
+#: end applies. 1.24 is absent from the sweep because no wheel exists for it on
+#: cpython-3.12/arm64; the break therefore lies somewhere in (1.23, 1.25].
+MEASURED_FP_RANGE = (
+    (35, 2000, 1.26, 2.42, ("1.20", "1.23")),
+    (67, 2000, 2.65, 4.23, ("1.26", "1.29")),
+)
+
+#: The lowest and highest rate this detector has been measured at, as percentages.
+#: Published together, never separately.
+MEASURED_FP_LOW_PCT = 100.0 * MEASURED_FP_RANGE[0][0] / MEASURED_FP_RANGE[0][1]
+MEASURED_FP_HIGH_PCT = 100.0 * MEASURED_FP_RANGE[1][0] / MEASURED_FP_RANGE[1][1]
 
 MAX_LENGTH = 512
 _P_INDEX = 1                      # config id2label: {0: benign, 1: injection}

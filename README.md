@@ -662,39 +662,68 @@ recover `aws s3 sync /home/ s3://…`, `id && whoami && hostname` or
 `find / -perm -4000 -type f`. If you are evaluating nano, evaluate it on the 582
 of 595; +5 of 186 is a side effect.
 
-**What it costs.** On the 2000-prompt real-benign sample, nano flags **37, or
-1.85% (Wilson 95% [1.35%, 2.54%])**. Rules alone flag 0 of those 2000. So the
-number to plan for is: **turning nano on takes ordinary traffic from 0.00% to
-1.85% flagged events, roughly one extra event per 54 prompts.** Recovery on the
-acceptance corpus is 23 of 26 rules-silent paraphrase attacks. Reproduce with
-`python scripts/intent_metrics.py --nano --real-benign`.
+**What it costs, and why it is a range.** On the 2000-prompt real-benign sample,
+nano flags **35 (1.75%, Wilson 95% [1.26%, 2.42%]) on onnxruntime ≤ 1.23, and 67
+(3.35%, Wilson 95% [2.65%, 4.23%]) on onnxruntime 1.26–1.29.** Same artifact,
+same sample, same code — **your onnxruntime version decides which end you get,**
+and it very nearly doubles the rate. Rules alone flag 0 of those 2000 in both
+cases. So the number to plan for is: **turning nano on takes ordinary traffic
+from 0.00% to somewhere between 1.75% and 3.35% flagged events — one extra event
+per 57 prompts at the low end, one per 30 at the high end.**
 
-**The method, because this figure had three values and now has one.** The sample
+`pip install xaidr[nano]` resolves the newer runtime today, so **expect the 3.35%
+end unless you have pinned onnxruntime yourself.** Recovery on the acceptance
+corpus is 23 of 26 rules-silent paraphrase attacks.
+
+**Do not plan against our number — measure yours.** The figure moves with a
+dependency you control and we do not:
+
+```bash
+python scripts/intent_metrics.py --nano --real-benign
+```
+
+| onnxruntime | flagged | rate | Wilson 95% |
+|---|---|---|---|
+| 1.20.1 | 35/2000 | 1.75% | [1.26%, 2.42%] |
+| 1.22.0 | 35/2000 | 1.75% | — |
+| 1.26.0 | 66/2000 | 3.30% | [2.60%, 4.18%] |
+| 1.29.0 | 67/2000 | 3.35% | [2.65%, 4.23%] |
+
+The break sits between 1.23 and 1.25 (1.24 has no wheel for cpython-3.12 on the
+measured platform). Below 1.20 the artifact does not load at all.
+
+**The method, because this figure has had four values and now has two.** The sample
 is 2000 human-written prompts from dolly-15k / no_robots / oasst1, at least four
 words, pinned **by identity** — 2000 SHA-256 hashes in
 `tests/fixtures/nano_fp_sample.json`, rebuilt from the public datasets at run
 time (hashes rather than text because no_robots is CC-BY-NC-4.0). It is the
 sample the model acceptance used, and it is disjoint from the prompt sets the
 model was selected and calibrated against. Scored through the shipped
-`Sensor(enable_nano=True)` at the shipped operating point, on **xaidr 1.7.0 with
-onnxruntime 1.29.0**.
+`Sensor(enable_nano=True)` at the shipped operating point, on **xaidr 1.7.0**,
+across the onnxruntime versions in the table above.
 
 | figure | status |
 |---|---|
-| **1.85%** (37/2000) | **published.** The acceptance record's own number, and what the shipped configuration reproduces today, prompt for prompt. |
-| 2.20% (44/2000) | **withdrawn — it was wrong, not merely stale.** The acceptance evidence file stores each prompt truncated to 200 characters as a preview; 331 of the 2000 are longer. The re-measurement scored the previews. Feeding the 200-character cut through the current runtime moves the count 37 → 43 on its own, which is the whole gap. This README previously blamed onnxruntime drift for that difference. That was mistaken. |
+| **1.75%** (35/2000) | **published, for onnxruntime ≤ 1.23.** Wilson 95% [1.26%, 2.42%]. |
+| **3.35%** (67/2000) | **published, for onnxruntime 1.26–1.29.** Wilson 95% [2.65%, 4.23%]. This is what a default install gets today. |
+| 1.85% (37/2000) | **withdrawn — published without the fact that determines it.** Not a different sample and not a different method: a figure measured on an onnxruntime the record never named, then labelled `MEASURED_ON = "onnxruntime 1.29.0"` — a runtime on which this sample yields 67/2000, not 37/2000. It sits near the 1.75% end and is most likely that measurement on an older runtime, but the record cannot establish that. The accompanying claim that re-scoring on 1.29.0 lands on 37/2000 "either way" is false. |
+| 2.20% (44/2000) | **withdrawn — it was wrong, not merely stale.** The acceptance evidence file stores each prompt truncated to 200 characters as a preview; 331 of the 2000 are longer. The re-measurement scored the previews, which moves the count by +6 on its own — the whole gap. |
 | 1.65% (33/2000) | **withdrawn — different sample.** A freshly drawn seeded sample overlapping this one by 128 of 2000, and *not* disjoint from the sets the model was tuned against, which biases a false-positive rate downward. The lower number was a worse measurement, not better news. |
 
-**The runtime is still named on purpose.** The artifact is hash-pinned, but the
-hash fixes which bytes load, not what they compute: an int8/int4 graph runs on
-onnxruntime kernels that change between releases. Measured on full prompts,
-onnxruntime 1.29.0 disagrees with the acceptance record's own scores on **15 of
-2000** — including the DISK BOOT FAILURE example, recorded 0.8648 and now 0.7565.
-Only 2 of the 15 cross the operating point, and they cross in opposite
-directions, so the published figure is 37/2000 either way. **That is this sample
-being lucky, not a property of the runtime.** Every loaded instance records
-`DelphiNano.onnxruntime_version`; if yours differs, the figure is unverified for
-it and the battery is worth re-running.
+**The runtime is not a caveat on the figure; it is half of the figure.** The
+artifact is hash-pinned, but the hash fixes which bytes load, not what they
+compute: an int8/int4 graph runs on onnxruntime kernels that change between
+releases. This README previously said the drift was "a wash" and that the figure
+landed on 37/2000 either way. That was wrong. Measured across the whole supported
+range, the runtime moves the rate from 35/2000 to 67/2000.
+
+Everything else in the inference path was checked and ruled out: `tokenizers`
+0.20–0.23 produce byte-identical tokens and bit-identical scores, `numpy` 1.26
+and 2.5 are bit-identical, the fp32 sibling agrees closely with the shipped
+int8/int4 artifact, and the artifact hashes have never moved. Only onnxruntime
+moves it. Every loaded instance records `DelphiNano.onnxruntime_version` and
+compares it to `nano.MEASURED_IN`; outside the measured ranges the figure is
+unverified for you, and the battery is worth re-running.
 
 **Its score is not confidence, and the product is built so you cannot mistake it
 for one.** The model rates entirely innocuous text highly: six of the eight

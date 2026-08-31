@@ -10,7 +10,7 @@
     "dolly-15k": 1083,
     "oasst1": 253
   },
-  "published_figure": "37/2000 = 1.85%, Wilson 95% [1.35%, 2.54%], measured through the shipped sensor with enable_nano=True at the shipped operating point (NANO_T_OP 0.0079) on xaidr 1.7.0 + onnxruntime 1.29.0. Reproduce with: python scripts/intent_metrics.py --nano --real-benign",
+  "published_figure": "A RANGE, NOT A POINT, because the onnxruntime version decides the end: 35/2000 = 1.75%, Wilson 95% [1.26%, 2.42%] on onnxruntime <=1.23, and 67/2000 = 3.35%, Wilson 95% [2.65%, 4.23%] on onnxruntime 1.26-1.29. Same sample, same artifact, same code, measured through the shipped sensor with enable_nano=True at the shipped operating point (NANO_T_OP 0.0079) on xaidr 1.7.0. `pip install xaidr[nano]` resolves the newer runtime today, which is the 3.35% end. A previously published 37/2000 = 1.85% is WITHDRAWN: it was measured on an unrecorded runtime and then labelled onnxruntime 1.29.0, which yields 67/2000 on this sample. Reproduce in YOUR environment with: python scripts/intent_metrics.py --nano --real-benign",
   "sha256_counts": {
     "000f805871902439485f64383a997a5b1a35c52df2e18bffc41b576f5de33017": 1,
     "001d678a9ff4b6aa83fa3495283bd772cead249d8da6b9f7e72a69ec38918124": 1,

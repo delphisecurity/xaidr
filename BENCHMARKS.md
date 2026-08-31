@@ -125,7 +125,8 @@ published as one.
 | benign templates flagged, either path | 12 | **0** (1 with `nano` on) |
 | ordinary DevOps operations blocked or flagged | 38 | **0** |
 | real benign prompts flagged, rules only | 2000 | **0** (0.00%) |
-| real benign prompts flagged, `nano` on | 2000 | **37** (1.85%, Wilson 95% [1.35%, 2.54%]) |
+| real benign prompts flagged, `nano` on, onnxruntime ≤ 1.23 | 2000 | **35** (1.75%, Wilson 95% [1.26%, 2.42%]) |
+| real benign prompts flagged, `nano` on, onnxruntime 1.26–1.29 | 2000 | **67** (3.35%, Wilson 95% [2.65%, 4.23%]) |
 
 So the false-block rate to read beside 167 of 186 is **0 of 74** on commands,
 **1 of 89** on prose, **0 of 12** on templates and **0 of 38** on ordinary
@@ -146,27 +147,51 @@ includes reading security documents will generate flag volume at that rate;
 see [monitor mode](README.md#deployment-modes-and-tuning). Everything else —
 commands, templates, ordinary DevOps operations — is 0 on both columns.
 
-The 2000-prompt rows were measured on **xaidr 1.7.0 with onnxruntime 1.29.0**
-with `python scripts/intent_metrics.py --nano --real-benign`. The sample is
+The 2000-prompt rows were measured on **xaidr 1.7.0** across four onnxruntime
+versions with `python scripts/intent_metrics.py --nano --real-benign`:
+
+| onnxruntime | flagged | rate | Wilson 95% |
+|---|---|---|---|
+| 1.20.1 | 35/2000 | 1.75% | [1.26%, 2.42%] |
+| 1.22.0 | 35/2000 | 1.75% | — |
+| 1.26.0 | 66/2000 | 3.30% | [2.60%, 4.18%] |
+| 1.29.0 | 67/2000 | 3.35% | [2.65%, 4.23%] |
+
+The break sits between 1.23 and 1.25; 1.24 has no wheel for cpython-3.12 on the
+measured platform, and below 1.20 the artifact does not load at all. The sample is
 pinned **by identity**, not by a seed: `tests/fixtures/nano_fp_sample.json` names
 2000 prompts by SHA-256 and the script rebuilds them from dolly / no_robots /
 oasst1 at run time (hashes rather than text because no_robots is CC-BY-NC-4.0).
 It is the sample the model acceptance used, and it is disjoint from the prompt
 sets the model was selected and calibrated against.
 
-**This quantity had three published values and now has one.** 1.85% is the
-acceptance record's own figure and is what the shipped configuration reproduces
-today, prompt for prompt. **2.20% (44/2000) is withdrawn and was wrong, not
-merely stale**: the acceptance evidence file stores each prompt truncated to 200
-characters as a preview, 331 of the 2000 are longer, and the re-measurement that
-produced 2.20% scored the previews — feeding the 200-character cut through the
-current runtime moves the count 37 → 43 on its own, which is the entire gap that
-was previously attributed to onnxruntime drift. **1.65% (33/2000) is withdrawn**
-as a different sample: a freshly drawn seeded one overlapping this by 128 of
-2000 and not disjoint from the tuning sets, which biases the rate downward.
-Runtime drift is real — 15 of 2000 raw scores differ from the record on 1.29.0 —
-but only 2 cross the operating point and they cross in opposite directions, so
-the figure is 37/2000 either way. Treat that as this sample being lucky.
+**This quantity has had four published values and now has two, because the
+runtime is part of it.** 1.75% and 3.35% are the same sample, artifact and code
+measured on different onnxruntime versions, and the spread between them is larger
+than any of the corrections below.
+
+**1.85% (37/2000) is withdrawn** — not for a bad sample or a bad method, but for
+being published without the fact that determines it. It was measured on an
+onnxruntime the record never named, then labelled `MEASURED_ON = "onnxruntime
+1.29.0"`, a runtime on which this sample yields 67/2000. This document previously
+asserted that runtime drift moved 15 of 2000 raw scores, that only 2 crossed the
+operating point, and that the figure was "37/2000 either way ... this sample
+being lucky." That is false: across 1.20 → 1.29 the count goes 35 → 67.
+
+**2.20% (44/2000) is withdrawn and was wrong, not merely stale**: the acceptance
+evidence file stores each prompt truncated to 200 characters as a preview, 331 of
+the 2000 are longer, and the re-measurement that produced 2.20% scored the
+previews — worth +6 on its own, which is that figure's whole gap.
+
+**1.65% (33/2000) is withdrawn** as a different sample: a freshly drawn seeded one
+overlapping this by 128 of 2000 and not disjoint from the tuning sets, which
+biases the rate downward.
+
+Everything else in the inference path was measured and ruled out: `tokenizers`
+0.20–0.23 give byte-identical tokens and bit-identical scores, `numpy` 1.26 and
+2.5 are bit-identical, the fp32 sibling agrees closely with the shipped int8/int4
+artifact, and the pinned artifact hashes have never changed. Only onnxruntime
+moves the rate.
 
 **This figure rests on public datasets that a public model may have seen.** We
 did not train the nano model; that its authors' stated training mix excludes
