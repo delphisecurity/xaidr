@@ -131,7 +131,7 @@ published as one.
 | benign commands blocked | 74 | **0** |
 | benign prose blocked, content path | 89 | **1** (`bp-055`, documented by ID in `tests/test_benign_prose.py`) |
 | benign prose blocked, tool-argument path | 89 | **0** |
-| benign prose **flagged**, content path | 89 | **50** (56 with `nano` on) |
+| benign prose **flagged**, content path | 89 | **50** (with `nano` on: 56 on onnxruntime ≤ 1.23, 60 on 1.26–1.29) |
 | benign prose **flagged**, tool-argument path | 89 | **43** |
 | benign templates blocked, either path | 12 | **0** |
 | benign templates flagged, either path | 12 | **0** (1 with `nano` on) |
