@@ -141,7 +141,10 @@ def _print_env_verdict() -> None:
     live = onnxruntime.__version__
     key = _version_key(live)
     for k, n, lo, hi, (r_lo, r_hi) in nano.MEASURED_FP_RANGE:
-        if _version_key(r_lo) <= key <= _version_key(r_hi):
+        b_lo, b_hi = _version_key(r_lo), _version_key(r_hi)
+        # Compare only as many components as the bound gives, so "1.29" covers
+        # 1.29.0 rather than sorting below it.
+        if key[:len(b_lo)] >= b_lo and key[:len(b_hi)] <= b_hi:
             print(f"    YOUR RUNTIME: onnxruntime {live} — inside the measured "
                   f"range {r_lo}-{r_hi},")
             print(f"    where the published figure is {k}/{n} = "

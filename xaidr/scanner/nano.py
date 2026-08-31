@@ -296,6 +296,161 @@ MEASURED_FP_RANGE = (
 MEASURED_FP_LOW_PCT = 100.0 * MEASURED_FP_RANGE[0][0] / MEASURED_FP_RANGE[0][1]
 MEASURED_FP_HIGH_PCT = 100.0 * MEASURED_FP_RANGE[1][0] / MEASURED_FP_RANGE[1][1]
 
+#: THE ENVIRONMENT THE FIGURES ABOVE WERE MEASURED IN, as data rather than prose.
+#:
+#: Populated from an actual measurement run, not typed from memory: every value
+#: here was read out of the interpreter that produced MEASURED_FP_RANGE (see
+#: `python scripts/intent_metrics.py --nano --real-benign`).
+#:
+#: This exists because 1.85% was withdrawn for exactly one reason — it was
+#: published without its environment — and a prose sentence naming one package
+#: is what allowed that. Anything that can change a score belongs here. The
+#: entries carrying `verified_irrelevant` were tested across the stated versions
+#: and produced bit-identical scores; they are recorded anyway, because "we
+#: checked and it did not matter" is a measurement with a shelf life, and the
+#: next person needs to know which versions it was true for.
+MEASURED_IN = {
+    # THE ONE THAT MOVES THE FIGURE. Ranges live in MEASURED_FP_RANGE, one per
+    # published end; this names the exact builds the sweep ran on.
+    "onnxruntime": {"measured": ("1.20.1", "1.22.0", "1.26.0", "1.29.0"),
+                    "moves_the_score": True},
+    # Byte-identical token ids and bit-identical scores across these.
+    "tokenizers": {"measured": ("0.20.3", "0.21.4", "0.22.1", "0.23.1"),
+                   "moves_the_score": False, "verified_irrelevant": True},
+    # Bit-identical scores across these; ids are cast int64 and logits float64
+    # explicitly, so there is no dtype latitude for it to exercise.
+    "numpy": {"measured": ("1.26.4", "2.5.2"),
+              "moves_the_score": False, "verified_irrelevant": True},
+    # Download only. The bytes are hash-verified on every load by _verify, so a
+    # different hub version cannot change what is scored — only whether the
+    # fetch succeeds.
+    "huggingface_hub": {"measured": ("0.36.2",),
+                        "moves_the_score": False, "verified_irrelevant": True},
+    # NOT verified irrelevant. Kernel selection is ISA- and build-dependent, and
+    # the onnxruntime result above is that kernel changes move the rate. A
+    # different interpreter or a different machine is UNMEASURED, not equivalent.
+    "python": {"measured": ("3.12.2",), "moves_the_score": None},
+    "machine": {"measured": ("arm64",), "moves_the_score": None},
+    "system": {"measured": ("Darwin",), "moves_the_score": None},
+    # The artifact itself, which IS pinned and enforced on every load.
+    "artifact_sha256": {"measured": (PINNED_SHA256["model.onnx"],),
+                        "moves_the_score": True},
+}
+
+#: Keys whose deviation makes the published range unverified. `tokenizers`,
+#: `numpy` and `huggingface_hub` are deliberately absent: they were measured
+#: across a spread and produced identical scores, so flagging them would train a
+#: reader to ignore the flag. `artifact_sha256` is absent because a mismatch
+#: there is a hard load failure (NanoArtifactMismatch), never a warning.
+_FIGURE_CRITICAL = ("onnxruntime", "python", "machine", "system")
+
+
+class NanoFigureUnverifiedWarning(UserWarning):
+    """The published false-positive range was not measured in THIS environment.
+
+    Not an error and not a detection problem: the signal works, the published
+    NUMBER just does not describe this install. Raised once per process.
+    """
+
+
+def _version_tuple(v: str) -> tuple:
+    """(1, 29, 0) from '1.29.0'. Non-numeric tails are dropped, not guessed."""
+    out = []
+    for part in str(v).split("."):
+        digits = ""
+        for ch in part:
+            if not ch.isdigit():
+                break
+            digits += ch
+        if not digits:
+            break
+        out.append(int(digits))
+    return tuple(out)
+
+
+def live_environment() -> dict:
+    """The values of MEASURED_IN's keys in THIS process. Never raises."""
+    import platform
+    import sys
+    env = {"python": ".".join(str(p) for p in sys.version_info[:3]),
+           "machine": platform.machine(),
+           "system": platform.system()}
+    for mod, key in (("onnxruntime", "onnxruntime"), ("tokenizers", "tokenizers"),
+                     ("numpy", "numpy"), ("huggingface_hub", "huggingface_hub")):
+        try:
+            env[key] = __import__(mod).__version__
+        except Exception:
+            env[key] = None
+    return env
+
+
+def figure_applies() -> tuple:
+    """Which published end applies here, and what differs from the measurement.
+
+    Returns ``(status, applies, deviations)``:
+
+      status      "verified" | "unverified"
+      applies     the matching MEASURED_FP_RANGE entry, or None
+      deviations  [(key, measured_values, live_value), ...] for the keys in
+                  _FIGURE_CRITICAL that are outside what was measured
+
+    A runtime inside one of the measured onnxruntime ranges AND a platform that
+    matches is "verified"; anything else is "unverified", which means the number
+    is unknown here, NOT that it is bad.
+    """
+    env = live_environment()
+    deviations = []
+    for key in _FIGURE_CRITICAL:
+        if key == "onnxruntime":
+            continue
+        measured = MEASURED_IN[key]["measured"]
+        if env.get(key) not in measured:
+            deviations.append((key, measured, env.get(key)))
+
+    applies = None
+    live_ort = env.get("onnxruntime")
+    if live_ort:
+        key = _version_tuple(live_ort)
+        for entry in MEASURED_FP_RANGE:
+            lo, hi = _version_tuple(entry[4][0]), _version_tuple(entry[4][1])
+            # Compare only as many components as the BOUND specifies, so the
+            # bound "1.29" covers 1.29.0 and 1.29.7. Comparing full tuples makes
+            # (1,29,0) > (1,29) and silently excludes the version the figure was
+            # actually measured on.
+            if key[:len(lo)] >= lo and key[:len(hi)] <= hi:
+                applies = entry
+                break
+    if applies is None:
+        deviations.append(
+            ("onnxruntime", tuple(e[4] for e in MEASURED_FP_RANGE), live_ort))
+
+    return ("unverified" if deviations else "verified", applies, deviations)
+
+
+_warned_unverified = False
+
+
+def _warn_figure_unverified(deviations) -> None:
+    """Warn ONCE per process. Never raises, never blocks a load.
+
+    Once, not per scan: this is a property of the process, not of the traffic,
+    and a per-scan warning is a warning nobody reads.
+    """
+    global _warned_unverified
+    if _warned_unverified:
+        return
+    _warned_unverified = True
+    import warnings
+    detail = "; ".join(
+        f"{k}: measured {list(m)}, running {live!r}" for k, m, live in deviations)
+    warnings.warn(
+        "xaidr nano: the published false-positive range "
+        f"({MEASURED_FP_LOW_PCT:.2f}%-{MEASURED_FP_HIGH_PCT:.2f}%) was NOT "
+        f"measured in this environment ({detail}). The signal works; the "
+        "published NUMBER is unverified here. Measure yours with: "
+        "python scripts/intent_metrics.py --nano --real-benign",
+        NanoFigureUnverifiedWarning, stacklevel=2)
+
 MAX_LENGTH = 512
 _P_INDEX = 1                      # config id2label: {0: benign, 1: injection}
 
@@ -537,6 +692,16 @@ class DelphiNano:
         # answered by this attribute.
         self.onnxruntime_version = ort.__version__
         self.load_time_s = time.time() - t0
+
+        # THE ENVIRONMENT IS COMPARED, NOT JUST RECORDED. Recording the runtime
+        # is what the previous release did, and it did not stop a figure being
+        # published against the wrong one: a value nothing reads is not a
+        # control. These three attributes are the reading half.
+        self.figure_status, self.figure_applies, self.figure_deviations = \
+            figure_applies()
+        self.environment = live_environment()
+        if self.figure_status != "verified":
+            _warn_figure_unverified(self.figure_deviations)
 
     @classmethod
     def get(cls, model_dir: Optional[str] = None,

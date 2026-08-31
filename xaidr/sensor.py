@@ -843,6 +843,23 @@ class DelphiSensor:
                 "detection signal, NOT calibrated confidence; do not rank or "
                 "triage by this value (see xaidr ScanResult.nano_score)"
             )
+            # THE FIGURE'S ENVIRONMENT RIDES WITH THE EVENT, for the same reason
+            # nanoCalibrated does: the consumer deciding what this score means
+            # is in a SIEM, not in our source tree. `nanoFpRange` is what we
+            # published; `nanoFigureStatus` says whether it was ever measured on
+            # the runtime that produced THIS event.
+            try:
+                from .scanner import nano as _nano
+                status, applies, _ = _nano.figure_applies()
+                data["nanoRuntime"] = _nano.live_environment().get("onnxruntime")
+                data["nanoFigureStatus"] = status
+                data["nanoFpRange"] = (
+                    f"{_nano.MEASURED_FP_LOW_PCT:.2f}%-"
+                    f"{_nano.MEASURED_FP_HIGH_PCT:.2f}%")
+                if applies is not None:
+                    data["nanoFpApplies"] = f"{applies[0]}/{applies[1]}"
+            except Exception:
+                pass
         self._telemetry.enqueue({
             "type": "scan",
             "agentId": self.agent_id,
