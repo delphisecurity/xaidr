@@ -14,6 +14,11 @@ Design:
 - Missing fields are OMITTED, never guessed. A consumer treats an absent
   provenance/identity field as "unknown", never as "safe".
 
+- Two event types are mapped, and the shape says which it is:
+  ``gen_ai.security.event_type`` is ``scan`` or ``circuit_breaker``. Scans carry
+  ``detection.*`` / ``interaction.*``; breaker transitions carry
+  ``circuit_breaker.*``. Do not expect a verdict on a breaker record.
+
 Spec: openA2A-schema-spec.md (schema_version 0.2.0).
 
 Provenance/OBO fields (gen_ai.security.provenance.*) are defined by the spec but
@@ -28,23 +33,36 @@ from uuid import uuid4
 
 from .types import safe_content_hash, utc_now_rfc3339
 
-#: 0.2.0, and the bump is deliberate.
+#: 0.2.0, and the bump is deliberate. Three changes reach a consumer.
 #:
-#: ``gen_ai.security.timestamp`` changes MEANING and FORMAT. It used to be minted
-#: here, at map time, which is wrong: mapping happens in the flush worker, up to
-#: ``flush_interval_sec`` (5.0 by default) after the scan, and a whole batch of
-#: up to 50 events maps in one pass and so received near-identical stamps bearing
-#: no relation to when anything happened. It is now the instant the sensor
-#: created the event, and it carries microseconds rather than whole seconds.
+#: 1. ``gen_ai.security.timestamp`` changes MEANING and FORMAT. It used to be
+#:    minted here, at map time, which is wrong: mapping happens in the flush
+#:    worker, up to ``flush_interval_sec`` (5.0 by default) after the scan, and a
+#:    whole batch of up to 50 events maps in one pass and so received
+#:    near-identical stamps bearing no relation to when anything happened. It is
+#:    now the instant the sensor created the event, and it carries microseconds
+#:    rather than whole seconds. A consumer with a ``%Y-%m-%dT%H:%M:%SZ`` format
+#:    string BREAKS on the new value.
+#: 2. ``gen_ai.security.event_type`` appears, and with it a whole class of event
+#:    (``circuit_breaker``) that previously arrived indistinguishable from an
+#:    empty scan. A consumer whose rules assume every record is a scan now sees
+#:    records that are not.
+#: 3. New attribute namespaces: ``gen_ai.security.circuit_breaker.*`` and the
+#:    OTel trace fields. Additive on their own.
 #:
-#: A consumer with a ``%Y-%m-%dT%H:%M:%SZ`` format string BREAKS on the new
-#: value. That alone forces a version change; it cannot be shipped as a silent
-#: additive. MINOR AND NOT PATCH for that reason. MINOR AND NOT MAJOR because the
-#: spec is pre-1.0 and semver puts no compatibility guarantee on 0.x minors: 0.x
-#: is where a schema is allowed to still be wrong. The version rides on every
-#: event precisely so a consumer can branch on it, which is worth nothing if it
-#: does not move when the shape does.
+#: MINOR AND NOT PATCH, because (1) and (2) are breaking for a consumer. MINOR
+#: AND NOT MAJOR, because the spec is pre-1.0 and semver puts no compatibility
+#: guarantee on 0.x minors: 0.x is where a schema is allowed to still be wrong.
+#: The version rides on every event precisely so a consumer can branch on it,
+#: which is worth nothing if it does not move when the shape does.
 SCHEMA_VERSION = "0.2.0"
+
+#: Envelope ``type`` values the sensor emits, and the values that appear on
+#: ``gen_ai.security.event_type``. Passed through as-is rather than translated:
+#: an event type is an identity, and renaming it across a mapping boundary is
+#: how two names for one thing get into a SIEM.
+EVENT_TYPE_SCAN = "scan"
+EVENT_TYPE_CIRCUIT_BREAKER = "circuit_breaker"
 
 # Map the sensor's internal `direction` to the spec's interaction.type +
 # interaction.direction. interaction.type is the surface; direction is the way.
@@ -157,6 +175,15 @@ def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
 
     The internal event is `{type, agentId, data: {...}}`. Returns a flat dict of
     dotted attribute keys. Unknown/missing fields are omitted.
+
+    Two event types reach this function. A ``circuit_breaker`` event is a state
+    transition of the sensor, not a verdict on a message, and it is mapped by
+    ``_map_circuit_breaker`` rather than by the scan body below. Before that
+    branch existed, a breaker event fell through the scan mapping and emerged as
+    five fields — version, id, timestamp, agent and enforcement mode — with its
+    reason, its counts, its thresholds and even its trip/close discriminator
+    silently dropped, and nothing on the record to say it was not simply a scan
+    that had gone strangely empty.
     """
     data = event.get("data", event)  # tolerate flat or nested
     out: dict[str, Any] = {}
@@ -164,7 +191,30 @@ def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
     # --- envelope -----------------------------------------------------------
     out["gen_ai.security.schema_version"] = SCHEMA_VERSION
 
-    out["gen_ai.security.event_id"] = data.get("scanId") or uuid4().hex[:12]
+    # THE DISCRIMINATOR, and why it is emitted rather than inferred.
+    #
+    # This shape used to have no type field at all, so the only way to tell a
+    # breaker event from a scan was to notice which attributes were missing —
+    # which is unusable, because "attribute absent" is this schema's encoding of
+    # "unknown" everywhere else. Routing, alerting and dashboards all need to
+    # branch on what kind of record this is before they read anything else, so
+    # the kind is stated.
+    #
+    # OMITTED when the envelope carries no `type`, in keeping with the omit-
+    # don't-guess contract. Every event this SDK emits carries one, so on real
+    # traffic the attribute is always present; an event without it is a
+    # hand-built dict, and defaulting it to "scan" would be inventing a fact
+    # about a caller's data.
+    event_type = event.get("type")
+    if isinstance(event_type, str) and event_type:
+        out["gen_ai.security.event_type"] = event_type
+
+    # A scan is identified by scanId, a breaker transition by eventId. Both land
+    # on one attribute because a consumer correlating events should not have to
+    # know which internal field name produced the id.
+    out["gen_ai.security.event_id"] = (
+        data.get("scanId") or data.get("eventId") or uuid4().hex[:12]
+    )
 
     # THE TIMESTAMP IS THE EVENT'S OWN, not this function's idea of "now".
     #
@@ -188,6 +238,14 @@ def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
     agent_id = data.get("agentId") or event.get("agentId")
     if agent_id:
         out["gen_ai.agent.id"] = agent_id
+
+    # Trace correlation applies to every event type, so it is resolved before
+    # the branch.
+    _passthrough_trace(data, out)
+
+    if event_type == EVENT_TYPE_CIRCUIT_BREAKER:
+        _map_circuit_breaker(data, out)
+        return out
 
     # --- interaction --------------------------------------------------------
     direction = data.get("direction")
@@ -309,6 +367,107 @@ def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
     _passthrough_provenance(data, out)
 
     return out
+
+
+def _map_circuit_breaker(data: dict[str, Any], out: dict[str, Any]) -> None:
+    """Map a breaker state transition into ``gen_ai.security.circuit_breaker.*``.
+
+    WHY ITS OWN NAMESPACE AND NOT ``detection.*``. A breaker trip is not a
+    detection. Nothing was scanned, no rule fired, there is no verdict on any
+    message: the sensor is reporting that it changed state. Folding these onto
+    the detection attributes would put a record with no score and no category
+    into every query written against detections, and would make the count of
+    detections wrong by however many times the circuit flapped. The two live
+    side by side under ``gen_ai.security`` because they share a subject (this
+    sensor) and nothing else.
+
+    WHAT IS DELIBERATELY NOT EMITTED, because both are guesses:
+
+      * ``severity``. The scan path derives it from (action, score) and a
+        breaker event has neither. A trip is operationally significant and it is
+        tempting to call it "high", but that number would be this mapper's
+        opinion rather than a measurement, and it would then be indistinguishable
+        from a severity the detection path computed. A consumer that wants to
+        alert on trips should alert on the event type, which is now present.
+      * ``state`` as an open/closed enum alongside ``transition``. It is one
+        fact spelled two ways, which invites half a codebase to check the wrong
+        one, and the enum would need new values the moment a half-open state
+        exists (there is none today, by design). ``transition`` is the fact the
+        sensor actually recorded.
+
+    ``enforcement_mode`` is shared with the detection namespace rather than
+    duplicated: it describes the sensor, not the verdict, and it is already
+    where a consumer looks for it.
+    """
+    # trip | close. The single most important attribute here: without it a
+    # breaker record cannot be told from its own inverse.
+    transition = data.get("event")
+    if transition:
+        out["gen_ai.security.circuit_breaker.transition"] = transition
+
+    # A trip records why it opened in `reason`; a close records the reason it
+    # HAD been open in `tripReason`. Same fact about the same episode, so one
+    # attribute, and a consumer joining a close back to its trip compares equal
+    # values instead of two differently-named fields.
+    reason = data.get("reason") or data.get("tripReason")
+    if reason:
+        out["gen_ai.security.circuit_breaker.reason"] = reason
+
+    # close only: manual_reset | cooldown_elapsed. Whether a human intervened or
+    # the cooldown expired is the difference between an incident someone handled
+    # and one that timed out unattended.
+    how = data.get("how")
+    if how:
+        out["gen_ai.security.circuit_breaker.close_method"] = how
+
+    for src, attr in (
+        ("violations", "gen_ai.security.circuit_breaker.violations"),
+        ("toolCalls", "gen_ai.security.circuit_breaker.tool_calls"),
+        ("violationThreshold", "gen_ai.security.circuit_breaker.violation_threshold"),
+        ("rateThreshold", "gen_ai.security.circuit_breaker.rate_threshold"),
+        ("cooldownSec", "gen_ai.security.circuit_breaker.cooldown_sec"),
+    ):
+        value = data.get(src)
+        # A None threshold means that trigger is DISABLED, and the schema's
+        # contract is that an absent attribute means unknown. Emitting null
+        # would say "unknown" where the truth is "off", so a disabled trigger is
+        # omitted and its absence is documented rather than encoded.
+        if value is not None:
+            out[attr] = value
+
+    mode = data.get("enforcementMode") or data.get("enforcement_mode")
+    if mode:
+        out["gen_ai.security.detection.enforcement_mode"] = mode
+
+
+def _passthrough_trace(data: dict[str, Any], out: dict[str, Any]) -> None:
+    """Carry W3C trace context, when the sensor resolved one.
+
+    WHY THESE ARE TOP-LEVEL AND NOT UNDER ``gen_ai.security.*``. The module's
+    first design rule is to reuse existing attributes rather than re-mint them,
+    and trace correlation is the most thoroughly standardised thing in this
+    whole payload. ``trace_id`` / ``span_id`` / ``trace_flags`` are the names
+    the OpenTelemetry log data model uses and the names every OTel-aware
+    consumer already joins on. Publishing them as ``gen_ai.security.trace.id``
+    would mean a correlation that works everywhere stops working here, in
+    exchange for tidiness.
+
+    ``source`` is the exception and does sit under our namespace: whether the
+    parent context came off the wire or from an active in-process span is an
+    xaidr observation about how the context was obtained, not part of the W3C
+    context itself, and there is no standard attribute for it.
+    """
+    trace = data.get("traceParent")
+    if not isinstance(trace, dict):
+        return
+    if trace.get("traceId"):
+        out["trace_id"] = trace["traceId"]
+    if trace.get("spanId"):
+        out["span_id"] = trace["spanId"]
+    if trace.get("traceFlags"):
+        out["trace_flags"] = trace["traceFlags"]
+    if trace.get("source"):
+        out["gen_ai.security.trace.source"] = trace["source"]
 
 
 def _passthrough_provenance(data: dict[str, Any], out: dict[str, Any]) -> None:

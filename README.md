@@ -1854,15 +1854,45 @@ them:
 
 ```
 gen_ai.security.schema_version        gen_ai.security.detection.action
-gen_ai.security.event_id              gen_ai.security.detection.score
-gen_ai.security.timestamp             gen_ai.security.detection.category
-gen_ai.agent.id                       gen_ai.security.detection.rules
-gen_ai.security.interaction.type      gen_ai.security.detection.enforcement_mode
-gen_ai.security.interaction.direction gen_ai.security.detection.latency_ms
+gen_ai.security.event_type            gen_ai.security.detection.score
+gen_ai.security.event_id              gen_ai.security.detection.category
+gen_ai.security.timestamp             gen_ai.security.detection.rules
+gen_ai.agent.id                       gen_ai.security.detection.enforcement_mode
+gen_ai.security.interaction.type      gen_ai.security.detection.latency_ms
+gen_ai.security.interaction.direction
 gen_ai.security.interaction.content_hash
 gen_ai.security.authz.impact_class    gen_ai.security.authz.decision
 gen_ai.security.authz.impact_tier     gen_ai.security.authz.policy_id
+trace_id  span_id  trace_flags        gen_ai.security.trace.source
 ```
+
+**Two event types, and the record says which.**
+`gen_ai.security.event_type` is `scan` or `circuit_breaker`. A breaker
+transition is a state change of the sensor, not a verdict on a message, so it
+carries `gen_ai.security.circuit_breaker.*` (`transition`, `reason`,
+`close_method`, `violations`, `tool_calls`, and whichever thresholds are
+enabled) and **no** `detection.*` or `interaction.*` attributes. Do not write a
+query that assumes every mapped record has a verdict. A disabled trigger is
+omitted rather than emitted as null, because absent already means unknown here
+and null is what a chart reads as zero.
+
+**Timestamps are stamped at scan time, in UTC with microseconds**
+(`2026-08-31T22:41:26.766832Z`). Before schema 0.2.0 the mapper minted this
+itself, which meant it recorded when the telemetry batch drained rather than
+when anything happened: mapping runs in the flush worker, up to
+`flush_interval_sec` after the scan, and a batch of up to 50 events all received
+near-identical stamps. The native event now carries its own `timestamp` and the
+mapper reads it.
+
+**Trace correlation reuses the OpenTelemetry names.** `trace_id`, `span_id` and
+`trace_flags` are emitted top-level, not under `gen_ai.security.*`, so a
+consumer already joining on them does not have to special-case this producer.
+`gen_ai.security.trace.source` (`wire` or `otel`) is ours, because how the
+parent context was obtained is an xaidr observation with no standard attribute.
+
+Consumers on **schema 0.1.0** should note that 0.2.0 changes the timestamp's
+meaning and its format, and introduces a record type that is not a scan. Branch
+on `gen_ai.security.schema_version`; that is what it is for.
 
 The schema propagates to built-in reporters that support `schema=`. A reporter
 with its own explicit `schema=` keeps it; the sensor's fills in built-in
