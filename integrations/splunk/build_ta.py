@@ -25,6 +25,21 @@ Three things vary between builds if you let them, and all three are pinned here:
 Set SOURCE_DATE_EPOCH to override the timestamp. The default is fixed rather
 than "now" so that the default build is the reproducible one -- a default of
 `time.time()` would put the trap back.
+
+After building, the archive is handed to `slim validate` when the Splunk
+packaging toolkit is on PATH. AppInspect and slim are different validators and
+do not cover each other: AppInspect passed this add-on on both tag sets while
+slim rejected `app.manifest` outright over an illegal field name. Splunkbase
+runs both, so a build that only clears AppInspect can still bounce at upload.
+
+    pip install splunk-packaging-toolkit    # provides `slim`
+
+slim 1.2.8 requires Python >=3.5.1,<3.14. On a 3.14 interpreter pip silently
+resolves to 1.0.1 instead, which is a py2-era release whose installer writes to
+/usr/local/bin and fails; install it under 3.12/3.13 if that happens.
+
+Validation is skipped with a warning when slim is absent, so it never breaks a
+build on a machine that lacks it -- but a slim that runs and fails is fatal.
 """
 
 from __future__ import annotations
@@ -34,6 +49,8 @@ import gzip
 import hashlib
 import io
 import os
+import shutil
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -116,6 +133,40 @@ def build(app_root: Path, out_path: Path, epoch: int) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
+def validate(package: Path) -> int:
+    """Run `slim validate` on the built archive.
+
+    Returns 0 on success or when slim is not installed, 1 when slim runs and
+    rejects the package. Absence is a warning rather than an error so the build
+    still works without the toolkit; a rejection is fatal because that is
+    precisely the upload failure this is here to catch early.
+    """
+    slim = shutil.which("slim")
+    if slim is None:
+        print(
+            "  slim   not found -- SKIPPED. `pip install splunk-packaging-toolkit`\n"
+            "         (needs Python <3.14). AppInspect does not cover these checks.",
+            file=sys.stderr,
+        )
+        return 0
+
+    print(f"  slim   {slim}")
+    result = subprocess.run(
+        [slim, "validate", str(package)], capture_output=True, text=True
+    )
+    # 1.2.8 exits 1 on a rejection, so the returncode alone is enough there. The
+    # [ERROR] scan below is belt-and-braces for other versions, not a workaround
+    # for a known bug -- slim writes its findings to stderr either way.
+    output = result.stdout + result.stderr
+    for line in output.splitlines():
+        print(f"         {line.strip()}")
+    if result.returncode != 0 or "[ERROR]" in output:
+        print("  slim   FAILED -- Splunkbase will reject this package", file=sys.stderr)
+        return 1
+    print("  slim   ok")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     here = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -131,6 +182,11 @@ def main(argv: list[str] | None = None) -> int:
         default=here.parents[1] / "dist" / f"{APP_DIR_NAME}.tar.gz",
         help="output path (default: dist/TA-xaidr.tar.gz at the repo root)",
     )
+    parser.add_argument(
+        "--no-validate",
+        action="store_true",
+        help="skip the `slim validate` pass that runs by default after building",
+    )
     args = parser.parse_args(argv)
 
     epoch = int(os.environ.get("SOURCE_DATE_EPOCH", DEFAULT_SOURCE_DATE_EPOCH))
@@ -144,7 +200,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  sha256 {digest}")
     print(f"  bytes  {size}")
     print(f"  epoch  {epoch}  (SOURCE_DATE_EPOCH to override)")
-    return 0
+    if args.no_validate:
+        return 0
+    return validate(args.out.resolve())
 
 
 if __name__ == "__main__":

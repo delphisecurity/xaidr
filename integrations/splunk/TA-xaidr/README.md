@@ -389,8 +389,11 @@ and one close**.
   and the anchored `span_id` / `trace_id` patterns do not match `parent_span_id`
   or `x_trace_id`.
 * every field an eventtype searches on is one this add-on actually produces.
-* `splunk-appinspect` on the packaged tarball: 0 errors, 0 failures, 0 warnings,
-  0 manual checks, 0 skipped, on both the cloud tag set and the full set.
+* `splunk-appinspect` on the packaged tarball: 0 errors, 0 failures, 0 manual
+  checks, 0 skipped, on both the cloud tag set and the full set. The cloud set
+  is also 0 warnings; the full set carries a single expected warning,
+  `check_for_updates_disabled`, explained under "Building the package" below.
+* `slim validate` (Splunk packaging toolkit) on the same tarball: clean.
 
 ### The openA2A extractions could become aliases. They are correct either way
 
@@ -531,6 +534,46 @@ tree you already have preserves mtimes and the hash looks stable right up until
 CI clones fresh.
 
 Set `SOURCE_DATE_EPOCH` to override the pinned timestamp.
+
+### Two validators, and passing one proves nothing about the other
+
+The build runs `slim validate` on the finished archive automatically. Install
+the toolkit or that step is skipped with a warning:
+
+```sh
+pip install splunk-packaging-toolkit          # provides `slim`
+slim validate dist/TA-xaidr.tar.gz            # or run it by hand
+```
+
+Splunkbase runs **both** `splunk-appinspect` and the packaging toolkit, and they
+check different things. This add-on cleared AppInspect on both tag sets --
+0 errors, 0 failures -- while `slim` rejected it outright, because AppInspect
+does not parse `app.manifest` against the toolkit's schema and does not enforce
+Splunkbase's hosting rules. Two checks that AppInspect passed and slim did not:
+
+* **`app.manifest` field names are a closed set.** The toolkit rejects an
+  unrecognised key by name and does not care that the value was `null` --
+  `"incompatible": null` failed as `Illegal field name`. The toolkit spells that
+  field `incompatibleApps`. Null values on *recognised* keys are fine, so the
+  remaining `dependencies` / `tasks` / `inputGroups` / `platformRequirements`
+  nulls are legal and stay. Legal top-level keys are `schemaVersion`, `info`,
+  `dependencies`, `tasks`, `inputGroups`, `incompatibleApps`,
+  `platformRequirements`, `supportedDeployments`, `targetWorkloads`.
+* **`check_for_updates` may not be false** on a Splunkbase-hosted app, which
+  has to be able to offer updates.
+
+The second one is where the two validators actively disagree, so expect the
+warning and do not act on it. AppInspect's `check_for_updates_disabled` asks for
+`false` on *private apps not uploaded to Splunkbase* -- it is tagged
+`private_app` / `private_classic` / `private_victoria` and its premise simply
+does not hold for an add-on published on Splunkbase. It warns both when the key
+is `true` and when the key is absent, so there is no Splunkbase-legal setting
+that silences it, and deleting the key buys nothing. It carries no `cloud` tag,
+so the cloud tag set remains at 0 warnings.
+
+Note that `slim` needs Python `>=3.5.1,<3.14`. On a 3.14 interpreter pip
+resolves to 1.0.1 instead of 1.2.8 and the install fails writing to
+`/usr/local/bin`; use 3.12 or 3.13.
 
 ## Support
 
