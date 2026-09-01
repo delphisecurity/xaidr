@@ -4,8 +4,41 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
+
+#: Wire format for every timestamp this SDK emits: RFC 3339, UTC, microseconds.
+#:
+#: Named so a consumer can quote it rather than copy a format string out of a
+#: docstring, and so the mapper and the sensor cannot drift apart.
+TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
+
+
+def utc_now_rfc3339() -> str:
+    """The current UTC instant as RFC 3339 with MICROSECOND precision.
+
+    WHY MICROSECONDS AND NOT SECONDS. The first version of this schema stamped
+    to whole seconds. A scan takes well under a millisecond (median 0.43 ms on
+    the committed corpus), so a second-precision stamp puts an unbounded number
+    of events at the same instant and leaves a SIEM with no way to order them —
+    including no way to order a block against the tool call that followed it,
+    which is exactly the sequence an incident review needs to read. Microseconds
+    is what the platform clock offers; nothing here is padded to imply
+    resolution the clock does not have.
+
+    WHY UTC AND A LITERAL 'Z'. ``datetime.isoformat()`` renders the offset as
+    ``+00:00``. Both spellings are valid RFC 3339 and both are accepted by
+    every parser that matters, but emitting one shape and only one shape means a
+    consumer can pin a single format string. ``Z`` is the shorter and is what
+    the schema published from the start.
+
+    NOT MONOTONIC, and callers must not treat it as such. This is wall clock: it
+    can step backwards across an NTP correction. It answers "when did this
+    happen" for a human and a SIEM, not "how long did this take" — that is
+    ``scanTimeMs``, which is measured on a monotonic clock at the scan site.
+    """
+    return datetime.now(timezone.utc).strftime(TIMESTAMP_FORMAT)
 
 
 def safe_content_hash(text: str) -> str:

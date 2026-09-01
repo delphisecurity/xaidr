@@ -62,7 +62,12 @@ from .privilege_tiers import (
     least_privileged_tier as _least_privileged_tier,
     validate_tier as _validate_tier,
 )
-from .types import DelphiBlockedError, ScanResult, safe_content_hash
+from .types import (
+    DelphiBlockedError,
+    ScanResult,
+    safe_content_hash,
+    utc_now_rfc3339,
+)
 
 
 class _StructuralThreat:
@@ -420,6 +425,7 @@ class DelphiSensor:
         """
         try:
             data = {
+                "timestamp": utc_now_rfc3339(),
                 "eventId": uuid4().hex[:12],
                 "agentId": self.agent_id,
                 "enforcementMode": self.enforcement_mode,
@@ -472,6 +478,7 @@ class DelphiSensor:
         )
         try:
             data = {
+                "timestamp": utc_now_rfc3339(),
                 "scanId": uuid4().hex[:12],
                 "agentId": self.agent_id,
                 "action": "blocked",
@@ -626,6 +633,7 @@ class DelphiSensor:
             input_status="not_scannable",
         )
         data = {
+            "timestamp": utc_now_rfc3339(),
             "scanId": uuid4().hex[:12],
             "agentId": self.agent_id,
             "action": "allowed",
@@ -699,6 +707,7 @@ class DelphiSensor:
             phash = safe_content_hash(prompt) if isinstance(prompt, str) else None
             plen = len(prompt) if isinstance(prompt, str) else 0
             data = {
+                "timestamp": utc_now_rfc3339(),
                 # Same id as the WARN above, so the log line and this event are
                 # correlatable. They were independently generated before, which
                 # left an operator no way to join them.
@@ -807,6 +816,7 @@ class DelphiSensor:
         )
 
         data = {
+            "timestamp": utc_now_rfc3339(),
             "scanId": uuid4().hex[:12],
             "agentId": self.agent_id,
             "action": result.action,
@@ -1056,6 +1066,7 @@ class DelphiSensor:
         )
 
         data = {
+            "timestamp": utc_now_rfc3339(),
             "scanId": uuid4().hex[:12],
             "agentId": self.agent_id,
             "action": result.action,
@@ -1565,6 +1576,7 @@ class DelphiSensor:
             self.agent_id, per_call=origin_context, tier=self._declared_tier
         )
         data = {
+            "timestamp": utc_now_rfc3339(),
             "scanId": uuid4().hex[:12],
             "agentId": self.agent_id,
             "action": action,
@@ -2234,6 +2246,7 @@ class ProtectedHttpClient:
         try:
             dest = dest_id or "unknown"
             data = {
+                "timestamp": utc_now_rfc3339(),
                 "scanId": uuid4().hex[:12],
                 "agentId": self._sensor.agent_id,
                 "action": result.action,

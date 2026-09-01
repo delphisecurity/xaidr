@@ -14,7 +14,7 @@ Design:
 - Missing fields are OMITTED, never guessed. A consumer treats an absent
   provenance/identity field as "unknown", never as "safe".
 
-Spec: openA2A-schema-spec.md (schema_version 0.1.0).
+Spec: openA2A-schema-spec.md (schema_version 0.2.0).
 
 Provenance/OBO fields (gen_ai.security.provenance.*) are defined by the spec but
 populated in a later phase; the mapper already passes them through if present on
@@ -23,13 +23,28 @@ the internal event, so this is forward-compatible.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from .types import safe_content_hash
+from .types import safe_content_hash, utc_now_rfc3339
 
-SCHEMA_VERSION = "0.1.0"
+#: 0.2.0, and the bump is deliberate.
+#:
+#: ``gen_ai.security.timestamp`` changes MEANING and FORMAT. It used to be minted
+#: here, at map time, which is wrong: mapping happens in the flush worker, up to
+#: ``flush_interval_sec`` (5.0 by default) after the scan, and a whole batch of
+#: up to 50 events maps in one pass and so received near-identical stamps bearing
+#: no relation to when anything happened. It is now the instant the sensor
+#: created the event, and it carries microseconds rather than whole seconds.
+#:
+#: A consumer with a ``%Y-%m-%dT%H:%M:%SZ`` format string BREAKS on the new
+#: value. That alone forces a version change; it cannot be shipped as a silent
+#: additive. MINOR AND NOT PATCH for that reason. MINOR AND NOT MAJOR because the
+#: spec is pre-1.0 and semver puts no compatibility guarantee on 0.x minors: 0.x
+#: is where a schema is allowed to still be wrong. The version rides on every
+#: event precisely so a consumer can branch on it, which is worth nothing if it
+#: does not move when the shape does.
+SCHEMA_VERSION = "0.2.0"
 
 # Map the sensor's internal `direction` to the spec's interaction.type +
 # interaction.direction. interaction.type is the surface; direction is the way.
@@ -148,8 +163,26 @@ def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
 
     # --- envelope -----------------------------------------------------------
     out["gen_ai.security.schema_version"] = SCHEMA_VERSION
+
     out["gen_ai.security.event_id"] = data.get("scanId") or uuid4().hex[:12]
-    out["gen_ai.security.timestamp"] = _now_rfc3339()
+
+    # THE TIMESTAMP IS THE EVENT'S OWN, not this function's idea of "now".
+    #
+    # Minting it here was wrong and quietly so. Mapping runs in the telemetry
+    # flush worker, which wakes every flush_interval_sec (5.0 by default) and
+    # maps a batch of up to 50 events in one pass, so every event in a batch
+    # received all-but-identical stamps, offset from the moment it actually
+    # happened by however long it had sat in the queue. Ordering within a batch
+    # was lost entirely. The sensor now stamps at creation and this reads that.
+    #
+    # The fallback still exists because this function is public and callers pass
+    # hand-built dicts (the test-suite does). An event with no timestamp of its
+    # own gets map time, which is the old behaviour and the best available
+    # answer for a record that never carried one.
+    ts = data.get("timestamp")
+    out["gen_ai.security.timestamp"] = (
+        ts if isinstance(ts, str) and ts else utc_now_rfc3339()
+    )
 
     # --- reused OTel attribute (do NOT re-mint) -----------------------------
     agent_id = data.get("agentId") or event.get("agentId")
@@ -304,6 +337,8 @@ def _passthrough_provenance(data: dict[str, Any], out: dict[str, Any]) -> None:
     if prov.get("delegation_chain"):
         out["gen_ai.security.provenance.delegation_chain"] = prov["delegation_chain"]
 
-
-def _now_rfc3339() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+# `_now_rfc3339` used to live here and emitted whole seconds. It is gone rather
+# than kept as an alias: the one call site was the map-time timestamp this
+# release fixes, and leaving a second-precision clock in the module is how the
+# old format finds its way back in. Timestamps come from
+# `types.utc_now_rfc3339`, which every emitter shares.
