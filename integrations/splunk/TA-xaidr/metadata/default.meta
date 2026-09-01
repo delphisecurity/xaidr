@@ -1,0 +1,23 @@
+#
+# default.meta - TA-xaidr
+#
+# Knowledge objects here are parsing configuration, so they are exported to the
+# whole system: the sourcetypes and extractions have to be visible from whatever
+# app a user happens to be searching in.
+#
+# sc_admin is listed alongside admin because 'admin' is not a role Splunk Cloud
+# customers have; without it a Cloud administrator could not edit these objects.
+#
+
+[]
+access = read : [ * ], write : [ admin, sc_admin, power ]
+export = system
+
+[props]
+export = system
+
+[transforms]
+export = system
+
+[eventtypes]
+export = system

@@ -1907,6 +1907,14 @@ the two-part activation: the reporter *emits*, but you must configure a
 this package deliberately stays API-only) to actually ship records. Without one,
 emitting is a safe no-op.
 
+**Splunk.** A Technology Add-on lives in
+[`integrations/splunk/TA-xaidr/`](integrations/splunk/TA-xaidr/): two
+sourcetypes and the search-time extractions that normalise both the native and
+the openA2A shapes onto one `xaidr_*` field namespace, so a search written once
+works against either. Configuration only — no scripts, no inputs, no custom
+search commands. Verified on a real Splunk 10.4.2 instance; clean on
+`splunk-appinspect` for both the cloud tag set and the full set.
+
 ---
 
 ## Deployment modes and tuning
