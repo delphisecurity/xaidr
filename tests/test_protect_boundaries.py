@@ -443,6 +443,55 @@ def test_a_blocked_tool_is_never_invoked(cap):
     assert calls == [], "the tool ran despite a block verdict"
 
 
+def test_the_refusal_type_follows_tool_call_id_not_the_input_shape(cap):
+    """A blocked call must return what its CALLER was promised, not a str always.
+
+    ``BaseTool.run`` serves two contracts. A ToolCall-driven caller (a LangGraph
+    ToolNode, a create_agent tool node) is promised a ToolMessage and raises
+    ``TypeError: Tool <name> returned unexpected type`` on anything else — so a
+    refusal string there turned a correct block into a crashed graph. A direct
+    ``run(args)`` caller is promised the raw content and must keep getting the
+    string. The discriminator is ``tool_call_id``, exactly as langchain's own
+    ``_format_output`` uses it, and NOT a sniff of ``tool_input``: by the time
+    ``run`` is entered the ToolCall envelope has already been unwrapped, so the
+    only thing a shape sniff could match is a user tool whose ARGUMENTS happen
+    to look like a tool call. The third case below is that tool.
+    """
+    tools = fakes.install_langchain_core()
+    messages = sys.modules["langchain_core.messages"]
+    _protect(["langchain_core"], cap)
+    calls = []
+
+    def run_command(command):
+        calls.append(command)
+        return "executed"
+
+    tool = tools.BaseTool("run_command", run_command)
+
+    from_tool_call = tool.invoke({"name": "run_command", "type": "tool_call",
+                                  "id": "call_1",
+                                  "args": {"command": SHELL_ATTACK}})
+    assert isinstance(from_tool_call, messages.ToolMessage), type(from_tool_call)
+    assert from_tool_call.content.startswith("[BLOCKED]")
+    assert from_tool_call.tool_call_id == "call_1"
+    assert from_tool_call.status == "error"
+
+    from_direct_run = tool.run({"command": SHELL_ATTACK})
+    assert isinstance(from_direct_run, str), type(from_direct_run)
+    assert from_direct_run.startswith("[BLOCKED]")
+
+    # Arguments that merely LOOK like a tool call are still a direct call.
+    replay = tools.BaseTool("replay", lambda payload: "replayed")
+    decoy = {"payload": {"name": "run_command", "type": "tool_call",
+                         "id": "not-really", "args": {"command": SHELL_ATTACK}}}
+    assert isinstance(replay.run(decoy), str), (
+        "a direct run() caller got a ToolMessage because its ARGUMENTS looked "
+        "like a tool call"
+    )
+
+    assert calls == [], "the tool ran despite a block verdict"
+
+
 def test_a_benign_tool_still_runs_and_returns_its_real_value(cap):
     tools = fakes.install_langchain_core()
     _protect(["langchain_core"], cap)

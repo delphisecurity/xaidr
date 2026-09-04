@@ -891,6 +891,7 @@ the reversal handle (`manifest.unprotect()`). Four rules govern it:
 | `httpx` | `Client.send`, `AsyncClient.send` | destination policy (every verb), request body, response DLP |
 | `requests` | `Session.send` | same |
 | `langchain-core` | `BaseTool.run` / `.arun` | tool — also covers LangGraph's `ToolNode` and bare tool calls |
+| `langgraph` | *(none — no seam of its own)* | tool only, transitively via `langchain-core`. Graph input/output: **not covered** |
 | `langchain` | `agents.create_agent` | input + output + tool, via `delphi_middleware` injection |
 | `openai-agents` | `Runner.run` / `.run_sync` | input + output |
 | `crewai` | `hooks.register_before_tool_call_hook` (a **hook**, not a patch), `Crew.kickoff` | agent-driven tool calls + crew input |
@@ -906,6 +907,35 @@ else) does. LangGraph's own graph boundary, the OpenAI Agents SDK's per-instance
 `FunctionTool.on_invoke_tool`, and LlamaIndex's non-`FunctionTool` types have no
 patchable call site — each is reported as `found_unpatchable` with the reason and
 the manual alternative (`sensor.protect_tools(...)`).
+
+**LangGraph was assumed covered; here is what is measured.** `create_agent` had
+been proven and a hand-written `StateGraph` had not, so both halves of the claim
+are now pinned in `tests/test_real_frameworks.py::TestRealLangGraph` against
+langgraph 1.2.11 / langchain-core 1.6.1.
+
+* **Tool calls are covered, and the refusal is readable.** A destructive call
+  under `protect(enforcement_mode="block")` executes **zero** times and comes
+  back as a `[BLOCKED]` `ToolMessage` with `status="error"`, on `invoke` and
+  `ainvoke` alike. It did not always: `BaseTool.run` returned the refusal as a
+  *string*, which is what `tool.run(args)` callers are promised but not what a
+  `ToolNode` is — ToolNode raises `TypeError: Tool <name> returned unexpected
+  type: <class 'str'>` and its default `handle_tool_errors` re-raises, so a
+  correctly-blocked call took the whole graph down. The seam now returns the
+  type each caller was promised, keyed on `tool_call_id` exactly as langchain's
+  own `_format_output` is.
+* **Graph input and output are not covered.** There is no library-owned call
+  site between the graph and your node functions, so an injected prompt reaches
+  the model and a leaked AWS key reaches the caller verbatim. The manifest says
+  so. Close it by wiring the middleware's own hooks in as nodes — they are
+  ordinary callables, and `AgentMiddleware.wrap_tool_call` is signature-identical
+  to LangGraph's `ToolCallWrapper` if you would rather own the tool gate too:
+
+  ```python
+  mw = delphi_middleware(agent_id="my-graph", enforcement_mode="block")
+  graph.add_node("guard_in",  lambda s: mw.before_model(s, None) or {})
+  graph.add_node("guard_out", lambda s: mw.after_model(s, None) or {})
+  graph.add_node("tools", ToolNode(tools, wrap_tool_call=mw.wrap_tool_call))
+  ```
 
 **CrewAI is a hook, and the coverage claim is narrower than it was.** Through
 1.6.1 this table said `crewai` → `tools.BaseTool.run` → "tool", and the manifest

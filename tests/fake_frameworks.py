@@ -145,12 +145,31 @@ def install_langchain_core() -> types.ModuleType:
             return clone
 
         def run(self, tool_input, **kwargs):
-            if isinstance(tool_input, dict):
-                return self.func(**tool_input)
-            return self.func(tool_input)
+            # `tool_call_id` is keyword-only on the real signature and is set by
+            # langchain's own `_prep_run_args` when the caller passed a ToolCall.
+            # It is modelled because it is the RETURN CONTRACT: real
+            # `_format_output` returns a ToolMessage iff tool_call_id is not
+            # None, and the raw content otherwise. Omitting it here would leave
+            # the seam's type-discrimination untested in the default suite —
+            # the same "fake with the wrong fidelity" trap the CrewAI seam fell
+            # into. Verified against langchain-core 1.6.1.
+            result = (
+                self.func(**tool_input)
+                if isinstance(tool_input, dict)
+                else self.func(tool_input)
+            )
+            return _format_output(result, kwargs.get("tool_call_id"), self.name)
 
         async def arun(self, tool_input, **kwargs):
             return self.run(tool_input, **kwargs)
+
+        def invoke(self, value, **kwargs):
+            """The ToolCall-driven caller, which is the one that gets a message."""
+            if isinstance(value, dict) and value.get("type") == "tool_call":
+                # Mirrors _prep_run_args: the envelope is UNWRAPPED here, so
+                # `run` only ever sees the tool's own arguments.
+                return self.run(dict(value["args"]), tool_call_id=value["id"])
+            return self.run(value)
 
     class _Msg:
         def __init__(self, content="", **kwargs):
@@ -165,7 +184,17 @@ def install_langchain_core() -> types.ModuleType:
         pass
 
     class ToolMessage(_Msg):
-        pass
+        def __init__(self, content="", tool_call_id=None, name=None,
+                     status="success", **kwargs):
+            super().__init__(content, tool_call_id=tool_call_id, name=name,
+                             status=status, **kwargs)
+
+    def _format_output(content, tool_call_id, name, status="success"):
+        """Shaped after langchain_core.tools.base._format_output."""
+        if tool_call_id is None:
+            return content
+        return ToolMessage(content=content, tool_call_id=tool_call_id,
+                           name=name, status=status)
 
     tools.BaseTool = BaseTool
     messages.AIMessage = AIMessage

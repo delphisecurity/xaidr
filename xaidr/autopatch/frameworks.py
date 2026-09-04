@@ -236,6 +236,59 @@ def _tool_seam_covered(ctx: PatchContext) -> bool:
     )
 
 
+def _langchain_refusal(text: str, name: str, kwargs: dict) -> Any:
+    """Return the refusal in the TYPE this particular caller was promised.
+
+    ``BaseTool.run`` has two callers with two different return contracts, and
+    returning one contract's value to the other is not a cosmetic mismatch — it
+    crashed the host. A LangGraph ``ToolNode`` calls ``tool.invoke(tool_call)``,
+    which requires a ``ToolMessage`` back and raises
+    ``TypeError: Tool <name> returned unexpected type: <class 'str'>`` on
+    anything else; ToolNode's default ``handle_tool_errors`` re-raises it, so a
+    correctly-blocked call took the whole graph down instead of handing the
+    agent a refusal it could read. Direct ``tool.run(args)`` callers, meanwhile,
+    have always received the plain string and must keep receiving it.
+
+    THE DISCRIMINATOR IS ``tool_call_id``, NOT THE SHAPE OF THE INPUT, and the
+    difference matters. It is tempting to sniff ``tool_input`` for a ToolCall —
+    a dict with ``type == "tool_call"``. That test cannot work here and would be
+    unsafe if it could: ``_prep_run_args`` has ALREADY unwrapped the envelope by
+    the time ``run`` is entered (``tool_input = value["args"].copy()``), so what
+    the seam sees is the tool's own ARGUMENTS and the ToolCall shape is simply
+    not present. Sniffing would therefore only ever fire on a user tool whose
+    arguments happen to look like a tool call — a replay, audit or router tool
+    that takes one as its payload is an entirely ordinary thing to write — and
+    that tool's caller would silently get a ToolMessage where it expected a
+    string. There is no such ambiguity here: ``tool_call_id`` is set by
+    langchain's own ``_prep_run_args`` from ``value["id"]`` and is keyword-only
+    on ``run``/``arun``, so it can never be spoofed by a tool's arguments.
+
+    This mirrors the library's own rule at the same decision point:
+    ``_format_output`` returns a ``ToolMessage`` iff ``tool_call_id is not
+    None`` and the raw content otherwise. Verified against langchain-core 1.6.1.
+
+    Resolving ``ToolMessage`` from ``sys.modules`` rather than importing keeps
+    rule 1 (never import a framework to instrument it). A ``tool_call_id`` only
+    exists because a ToolCall came off an AIMessage, so ``langchain_core.messages``
+    is necessarily imported by then; if it somehow is not, or construction
+    fails, this falls back to the string — the pre-existing behaviour, never an
+    exception out of a security wrapper.
+    """
+    tool_call_id = kwargs.get("tool_call_id")
+    if tool_call_id is None:
+        return text
+    messages = sys.modules.get("langchain_core.messages")
+    tool_message = getattr(messages, "ToolMessage", None) if messages else None
+    if tool_message is None:
+        return text
+    try:
+        return tool_message(
+            content=text, tool_call_id=tool_call_id, name=name, status="error"
+        )
+    except Exception:
+        return text
+
+
 def _patch_langchain_core(ctx: PatchContext) -> None:
     ctx.module("langchain_core.tools")
 
@@ -251,14 +304,19 @@ def _patch_langchain_core(ctx: PatchContext) -> None:
             tool_input = kwargs.get("tool_input")
             if tool_input is None and len(args) > 1:
                 tool_input = args[1]
-            return scan_tool_boundary(ctx.sensor, name, tool_input)
+            halt = scan_tool_boundary(ctx.sensor, name, tool_input)
+            if halt is None:
+                return None
+            return Halt(_langchain_refusal(halt.value, name, kwargs))
 
         return make_wrapper(orig, before=before)
 
     ctx.install(
         "langchain_core.tools", "BaseTool.run", "tool", factory,
         "every sync tool invocation is scan_tool_call'd before it executes; a "
-        "halting verdict returns the refusal string instead of running the tool",
+        "halting verdict returns the refusal instead of running the tool — as a "
+        "ToolMessage when the caller passed a tool_call_id (a ToolNode or "
+        "create_agent tool call), as the refusal string otherwise",
     )
     ctx.try_install(
         "langchain_core.tools", "BaseTool.arun", "tool", factory,
@@ -389,8 +447,9 @@ def _patch_langgraph(ctx: PatchContext) -> None:
         "call site between the graph and your node functions to wrap, and "
         "patching Pregel.invoke would scan opaque state dicts rather than "
         "messages. " + tail + " For the graph's own input/output, use "
-        "langchain.agents.create_agent (which protect() does instrument) or call "
-        "sensor.scan()/scan_output() in your entry and exit nodes.",
+        "langchain.agents.create_agent (which protect() does instrument), add "
+        "delphi_middleware(...).before_model / .after_model as graph nodes, or "
+        "call sensor.scan()/scan_output() in your entry and exit nodes.",
     )
 
 
