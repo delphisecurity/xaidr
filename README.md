@@ -870,8 +870,8 @@ xaidr.protect() manifest — agent_id='support-agent' mode='block'
     + httpx            httpx.Client.send  [egress]
     + langchain_core   langchain_core.tools.BaseTool.run  [tool]
     + langchain_core   langchain_core.tools.BaseTool.arun  [tool]
-  NOT PRESENT (8) — not in sys.modules, nothing to patch
-    - autogen-core, autogen-legacy, crewai, langchain, llama-index, mcp, ...
+  NOT PRESENT (9) — not in sys.modules, nothing to patch
+    - autogen-core, autogen-legacy, crewai, deepagents, langchain, llama-index, ...
 ```
 
 The manifest is also a mapping (`manifest["patched"]`, `manifest.to_dict()`) and
@@ -892,6 +892,7 @@ the reversal handle (`manifest.unprotect()`). Four rules govern it:
 | `requests` | `Session.send` | same |
 | `langchain-core` | `BaseTool.run` / `.arun` | tool — also covers LangGraph's `ToolNode` and bare tool calls |
 | `langgraph` | *(none — no seam of its own)* | tool only, transitively via `langchain-core`. Graph input/output: **not covered** |
+| `deepagents` | *(none — no seam of its own)* | input + output + tool **iff `protect()` ran before `import deepagents`**; otherwise tool only |
 | `langchain` | `agents.create_agent` | input + output + tool, via `delphi_middleware` injection |
 | `openai-agents` | `Runner.run` / `.run_sync` | input + output |
 | `crewai` | `hooks.register_before_tool_call_hook` (a **hook**, not a patch), `Crew.kickoff` | agent-driven tool calls + crew input |
@@ -936,6 +937,37 @@ langgraph 1.2.11 / langchain-core 1.6.1.
   graph.add_node("guard_out", lambda s: mw.after_model(s, None) or {})
   graph.add_node("tools", ToolNode(tools, wrap_tool_call=mw.wrap_tool_call))
   ```
+
+**Deep Agents: call `protect()` BEFORE `import deepagents`.** Import order is
+usually a performance detail. Here it silently decides whether a boundary exists
+at all, so it gets its own paragraph. `deepagents` has no seam of its own —
+`deepagents.graph` and `deepagents.middleware.subagents` each run
+`from langchain.agents import create_agent` at import time, which is a name
+rebind — so:
+
+```python
+import xaidr
+xaidr.protect(agent_id="a", enforcement_mode="block")   # FIRST
+from deepagents import create_deep_agent                # then this
+```
+
+In that order all three boundaries land, including deepagents' own built-in
+tools (`task`, `write_file`) and inside every subagent. Import `deepagents`
+first and those modules keep the original builder: the middleware is never
+injected, and the model **input and output of every deep agent and subagent go
+unscanned** — measured against deepagents 0.7.13, an injected prompt reaches the
+model and a leaked AWS key reaches the caller verbatim. Nothing at the call site
+looks different, which is why the manifest reports the wrong order as a loud
+`found_unpatchable` gap rather than a footnote.
+
+Passing `create_deep_agent(middleware=[delphi_middleware(...)])` by hand is the
+other supported wiring, at a known cost: it covers the **parent agent only**.
+Subagents are built by a separate `create_agent` call inside
+`SubAgentMiddleware` that never sees your list, so a subagent's model output is
+unscanned and comes back to the parent as a `ToolMessage` — which no boundary
+scans either. Tool *results* are outside every wiring; only tool *arguments* are
+scanned. Pinned in `tests/test_real_frameworks.py::TestRealDeepAgents`, import
+order included (in child processes, since it is a process-global fact).
 
 **CrewAI is a hook, and the coverage claim is narrower than it was.** Through
 1.6.1 this table said `crewai` → `tools.BaseTool.run` → "tool", and the manifest

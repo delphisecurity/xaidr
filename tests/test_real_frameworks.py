@@ -23,10 +23,12 @@ deterministic. That is not a weaker test than a real model — it is a stronger
 one, because it lets each case assert the exact thing that matters (the model
 was never called; the tool never executed) instead of inspecting prose.
 
-The LangGraph suite exists because it was ASSUMED covered. ``create_agent`` had
-been proven; a hand-written ``StateGraph`` had not, and the manifest spoke about
-it. What it found is pinned here rather than summarised: a hand-written graph
-gets its tool boundary and NOTHING else — a test below, not a claim.
+The LangGraph and Deep Agents suites exist because both were ASSUMED covered.
+``create_agent`` had been proven; a hand-written ``StateGraph`` and a real
+``deepagents`` agent had not, and the manifest spoke about both. What they found
+is pinned here rather than summarised: a hand-written graph gets its tool
+boundary and NOTHING else, and whether ``protect()`` reaches a deep agent at all
+is decided by import order. Each is a test below, not a claim.
 
 One defect it found is fixed rather than documented: the refusal used to come
 back from ``BaseTool.run`` as a string, which a ``ToolNode`` rejects, so a
@@ -931,3 +933,419 @@ class TestRealLangGraph:
             "ARGUMENTS looked like a tool call"
         )
 
+
+# ═══════════════════════════════════════════════════════════════════════
+# Deep Agents — the real `deepagents` package
+# ═══════════════════════════════════════════════════════════════════════
+
+#: Scaffolding shared by the in-process tests and the import-order children.
+#: A deep agent is `create_agent` underneath, so the model is scripted exactly
+#: as it is for LangChain above: no API key, no network, deterministic.
+_DEEPAGENTS_PRELUDE = '''
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.tools import tool
+
+MODEL_CALLS = []
+EXECUTED = []
+
+
+@tool
+def run_shell(command: str) -> str:
+    """Run a shell command on the host."""
+    EXECUTED.append(command)
+    return "executed: " + command
+
+
+class ScriptedModel(BaseChatModel):
+    script: list = []
+
+    @property
+    def _llm_type(self):
+        return "scripted"
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        MODEL_CALLS.append(messages)
+        index = min(len(MODEL_CALLS) - 1, len(self.script) - 1)
+        return ChatResult(generations=[ChatGeneration(message=self.script[index])])
+
+
+def tool_call(name, args, call_id="c1"):
+    return AIMessage(content="", tool_calls=[
+        {"name": name, "args": args, "id": call_id, "type": "tool_call"}])
+'''
+
+
+def _in_a_fresh_process(body: str) -> dict:
+    """Run ``body`` in a child interpreter and return the dict it reports.
+
+    Import ORDER is a process-global fact: by the time any in-process test could
+    ask whether ``deepagents`` was imported before ``protect()``, it has been.
+    A child process is the only honest way to ask, so the two import orders are
+    tested where they are actually decided.
+    """
+    source = (
+        "import json, os, sys\n"
+        "sys.path[:0] = json.loads(os.environ['XAIDR_CHILD_PATH'])\n"
+        "import warnings\n"
+        "import xaidr\n"
+        "from xaidr.autopatch.manifest import XaidrProtectionWarning\n"
+        "warnings.simplefilter('ignore', XaidrProtectionWarning)\n"
+        "def emit(**kw):\n"
+        "    print('XAIDR_RESULT ' + json.dumps(kw))\n"
+        + body
+    )
+    env = dict(os.environ, XAIDR_CHILD_PATH=json.dumps(sys.path))
+    done = subprocess.run([sys.executable, "-c", source], env=env,
+                          capture_output=True, text=True, check=False)
+    assert done.returncode == 0, (
+        f"child failed:\nSTDOUT\n{done.stdout[-4000:]}\nSTDERR\n{done.stderr[-4000:]}"
+    )
+    lines = [ln for ln in done.stdout.splitlines()
+             if ln.startswith("XAIDR_RESULT ")]
+    assert lines, f"child reported nothing:\n{done.stdout[-4000:]}"
+    return json.loads(lines[-1][len("XAIDR_RESULT "):])
+
+
+@requires_deepagents
+class TestRealDeepAgents:
+    """The real ``deepagents`` package, its own built-in tools, and subagents.
+
+    Deep Agents has no seam of its own — ``create_deep_agent`` is
+    ``langchain.agents.create_agent`` underneath, and the subagent middleware
+    calls ``create_agent`` again for each subagent. So there are two separate
+    questions, and they have different answers: does the middleware reach a deep
+    agent when you pass it explicitly (yes, with one gap), and does
+    ``protect()`` reach one on its own (only if it ran before the import).
+    """
+
+    @pytest.fixture
+    def deep_bits(self):
+        from deepagents import create_deep_agent
+
+        from xaidr.integrations.langchain import delphi_middleware
+
+        namespace: dict = {}
+        exec(compile(_DEEPAGENTS_PRELUDE, "<deepagents prelude>", "exec"),
+             namespace)
+        model_calls = namespace["MODEL_CALLS"]
+        executed = namespace["EXECUTED"]
+
+        def build(script, mode="block", **kwargs):
+            return create_deep_agent(
+                model=namespace["ScriptedModel"](script=script),
+                tools=[namespace["run_shell"]],
+                system_prompt="an ops agent",
+                middleware=[delphi_middleware(agent_id="real-deep",
+                                              enforcement_mode=mode)],
+                **kwargs,
+            )
+
+        return build, namespace["tool_call"], model_calls, executed
+
+    # ── explicit middleware=[...] ────────────────────────────────────────
+
+    def test_control_the_destructive_tool_runs_without_the_middleware(self):
+        from deepagents import create_deep_agent
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        namespace: dict = {}
+        exec(compile(_DEEPAGENTS_PRELUDE, "<deepagents prelude>", "exec"),
+             namespace)
+        agent = create_deep_agent(
+            model=namespace["ScriptedModel"](script=[
+                namespace["tool_call"]("run_shell", {"command": DESTRUCTIVE}),
+                AIMessage(content="done"),
+            ]),
+            tools=[namespace["run_shell"]],
+            system_prompt="an ops agent",
+        )
+        agent.invoke({"messages": [HumanMessage(content="clean the disk")]})
+        assert namespace["EXECUTED"] == [DESTRUCTIVE], (
+            "the tool did not run unprotected — the attack itself is broken"
+        )
+
+    def test_a_destructive_tool_call_is_refused(self, deep_bits):
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        build, call, _, executed = deep_bits
+        out = build([call("run_shell", {"command": DESTRUCTIVE}),
+                     AIMessage(content="stopped")]).invoke(
+            {"messages": [HumanMessage(content="clean the disk")]})
+        assert executed == [], f"the destructive tool EXECUTED: {executed}"
+        tool_messages = [m for m in out["messages"] if isinstance(m, ToolMessage)]
+        assert tool_messages and "[BLOCKED]" in tool_messages[-1].content
+
+    def test_deepagents_OWN_built_in_tool_is_scanned(self, deep_bits):
+        """The seam must reach the library's tools, not only the user's.
+
+        ``task`` is deepagents' subagent-delegation tool: whatever the model puts
+        in ``description`` becomes the subagent's instructions, so an unscanned
+        ``task`` call is a laundering route for an injection.
+        """
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        build, call, _, _ = deep_bits
+        out = build([call("task", {"description": INJECTION,
+                                   "subagent_type": "general-purpose"}),
+                     AIMessage(content="stopped")]).invoke(
+            {"messages": [HumanMessage(content="delegate this")]})
+        tool_messages = [m for m in out["messages"] if isinstance(m, ToolMessage)]
+        assert tool_messages, "the task tool produced no ToolMessage"
+        assert "[BLOCKED]" in str(tool_messages[-1].content)
+        assert tool_messages[-1].name == "task"
+
+    def test_injection_is_stopped_before_the_model(self, deep_bits):
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        build, _, model_calls, _ = deep_bits
+        out = build([AIMessage(content="the model was reached — FAILURE")]).invoke(
+            {"messages": [HumanMessage(content=INJECTION)]})
+        assert model_calls == [], "the model was called on a blocked input"
+        assert "xaidr" in str(out["messages"][-1].content)
+
+    def test_a_secret_is_caught_on_output(self, deep_bits):
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        build, _, _, _ = deep_bits
+        out = build([AIMessage(content=LEAKED_SECRET)]).invoke(
+            {"messages": [HumanMessage(content="the creds please")]})
+        final = str(out["messages"][-1].content)
+        assert "AKIAIOSFODNN7EXAMPLE" not in final
+        assert "xaidr" in final
+
+    def test_a_benign_tool_call_still_runs(self, deep_bits):
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        build, call, _, executed = deep_bits
+        build([call("run_shell", {"command": "df -h"}),
+               AIMessage(content="done")]).invoke(
+            {"messages": [HumanMessage(content="how full is the disk?")]})
+        assert executed == ["df -h"], f"a benign tool call was blocked: {executed}"
+
+    def test_monitor_mode_does_not_block(self, deep_bits):
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        build, call, _, executed = deep_bits
+        build([call("run_shell", {"command": DESTRUCTIVE}),
+               AIMessage(content="done")], mode="monitor").invoke(
+            {"messages": [HumanMessage(content="clean the disk")]})
+        assert executed == [DESTRUCTIVE], "monitor mode blocked; it must not"
+
+    def test_an_explicit_middleware_does_NOT_reach_inside_a_subagent(self, deep_bits):
+        """The gap in the explicit wiring, pinned so it cannot be assumed away.
+
+        ``SubAgentMiddleware`` builds each subagent with its OWN
+        ``create_agent(middleware=spec_middleware)`` call — the parent's
+        ``middleware=[...]`` list is not propagated. So a subagent's model output
+        is unscanned, and it returns to the parent as a ToolMessage, which no
+        boundary scans either. ``protect()`` before ``import deepagents`` DOES
+        close this (see the import-order test below); passing the middleware by
+        hand does not.
+        """
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        build, call, _, _ = deep_bits
+        agent = build([
+            call("task", {"description": "summarise the config",
+                          "subagent_type": "general-purpose"}, "t1"),
+            AIMessage(content=LEAKED_SECRET),   # the SUBAGENT's answer
+            AIMessage(content="done"),          # the parent wraps up
+        ])
+        out = agent.invoke({"messages": [HumanMessage(content="please delegate")]})
+        transcript = "\n".join(str(m.content) for m in out["messages"])
+        assert "AKIAIOSFODNN7EXAMPLE" in transcript, (
+            "the subagent's leak was caught — the explicit-middleware wiring has "
+            "grown subagent coverage; update this test and the manifest note"
+        )
+
+    # ── protect(), where import order decides everything ─────────────────
+
+    IMPORT_FIRST = _DEEPAGENTS_PRELUDE + '''
+import deepagents
+from deepagents import create_deep_agent
+manifest = xaidr.protect(agent_id="child", enforcement_mode="block", quiet=True)
+
+gaps = [r.target for r in manifest.found_unpatchable if r.framework == "deepagents"]
+detail = " ".join(r.detail for r in manifest.found_unpatchable
+                  if r.framework == "deepagents")
+
+def build(script):
+    return create_deep_agent(model=ScriptedModel(script=script),
+                             tools=[run_shell], system_prompt="an ops agent")
+
+MODEL_CALLS.clear()
+out = build([AIMessage(content="the model was reached")]).invoke(
+    {"messages": [HumanMessage(content=%(injection)r)]})
+model_reached_on_injection = len(MODEL_CALLS)
+
+MODEL_CALLS.clear()
+out = build([AIMessage(content=%(secret)r)]).invoke(
+    {"messages": [HumanMessage(content="the creds please")]})
+secret_reached_the_caller = "AKIAIOSFODNN7EXAMPLE" in str(out["messages"][-1].content)
+
+MODEL_CALLS.clear(); EXECUTED.clear()
+tool_error = ""
+tool_messages = []
+try:
+    out = build([tool_call("run_shell", {"command": %(destructive)r}),
+                 AIMessage(content="stopped")]).invoke(
+        {"messages": [HumanMessage(content="clean the disk")]})
+    tool_messages = [str(m.content) for m in out["messages"]
+                     if isinstance(m, ToolMessage)]
+except BaseException as exc:
+    tool_error = type(exc).__name__ + ": " + str(exc)
+
+emit(gaps=gaps, detail=detail, tool_messages=tool_messages,
+     model_reached_on_injection=model_reached_on_injection,
+     secret_reached_the_caller=secret_reached_the_caller,
+     executed=list(EXECUTED), tool_error=tool_error)
+''' % {"injection": INJECTION, "secret": LEAKED_SECRET,
+       "destructive": DESTRUCTIVE}
+
+    PROTECT_FIRST = _DEEPAGENTS_PRELUDE + '''
+import langchain.agents, langchain_core.tools   # so protect() can see them
+manifest = xaidr.protect(agent_id="child", enforcement_mode="block", quiet=True)
+not_present_first = "deepagents" in manifest.not_present
+from deepagents import create_deep_agent
+
+# protect() reads sys.modules and never imports, so the FIRST call could only
+# report deepagents as absent. Calling it again after the import is the
+# documented way to get a manifest that speaks about it (rule 4: idempotent).
+second = xaidr.protect(agent_id="child", enforcement_mode="block", quiet=True)
+gaps = [r.target for r in second.found_unpatchable if r.framework == "deepagents"]
+notes = " ".join(second.notes)
+
+def build(script, tools=None):
+    return create_deep_agent(model=ScriptedModel(script=script),
+                             tools=[run_shell] if tools is None else tools,
+                             system_prompt="an ops agent")
+
+MODEL_CALLS.clear()
+out = build([AIMessage(content="the model was reached")]).invoke(
+    {"messages": [HumanMessage(content=%(injection)r)]})
+model_reached_on_injection = len(MODEL_CALLS)
+input_refusal = str(out["messages"][-1].content)
+
+MODEL_CALLS.clear()
+out = build([AIMessage(content=%(secret)r)]).invoke(
+    {"messages": [HumanMessage(content="the creds please")]})
+secret_reached_the_caller = "AKIAIOSFODNN7EXAMPLE" in str(out["messages"][-1].content)
+
+MODEL_CALLS.clear(); EXECUTED.clear()
+tool_error = ""
+tool_messages = []
+try:
+    out = build([tool_call("run_shell", {"command": %(destructive)r}),
+                 AIMessage(content="stopped")]).invoke(
+        {"messages": [HumanMessage(content="clean the disk")]})
+    tool_messages = [str(m.content) for m in out["messages"]
+                     if isinstance(m, ToolMessage)]
+except BaseException as exc:
+    tool_error = type(exc).__name__ + ": " + str(exc)
+
+# A subagent's own output boundary — only reachable because the SubAgent
+# middleware's create_agent is the patched one too.
+MODEL_CALLS.clear()
+out = build([tool_call("task", {"description": "summarise the config",
+                                "subagent_type": "general-purpose"}, "t1"),
+             AIMessage(content=%(secret)r),
+             AIMessage(content="done")], tools=[]).invoke(
+    {"messages": [HumanMessage(content="please delegate")]})
+subagent_leak_escaped = "AKIAIOSFODNN7EXAMPLE" in "\\n".join(
+    str(m.content) for m in out["messages"])
+
+emit(gaps=gaps, notes=notes, not_present_first=not_present_first,
+     model_reached_on_injection=model_reached_on_injection,
+     input_refusal=input_refusal,
+     secret_reached_the_caller=secret_reached_the_caller,
+     executed=list(EXECUTED), tool_error=tool_error,
+     tool_messages=tool_messages,
+     subagent_leak_escaped=subagent_leak_escaped)
+''' % {"injection": INJECTION, "secret": LEAKED_SECRET,
+       "destructive": DESTRUCTIVE}
+
+    def test_protect_AFTER_importing_deepagents_covers_no_input_or_output(self):
+        """``deepagents.graph`` binds ``create_agent`` at import time.
+
+        That is a name rebind, so a ``protect()`` that runs afterwards patches
+        ``langchain.agents.create_agent`` while ``deepagents.graph`` keeps the
+        original — and no deep agent is ever built with the middleware. The tool
+        boundary still lands regardless, because ``BaseTool.run`` is a
+        class-method seam that no import order can miss — so the wrong order
+        costs you input and output, not tools.
+        """
+        result = _in_a_fresh_process(self.IMPORT_FIRST)
+        assert result["model_reached_on_injection"] == 1, (
+            "the injection was blocked — protect() now reaches a deepagents "
+            "import that preceded it; update this test and the manifest"
+        )
+        assert result["secret_reached_the_caller"] is True
+        # ...and the manifest says so, loudly, instead of implying coverage.
+        assert result["gaps"] == ["deepagents.graph.create_agent"], result["gaps"]
+        assert "imported BEFORE protect()" in result["detail"]
+        assert "UNSCANNED" in result["detail"]
+        # The tool boundary is the one thing that does survive the bad order.
+        assert result["executed"] == [], (
+            f"the destructive tool EXECUTED: {result['executed']}"
+        )
+        assert result["tool_error"] == "", (
+            f"a blocked tool call raised instead of refusing: {result['tool_error']}"
+        )
+        assert any("[BLOCKED]" in m for m in result["tool_messages"]), (
+            result["tool_messages"]
+        )
+
+    def test_protect_BEFORE_importing_deepagents_covers_all_three(self):
+        """The supported order. Input, output, tool args — and subagents.
+
+        The manifest naming is honest about its own timing here: the first
+        ``protect()`` can only say ``deepagents`` is not imported yet, because it
+        reads ``sys.modules`` and never imports. Call it again after importing
+        your agent modules and it names Deep Agents as covered, with the limit.
+        """
+        result = _in_a_fresh_process(self.PROTECT_FIRST)
+        assert result["not_present_first"] is True, (
+            "protect() claimed to know about deepagents before it was imported"
+        )
+        assert result["gaps"] == [], (
+            f"deepagents reported a gap in the supported order: {result['gaps']}"
+        )
+        assert "deepagents: no seam of its own" in result["notes"]
+        assert "NOT covered: tool RESULTS" in result["notes"]
+        assert result["model_reached_on_injection"] == 0, (
+            "the model was called on a blocked input"
+        )
+        assert "xaidr" in result["input_refusal"]
+        assert result["secret_reached_the_caller"] is False
+        assert result["executed"] == []
+        assert result["tool_error"] == "", result["tool_error"]
+        assert any("[BLOCKED]" in m for m in result["tool_messages"]), (
+            result["tool_messages"]
+        )
+        assert result["subagent_leak_escaped"] is False, (
+            "a subagent's leaked key reached the parent transcript"
+        )
+
+    def test_deepagents_still_builds_its_agents_with_create_agent(self):
+        """API-drift canary for the ONLY thing that gives Deep Agents coverage.
+
+        There is no deepagents seam. Every claim in the manifest rests on
+        ``deepagents.graph`` (and the subagent middleware) resolving
+        ``create_agent`` from ``langchain.agents`` at import. If that stops being
+        true, coverage silently becomes zero and this fails first.
+        """
+        import importlib
+
+        from xaidr.autopatch.frameworks import _DEEPAGENTS_BUILDERS
+
+        for name in _DEEPAGENTS_BUILDERS:
+            module = importlib.import_module(name)
+            assert hasattr(module, "create_agent"), (
+                f"{name} no longer binds create_agent — xaidr's Deep Agents "
+                "coverage rests entirely on that binding"
+            )

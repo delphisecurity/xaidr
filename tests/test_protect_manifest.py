@@ -30,8 +30,8 @@ from xaidr.autopatch.manifest import ProtectionManifest, XaidrProtectionWarning
 import fake_frameworks as fakes
 
 FAKE_PREFIXES = (
-    "langchain", "langchain_core", "langgraph", "agents", "crewai",
-    "autogen", "autogen_core", "llama_index", "mcp", "requests",
+    "langchain", "langchain_core", "langgraph", "deepagents", "agents",
+    "crewai", "autogen", "autogen_core", "llama_index", "mcp", "requests",
 )
 
 
@@ -213,7 +213,8 @@ def test_importing_xaidr_patches_nothing():
         # Importing xaidr must not pull in anything it patches.
         "appeared = {m.split('.')[0] for m in set(sys.modules) - before_modules}",
         "leaked = appeared & {'httpx', 'requests', 'langchain', 'langchain_core',"
-        " 'langgraph', 'crewai', 'autogen', 'autogen_core', 'llama_index', 'mcp'}",
+        " 'langgraph', 'deepagents', 'crewai', 'autogen', 'autogen_core',"
+        " 'llama_index', 'mcp'}",
         "assert not leaked, f'importing xaidr pulled in {sorted(leaked)}'",
     ]
     if HAVE_HTTPX:
@@ -315,7 +316,7 @@ def test_nothing_installed_still_returns_a_usable_manifest():
         "m = xaidr.protect(agent_id='bare');"
         "assert m.patched == [], m.patched;"
         "assert m.found_unpatchable == [], m.found_unpatchable;"
-        "assert len(m.not_present) == 11, m.not_present;"
+        "assert len(m.not_present) == 12, m.not_present;"
         "assert m.fully_covered;"
         "assert 'nothing was instrumented' in repr(m);"
         "print('bare-ok')"
@@ -346,6 +347,67 @@ def test_langgraph_says_so_when_nothing_at_all_is_covered():
         manifest = xaidr.protect(agent_id="a", quiet=True)
     entry = next(r for r in manifest.found_unpatchable if r.framework == "langgraph")
     assert "NO instrumented boundary at all" in entry.detail
+
+
+# ── deepagents: no seam, so import ORDER is the whole story ──────────────
+
+
+def test_deepagents_imported_too_early_is_a_loud_gap():
+    """protect() after `import deepagents` reaches no deep agent at all.
+
+    `deepagents.graph` binds create_agent at import, so a later protect()
+    patches langchain.agents while deepagents keeps the original. Nothing about
+    that is visible at the call site, which is exactly why it is a manifest
+    entry rather than a note.
+    """
+    fakes.install_langchain_core()
+    fakes.install_langchain()
+    fakes.install_deepagents()          # binds the UNPATCHED create_agent
+    with pytest.warns(XaidrProtectionWarning):
+        manifest = xaidr.protect(agent_id="a", quiet=True)
+    entry = next(r for r in manifest.found_unpatchable
+                 if r.framework == "deepagents")
+    assert entry.target == "deepagents.graph.create_agent"
+    assert entry.boundary == "input+output"
+    assert "imported BEFORE protect()" in entry.detail
+    assert "UNSCANNED" in entry.detail
+    assert "deepagents.middleware.subagents" in entry.detail
+
+
+def test_deepagents_imported_after_protect_is_reported_covered():
+    """The supported order, checked rather than assumed.
+
+    protect() cannot see deepagents on the call that precedes the import, so
+    the manifest that names it is the SECOND one — which is the documented,
+    idempotent way to pick up modules imported since.
+    """
+    fakes.install_langchain_core()
+    fakes.install_langchain()
+    first = _protect()
+    fakes.install_deepagents()          # binds the PATCHED create_agent
+    try:
+        assert "deepagents" in first.not_present
+        second = _protect()
+        assert not [r for r in second.found_unpatchable
+                    if r.framework == "deepagents"]
+        note = next(n for n in second.notes if n.startswith("deepagents:"))
+        assert "no seam of its own" in note
+        assert "NOT covered: tool RESULTS" in note
+    finally:
+        first.unprotect()
+
+
+def test_deepagents_with_an_unrecognised_layout_claims_nothing():
+    """No create_agent binding anywhere -> say so; never guess coverage."""
+    fakes.install_langchain_core()
+    fakes.install_langchain(with_create_agent=False)
+    fakes.install_deepagents()
+    with pytest.warns(XaidrProtectionWarning):
+        manifest = xaidr.protect(agent_id="a", quiet=True)
+    entry = next(r for r in manifest.found_unpatchable
+                 if r.framework == "deepagents")
+    assert "layout is not recognised" in entry.detail
+    assert "NOTHING can be claimed" in entry.detail
 
 
 # ═══════════════════════════════════════════════════════════════════════

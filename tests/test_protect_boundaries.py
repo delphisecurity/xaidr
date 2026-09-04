@@ -37,8 +37,8 @@ from xaidr.autopatch.manifest import XaidrProtectionWarning
 import fake_frameworks as fakes
 
 FAKE_PREFIXES = (
-    "langchain", "langchain_core", "langgraph", "agents", "crewai",
-    "autogen", "autogen_core", "llama_index", "mcp", "requests",
+    "langchain", "langchain_core", "langgraph", "deepagents", "agents",
+    "crewai", "autogen", "autogen_core", "llama_index", "mcp", "requests",
 )
 
 # Payloads the shipped ruleset blocks with no configuration. Kept here so every

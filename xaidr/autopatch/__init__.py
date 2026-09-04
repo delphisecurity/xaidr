@@ -182,6 +182,33 @@ def protect(
     installed, deliberately, because an import hook is exactly the invisible
     self-installing machinery rule 2 exists to forbid. Call ``protect()`` again
     afterwards — rule 4 makes that safe.
+
+    DEEP AGENTS: CALL THIS BEFORE ``import deepagents``. Ordering is usually a
+    performance detail; here it silently decides whether a boundary exists at
+    all, so it is stated rather than left to the general rule above.
+    ``deepagents`` has no seam of its own — ``deepagents.graph`` and
+    ``deepagents.middleware.subagents`` each run ``from langchain.agents import
+    create_agent`` at IMPORT time, and that is a name rebind. Import deepagents
+    first and those modules keep the ORIGINAL builder, so the middleware is
+    never injected and the model INPUT and OUTPUT of every deep agent and every
+    subagent go unscanned: measured against deepagents 0.7.13, an injected
+    prompt reaches the model and a leaked AWS key reaches the caller verbatim.
+    Nothing at the call site looks different, which is why this is reported as a
+    loud ``found_unpatchable`` gap rather than a note. Two ways to be safe::
+
+        import xaidr
+        xaidr.protect(agent_id="a", enforcement_mode="block")   # FIRST
+        from deepagents import create_deep_agent                # then this
+
+        # ...or wire it yourself, at a known cost:
+        create_deep_agent(model=..., tools=[...],
+                          middleware=[delphi_middleware(agent_id="a")])
+
+    The explicit ``middleware=`` form covers the PARENT agent only. Subagents are
+    built by a separate ``create_agent`` call inside ``SubAgentMiddleware`` that
+    never sees your list, so a subagent's model output is unscanned and returns
+    to the parent as a ToolMessage — which no boundary scans either. Only the
+    protect-first order reaches inside a subagent.
     """
     manifest = ProtectionManifest(agent_id=agent_id, enforcement_mode=enforcement_mode)
 

@@ -41,6 +41,10 @@ version named. "on-path" is the second question, asked explicitly:
                          self.run(), so the ToolNode agent path reaches it. OK
   langgraph 1.2.11       No own seam, by design; covered transitively via
                          langchain_core.BaseTool.run (ToolNode).           OK
+  deepagents 0.7.13      No own seam; every agent AND subagent is built by
+                         langchain.agents.create_agent, imported by NAME at
+                         module load, so import ORDER decides coverage. The
+                         fake models the binding, not a call site.          OK
   openai-agents 0.22.0   Runner.run/.run_sync present, both classmethods,
                          run async + run_sync sync as modelled;
                          RunResult.final_output is a dataclass FIELD (not a
@@ -288,6 +292,38 @@ def install_langgraph() -> types.ModuleType:
 
     graph.StateGraph = StateGraph
     return langgraph
+
+
+# ── deepagents: no seam of its own, only a create_agent BINDING ──────────
+
+
+def install_deepagents() -> types.ModuleType:
+    """``deepagents.graph`` / ``deepagents.middleware.subagents``.
+
+    The only thing that matters about deepagents for ``protect()`` is modelled
+    here, and it is a binding rather than a call site: both modules run
+    ``from langchain.agents import create_agent`` at IMPORT time, so each holds
+    whatever ``langchain.agents.create_agent`` was AT THAT MOMENT. Calling this
+    after ``install_langchain()`` and before ``protect()`` reproduces the
+    "imported too early" order; calling it after ``protect()`` reproduces the
+    supported one. Verified against deepagents 0.7.13, where ``graph.py`` and
+    ``middleware/subagents.py`` both do exactly that import and every agent —
+    parent and subagent alike — is built by it.
+    """
+    _mod("deepagents")
+    graph = _mod("deepagents.graph")
+    _mod("deepagents.middleware")
+    subagents = _mod("deepagents.middleware.subagents")
+
+    agents = sys.modules.get("langchain.agents")
+    builder = getattr(agents, "create_agent", None) if agents else None
+    if builder is not None:
+        graph.create_agent = builder
+        subagents.create_agent = builder
+    # Deliberately leaves the attribute OFF when langchain has no create_agent,
+    # which is the shape protect() must report as "layout not recognised"
+    # rather than guess about.
+    return sys.modules["deepagents"]
 
 
 # ── OpenAI Agents SDK ────────────────────────────────────────────────────

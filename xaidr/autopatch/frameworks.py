@@ -33,6 +33,7 @@ from .core import (
     PatchContext,
     PatchUnavailable,
     is_exempt,
+    is_xaidr_wrapper,
     make_wrapper,
     refusal_text,
     scan_text_boundary,
@@ -428,28 +429,101 @@ def _patch_langchain(ctx: PatchContext) -> None:
 # ─────────────────────────────────────────────────────────────────────────
 
 
-def _patch_langgraph(ctx: PatchContext) -> None:
-    ctx.module("langgraph")
+def _tool_tail(ctx: PatchContext) -> str:
+    """What a seamless framework's gap note may truthfully say about tools.
+
+    Shared by langgraph and deepagents: neither has a seam of its own, so for
+    both the honest sentence depends on whether the langchain_core tool seam
+    actually landed in THIS run.
+    """
     if _tool_seam_covered(ctx):
-        tail = (
+        return (
             "Tool calls ARE covered: a LangGraph ToolNode executes langchain_core "
             "BaseTools, which protect() patched above."
         )
-    else:
-        tail = (
-            "Tool calls are NOT covered either, because langchain_core.tools is "
-            "not imported/patched — so this graph currently has NO instrumented "
-            "boundary at all."
-        )
+    return (
+        "Tool calls are NOT covered either, because langchain_core.tools is "
+        "not imported/patched — so this graph currently has NO instrumented "
+        "boundary at all."
+    )
+
+
+def _patch_langgraph(ctx: PatchContext) -> None:
+    ctx.module("langgraph")
     ctx.unpatchable(
         "langgraph.graph.StateGraph", "input+output",
         "a StateGraph's nodes are callables YOU supply; there is no library-owned "
         "call site between the graph and your node functions to wrap, and "
         "patching Pregel.invoke would scan opaque state dicts rather than "
-        "messages. " + tail + " For the graph's own input/output, use "
+        "messages. " + _tool_tail(ctx) + " For the graph's own input/output, use "
         "langchain.agents.create_agent (which protect() does instrument), add "
         "delphi_middleware(...).before_model / .after_model as graph nodes, or "
         "call sensor.scan()/scan_output() in your entry and exit nodes.",
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# deepagents — create_agent all the way down, so import ORDER decides.
+# ─────────────────────────────────────────────────────────────────────────
+
+#: The modules that bind ``create_agent`` at import time and therefore decide
+#: whether a deep agent is instrumented. Checked, not assumed.
+_DEEPAGENTS_BUILDERS = ("deepagents.graph", "deepagents.middleware.subagents")
+
+
+def _patch_deepagents(ctx: PatchContext) -> None:
+    """deepagents has no seam of its own: it builds every agent with create_agent.
+
+    ``deepagents.graph`` (and the subagent middleware) run
+    ``from langchain.agents import create_agent`` at IMPORT time, which is a name
+    rebind — so whether ``protect()`` reaches a deep agent is decided entirely by
+    whether ``protect()`` ran BEFORE ``import deepagents``. Nothing about that is
+    visible at the call site, so it is checked here rather than assumed, and this
+    reports what actually happened in THIS process.
+    """
+    ctx.module("deepagents")
+    bound = {}
+    for name in _DEEPAGENTS_BUILDERS:
+        mod = sys.modules.get(name)
+        if mod is not None and hasattr(mod, "create_agent"):
+            bound[name] = is_xaidr_wrapper(mod.create_agent)
+
+    if not bound:
+        ctx.unpatchable(
+            "deepagents.graph.create_agent", "input+output",
+            "deepagents is imported but no module in it holds a create_agent "
+            "reference, so this version's layout is not recognised and NOTHING "
+            "can be claimed about its input/output coverage. " + _tool_tail(ctx),
+        )
+        return
+
+    stale = sorted(name for name, patched in bound.items() if not patched)
+    if stale:
+        ctx.unpatchable(
+            "deepagents.graph.create_agent", "input+output",
+            "deepagents was imported BEFORE protect(), so "
+            + ", ".join(stale)
+            + " each hold the ORIGINAL langchain.agents.create_agent and the "
+            "delphi_middleware injection never reaches a deep agent: the model "
+            "input and the model output of every deep agent (and of every "
+            "subagent) are UNSCANNED. Measured: an injected prompt reaches the "
+            "model and a leaked AWS key reaches the caller verbatim. Fix by "
+            "calling xaidr.protect() before `import deepagents`, or by passing "
+            "middleware=[delphi_middleware(...)] to create_deep_agent() "
+            "yourself. " + _tool_tail(ctx),
+        )
+        return
+
+    ctx.note(
+        "deepagents: no seam of its own — every deep agent and every subagent is "
+        "built by langchain.agents.create_agent, which protect() patched BEFORE "
+        "deepagents imported it, so the middleware is injected into all of them "
+        "(input via before_model, output via after_model, tool args via "
+        "wrap_tool_call — including deepagents' own built-in tools such as "
+        "`task` and `write_file`). NOT covered: tool RESULTS. A subagent's answer "
+        "comes back as a ToolMessage, which no boundary scans in the PARENT — it "
+        "is scanned in the subagent's own after_model, and only because the "
+        "subagent was built by the patched create_agent too."
     )
 
 
@@ -811,6 +885,10 @@ TARGETS: tuple[FrameworkTarget, ...] = (
     FrameworkTarget(
         "langgraph", ("langgraph",), _patch_langgraph,
         "no seam of its own; tools covered via langchain_core",
+    ),
+    FrameworkTarget(
+        "deepagents", ("deepagents",), _patch_deepagents,
+        "no seam of its own; covered via create_agent iff protect() ran first",
     ),
     FrameworkTarget(
         "openai-agents", ("agents",), _patch_openai_agents,
