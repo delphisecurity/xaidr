@@ -221,7 +221,22 @@ def test_breaker_event_id_comes_from_eventId():
 # ── trace context ────────────────────────────────────────────────────────────
 
 def test_trace_context_reaches_the_mapped_schema():
-    """data.traceParent used to be dropped in full."""
+    """data.traceParent used to be dropped in full.
+
+    Needs the ``[trace]`` extra, and says so rather than failing without it.
+    ``resolve_parent`` parses the header through OTel's W3C propagator and is
+    documented to fail SAFE to ``None`` when opentelemetry-api is absent — so on
+    a zero-dependency install the premise assertion below is not a regression,
+    it is the package behaving as designed. Without this guard the CI `base`
+    config, whose entire job is to prove the core suite runs with no third-party
+    deps, went red on every push from 2026-09-01 onward. Same fix the httpx-
+    dependent tests already carry; never fix it by adding the extra to the base
+    install, which would delete the check that caught this.
+    """
+    pytest.importorskip(
+        "opentelemetry",
+        reason="needs the [trace] extra — `pip install 'xaidr[trace]'` to run",
+    )
     from xaidr.trace_context import resolve_parent
 
     pc = resolve_parent(
