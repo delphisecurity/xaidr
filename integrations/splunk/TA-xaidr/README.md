@@ -575,6 +575,44 @@ Note that `slim` needs Python `>=3.5.1,<3.14`. On a 3.14 interpreter pip
 resolves to 1.0.1 instead of 1.2.8 and the install fails writing to
 `/usr/local/bin`; use 3.12 or 3.13.
 
+### The app icon
+
+`static/appIcon.png` (36x36) and `static/appIcon_2x.png` (72x72), transparent
+PNG. They are committed artifacts, regenerated from the source logo with:
+
+```sh
+python3 integrations/splunk/make_icons.py path/to/logo.png     # needs Pillow
+```
+
+The build has no third-party dependencies, so icon generation is a separate
+script rather than a build step; `build_ta.py` picks up `static/` on its own.
+
+**Nothing validates the dimensions, so get them right here.** Splunk silently
+ignores an icon whose size is off -- no error, the icon just does not appear --
+and AppInspect has no dimension check either. Its only constraint on the
+directory is `check_static_directory_file_allow_list`: `static/` must be flat
+(no subdirectories) and contain only `.png`, `.md` or `.txt`.
+
+The script squares the artwork rather than the file. The source is a square
+1024x1024 canvas, but the mark inside it is 702x868 and sits off-centre, so
+scaling the file as-is would hand Splunk an off-centre icon. It crops to the
+alpha bounding box and re-centres on a fresh square of transparency, padding
+rather than stretching, so the aspect ratio is untouched.
+
+Other sizes Splunk recognises, none of which this add-on currently ships:
+
+| File | Size | Purpose |
+|---|---|---|
+| `appIconAlt.png` / `appIconAlt_2x.png` | 36x36 / 72x72 | alternate icon for dark UI contexts |
+| `appLogo.png` / `appLogo_2x.png` | 160x40 / 320x80 | navigation-bar logo, optional |
+| app screenshot | 623x350 | Splunkbase listing artwork |
+
+The Splunkbase listing icon is taken from the package's `static/` directory
+rather than uploaded separately in the portal, so `appIcon.png` serves both the
+in-product tile and the listing. The `Alt` and `appLogo` files are optional for
+a config-only add-on with no nav entry; the 623x350 screenshot is listing
+artwork rather than a package file, and is worth adding at submission time.
+
 ## Support
 
 Issues: https://github.com/delphisecurity/xaidr/issues
