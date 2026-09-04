@@ -1019,9 +1019,17 @@ the mechanism, which is where an unprotected boundary belongs:
 For either, wrap the underlying functions with `sensor.protect_tools([...])`.
 
 **Enforcement shape.** Tool boundaries return a `[BLOCKED]` / `[APPROVAL
-REQUIRED]` string the agent can read and recover from. Transport and entrypoint
-boundaries raise `DelphiBlockedError` — there is no in-band way for an HTTP send
-to say "refused".
+REQUIRED]` refusal the agent can read and recover from, rather than raising.
+It is a plain string everywhere except one case: the `langchain-core`
+`BaseTool.run`/`.arun` seam returns that same text as a **`ToolMessage`** (with
+`status="error"`) when the caller passed a `tool_call_id`, because that caller
+is a `ToolNode` or a `create_agent` tool loop and a string is not a legal return
+there. Direct `tool.run(args)` callers still get the string, and no other
+framework's seam is affected. **If you match on the refusal, match on
+`str(result)`, not on `isinstance(result, str)`** — see the LangGraph section
+above for why this changed in 1.9.0. Transport and entrypoint boundaries raise
+`DelphiBlockedError` instead — there is no in-band way for an HTTP send to say
+"refused".
 
 `protect()` wires **boundaries only**. Telemetry, policy loading, and the circuit
 breaker stay where they already are — the `Sensor` constructor — and everything
@@ -2164,26 +2172,32 @@ detection ones.
   a denial-of-service risk.
 
 Verified with `python -m pytest -q`. **The figure quoted here is the `base`
-configuration — `pip install .` plus `pytest`, no extras at all: 7406 passed,
-45 skipped, 0 failed**, identical across three consecutive serial runs. That
-configuration is quoted because it is the one that proves the headline claim:
-the core suite runs with **zero third-party dependencies**. The suite covers the
-public scan APIs, wrappers, policy, provenance, reporters, telemetry schema, and
-resilience behavior.
+configuration — `pip install .` plus `pytest`, no extras at all, no framework
+installed: 7436 passed, 113 skipped, 0 failed**, identical across three
+consecutive serial runs. That configuration is quoted because it is the one that
+proves the headline claim: the core suite runs with **zero third-party
+dependencies**. The suite covers the public scan APIs, wrappers, policy,
+provenance, reporters, telemetry schema, and resilience behavior.
 
-Both configurations CI runs, measured on this commit:
+A pass count means nothing without the configuration that produced it, because
+whole test classes only exist when a framework is importable. All four are given
+rather than the flattering one, measured on this commit, CPython 3.12.2 on
+macOS 26.6 / arm64:
 
-| CI job | install | result |
+| configuration | install | result |
 |---|---|---|
-| `base` | `pip install .` && `pip install pytest` | **7406 passed, 45 skipped** |
-| `full` | `pip install ".[http,trace,dev]"` | **7462 passed, 24 skipped** |
-| `corpus` | `pip install .` && `python scripts/corpus_report.py` | benign gates **PASS**, exit 0 |
-| `corpus` | &nbsp;&nbsp;&nbsp;&nbsp;then `python scripts/intent_metrics.py` | catch rate + denominator printed into the log; reported, not gated |
+| `base` (CI job) | `pip install .` && `pip install pytest` | **7436 passed, 113 skipped** |
+| `full` (CI job) | `pip install ".[http,trace,dev]"` | **7493 passed, 91 skipped** |
+| `full` + the LangChain stack | &nbsp;&nbsp;+ `".[langchain]" langgraph deepagents llama-index-core` | **7530 passed, 59 skipped** |
+| `full` + CrewAI | &nbsp;&nbsp;+ `".[crewai]"` | **7504 passed, 80 skipped** |
+| `corpus` (CI job) | `pip install .` && `python scripts/corpus_report.py` | benign gates **PASS**, exit 0 |
+| `corpus` (CI job) | &nbsp;&nbsp;&nbsp;&nbsp;then `python scripts/intent_metrics.py` | catch rate + denominator printed into the log; reported, not gated |
 
-Adding an agent framework on top of `full` runs the real-framework tests:
-`.[crewai]` → **7473 passed, 13 skipped**; `.[langchain]` → **7474 passed, 17
-skipped**. The configurations genuinely differ, so all of them are given rather
-than picking the flattering one.
+The LangChain-stack row is the one that exercises the real LangGraph `ToolNode`
+return contract and the real Deep Agents import-order check; the CrewAI row is
+what proves those two changes left the CrewAI seam alone. Framework versions in
+that measurement: langchain 1.4.0, langchain-core 1.6.1, langgraph 1.2.11,
+deepagents 0.7.13, llama-index-core 0.14.24, crewai 1.15.20.
 
 **A correction, because this paragraph was wrong through 1.6.1 and the CI it
 described was red.** It claimed "no optional extras installed: 7453 passed, 6
@@ -2196,17 +2210,26 @@ tests now skip, which is what the job's own contract always said they should do;
 the fix was never to add httpx to `base`, since that job is the only standing
 proof of the zero-dependency claim and is what caught this.
 
-What the 45 `base` skips are, since a large skip count should never be left
-vague:
+What the 113 `base` skips are, since a large skip count should never be left
+vague. Every one of them is "this configuration does not have the thing", not a
+disabled test — each line names what to install to run it:
 
 | skips | why | how to run them |
 |---:|---|---|
-| 20 | needs the `[http]` extra (17 marked + 3 `importorskip`) | `pip install ".[http]"` |
+| 47 | `nano` needs `onnxruntime` + the pinned local artifact | `pip install ".[nano]"` and set `XAIDR_NANO_TEST_ARTIFACTS` |
+| 20 | needs the `[http]` extra | `pip install ".[http]"` |
+| 14 | real LangGraph (with LangChain) not installed | `pip install langgraph` |
 | 11 | real CrewAI not installed | `pip install ".[crewai]"` |
-| 6 | real LangChain not installed | `pip install ".[langchain]"` |
-| 5 | `nano` needs `onnxruntime` + a local artifact | `pip install ".[nano]"` and set `XAIDR_NANO_TEST_ARTIFACTS` |
-| 1 | `[trace]` not installed | `pip install ".[trace]"` |
-| 2 | one pre-existing LangChain-dependent test, one superseded duplicate | — |
+| 11 | real Deep Agents not installed | `pip install deepagents` |
+| 7 | real LangChain not installed | `pip install ".[langchain]"` |
+| 2 | `[trace]` not installed | `pip install ".[trace]"` |
+| 1 | superseded duplicate | — |
+
+The nano block dominates and is the least interesting: `[nano]` is an optional
+ML signal that is off by default, and its tests need a hash-pinned artifact that
+is not in the repository. The 43 framework skips are the ones worth installing
+for — they are the tests that run against the real LangChain, LangGraph, Deep
+Agents and CrewAI rather than the in-repo fakes.
 
 That figure is a **source-tree** claim, not something you can reproduce from
 what you installed: the wheel and the sdist ship the `xaidr` package only, with
