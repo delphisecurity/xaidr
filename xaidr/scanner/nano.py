@@ -582,6 +582,29 @@ def remap(p_raw: float, flag_threshold: float, block_threshold: float) -> float:
 
 
 # ── artifact resolution + the enforced pin ───────────────────────────────────
+# What the operator LOSES, and the step that gets it back. Both halves matter.
+#
+# A hash failure is not a nano problem, it is a COVERAGE problem: the operator
+# asked for the ML layer, and from here on the scanner is rules-only. Naming the
+# bytes without naming that consequence describes the cause of an outage and not
+# the outage. `resolve_model_dir` already reads this way for a missing directory
+# — it names the path, what is absent, and the exact remedy — and a mismatched
+# artifact is the same class of failure, so it says the same kind of thing.
+#
+# The remedy names the API this package actually ships. There is deliberately no
+# CLI fetch verb here: `auto_download` is a keyword on resolve_model_dir, and
+# printing a command that does not exist would send the operator somewhere the
+# package cannot take them.
+_DEGRADATION_NOTICE = (
+    "nano will NOT load for this process: every scan runs rules-only, with no "
+    "ML layer, until this is fixed. Re-fetch the pinned revision "
+    f"({DEFAULT_REVISION}) with "
+    "`xaidr.scanner.nano.resolve_model_dir(auto_download=True)`, point "
+    "XAIDR_NANO_MODEL at a directory holding the pinned artifacts, or re-run "
+    "the evaluation battery against the bytes you have."
+)
+
+
 def _sha256(path: str) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -602,7 +625,9 @@ def _verify(model_dir: str) -> dict:
         path = os.path.join(model_dir, name)
         if not os.path.exists(path):
             raise NanoArtifactMismatch(
-                f"nano artifact missing: {path}. Expected SHA256 {expected}.")
+                f"nano artifact missing: {path}\n"
+                f"  expected SHA256 {expected}\n"
+                + _DEGRADATION_NOTICE)
         actual = _sha256(path)
         seen[name] = actual
         if actual != expected:
@@ -612,8 +637,8 @@ def _verify(model_dir: str) -> dict:
                 f"  actual   SHA256 {actual}\n"
                 "Refusing to load. This model was accepted on the measured "
                 "behaviour of the expected bytes; different bytes are an "
-                "unevaluated model. Re-download from the pinned revision "
-                f"({DEFAULT_REVISION}) or re-run the evaluation battery.")
+                "unevaluated model.\n"
+                + _DEGRADATION_NOTICE)
     return seen
 
 

@@ -285,6 +285,12 @@ def scan_l1_dual_view(normalized: str, raw: str, output: bool = False):
 # sounds good") are the bulk of what would otherwise pay the model's latency.
 NANO_MIN_WORDS = 4
 
+# The family that means "nano said nothing" — the one value that must NEVER be
+# attributed as a detection. It is also what the fail-open inference path
+# returns, which is deliberate: one name for "no signal" and "no answer" means a
+# model fault cannot be mistaken for a model reading anywhere downstream.
+NANO_FAMILY_SILENT = "none"
+
 
 def _FLAG_BAND_CAP(block_threshold: float, flag_threshold: float) -> float:
     """A score strictly inside the flag band [flag_threshold, block_threshold):
@@ -636,13 +642,14 @@ class LocalScanner:
         # chat-shaped input only; a2a and output are out of scope until measured.
         nano_score = None
         nano_raw = None
+        nano_family = None
         if (
             self.nano_enabled
             and score == 0.0
             and direction == "input"
             and len(scan_text.split()) >= NANO_MIN_WORDS
         ):
-            nano_raw, nano_score = self._run_nano(scan_text)
+            nano_raw, nano_score, nano_family = self._run_nano(scan_text)
             # D2: the caller's `score` contract is preserved below the flag
             # threshold — a sub-threshold nano reading leaves an allowed scan at
             # score 0.0, exactly as today. The reading is still reported, via the
@@ -700,6 +707,28 @@ class LocalScanner:
             + dlp_rules
             + comp_rules
         )
+        # ATTRIBUTION for a nano-driven flag. Without this a nano flag arrives
+        # with `rules == []` and `category is None`: the operator sees a flagged
+        # event that names nothing at all, which is indistinguishable from a bug
+        # and is the fastest way to get a flag ignored. The reading was already
+        # carried on nano_score/nano_raw, but those are tuning fields — `rules`
+        # is what an operator reads, and it was empty.
+        #
+        # The `nano:` PREFIX is the point. It keeps the model's contribution
+        # visibly separate from every rule id in the ruleset, so a queue can be
+        # filtered to "rules only" and a triager can see at a glance that this
+        # flag came from an uncalibrated signal rather than from a pattern
+        # someone wrote down and argued about.
+        #
+        # Excluding "none" excludes the fail-open path with it: `classify`
+        # returns family="none" with p_raw 0.0 on any inference error, so an
+        # error can never be attributed as a detection. The upstream gate also
+        # excludes "parse_error" and "error"; neither is reachable here, because
+        # this tree's family vocabulary is CLOSED to {"injection", "none"} and
+        # derived from p_raw rather than authored by the model, so listing them
+        # would be dead branches pretending to be defence.
+        if nano_family and nano_family != NANO_FAMILY_SILENT:
+            all_rules.append(f"nano:{nano_family}")
         if bypass_hit:
             all_rules.append("DIRECTIVE_protective_override_bypass")
         if encoding_hit:
@@ -908,7 +937,7 @@ class LocalScanner:
         return max_score, rules, category
 
     def _run_nano(self, scan_text: str):
-        """Score one rules-silent input. Returns (raw P, capped scanner score).
+        """Score one rules-silent input. Returns (raw P, capped score, family).
 
         Fail-OPEN on any inference error: a model fault must never break a scan
         or change a verdict, so a failure returns 0.0 and the rules-only result
@@ -920,17 +949,20 @@ class LocalScanner:
         The cap comes from _FLAG_BAND_CAP rather than a local constant so it can
         never drift from the scanner's own flag-band ceiling — the containment
         argument depends on the two being the same number.
+
+        `family` is carried out rather than dropped so the flag can be
+        ATTRIBUTED: see the rules-assembly block in scan().
         """
         from .nano import remap                       # lazy: keeps nano optional
         try:
-            p_raw = self._nano.classify(scan_text).p_raw
+            result = self._nano.classify(scan_text)
         except Exception:
-            return 0.0, 0.0
+            return 0.0, 0.0, NANO_FAMILY_SILENT
         capped = min(
-            remap(p_raw, self.flag_threshold, self.block_threshold),
+            remap(result.p_raw, self.flag_threshold, self.block_threshold),
             _FLAG_BAND_CAP(self.block_threshold, self.flag_threshold),
         )
-        return p_raw, capped
+        return result.p_raw, capped, result.family
 
     def _compute_composite(
         self, l1_score: float, l2_score: float, dlp_score: float
