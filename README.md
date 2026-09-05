@@ -2293,7 +2293,7 @@ detection ones.
 
 Verified with `python -m pytest -q`. **The figure quoted here is the `base`
 configuration — `pip install .` plus `pytest`, no extras at all, no framework
-installed: 7436 passed, 142 skipped, 0 failed**, identical across three
+installed: 7436 passed, 144 skipped, 0 failed**, identical across three
 consecutive serial runs. That configuration is quoted because it is the one that
 proves the headline claim: the core suite runs with **zero third-party
 dependencies**. The suite covers the public scan APIs, wrappers, policy,
@@ -2306,11 +2306,11 @@ macOS 26.6 / arm64:
 
 | configuration | install | result |
 |---|---|---|
-| `base` (CI job) | `pip install .` && `pip install pytest` | **7436 passed, 142 skipped** |
-| `full` (CI job) | `pip install ".[http,trace,dev]"` | **7493 passed, 120 skipped** |
-| `full` + the LangChain stack | &nbsp;&nbsp;+ `".[langchain]" langgraph deepagents llama-index-core` | **7530 passed, 88 skipped** |
-| `full` + CrewAI | &nbsp;&nbsp;+ `".[crewai]"` | **7504 passed, 109 skipped** |
-| `full` + Haystack | &nbsp;&nbsp;+ `".[haystack]"` | **7522 passed, 91 skipped** |
+| `base` (CI job) | `pip install .` && `pip install pytest` | **7436 passed, 144 skipped** |
+| `full` (CI job) | `pip install ".[http,trace,dev]"` | **7493 passed, 122 skipped** |
+| `full` + the LangChain stack | &nbsp;&nbsp;+ `".[langchain]" langgraph deepagents llama-index-core` | **7530 passed, 90 skipped** |
+| `full` + CrewAI | &nbsp;&nbsp;+ `".[crewai]"` | **7504 passed, 111 skipped** |
+| `full` + Haystack | &nbsp;&nbsp;+ `".[haystack]"` | **7524 passed, 91 skipped** |
 | `corpus` (CI job) | `pip install .` && `python scripts/corpus_report.py` | benign gates **PASS**, exit 0 |
 | `corpus` (CI job) | &nbsp;&nbsp;&nbsp;&nbsp;then `python scripts/intent_metrics.py` | catch rate + denominator printed into the log; reported, not gated |
 
@@ -2322,7 +2322,7 @@ deepagents 0.7.13, llama-index-core 0.14.24, crewai 1.15.20, haystack-ai 3.1.1.
 
 **Read the four framework rows against each other, not one at a time.** Adding
 the Haystack integration moved the pass count in exactly one of them: every
-other config gained 29 skips and not a single pass, which is the new
+other config gained 31 skips and not a single pass, which is the new
 `TestRealHaystack` class skipping cleanly where `haystack-ai` is absent. A
 framework integration that changed a number in a config where its framework is
 not installed would be an integration that leaked out of its own extra.
@@ -2345,7 +2345,7 @@ disabled test — each line names what to install to run it:
 | skips | why | how to run them |
 |---:|---|---|
 | 47 | `nano` needs `onnxruntime` + the pinned local artifact | `pip install ".[nano]"` and set `XAIDR_NANO_TEST_ARTIFACTS` |
-| 29 | real Haystack not installed | `pip install ".[haystack]"` |
+| 31 | real Haystack not installed | `pip install ".[haystack]"` |
 | 20 | needs the `[http]` extra | `pip install ".[http]"` |
 | 14 | real LangGraph (with LangChain) not installed | `pip install langgraph` |
 | 11 | real CrewAI not installed | `pip install ".[crewai]"` |
@@ -2356,7 +2356,7 @@ disabled test — each line names what to install to run it:
 
 The nano block dominates and is the least interesting: `[nano]` is an optional
 ML signal that is off by default, and its tests need a hash-pinned artifact that
-is not in the repository. The 72 framework skips are the ones worth installing
+is not in the repository. The 74 framework skips are the ones worth installing
 for — they are the tests that run against the real LangChain, LangGraph, Deep
 Agents, CrewAI and Haystack rather than the in-repo fakes.
 

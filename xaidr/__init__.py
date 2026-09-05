@@ -20,7 +20,7 @@ from .autopatch import (
     protect, unprotect, ProtectionManifest, XaidrProtectionWarning,
 )
 
-__version__ = "1.9.0"
+__version__ = "1.10.0"
 
 __all__ = [
     "Sensor",
