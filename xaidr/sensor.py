@@ -368,6 +368,10 @@ class DelphiSensor:
         # path behaves exactly as it did before the feature existed. A config
         # with no trigger configured is likewise inert.
         self._breaker: Optional[_CircuitRuntime] = None
+        #: Counter names whose fail-open fault has already been reported, so a
+        #: broken counter is stated ONCE per sensor instead of once per call.
+        #: See ``_breaker_counter_failed``.
+        self._breaker_faults: set = set()
         if circuit_breaker is not None:
             if not isinstance(circuit_breaker, CircuitBreaker):
                 raise ValueError(
@@ -405,7 +409,7 @@ class DelphiSensor:
             return "closed"
 
     def reset_circuit(self) -> None:
-        """Close the circuit immediately and clear both counters. No-op if off."""
+        """Close the circuit immediately and clear all three counters. No-op if off."""
         if self._breaker is None:
             return
         try:
@@ -532,10 +536,40 @@ class DelphiSensor:
             if is_violation:
                 self._breaker.record_violation()
         except Exception as exc:
-            logger.warning(
-                "xaidr: circuit_breaker violation count failed (%s: %s)",
-                type(exc).__name__, exc,
-            )
+            self._breaker_counter_failed("violation", exc)
+
+    def _breaker_counter_failed(self, counter: str, exc: Exception) -> None:
+        """Report a breaker counter that faulted, ONCE, and say what it costs.
+
+        The old message was ``circuit_breaker <name> count failed (<exc>)`` at
+        WARNING, emitted on every single call. Measured against the published
+        1.10.0 wheel, that produced fifty identical lines for fifty delegations,
+        which reads as log noise rather than as a dead control, and it never
+        said the thing an operator needs: that the trigger is now counting
+        NOTHING and the circuit will not open on it. ``circuit_state`` keeps
+        answering ``"closed"`` throughout, which looks like health.
+
+        So: ERROR rather than WARNING (a configured control that is not running
+        is not a warning), once per counter per sensor rather than once per call,
+        and the message says the trigger is inert and will not trip.
+
+        Still fail-OPEN. A counter fault must not break a scan, because a
+        breaker that takes the agent down when its own bookkeeping fails is
+        worse than one that stops counting. The structural guarantee that this
+        can never again be a MISSING METHOD is a test, not a runtime check:
+        ``tests/test_delegation_rate_breaker.py`` asserts every attribute this
+        module calls on the runtime actually exists on it.
+        """
+        if counter in self._breaker_faults:
+            return
+        self._breaker_faults.add(counter)
+        logger.error(
+            "xaidr: circuit_breaker %s counter is NOT COUNTING and will not "
+            "trip (%s: %s). The breaker's other triggers are unaffected; "
+            "circuit_state will keep reporting 'closed' for this one. "
+            "This message is logged once per sensor.",
+            counter, type(exc).__name__, exc,
+        )
 
     def _breaker_tool_tick(self) -> None:
         """Count one ``scan_tool_call`` invocation toward the rate trigger.
@@ -548,10 +582,7 @@ class DelphiSensor:
         try:
             self._breaker.record_tool_call()
         except Exception as exc:
-            logger.warning(
-                "xaidr: circuit_breaker rate count failed (%s: %s)",
-                type(exc).__name__, exc,
-            )
+            self._breaker_counter_failed("tool-call rate", exc)
 
     def _breaker_delegation_tick(self) -> None:
         """Count one OUTBOUND ``scan_a2a`` invocation toward the fan-out trigger.
@@ -566,16 +597,22 @@ class DelphiSensor:
 
         This mirrors ``_breaker_tool_tick``: separate counter, separate
         threshold, same fail-safe discipline (a fault degrades to "no breaker").
+
+        SHIPPED BROKEN IN 1.10.0 AND EARLIER. This method existed, with this
+        docstring, calling ``record_delegation`` on a runtime that did not
+        implement it. Every outbound ``scan_a2a`` with a breaker configured
+        raised AttributeError, was caught here, logged, and counted nothing, so
+        the fan-out trigger did not exist while appearing to. The method now
+        exists; ``tests/test_delegation_rate_breaker.py`` asserts that every
+        method this file calls on the runtime is implemented, so the class of
+        bug cannot recur silently.
         """
         if self._breaker is None:
             return
         try:
             self._breaker.record_delegation()
         except Exception as exc:
-            logger.warning(
-                "xaidr: circuit_breaker delegation count failed (%s: %s)",
-                type(exc).__name__, exc,
-            )
+            self._breaker_counter_failed("delegation rate", exc)
 
     def _extract_a2a_content(self, body: Optional[dict], raw: Optional[str]) -> str:
         """Extract scannable text from a parsed A2A body (or raw fallback)."""
