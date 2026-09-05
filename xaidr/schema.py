@@ -423,8 +423,25 @@ def _map_circuit_breaker(data: dict[str, Any], out: dict[str, Any]) -> None:
     for src, attr in (
         ("violations", "gen_ai.security.circuit_breaker.violations"),
         ("toolCalls", "gen_ai.security.circuit_breaker.tool_calls"),
+        # Outbound scan_a2a delegations. Its own attribute rather than folded
+        # into tool_calls, for the same reason it is its own counter: a consumer
+        # alerting on a fan-out storm must be able to query it without the
+        # chatty-tool-user traffic in the denominator.
+        #
+        # THESE TWO DID NOT MOVE SCHEMA_VERSION, and that was a decision. They
+        # are additive attributes inside a namespace this file already documents
+        # as additive, on an event type that already exists: no consumer rule
+        # changes meaning, nothing a consumer reads today disappears or changes
+        # type, and the absent-means-off contract below already requires
+        # handling an attribute that is sometimes present. The version exists so
+        # a consumer can branch when the shape BREAKS; moving it for two new
+        # optional keys would tell every consumer to re-check rules that are
+        # still correct, which is how a version signal stops being read.
+        ("delegations", "gen_ai.security.circuit_breaker.delegations"),
         ("violationThreshold", "gen_ai.security.circuit_breaker.violation_threshold"),
         ("rateThreshold", "gen_ai.security.circuit_breaker.rate_threshold"),
+        ("delegationRateThreshold",
+         "gen_ai.security.circuit_breaker.delegation_rate_threshold"),
         ("cooldownSec", "gen_ai.security.circuit_breaker.cooldown_sec"),
     ):
         value = data.get(src)

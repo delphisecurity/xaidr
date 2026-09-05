@@ -15,8 +15,20 @@ What it counts, and nothing more:
   action could never trip in monitor mode, defeating measure-before-enforcing.
 * **Tool-call rate** — ``scan_tool_call`` invocations only. A merely chatty agent
   making many ``scan()`` calls must not trip it.
+* **Delegation rate** — OUTBOUND ``scan_a2a`` invocations only.
 
-It does NOT model "erratic", anomalous, or novel behavior. Two counters.
+It does NOT model "erratic", anomalous, or novel behavior. Three counters.
+
+WHY DELEGATION IS ITS OWN COUNTER AND NOT PART OF THE TOOL-CALL RATE. They are
+different failure modes and they need different numbers. An agent that calls
+forty tools in a minute is doing its job; an agent that delegates to forty peers
+in a minute is a fan-out storm, and it is the second one that cascades, because
+each of those peers is itself an agent that will call tools and delegate again.
+Summing them into one counter would force a single threshold to be either too
+low for the chatty tool user or too high to catch the storm, and would make the
+trip reason unreadable: an operator seeing ``rate_threshold`` could not tell
+which of the two had actually happened. Separate counters, separate thresholds,
+separate trip reasons.
 """
 
 from __future__ import annotations
@@ -37,6 +49,7 @@ CIRCUIT_OPEN_RULE = "CIRCUIT_BREAKER_OPEN"
 # Trip reasons (also the value of the "reason" key handed to on_trip).
 REASON_VIOLATIONS = "violation_threshold"
 REASON_RATE = "rate_threshold"
+REASON_DELEGATION_RATE = "delegation_rate_threshold"
 
 # Hard cap on retained timestamps per counter. Timestamps are pruned to the
 # window on every access; this cap is the second, independent bound so a
@@ -60,32 +73,70 @@ class CircuitBreaker:
         rate_threshold: open after this many ``scan_tool_call`` invocations
             within ``rate_window_sec``. None disables the rate trigger.
         rate_window_sec: sliding window for the tool-call count.
+        delegation_rate_threshold: open after this many OUTBOUND ``scan_a2a``
+            invocations within ``delegation_rate_window_sec``. None disables the
+            delegation trigger, **and None is the default** (see below).
+        delegation_rate_window_sec: sliding window for the delegation count.
         cooldown_sec: auto-close this long after the trip. ``None`` means the
             circuit stays open until ``reset_circuit()`` — the kill-switch form.
             There is no half-open state.
         on_trip: called EXACTLY ONCE per trip with one dict argument:
-            ``{"reason", "violations", "tool_calls", "agent_id",
+            ``{"reason", "violations", "tool_calls", "delegations", "agent_id",
             "enforcement_mode"}``. Exceptions raised by the callback are logged
-            and swallowed — your callback cannot take the agent down.
+            and swallowed — your callback cannot take the agent down. (``delegations``
+            was added alongside the delegation trigger; the addition is additive,
+            so a callback that reads keys by name is unaffected. All three counts
+            are reported on every trip whatever the reason, because the useful
+            question at trip time is what ELSE was happening.)
         time_source: monotonic clock, injectable for testing. Defaults to
             ``time.monotonic``. Must be monotonic: a wall-clock jump would
             corrupt the windows.
+
+    WHY ``delegation_rate_threshold`` DEFAULTS TO None, i.e. OFF. It was worth
+    arguing rather than assuming, because a fan-out storm is a real cascading
+    vector and a control nobody turns on protects nobody. It is off anyway, for
+    four reasons that outweigh that:
+
+    1. **It halts agents.** This whole module inverts the package's fail-open
+       discipline, which is exactly why the breaker as a whole is opt-in. A
+       trigger that is on by default would smuggle a halt into a deployment that
+       opted into a different trigger.
+    2. **It would be a silent behaviour change for existing users.** Anyone
+       running ``CircuitBreaker(violation_threshold=N)`` today would, on upgrade,
+       acquire a second way for their agent to stop serving, without editing
+       anything. Availability changes do not arrive in a patch release.
+    3. **There is no honest default VALUE.** A supervisor fanning out to twenty
+       workers is normal in one deployment and an incident in another. Any number
+       here would be this file's opinion, and the standard elsewhere in this
+       package (the nano false-positive range, the onnxruntime floors) is that
+       unmeasured numbers are not asserted.
+    4. **It matches the pattern already set.** Both sibling triggers default to
+       None, and ``nano`` ships the same way: the capability is present,
+       measured, documented, and off until someone enables it deliberately.
+
+    The cost of that choice is that it must be findable, so the trigger, its
+    default, and the reason for the default are all in the README's
+    circuit-breaker section rather than only here.
     """
 
     violation_threshold: Optional[int] = None
     violation_window_sec: float = 60.0
     rate_threshold: Optional[int] = None
     rate_window_sec: float = 60.0
+    delegation_rate_threshold: Optional[int] = None
+    delegation_rate_window_sec: float = 60.0
     cooldown_sec: Optional[float] = 300.0
     on_trip: Optional[Callable] = None
     time_source: Callable[[], float] = time.monotonic
 
     def __post_init__(self):
-        for name in ("violation_threshold", "rate_threshold"):
+        for name in ("violation_threshold", "rate_threshold",
+                     "delegation_rate_threshold"):
             val = getattr(self, name)
             if val is not None and (not isinstance(val, int) or val < 1):
                 raise ValueError(f"{name} must be a positive int or None, got {val!r}")
-        for name in ("violation_window_sec", "rate_window_sec"):
+        for name in ("violation_window_sec", "rate_window_sec",
+                     "delegation_rate_window_sec"):
             val = getattr(self, name)
             if val is None or float(val) <= 0:
                 raise ValueError(f"{name} must be > 0, got {val!r}")
@@ -100,8 +151,20 @@ class CircuitBreaker:
 
     @property
     def enabled(self) -> bool:
-        """True when at least one trigger is configured."""
-        return self.violation_threshold is not None or self.rate_threshold is not None
+        """True when at least one trigger is configured.
+
+        EVERY trigger must be listed here. The sensor only installs the breaker
+        when this is True, so a trigger missing from this expression is a
+        trigger that is configured, reported as configured, and silently never
+        counted -- which is the failure mode the delegation trigger shipped with
+        for a different reason. Pinned by
+        ``tests/test_delegation_rate_breaker.py``.
+        """
+        return (
+            self.violation_threshold is not None
+            or self.rate_threshold is not None
+            or self.delegation_rate_threshold is not None
+        )
 
 
 @dataclass
@@ -156,6 +219,10 @@ class _CircuitRuntime:
             window_sec=float(config.rate_window_sec),
             maxlen=_retained_cap(config.rate_threshold),
         )
+        self._delegations = _Counters(
+            window_sec=float(config.delegation_rate_window_sec),
+            maxlen=_retained_cap(config.delegation_rate_threshold),
+        )
 
     # ── clock ────────────────────────────────────────────────────────────
     def _now(self) -> float:
@@ -196,12 +263,14 @@ class _CircuitRuntime:
         self._trip_reason = None
         self._violations.clear()
         self._tool_calls.clear()
+        self._delegations.clear()
         return {
             "event": "close",
             "how": how,
             "tripReason": reason,
             "violations": 0,
             "toolCalls": 0,
+            "delegations": 0,
         }
 
     def reset(self) -> None:
@@ -226,6 +295,21 @@ class _CircuitRuntime:
             return
         self._record(self._tool_calls, self.config.rate_threshold, REASON_RATE)
 
+    def record_delegation(self) -> None:
+        """Count one OUTBOUND scan_a2a invocation; trip if over.
+
+        Its own counter, deliberately: see the module docstring. A tool-heavy
+        agent and a fan-out storm must remain distinguishable both in what trips
+        and in the reason the trip reports.
+        """
+        if self.config.delegation_rate_threshold is None:
+            return
+        self._record(
+            self._delegations,
+            self.config.delegation_rate_threshold,
+            REASON_DELEGATION_RATE,
+        )
+
     def _record(self, counters: _Counters, threshold: int, reason: str) -> None:
         trip_event = None
         callback_payload = None
@@ -243,14 +327,17 @@ class _CircuitRuntime:
                     "reason": reason,
                     "violations": snap["violations"],
                     "toolCalls": snap["toolCalls"],
+                    "delegations": snap["delegations"],
                     "violationThreshold": self.config.violation_threshold,
                     "rateThreshold": self.config.rate_threshold,
+                    "delegationRateThreshold": self.config.delegation_rate_threshold,
                     "cooldownSec": self.config.cooldown_sec,
                 }
                 callback_payload = {
                     "reason": reason,
                     "violations": snap["violations"],
                     "tool_calls": snap["toolCalls"],
+                    "delegations": snap["delegations"],
                     "agent_id": self.agent_id,
                     "enforcement_mode": self.enforcement_mode,
                 }
@@ -265,6 +352,7 @@ class _CircuitRuntime:
         return {
             "violations": self._violations.count(now),
             "toolCalls": self._tool_calls.count(now),
+            "delegations": self._delegations.count(now),
         }
 
     # ── side effects ─────────────────────────────────────────────────────
