@@ -1140,6 +1140,25 @@ covered by scanning what enters through your normal tool boundary.
 
 ### Haystack Agent hooks
 
+> **Read this before you read your logs.** A blocked input makes Haystack log
+> **`Agent reached maximum agent steps of N, stopping.`** at WARNING. **That is
+> not a step-budget exhaustion — it is a security block**, and the two are
+> indistinguishable in the log. Stopping the run is only possible from a
+> `before_run` hook by exhausting the step budget (a hook cannot `break` the
+> Agent's loop), the line is emitted by `haystack.components.agents`, and
+> **nothing in a hook can suppress it**.
+>
+> What you can trust instead is the Agent's **return value**, which this
+> integration repairs: `exit_reason` reads **`"xaidr_blocked"`** and
+> `step_count` reads `0`, rather than `"max_agent_steps"` and `2**62`.
+> **`"xaidr_blocked"` is NOT one of Haystack's documented `exit_reason` values**
+> (`"text"`, a tool name, `"max_agent_steps"`), so **any `ConditionalRouter` or
+> branch reading `exit_reason` needs a case for it** or it will fall through to
+> your default path. Import it rather than typing it:
+> `from xaidr.integrations.haystack import EXIT_REASON_BLOCKED`. A block that
+> rendered as `"text"` would be a block nothing downstream could route on, which
+> is why it is not one.
+
 Haystack's hooks are a **constructor argument**, not a middleware list and not a
 global registry, so `delphi_hooks()` returns the `hooks=` mapping itself:
 
@@ -1174,20 +1193,22 @@ carrying the rejected call, then a `ChatMessage.from_tool(..., error=True)`), so
 the Agent loops on and can recover rather than dying on the rewrite. One blocked
 call in a parallel batch does not cancel its siblings.
 
-**The input boundary costs you two things, and you should know both.**
-Exhausting the Agent's step budget is the only way a `before_run` hook can stop
-the loop — a hook cannot `break` it — and that is the path Haystack labels
-`max_agent_steps`:
+Branching on the repaired `exit_reason` (see the callout at the top of this
+section) looks like this:
 
-* Haystack logs `Agent reached maximum agent steps of N, stopping.` at WARNING on
-  every blocked input. That line is Haystack's, from a hook it cannot be
-  suppressed, and it is not a real step-budget exhaustion.
-* `exit_reason` would otherwise read `"max_agent_steps"` with a step count of
-  `2**62`. The `after_run` hook rewrites both, to `"xaidr_blocked"` and `0`.
-  **`"xaidr_blocked"` is outside Haystack's documented set** (`"text"`, a tool
-  name, `"max_agent_steps"`), so a `ConditionalRouter` switching on `exit_reason`
-  needs a branch for it. A block that rendered as `"text"` would be a block
-  nothing downstream could route on, which is why it is not one.
+```python
+from haystack.components.routers import ConditionalRouter
+from xaidr.integrations.haystack import EXIT_REASON_BLOCKED
+
+router = ConditionalRouter(routes=[
+    {"condition": "{{ exit_reason == '" + EXIT_REASON_BLOCKED + "' }}",
+     "output": "{{ last_message }}", "output_name": "refused",
+     "output_type": ChatMessage},
+    {"condition": "{{ True }}",
+     "output": "{{ last_message }}", "output_name": "answer",
+     "output_type": ChatMessage},
+])
+```
 
 **Two things this does not cover, said here rather than left to be discovered.**
 
