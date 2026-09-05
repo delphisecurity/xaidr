@@ -44,6 +44,24 @@ _KNOWN_L1_CATEGORIES = frozenset({
     "encoding_evasion", "eva003", "excessive_agency", "forged_trust",
     "jailbreak", "llm02", "llm09", "pii_detected", "prompt_injection",
     "supply_chain", "system_prompt_leak",
+    # Agentic-abuse families, one category per OWASP Agentic Security Initiative
+    # threat (asi01 goal manipulation … asi10 rogue agents), plus the two that do
+    # not map onto a single ASI number: `rag_poisoning` (hostile content planted
+    # in a retrieved document) and `lpci` (a payload split into fragments and
+    # reassembled by the model). Kept as SEPARATE categories rather than folded
+    # into `excessive_agency` because the category string is a de-facto API in
+    # telemetry — an operator filtering for memory poisoning should not have to
+    # know it was filed under a generic agency bucket — and because the tool-path
+    # tiers in sensor.py are decided one category at a time.
+    #
+    # NONE of these is in sensor._TOOL_ARG_KEEP_CATEGORIES, so they are
+    # CONTENT-PATH ONLY: they fire on scan()/scan_l1() and are dropped on the
+    # tool-argument path. That is the deliberate default this allowlist's own
+    # note describes, not an oversight — admitting a category to the tool path is
+    # a measured decision (see the four "STAY FILTERED" entries in sensor.py) and
+    # none of these has been measured against the 74-command benign gate.
+    "asi01", "asi02", "asi03", "asi05", "asi06", "asi07", "asi09", "asi10",
+    "lpci", "rag_poisoning",
     # output categories (output-l1-rules.json)
     "out", "social_engineering",
     # structural categories: emitted by a parse-based scanner, not by an L1

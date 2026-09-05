@@ -770,10 +770,308 @@
     "category": "prompt_injection"
   },
   {
+    "id": "ASI09_memory_behavior_injection",
+    "pattern": "\\b(?:write|create|add|store)\\s+(?:a\\s+)?(?:memory|note|entry|record)\\s+(?:that|which)\\s+(?:will|would|should)\\s+(?:cause|make|force)\\s+(?:you|the\\s+(?:model|agent|assistant))\\s+(?:to\\s+)?(?:behave|act|respond|operate)\\s+(?:differently|in\\s+a\\s+(?:different|new)\\s+way)",
+    "score": 0.8,
+    "category": "asi09"
+  },
+  {
     "id": "LLM06_bulk_data_extraction",
     "pattern": "\\bretrieve\\s+(?:all|every|complete)\\s+(?:records?|data|entries?|rows?)\\s+from\\s+(?:the\\s+)?(?:\\w+\\s+)?(?:table|database|collection|store)\\b",
     "score": 0.7,
     "category": "pii_detected"
+  },
+  {
+    "id": "ASI01_goal_override",
+    "pattern": "(?:your|the)\\s+(?:new|updated|real|actual)\\s+(?:goal|objective|task|mission)\\s+is",
+    "score": 0.88,
+    "category": "asi01"
+  },
+  {
+    "id": "ASI01_output_redirect",
+    "pattern": "redirect\\s+(?:your|the)\\s+(?:output|results?|response)\\s+to",
+    "score": 0.82,
+    "category": "asi01"
+  },
+  {
+    "id": "ASI01_covert_exfil",
+    "pattern": "(?:silently|quietly|secretly|without\\s+(?:telling|notifying|alerting))\\s+(?:send|forward|copy|exfiltrate)",
+    "score": 0.92,
+    "category": "asi01"
+  },
+  {
+    "id": "ASI02_mass_tool_invoke",
+    "pattern": "(?:call|invoke|execute|run)\\s+(?:all|every|each)\\s+(?:tool|function|api|endpoint)",
+    "score": 0.8,
+    "category": "asi02"
+  },
+  {
+    "id": "ASI02_destructive_tool_use",
+    "pattern": "(?:delete|remove|drop|truncate)\\s+(?:all|every|\\*|everything)",
+    "score": 0.9,
+    "category": "asi02"
+  },
+  {
+    "id": "ASI03_privilege_escalation",
+    "pattern": "(?:use|assume|impersonate|act\\s+as)\\s+(?:admin|root|system|service\\s*account|superuser)",
+    "score": 0.9,
+    "category": "asi03"
+  },
+  {
+    "id": "ASI03_credential_forwarding",
+    "pattern": "(?:forward|pass|send|share)\\s+(?:my|the|this)\\s+(?:token|credential|api[_\\s]?key|session|cookie)",
+    "score": 0.88,
+    "category": "asi03"
+  },
+  {
+    "id": "ASI05_generate_and_exec",
+    "pattern": "(?:generate|write|create)\\s+(?:and\\s+)?(?:execute|run|eval)\\s+(?:code|script|command)",
+    "score": 0.85,
+    "category": "asi05"
+  },
+  {
+    "id": "ASI06_memory_manipulation",
+    "pattern": "(?:update|modify|change|overwrite)\\s+(?:your|the)\\s+(?:memory|context|knowledge|state)\\s+(?:to|so\\s+that|with|permanently|for\\s+all|system|override)",
+    "score": 0.78,
+    "category": "asi06"
+  },
+  {
+    "id": "ASI06_persistent_injection",
+    "pattern": "(?:from\\s+now\\s+on|going\\s+forward|permanently|always)\\s+(?:remember|store|save|treat)",
+    "score": 0.8,
+    "category": "asi06"
+  },
+  {
+    "id": "ASI07_agent_instruction",
+    "pattern": "(?:tell|instruct|command|message)\\s+(?:the\\s+)?(?:other|next|downstream)\\s+agent",
+    "score": 0.75,
+    "category": "asi07"
+  },
+  {
+    "id": "ASI10_self_modification",
+    "pattern": "(?:modify|change|update)\\s+(?:your|my)\\s+(?:own\\s+)?(?:code|instructions|behavior|configuration)",
+    "score": 0.85,
+    "category": "asi10"
+  },
+  {
+    "id": "ASI10_concealment",
+    "pattern": "(?:don't|do\\s+not|never)\\s+(?:log|report|alert|notify|tell)\\s+(?:the\\s+)?(?:user|admin|human|operator)",
+    "score": 0.92,
+    "category": "asi10"
+  },
+  {
+    "id": "ASI03_self_admin_grant",
+    "pattern": "\\b(?:execute|run)\\s+(?:a\\s+)?(?:\\w+\\s+)?(?:migration|command|script|query)\\s+(?:that|to|which)\\s+(?:adds?|creates?|grants?|gives?|makes?)\\s+(?:yourself|me|this\\s+(?:agent|user))\\s+(?:(?:as|a|an)\\s+)?(?:super\\s*admin|admin(?:istrator)?|root)",
+    "score": 0.85,
+    "category": "asi03"
+  },
+  {
+    "id": "ASI05_self_safety_removal",
+    "pattern": "\\b(?:modify|edit|change|update|alter)\\s+(?:your\\s+)?(?:own\\s+)?(?:source\\s*code|code|config(?:uration)?)\\s+to\\s+(?:remove|disable|bypass|turn\\s+off|eliminate)\\s+(?:safety|security|guardrails?|checks?|filters?|restrictions?)",
+    "score": 0.88,
+    "category": "asi05"
+  },
+  {
+    "id": "ASI02_unauthorized_transaction",
+    "pattern": "\\b(?:wire\\s+transfer|send\\s+(?:money|funds?|payment)|transfer\\s+\\$?\\d[\\d,.]*)\\s+to\\s+(?:account|wallet|address|routing)\\b",
+    "score": 0.85,
+    "category": "asi02"
+  },
+  {
+    "id": "ASI05_pipe_to_shell",
+    "pattern": "\\b(?:curl|wget|fetch)\\s+[^\\n|]{0,300}\\|\\s*(?:bash|sh|zsh|dash|exec|python\\d?|perl|ruby|node|php|pwsh)\\b|\\b(?:base64\\s+(?:-d|-D|--decode)|openssl\\s+(?:base64|enc)[^\\n|]{0,60}?-d|xxd\\s+-r|gunzip|zcat|gzip\\s+-d)\\b[^\\n|]{0,120}\\|\\s*(?:bash|sh|zsh|dash|python\\d?|perl|ruby|node|php|pwsh)\\b|\\beval\\s+[\"']?\\$\\([^)]{0,300}(?:base64\\s+(?:-d|--decode)|xxd\\s+-r|openssl\\s+(?:base64|enc)[^)]{0,40}?-d)|\\b(?:ba|z|k|da)?sh\\s*<\\(\\s*(?:curl|wget|fetch)\\b|\\b(?:curl|wget|fetch)\\s+[^\\n|]{0,300}\\|\\s*(?:sudo|doas)\\s+(?:ba|z|k|da)?sh\\b|(?:eval|(?:ba|z|k|da)?sh\\s+-c)\\s+[\\\"']?\\$\\(\\s*(?:curl|wget)\\b|`\\s*(?:curl|wget)\\s+[^`]{0,200}`\\s*\\|?\\s*(?:ba|z|k|da)?sh\\b",
+    "score": 0.9,
+    "category": "asi05"
+  },
+  {
+    "id": "ASI05_download_execute",
+    "_was": "\\b(?:wget|curl)\\s+\\S+.*&&\\s*chmod\\s+\\+x\\b",
+    "_why_changed": "Unbounded .* between two anchors is quadratic per start position (the engine runs it to end-of-text and backtracks, at every offset), which tests/test_redos_pattern_audit.py rejects outright. Bounded to a single-line span; the download and the chmod that follows it are one command line, so 200 chars spans every real instance.",
+    "pattern": "\\b(?:wget|curl)\\s+\\S+[^\\n]{0,200}&&\\s*chmod\\s+\\+x\\b",
+    "score": 0.88,
+    "category": "asi05"
+  },
+  {
+    "id": "ASI02_crypto_mining",
+    "pattern": "\\b(?:mine|mining)\\s+(?:crypto(?:currency)?|bitcoin|ethereum|monero)\\b",
+    "score": 0.82,
+    "category": "asi02"
+  },
+  {
+    "id": "ASI02_firewall_open",
+    "pattern": "\\bmodify\\s+(?:the\\s+)?(?:firewall|iptables|security\\s+group)\\s+(?:rules?|config)?\\s+to\\s+(?:allow|open|permit)\\b",
+    "score": 0.85,
+    "category": "asi02"
+  },
+  {
+    "id": "ASI03_self_authorize",
+    "pattern": "\\b(?:add|make|register)\\s+(?:myself|me)\\s+(?:as\\s+)?(?:an?\\s+)?(?:authorized|approved)\\s+(?:signer|approver|reviewer)\\b",
+    "score": 0.8,
+    "category": "asi03"
+  },
+  {
+    "id": "ASI03_token_escalation",
+    "pattern": "\\bmodify\\s+(?:the\\s+)?(?:OAuth|JWT|SAML)\\s+(?:scope|token|claims?|permissions?)\\s+(?:to\\s+(?:include|add)|of\\s+my)\\b",
+    "score": 0.82,
+    "category": "asi03"
+  },
+  {
+    "id": "ASI05_self_clone_unsafe",
+    "pattern": "\\b(?:shadow|clone|duplicate)\\s+(?:copy\\s+of\\s+)?(?:yourself|this\\s+agent|the\\s+(?:AI|model|assistant))\\s+(?:without|with\\s+no)\\s+(?:safety|restrictions?|guardrails?|constraints?)\\b",
+    "score": 0.88,
+    "category": "asi05"
+  },
+  {
+    "id": "ASI02_monitoring_evasion",
+    "pattern": "\\b(?:inject|insert|add)\\s+(?:false\\s+positive|noise|decoy)\\s+(?:into|to)\\s+(?:the\\s+)?(?:security|monitoring|alert|detection|SIEM)\\b",
+    "score": 0.82,
+    "category": "asi02"
+  },
+  {
+    "id": "ASI07_pipeline_injection",
+    "pattern": "\\b(?:insert|place|add)\\s+(?:a\\s+)?(?:new\\s+)?agent\\s+(?:into|in)\\s+(?:the\\s+)?(?:pipeline|chain|workflow)\\s+(?:between|before|after)\\b",
+    "score": 0.8,
+    "category": "asi07"
+  },
+  {
+    "id": "ASI09_trust_corruption",
+    "pattern": "\\b(?:corrupt|tamper|poison)\\s+(?:the\\s+)?(?:trust\\s+(?:store|registry|score|system)|(?:shared|global)\\s+(?:state|memory|context))\\b",
+    "score": 0.85,
+    "category": "asi09"
+  },
+  {
+    "id": "ASI09_knowledge_poisoning",
+    "pattern": "\\b(?:update|modify|poison)\\s+(?:the\\s+)?(?:knowledge\\s+base|training\\s+data|shared\\s+memory|agent\\s+(?:config|instructions?))\\s+(?:to|so\\s+(?:that|it)|with)\\b",
+    "score": 0.78,
+    "category": "asi09"
+  },
+  {
+    "id": "ASI02_stealth_mode",
+    "pattern": "\\boperate\\s+in\\s+(?:stealth|silent|invisible|covert|hidden)\\s+mode\\b",
+    "score": 0.78,
+    "category": "asi02"
+  },
+  {
+    "id": "RAG_context_override",
+    "pattern": "(?:ignore|disregard|forget)\\s+(?:all\\s+)?(?:previous|prior|other)\\s+(?:context|documents?|chunks?|information)",
+    "score": 0.92,
+    "category": "rag_poisoning"
+  },
+  {
+    "id": "RAG_control_token_in_context",
+    "pattern": "\\[SYSTEM\\]|\\[INST\\]|<\\|im_start\\|>|<<SYS>>|<\\|system\\|>|###\\s*(?:System|Instruction)",
+    "score": 0.95,
+    "category": "rag_poisoning"
+  },
+  {
+    "id": "RAG_priority_manipulation",
+    "pattern": "RETRIEVAL_OVERRIDE|DOCUMENT_PRIORITY\\s*:|CONTEXT_INJECTION",
+    "score": 0.93,
+    "category": "rag_poisoning"
+  },
+  {
+    "id": "RAG_sensitivity_marker",
+    "pattern": "\\b(?:confidential|internal\\s+only|do\\s+not\\s+share|proprietary|classified)\\b",
+    "score": 0.7,
+    "category": "rag_poisoning"
+  },
+  {
+    "id": "RAGSCAN_html_comment_injection",
+    "pattern": "<!--[\\s\\S]*?(?:ignore|override|system|instruction|execute|admin|bypass|disable|output|reveal|extract)[\\s\\S]*?-->",
+    "score": 0.93,
+    "category": "rag_poisoning"
+  },
+  {
+    "id": "RAGSCAN_css_hidden_text",
+    "pattern": "style\\s*=\\s*['\"][^'\"]*(?:display:\\s*none|visibility:\\s*hidden|font-size:\\s*0|color:\\s*(?:white|transparent|rgba?\\([^)]*,\\s*0\\)))[^'\"]*['\"]",
+    "score": 0.91,
+    "category": "rag_poisoning"
+  },
+  {
+    "id": "RAGSCAN_aria_hidden_injection",
+    "pattern": "aria-hidden\\s*=\\s*['\"]true['\"][^>]*>[\\s\\S]*?(?:ignore|override|system|execute|admin|output|reveal|extract|email|send)",
+    "score": 0.9,
+    "category": "rag_poisoning"
+  },
+  {
+    "id": "RAGSCAN_base64_in_document",
+    "pattern": "(?:base64|Base64|BASE64)\\s*[:=]\\s*[A-Za-z0-9+\\/]{20,}={0,2}",
+    "score": 0.75,
+    "category": "rag_poisoning"
+  },
+  {
+    "id": "RAGSCAN_custom_marker_injection",
+    "pattern": "%%[A-Z_]+\\[[\\s\\S]*?\\]%%",
+    "score": 0.82,
+    "category": "rag_poisoning"
+  },
+  {
+    "id": "RAGSCAN_authority_spoof",
+    "pattern": "(?:SECURITY\\s+NOTICE|COMPLIANCE\\s+POLICY|SYSTEM\\s+(?:MESSAGE|UPDATE)|ADMIN\\s+(?:OVERRIDE|NOTE)|DEVELOPER\\s+NOTE)\\s*:",
+    "score": 0.88,
+    "category": "rag_poisoning"
+  },
+  {
+    "id": "RAGSCAN_context_manipulation",
+    "pattern": "(?:this\\s+document\\s+supersedes|previous\\s+(?:information|instructions?)\\s+(?:is|are)\\s+(?:incorrect|outdated|revoked|invalid|suspended))",
+    "score": 0.83,
+    "category": "rag_poisoning"
+  },
+  {
+    "id": "RAGSCAN_data_exfil_instruction",
+    "pattern": "(?:include|append|prepend|add|output|reveal)\\s+(?:the\\s+)?(?:system\\s+prompt|api\\s+keys?|credentials?|tokens?|passwords?|secrets?)\\s+(?:in|to)\\s+(?:your\\s+)?(?:response|output|reply|answer)",
+    "score": 0.9,
+    "category": "rag_poisoning"
+  },
+  {
+    "id": "ASI07_a2a_exfiltration",
+    "pattern": "\\b(?:forward|relay|pass)\\s+(?:this|the\\s+(?:response|output|result))\\s+to\\s+(?:https?:\\/\\/|external|another\\s+(?:server|endpoint|agent))",
+    "score": 0.78,
+    "category": "asi07"
+  },
+  {
+    "id": "ASI06_rogue_registration",
+    "pattern": "\\b(?:register|advertise|announce)\\s+(?:myself|me|this\\s+agent)\\s+as\\s+(?:a|an|the)\\s+(?:trusted|authorized|admin|system)\\b",
+    "score": 0.75,
+    "category": "asi06"
+  },
+  {
+    "id": "ASI07_communication_intercept",
+    "pattern": "\\b(?:intercept|monitor|sniff|capture)\\s+(?:(?:all|the)\\s+)?(?:messages?|traffic|communication|requests?)\\s+(?:between|from|to)\\s+(?:agents?|services?|models?)\\b",
+    "score": 0.82,
+    "category": "asi07"
+  },
+  {
+    "id": "ASI09_memory_poisoning",
+    "pattern": "\\b(?:poison|corrupt|manipulate|alter)\\s+(?:the\\s+)?(?:agent|model|system)\\s*(?:'s|s)?\\s*(?:memory|context|state|knowledge|training)\\b",
+    "score": 0.78,
+    "category": "asi09"
+  },
+  {
+    "id": "LPCI_S6_reconstruct_instruction",
+    "pattern": "(?:combine|concatenate|merge|join|assemble|reconstruct|piece\\s+together)\\s+(?:the\\s+)?(?:parts?|pieces?|fragments?|segments?|halves|sections?)\\s+(?:of\\s+)?(?:this|the\\s+(?:instruction|command|message|payload|text))",
+    "score": 0.8,
+    "category": "lpci"
+  },
+  {
+    "id": "LPCI_S6_split_payload",
+    "_was": "(?:part|piece|fragment|segment|half)\\s+(?:1|one|A|first)\\s*(?:of\\s+\\d+)?[:\\s]+.*?(?:part|piece|fragment|segment|half)\\s+(?:2|two|B|second)",
+    "_why_changed": "Lazy .*? between two anchors is still quadratic per start position \u2014 laziness changes the order the engine tries the split, not how many splits there are \u2014 and the audit rejects the shape. Bounded to [\\s\\S]{0,400}? rather than [^\\n]{0,\u2026} because a split payload is deliberately spread ACROSS lines; 400 spans the gap between the two fragment markers in every observed instance.",
+    "pattern": "(?:part|piece|fragment|segment|half)\\s+(?:1|one|A|first)\\s*(?:of\\s+\\d+)?[:\\s]+[\\s\\S]{0,400}?(?:part|piece|fragment|segment|half)\\s+(?:2|two|B|second)",
+    "score": 0.75,
+    "category": "lpci"
+  },
+  {
+    "id": "LPCI_S6_header_footer_split",
+    "pattern": "\\b(?:the\\s+)?(?:first|top|beginning|header)\\s+(?:part|section|half)\\s+(?:says?|contains?|reads?|is)\\b[\\s\\S]{10,200}\\b(?:the\\s+)?(?:second|bottom|end|footer)\\s+(?:part|section|half)\\s+(?:says?|contains?|reads?|is)\\b",
+    "score": 0.78,
+    "category": "lpci"
+  },
+  {
+    "id": "LPCI_S6_distributed_extraction",
+    "pattern": "\\b(?:read|take|extract|get)\\s+(?:the\\s+)?(?:first|last|Nth|odd|even)\\s+(?:word|letter|character|line|sentence)\\s+(?:from|of)\\s+(?:each|every)\\s+(?:paragraph|section|line|sentence|chunk)",
+    "score": 0.78,
+    "category": "lpci"
   },
   {
     "id": "LLM01_task_completion_injection",
