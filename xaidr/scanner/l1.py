@@ -62,6 +62,16 @@ _KNOWN_L1_CATEGORIES = frozenset({
     # none of these has been measured against the 74-command benign gate.
     "asi01", "asi02", "asi03", "asi05", "asi06", "asi07", "asi09", "asi10",
     "lpci", "rag_poisoning",
+    # RECONNAISSANCE families. These are the PRECURSOR, not the act: fingerprint
+    # the model (rec001), enumerate the retrieval corpus (rag005), map which
+    # documents answered (rec004), enumerate the tools and their schemas
+    # (rec006). Scored low on purpose — 0.12-0.28, well under the block band —
+    # because every one of them has a routine reading ("which model are you
+    # using?", "cite the document you just referenced") and blocking on a
+    # question is not the product. They exist to be VISIBLE: a burst of them
+    # ahead of an exfiltration attempt is the signal, which is a job for
+    # telemetry and the compositional layer, not for a single-rule verdict.
+    "rag005", "rec001", "rec004", "rec006",
     # output categories (output-l1-rules.json)
     "out", "social_engineering",
     # structural categories: emitted by a parse-based scanner, not by an L1
