@@ -15,6 +15,7 @@ adds one. Run them by installing the framework you want covered::
 
     pip install 'xaidr[crewai]'    && pytest tests/test_real_frameworks.py
     pip install 'xaidr[langchain]' && pytest tests/test_real_frameworks.py
+    pip install 'xaidr[haystack]'  && pytest tests/test_real_frameworks.py
     pip install langgraph          && pytest tests/test_real_frameworks.py
     pip install deepagents         && pytest tests/test_real_frameworks.py
 
@@ -63,6 +64,11 @@ HAVE_CREWAI = _installed("crewai")
 HAVE_LANGCHAIN = _installed("langchain") and _installed("langchain_core")
 HAVE_LANGGRAPH = HAVE_LANGCHAIN and _installed("langgraph")
 HAVE_DEEPAGENTS = HAVE_LANGGRAPH and _installed("deepagents")
+# `haystack.hooks` is the seam, and it does NOT exist in haystack-ai 2.x — which
+# has an `Agent` and so would otherwise look present. Checking the seam rather
+# than the package is what makes the skip mean "cannot run these", not
+# "something called haystack is importable".
+HAVE_HAYSTACK = _installed("haystack") and _installed("haystack.hooks")
 
 requires_crewai = pytest.mark.skipif(
     not HAVE_CREWAI,
@@ -79,6 +85,10 @@ requires_langgraph = pytest.mark.skipif(
 requires_deepagents = pytest.mark.skipif(
     not HAVE_DEEPAGENTS,
     reason="real deepagents not installed — pip install deepagents to run",
+)
+requires_haystack = pytest.mark.skipif(
+    not HAVE_HAYSTACK,
+    reason="real haystack-ai>=3 not installed — pip install 'xaidr[haystack]' to run",
 )
 
 DESTRUCTIVE = "rm -rf / --no-preserve-root"
@@ -1349,3 +1359,664 @@ emit(gaps=gaps, notes=notes, not_present_first=not_present_first,
                 f"{name} no longer binds create_agent — xaidr's Deep Agents "
                 "coverage rests entirely on that binding"
             )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Haystack (deepset) — the real `haystack-ai` Agent hook points
+# ═══════════════════════════════════════════════════════════════════════
+
+#: `hooks` default for the Haystack fixture's `build`, so that "wire xaidr"
+#: (the default) and "wire nothing" (`hooks=None`, the unprotected control)
+#: stay distinguishable. `None` is a real, meaningful argument here.
+_NO_HOOKS_ARGUMENT = object()
+
+
+@requires_haystack
+class TestRealHaystack:
+    """Haystack's `Agent(hooks={...})` seam, measured rather than assumed.
+
+    CrewAI is the reason this class exists in the shape it does. There, a seam
+    that EXISTED was not the seam the framework's own agent path took, and a
+    fake proved 107 tests green while `rm -rf /` ran. So nothing here is
+    inherited from the LangChain suite by analogy: Haystack's hooks cannot
+    return a verdict (the protocol is `run(state) -> None`), each boundary
+    blocks by rewriting `State`, and each of those rewrites is asserted against
+    the real run loop.
+
+    Three facts below are NEGATIVE — an Agent built before `protect()`, tool
+    RESULTS, and a Pipeline with no Agent in it. They are tests rather than
+    prose so that a change which quietly widens the claim fails here first.
+    """
+
+    @pytest.fixture
+    def agent_bits(self):
+        """A real Agent driven by a real scripted ChatGenerator. No API key."""
+        from haystack import component
+        from haystack.components.agents import Agent
+        from haystack.dataclasses import ChatMessage, ToolCall
+        from haystack.tools import tool
+
+        from xaidr.integrations.haystack import delphi_hooks
+
+        executed: list[str] = []
+        generators: list = []
+
+        @tool
+        def run_shell(command: str) -> str:
+            """Run a shell command on the host."""
+            executed.append(command)
+            return "executed: " + command
+
+        @component
+        class ScriptedChatGenerator:
+            def __init__(self, script=None):
+                self.script = script or []
+                self.calls: list = []
+
+            @component.output_types(replies=list[ChatMessage])
+            def run(self, messages, tools=None, **kwargs):
+                self.calls.append(messages)
+                index = min(len(self.calls) - 1, len(self.script) - 1)
+                return {"replies": [self.script[index]]}
+
+        def build(script, mode="block", hooks=_NO_HOOKS_ARGUMENT, **agent_kwargs):
+            """`hooks` unset -> wire xaidr; `hooks=None` -> the unprotected control."""
+            generator = ScriptedChatGenerator(script=script)
+            generators.append(generator)
+            if hooks is _NO_HOOKS_ARGUMENT:
+                hooks = delphi_hooks(agent_id="real-haystack",
+                                     enforcement_mode=mode)
+            agent = Agent(chat_generator=generator, tools=[run_shell],
+                          hooks=hooks, **agent_kwargs)
+            agent.warm_up()
+            return agent
+
+        return build, generators, executed, run_shell
+
+    @staticmethod
+    def _tool_call(name, arguments, call_id="c1"):
+        from haystack.dataclasses import ChatMessage, ToolCall
+
+        return ChatMessage.from_assistant(
+            tool_calls=[ToolCall(tool_name=name, arguments=arguments, id=call_id)]
+        )
+
+    @staticmethod
+    def _text(body):
+        from haystack.dataclasses import ChatMessage
+
+        return ChatMessage.from_assistant(body)
+
+    @staticmethod
+    def _user(body):
+        from haystack.dataclasses import ChatMessage
+
+        return ChatMessage.from_user(body)
+
+    @staticmethod
+    def _protect(mode="block"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", XaidrProtectionWarning)
+            return xaidr.protect(targets=["haystack"], agent_id="real-haystack",
+                                 enforcement_mode=mode, quiet=True)
+
+    # ── controls ─────────────────────────────────────────────────────────
+
+    def test_control_the_destructive_tool_runs_unhooked(self, agent_bits):
+        """A block that also happens with the feature off proves nothing."""
+        build, _, executed, _ = agent_bits
+        build([self._tool_call("run_shell", {"command": DESTRUCTIVE}),
+               self._text("done")], hooks=None).run(
+            messages=[self._user("clean the disk")])
+        assert executed == [DESTRUCTIVE], (
+            "the tool did not run unhooked — the attack itself is broken"
+        )
+
+    def test_control_the_injection_reaches_the_model_unhooked(self, agent_bits):
+        build, generators, _, _ = agent_bits
+        build([self._text("reached")], hooks=None).run(
+            messages=[self._user(INJECTION)])
+        assert len(generators[-1].calls) == 1
+
+    # ── the three boundaries ─────────────────────────────────────────────
+
+    def test_injection_is_stopped_before_the_chat_generator(self, agent_bits):
+        """HARD GATE. `before_run` must stop the LOOP, not merely annotate it.
+
+        A hook cannot `break` the Agent's loop, so the input boundary works by
+        exhausting `step_count` — which only stops anything because the Agent
+        re-reads it from State on the line after the `before_run` hooks. If that
+        line ever goes away this is the test that fails, and it fails on the
+        thing that matters: the model was called.
+        """
+        build, generators, _, _ = agent_bits
+        result = build([self._text("the model was reached — FAILURE")]).run(
+            messages=[self._user(INJECTION)])
+        assert generators[-1].calls == [], "the model was called on a blocked input"
+        assert "xaidr" in result["last_message"].text
+
+    def test_a_destructive_tool_call_is_refused(self, agent_bits):
+        """Zero executions AND a transcript the agent can read and recover from."""
+        build, generators, executed, _ = agent_bits
+        result = build([self._tool_call("run_shell", {"command": DESTRUCTIVE}),
+                        self._text("stopped")]).run(
+            messages=[self._user("clean the disk")])
+        assert executed == [], f"the destructive tool EXECUTED: {executed}"
+        tool_messages = [m for m in result["messages"] if m.is_from("tool")]
+        assert tool_messages, "no tool message — the refusal left no trace"
+        assert "[BLOCKED]" in tool_messages[-1].tool_call_result.result
+        assert tool_messages[-1].tool_call_result.error is True
+        assert tool_messages[-1].tool_call_result.origin.tool_name == "run_shell"
+        # ...and the Agent kept going rather than dying on the rewrite.
+        assert len(generators[-1].calls) == 2, (
+            "the Agent did not loop after the refusal — a blocked call must be "
+            "recoverable, not terminal"
+        )
+
+    def test_the_injection_is_caught_in_a_LATER_turn_too(self, agent_bits):
+        """The input boundary reads the LATEST user message, not the first.
+
+        `Agent.run(messages=...)` is normally handed the whole conversation each
+        turn, so a boundary that looked at `messages[0]` would scan the same
+        opening line forever and never see the turn that carried the attack.
+        """
+        build, generators, _, _ = agent_bits
+        result = build([self._text("the model was reached — FAILURE")]).run(
+            messages=[
+                self._user("hello"),
+                self._text("hi, how can I help?"),
+                self._user(INJECTION),
+            ])
+        assert generators[-1].calls == [], "the model was called on a blocked input"
+        assert "xaidr" in result["last_message"].text
+
+    def test_a_secret_is_caught_on_output(self, agent_bits):
+        build, _, _, _ = agent_bits
+        result = build([self._text(LEAKED_SECRET)]).run(
+            messages=[self._user("the creds please")])
+        assert "AKIAIOSFODNN7EXAMPLE" not in result["last_message"].text
+        assert "AKIAIOSFODNN7EXAMPLE" not in "\n".join(
+            m.text or "" for m in result["messages"]
+        ), "the key survived elsewhere in the transcript"
+        assert "xaidr" in result["last_message"].text
+
+    # ── false-positive guards ────────────────────────────────────────────
+
+    def test_a_benign_tool_call_still_runs(self, agent_bits):
+        """Protection that stops real work is not shipped."""
+        build, _, executed, _ = agent_bits
+        build([self._tool_call("run_shell", {"command": "df -h"}),
+               self._text("done")]).run(
+            messages=[self._user("how full is the disk?")])
+        assert executed == ["df -h"], f"a benign tool call was blocked: {executed}"
+
+    def test_a_benign_run_is_byte_identical_to_an_unhooked_one(self, agent_bits):
+        """Nothing in the happy path may be rewritten, relabelled, or renumbered."""
+        build, generators, _, _ = agent_bits
+        hooked = build([self._text("the disk is 40% full")]).run(
+            messages=[self._user("how full is the disk?")])
+        plain = build([self._text("the disk is 40% full")], hooks=None).run(
+            messages=[self._user("how full is the disk?")])
+        assert hooked["last_message"].text == plain["last_message"].text
+        assert hooked["exit_reason"] == plain["exit_reason"] == "text"
+        assert hooked["step_count"] == plain["step_count"] == 1
+        assert [m.role for m in hooked["messages"]] == [m.role for m in plain["messages"]]
+
+    def test_only_the_offending_call_is_removed_from_a_batch(self, agent_bits):
+        """One blocked call in a parallel batch must not cancel its siblings.
+
+        The rewrite rebuilds the whole message, so getting this wrong loses work
+        silently — the benign call would simply never be requested again.
+        """
+        from haystack.dataclasses import ChatMessage, ToolCall
+
+        build, _, executed, _ = agent_bits
+        both = ChatMessage.from_assistant(tool_calls=[
+            ToolCall(tool_name="run_shell", arguments={"command": DESTRUCTIVE}, id="a"),
+            ToolCall(tool_name="run_shell", arguments={"command": "df -h"}, id="b"),
+        ])
+        result = build([both, self._text("done")]).run(
+            messages=[self._user("do both")])
+        assert executed == ["df -h"], (
+            f"expected only the benign call to run, got {executed}"
+        )
+        results = [m.tool_call_result for m in result["messages"] if m.is_from("tool")]
+        assert any("[BLOCKED]" in r.result for r in results)
+        assert any("executed: df -h" in r.result for r in results)
+
+    def test_monitor_mode_does_not_block(self, agent_bits):
+        build, generators, executed, _ = agent_bits
+        result = build([self._tool_call("run_shell", {"command": DESTRUCTIVE}),
+                        self._text("done")], mode="monitor").run(
+            messages=[self._user("clean the disk")])
+        assert executed == [DESTRUCTIVE], "monitor mode blocked; it must not"
+        assert result["exit_reason"] == "text"
+
+    def test_monitor_mode_does_not_block_an_injection_either(self, agent_bits):
+        build, generators, _, _ = agent_bits
+        build([self._text("reached")], mode="monitor").run(
+            messages=[self._user(INJECTION)])
+        assert len(generators[-1].calls) == 1, "monitor mode stopped the model"
+
+    # ── the async run loop is a SEPARATE code path in the Agent ───────────
+
+    def test_the_async_run_blocks_at_all_three_boundaries(self, agent_bits):
+        """`Agent.run_async` duplicates `_run_step`, hooks and all.
+
+        Haystack calls `run_async` on a hook when it defines one and offloads
+        `run` to a thread when it does not, so this exercises a different method
+        on our side as well as a different loop on theirs.
+        """
+        import asyncio
+
+        build, generators, executed, _ = agent_bits
+
+        agent = build([self._tool_call("run_shell", {"command": DESTRUCTIVE}),
+                       self._text("stopped")])
+        result = asyncio.run(agent.run_async(messages=[self._user("clean the disk")]))
+        assert executed == [], f"the destructive tool EXECUTED on run_async: {executed}"
+        assert any("[BLOCKED]" in m.tool_call_result.result
+                   for m in result["messages"] if m.is_from("tool"))
+
+        agent = build([self._text("the model was reached — FAILURE")])
+        asyncio.run(agent.run_async(messages=[self._user(INJECTION)]))
+        assert generators[-1].calls == [], "the model was called on a blocked input"
+
+        agent = build([self._text(LEAKED_SECRET)])
+        result = asyncio.run(agent.run_async(messages=[self._user("the creds please")]))
+        assert "AKIAIOSFODNN7EXAMPLE" not in result["last_message"].text
+
+    # ── the honesty of what a blocked run REPORTS ────────────────────────
+
+    def test_a_blocked_input_reports_itself_and_not_max_agent_steps(self, agent_bits):
+        """The documented cost of the input boundary, pinned.
+
+        Exhausting the step budget is the only way a `before_run` hook can stop
+        the loop, and that path is the one the Agent labels `max_agent_steps`
+        with a step count of 2**62. Both would be lies about why the Agent
+        stopped, so `after_run` rewrites them. `exit_reason` becoming a value
+        outside Haystack's own set is deliberate — a block that renders as
+        `"text"` is a block nothing downstream can route on.
+        """
+        from xaidr.integrations.haystack import EXIT_REASON_BLOCKED
+
+        build, _, _, _ = agent_bits
+        result = build([self._text("unreached")]).run(
+            messages=[self._user(INJECTION)])
+        assert result["exit_reason"] == EXIT_REASON_BLOCKED
+        assert result["step_count"] == 0, (
+            f"the stop sentinel leaked to the caller: {result['step_count']}"
+        )
+        assert EXIT_REASON_BLOCKED not in ("text", "max_agent_steps")
+
+    def test_a_blocked_output_reports_itself_too(self, agent_bits):
+        from xaidr.integrations.haystack import EXIT_REASON_BLOCKED
+
+        build, _, _, _ = agent_bits
+        result = build([self._text(LEAKED_SECRET)]).run(
+            messages=[self._user("the creds please")])
+        assert result["exit_reason"] == EXIT_REASON_BLOCKED
+
+    # ── protect() ────────────────────────────────────────────────────────
+
+    def test_protect_instruments_every_agent_built_after_it(self, agent_bits):
+        """HARD GATE for the drop-in path: no `hooks=` at the call site at all."""
+        build, generators, executed, _ = agent_bits
+        manifest = self._protect()
+        try:
+            assert [r.target for r in manifest.patched] == [
+                "haystack.components.agents.agent.Agent.__init__"
+            ], repr(manifest)
+            result = build([self._tool_call("run_shell", {"command": DESTRUCTIVE}),
+                            self._text("stopped")], hooks=None).run(
+                messages=[self._user("clean the disk")])
+            assert executed == [], (
+                f"the destructive tool EXECUTED despite protect(): {executed}"
+            )
+            assert any("[BLOCKED]" in m.tool_call_result.result
+                       for m in result["messages"] if m.is_from("tool"))
+
+            build([self._text("the model was reached — FAILURE")], hooks=None).run(
+                messages=[self._user(INJECTION)])
+            assert generators[-1].calls == [], "the model was called on a blocked input"
+
+            result = build([self._text(LEAKED_SECRET)], hooks=None).run(
+                messages=[self._user("the creds please")])
+            assert "AKIAIOSFODNN7EXAMPLE" not in result["last_message"].text
+        finally:
+            manifest.unprotect()
+
+    def test_unprotect_really_removes_the_injection(self, agent_bits):
+        build, _, executed, _ = agent_bits
+        manifest = self._protect()
+        manifest.unprotect()
+        agent = build([self._tool_call("run_shell", {"command": DESTRUCTIVE}),
+                       self._text("done")], hooks=None)
+        assert agent.hooks == {}, f"hooks survived unprotect(): {agent.hooks}"
+        agent.run(messages=[self._user("clean the disk")])
+        assert executed == [DESTRUCTIVE]
+
+    def test_a_second_protect_does_not_inject_the_hooks_twice(self, agent_bits):
+        """Rule 4 against a constructor seam, where double-wrapping is visible."""
+        build, _, executed, _ = agent_bits
+        first = self._protect()
+        second = self._protect()
+        try:
+            assert [r.already_patched for r in second.patched] == [True]
+            agent = build([self._text("hi")], hooks=None)
+            assert {point: len(hooks) for point, hooks in agent.hooks.items()} == {
+                "before_run": 1, "before_tool": 1, "after_run": 1
+            }, agent.hooks
+        finally:
+            second.unprotect()
+            first.unprotect()
+
+    def test_protect_does_not_duplicate_hooks_a_caller_passed_by_hand(self, agent_bits):
+        """`hooks=delphi_hooks(...)` under an active protect() must not double-scan."""
+        from xaidr.integrations.haystack import delphi_hooks
+
+        build, _, executed, _ = agent_bits
+        manifest = self._protect()
+        try:
+            agent = build([self._tool_call("run_shell", {"command": DESTRUCTIVE}),
+                           self._text("stopped")],
+                          hooks=delphi_hooks(agent_id="by-hand",
+                                             enforcement_mode="block"))
+            assert {point: len(h) for point, h in agent.hooks.items()} == {
+                "before_run": 1, "before_tool": 1, "after_run": 1
+            }, agent.hooks
+            agent.run(messages=[self._user("clean the disk")])
+        finally:
+            manifest.unprotect()
+        assert executed == []
+
+    def test_protect_leaves_a_caller_s_own_hooks_alone(self, agent_bits):
+        """Merging, not replacing: someone else's hook must still run."""
+        build, _, _, _ = agent_bits
+        seen: list = []
+
+        class Counter:
+            def run(self, state):
+                seen.append(len(state.data.get("messages") or []))
+
+            def to_dict(self):
+                return {"type": "t.Counter", "init_parameters": {}}
+
+            @classmethod
+            def from_dict(cls, data):
+                return cls()
+
+        manifest = self._protect()
+        try:
+            agent = build([self._text("hi")], hooks={"before_llm": [Counter()],
+                                                     "before_run": [Counter()]})
+            assert len(agent.hooks["before_run"]) == 2, agent.hooks
+            assert "before_llm" in agent.hooks
+            agent.run(messages=[self._user("hello")])
+        finally:
+            manifest.unprotect()
+        assert seen, "the caller's own hooks did not run under protect()"
+
+    # ── NEGATIVE: what protect() and the hooks do NOT cover ──────────────
+
+    def test_an_agent_built_BEFORE_protect_is_NOT_instrumented(self, agent_bits):
+        """The cost of a CONSTRUCTOR seam, pinned rather than left to be found.
+
+        `langchain_core.tools.BaseTool.run` is a method seam: patching it covers
+        objects that already exist. `Agent.__init__` cannot, because by the time
+        it is patched the Agent's `hooks` dict is already built. Every other
+        seam in this package would catch this Agent; this one does not.
+        """
+        build, _, executed, _ = agent_bits
+        agent = build([self._tool_call("run_shell", {"command": DESTRUCTIVE}),
+                       self._text("done")], hooks=None)
+        manifest = self._protect()
+        try:
+            agent.run(messages=[self._user("clean the disk")])
+        finally:
+            manifest.unprotect()
+        assert executed == [DESTRUCTIVE], (
+            "an Agent built before protect() was instrumented — the seam has "
+            "grown retroactive coverage; update this test, the manifest note "
+            "and the README"
+        )
+
+    def test_tool_RESULTS_are_not_scanned(self, agent_bits):
+        """Only tool ARGUMENTS are. The `after_tool` hook point is left unused.
+
+        An injected payload coming BACK from a tool reaches the model verbatim.
+        Haystack offers the seam, so this is a decision rather than a limit, and
+        it is a test so that registering there later cannot happen quietly.
+        """
+        from haystack import component
+        from haystack.components.agents import Agent
+        from haystack.dataclasses import ChatMessage
+        from haystack.tools import tool
+
+        from xaidr.integrations.haystack import delphi_hooks
+
+        @tool
+        def fetch_page(url: str) -> str:
+            """Fetch a web page."""
+            return INJECTION
+
+        @component
+        class Scripted:
+            def __init__(self, script=None):
+                self.script = script or []
+                self.calls: list = []
+
+            @component.output_types(replies=list[ChatMessage])
+            def run(self, messages, tools=None, **kwargs):
+                self.calls.append(messages)
+                return {"replies": [self.script[min(len(self.calls) - 1,
+                                                    len(self.script) - 1)]]}
+
+        agent = Agent(
+            chat_generator=Scripted(script=[
+                self._tool_call("fetch_page", {"url": "https://example.com/a"}),
+                self._text("done"),
+            ]),
+            tools=[fetch_page],
+            hooks=delphi_hooks(agent_id="real-haystack", enforcement_mode="block"),
+        )
+        agent.warm_up()
+        result = agent.run(messages=[self._user("read that page")])
+        results = [m.tool_call_result.result for m in result["messages"]
+                   if m.is_from("tool")]
+        assert results == [INJECTION], (
+            "a tool RESULT was scanned or rewritten — this integration has "
+            "grown an after_tool boundary; update this test, the manifest's "
+            "found_unpatchable entry and the README"
+        )
+
+    def test_a_pipeline_without_an_agent_gets_nothing(self, agent_bits):
+        """`Pipeline._run_component` is not a boundary and is not treated as one.
+
+        A component's `run(**inputs)` takes an arbitrary per-component dict with
+        no notion of a user message, so nothing here scans it. Someone reading
+        "Haystack is covered" must not conclude their RAG pipeline is.
+        """
+        from haystack import Pipeline, component
+
+        @component
+        class Echo:
+            @component.output_types(text=str)
+            def run(self, text: str):
+                return {"text": text}
+
+        pipeline = Pipeline()
+        pipeline.add_component("echo", Echo())
+        manifest = self._protect()
+        try:
+            result = pipeline.run({"echo": {"text": INJECTION}})
+        finally:
+            manifest.unprotect()
+        assert result["echo"]["text"] == INJECTION, (
+            "a plain component's input was scanned — protect() has grown a "
+            "pipeline boundary; update this test and the manifest notes"
+        )
+
+    def test_the_manifest_names_the_tool_result_gap_and_the_two_costs(self):
+        """The manifest must not be readable as "Haystack is covered"."""
+        import haystack.components.agents  # noqa: F401  (must be in sys.modules)
+
+        manifest = self._protect()
+        try:
+            gap = next(r for r in manifest.found_unpatchable
+                       if r.framework == "haystack")
+            seam = next(r for r in manifest.patched if r.framework == "haystack")
+            notes = " ".join(manifest.notes)
+        finally:
+            manifest.unprotect()
+        assert gap.boundary == "tool result"
+        assert "after_tool" in gap.detail
+        assert seam.boundary == "input+output+tool"
+        # The three things a reader would otherwise have to discover at runtime.
+        assert "CONSTRUCTED BEFORE protect()" in notes
+        assert "Pipeline with no Agent" in notes
+        assert "maximum agent steps" in notes and "xaidr_blocked" in notes
+
+    def test_a_broken_boundary_fails_open_and_says_so(self, agent_bits, caplog):
+        """A scan fault must not take the agent down — and must not be silent.
+
+        Failing open is the rule everywhere in this package. Failing open
+        QUIETLY is the failure mode it exists to prevent, so the warning is
+        asserted alongside the survival, and asserted to carry the exception
+        type without its message (which can interpolate agent content).
+        """
+        import logging
+
+        build, generators, executed, _ = agent_bits
+
+        class Exploding:
+            agent_id = "boom"
+            enforcement_mode = "block"
+
+            def scan(self, *a, **kw):
+                raise RuntimeError("a prompt that must not be logged")
+
+            scan_output = scan_tool_call = scan
+
+        from xaidr.integrations.haystack import _DelphiHook
+
+        hooks = {point: [_DelphiHook(point, sensor=Exploding())]
+                 for point in ("before_run", "before_tool", "after_run")}
+        with caplog.at_level(logging.WARNING, logger="xaidr.haystack"):
+            result = build([self._tool_call("run_shell", {"command": "df -h"}),
+                            self._text("done")], hooks=hooks).run(
+                messages=[self._user("how full is the disk?")])
+        assert executed == ["df -h"], "a broken boundary stopped the agent"
+        assert result["last_message"].text == "done"
+        assert result["exit_reason"] == "text"
+
+        warnings_seen = [r.getMessage() for r in caplog.records]
+        assert warnings_seen, "a boundary failed open in total silence"
+        assert any("failed open (RuntimeError)" in m for m in warnings_seen), warnings_seen
+        assert not any("must not be logged" in m for m in warnings_seen), (
+            "the fail-open warning leaked the exception message, which can "
+            "carry the prompt or tool argument that caused it"
+        )
+
+    # ── API-drift canaries ───────────────────────────────────────────────
+
+    def test_the_hook_points_this_integration_binds_to_still_exist(self):
+        """Everything here rests on three names in haystack.hooks.protocol."""
+        from haystack.hooks.protocol import VALID_HOOK_POINTS
+
+        from xaidr.integrations.haystack import _POINTS
+
+        missing = [p for p in _POINTS if p not in VALID_HOOK_POINTS]
+        assert not missing, (
+            f"haystack no longer offers hook point(s) {missing} — this "
+            f"integration's whole seam is gone (it offers: {VALID_HOOK_POINTS})"
+        )
+
+    def test_the_agent_still_re_reads_pending_tool_calls_after_before_tool(self):
+        """The tool block is a State REWRITE; this is the line that honours it.
+
+        If the Agent ever stops re-reading the pending calls from State after
+        the `before_tool` hooks, removing a call stops removing its execution
+        and the tool boundary silently becomes a no-op.
+        """
+        from haystack.components.agents.agent import (
+            _pending_tool_call_messages_from_state,
+        )
+        from haystack.dataclasses import ChatMessage, ToolCall
+
+        refused = ChatMessage.from_tool(
+            tool_result="[BLOCKED]",
+            origin=ToolCall(tool_name="t", arguments={}, id="x"),
+            error=True,
+        )
+
+        class FakeState:
+            data = {"messages": [refused]}
+
+        assert _pending_tool_call_messages_from_state(FakeState()) == [], (
+            "a last message with no tool calls no longer means 'run no tools' — "
+            "the tool boundary's block mechanism is gone"
+        )
+
+    def test_the_agent_constructor_still_takes_hooks(self):
+        """API-drift canary for the seam protect() patches."""
+        import inspect
+
+        from haystack.components.agents import Agent
+
+        params = inspect.signature(Agent.__init__).parameters
+        assert "hooks" in params, (
+            "Agent.__init__ no longer takes hooks= — protect()'s Haystack seam "
+            "is gone"
+        )
+        assert params["hooks"].kind is inspect.Parameter.KEYWORD_ONLY, (
+            "hooks= is no longer keyword-only; the protect() patch injects it "
+            "into kwargs and would now miss a positional caller"
+        )
+
+    def test_a_hook_registered_at_the_wrong_point_raises(self):
+        """Each hook declares its point, so misuse fails loudly at construction."""
+        from haystack import component
+        from haystack.components.agents import Agent
+        from haystack.dataclasses import ChatMessage
+
+        from xaidr.integrations.haystack import delphi_hooks
+
+        @component
+        class Bare:
+            @component.output_types(replies=list[ChatMessage])
+            def run(self, messages, tools=None, **kwargs):
+                return {"replies": [ChatMessage.from_assistant("x")]}
+
+        output_hook = delphi_hooks(agent_id="misuse")["after_run"]
+        with pytest.raises(ValueError, match="after_run"):
+            Agent(chat_generator=Bare(), hooks={"before_llm": output_hook})
+
+    def test_the_hooks_serialize_and_round_trip(self):
+        """`Agent.to_dict()` must not explode because xaidr is wired in.
+
+        Serializing works out of the box; DEserializing needs the module on
+        Haystack's trusted-module allowlist, which is an explicit opt-in and is
+        asserted here so the README's instruction stays true.
+        """
+        from haystack.core.serialization import allow_deserialization_module
+        from haystack.hooks.utils import (
+            _deserialize_hooks_dictionary,
+            _serialize_hooks_dictionary,
+        )
+
+        from xaidr.integrations.haystack import _DelphiHook, delphi_hooks
+
+        serialized = _serialize_hooks_dictionary(
+            delphi_hooks(agent_id="round-trip", enforcement_mode="block")
+        )
+        assert set(serialized) == {"before_run", "before_tool", "after_run"}
+        assert serialized["before_tool"][0]["type"] == (
+            "xaidr.integrations.haystack._DelphiHook"
+        )
+
+        allow_deserialization_module("xaidr.integrations.haystack")
+        restored = _deserialize_hooks_dictionary(serialized)
+        assert isinstance(restored["before_tool"][0], _DelphiHook)
+        assert restored["before_tool"][0].point == "before_tool"
+        assert restored["before_tool"][0].sensor.enforcement_mode == "block"

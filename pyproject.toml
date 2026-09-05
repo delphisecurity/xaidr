@@ -122,10 +122,29 @@ langchain = ["langchain>=1.0", "langchain-core>=1.0"]
 # to patching `BaseTool.run`, which the agent tool path does not go through.
 # `pip install xaidr[crewai]`.
 crewai = ["crewai>=1.0"]
+# Haystack Agent hooks (integrations/haystack.py) — imports `haystack.hooks` and
+# `haystack.components.agents`. Referenced by the integration's own error message
+# ("Install with: pip install 'xaidr[haystack]'").
+#
+# THE FLOOR IS 3.0 BECAUSE THE SEAM DOES NOT EXIST BEFORE IT, not because 3.0 is
+# the newest. `haystack.hooks` — the Agent hook points this integration binds to
+# (`before_run`, `before_tool`, `after_run`) — was added in haystack-ai 3.0.
+# haystack-ai 2.x HAS an `Agent`, so a 2.x install would not fail at import; it
+# would fail inside `Agent.__init__` with an unrelated TypeError about an
+# unexpected `hooks` keyword. The integration therefore checks for the hook
+# points explicitly and reports a build without them as unpatchable, rather than
+# falling back to patching `Tool.invoke` — which is reachable but sees the
+# POST-state-injection arguments rather than the model's, and has no way to
+# refuse a call without recording it as having run.
+#
+# The distribution is `haystack-ai`; the import name is `haystack`.
+# `pip install 'xaidr[haystack]'`.
+haystack = ["haystack-ai>=3.0"]
 # Dev/test tooling — the base pytest regression suite. `pip install xaidr[dev]`.
-# tests/test_real_frameworks.py additionally exercises the REAL langchain and
-# crewai when they are present, and skips cleanly when they are not — install
-# `xaidr[dev,langchain]` / `xaidr[dev,crewai]` to run those.
+# tests/test_real_frameworks.py additionally exercises the REAL langchain,
+# crewai and haystack when they are present, and skips cleanly when they are
+# not — install `xaidr[dev,langchain]` / `xaidr[dev,crewai]` /
+# `xaidr[dev,haystack]` to run those.
 dev = ["pytest"]
 
 [project.urls]

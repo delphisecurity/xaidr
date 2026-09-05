@@ -776,6 +776,107 @@ def _patch_llama_index(ctx: PatchContext) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# haystack (deepset) — Agent hooks, injected at construction.
+#
+# Haystack has no global hook registry (unlike CrewAI) and no middleware=
+# parameter on a module function (unlike LangChain): its hooks are a
+# CONSTRUCTOR ARGUMENT, ``Agent(hooks={...})``. So the seam is
+# ``Agent.__init__`` itself, and what the patch does is merge this package's
+# hooks into whatever the caller passed.
+#
+# WHY NOT ``Tool.invoke``, which is the obvious class-method seam and would be
+# the more robust KIND of seam. Two reasons, both measured against
+# haystack-ai 3.1.1 rather than assumed:
+#
+#   1. It is the wrong ARGUMENTS. The Agent calls ``tool.invoke(**args)`` where
+#      ``args`` is ``_prepare_tool_args(...)`` output — the model's arguments
+#      AFTER ``_inject_state_args`` has merged in State values and possibly a
+#      streaming callback. Scanning that means scanning a live ``State`` object
+#      alongside the model's text. ``before_tool`` sees ``tool_call.arguments``,
+#      which is exactly what the model asked for and exactly ``scan_tool_call``'s
+#      input, with nothing added and nothing lost.
+#   2. It cannot BLOCK cleanly. ``Tool.invoke``'s only refusal channel is its
+#      return value, which becomes the tool's result — the call is recorded as
+#      having run. The ``before_tool`` hook removes the call before the executor
+#      sees it, which is the framework's own documented rejection path and the
+#      one its ``ConfirmationHook`` uses.
+#
+# ``Pipeline._run_component`` was considered and rejected too: it is
+# ``instance.run(**inputs)`` over an arbitrary per-component input dict, with no
+# notion of a user message, so a scan there would be scanning opaque state.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _patch_haystack(ctx: PatchContext) -> None:
+    module_name = "haystack.components.agents.agent"
+    mod = ctx.module(module_name)
+    if not hasattr(mod, "Agent"):
+        raise PatchUnavailable(
+            f"{module_name}.Agent not found — unexpected haystack layout. For "
+            "input/output, call sensor.scan()/scan_output() at your own entry "
+            "points; for tools, use sensor.protect_tools(...)"
+        )
+    # ctx.module() FIRST so a haystack without the 3.x hook API is reported as
+    # unpatchable rather than triggering an import (rule 1). delphi_hooks()
+    # imports haystack.hooks.protocol; requiring it in sys.modules here is what
+    # keeps that import a module-cache lookup and not a framework import.
+    ctx.module("haystack.hooks.protocol")
+    try:
+        from ..integrations.haystack import delphi_hooks, inject_hooks
+    except Exception as exc:  # pragma: no cover - import of our own module
+        raise PatchUnavailable(f"xaidr Haystack integration unavailable: {exc}") from exc
+    try:
+        hooks = delphi_hooks(sensor=ctx.sensor)
+    except ImportError as exc:
+        raise PatchUnavailable(f"haystack>=3.0 hook API not importable: {exc}") from exc
+
+    def factory(orig: Callable) -> Callable:
+        def before(args: tuple, kwargs: dict) -> Optional[Halt]:
+            kwargs["hooks"] = inject_hooks(kwargs.get("hooks"), hooks)
+            return None
+
+        return make_wrapper(orig, before=before)
+
+    ctx.install(
+        module_name, "Agent.__init__", "input+output+tool", factory,
+        "merges xaidr.integrations.haystack.delphi_hooks into every Agent(): "
+        "before_run input scan (the chat generator is not called on a block), "
+        "before_tool tool-argument scan (the call is removed before it "
+        "executes), after_run output scan — all on the same sensor",
+    )
+    ctx.unpatchable(
+        f"{module_name}.Agent.hooks['after_tool']", "tool result",
+        "tool RESULTS are not scanned — only tool ARGUMENTS are. Haystack does "
+        "offer the seam (the after_tool hook point runs once the result messages "
+        "are in State); this build deliberately does not register there, so a "
+        "tool returning an injected payload is not caught. Scan it yourself with "
+        "sensor.scan(result, direction='input') in an after_tool hook of your own.",
+    )
+    ctx.note(
+        "haystack: the seam is Agent.__init__, so an Agent CONSTRUCTED BEFORE "
+        "protect() keeps the hooks it was built with and is NOT instrumented. "
+        "Unlike deepagents there is no import-order trap — Agent.__init__ is a "
+        "class attribute, so calling protect() again after importing your agent "
+        "modules covers every Agent built from then on."
+    )
+    ctx.note(
+        "haystack: a Pipeline with no Agent in it gets NOTHING from protect(). "
+        "Pipeline._run_component calls instance.run(**inputs) on an arbitrary "
+        "per-component dict, which is not a place a message-shaped scan can be "
+        "made honestly. Call sensor.scan()/scan_output() at your own entry and "
+        "exit points for those."
+    )
+    ctx.note(
+        "haystack: a blocked INPUT stops the run by exhausting the Agent's step "
+        "budget (the only mechanism a before_run hook has), so haystack logs "
+        "'Agent reached maximum agent steps of N, stopping.' at WARNING on every "
+        "block. The hooks rewrite exit_reason to 'xaidr_blocked' and restore "
+        "step_count to 0, so the OUTPUT is honest; the log line is haystack's "
+        "and cannot be suppressed from a hook."
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # MCP clients
 # ─────────────────────────────────────────────────────────────────────────
 
@@ -914,6 +1015,18 @@ TARGETS: tuple[FrameworkTarget, ...] = (
     FrameworkTarget(
         "mcp", ("mcp",), _patch_mcp,
         "MCP client call_tool arguments + returned content",
+    ),
+    # Detected on the AGENTS module, not on `haystack`. Two reasons. A
+    # Haystack Pipeline with no Agent in it has no boundary this can reach, and
+    # warning that it is "present but unpatched" would be a false alarm — which
+    # is how a loud manifest stops being read. And the name `haystack` is also
+    # farm-haystack 1.x, which has no `components` package at all, so keying on
+    # this module cannot mistake one for the other.
+    FrameworkTarget(
+        "haystack",
+        ("haystack.components.agents", "haystack.components.agents.agent"),
+        _patch_haystack,
+        "input + output + tool via delphi_hooks injection into Agent.__init__",
     ),
 )
 

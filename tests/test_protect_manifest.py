@@ -32,6 +32,11 @@ import fake_frameworks as fakes
 FAKE_PREFIXES = (
     "langchain", "langchain_core", "langgraph", "deepagents", "agents",
     "crewai", "autogen", "autogen_core", "llama_index", "mcp", "requests",
+    # No fake haystack exists; it is listed so that a REAL haystack imported by
+    # tests/test_real_frameworks.py cannot leak into these tests through
+    # sys.modules and make them order-dependent. Same reason "langchain" is here
+    # in a config that has the real langchain installed.
+    "haystack",
 )
 
 
@@ -214,7 +219,7 @@ def test_importing_xaidr_patches_nothing():
         "appeared = {m.split('.')[0] for m in set(sys.modules) - before_modules}",
         "leaked = appeared & {'httpx', 'requests', 'langchain', 'langchain_core',"
         " 'langgraph', 'deepagents', 'crewai', 'autogen', 'autogen_core',"
-        " 'llama_index', 'mcp'}",
+        " 'llama_index', 'mcp', 'haystack'}",
         "assert not leaked, f'importing xaidr pulled in {sorted(leaked)}'",
     ]
     if HAVE_HTTPX:
@@ -311,12 +316,17 @@ def test_nothing_installed_still_returns_a_usable_manifest():
     gate is about a genuinely bare interpreter — one where `pip install xaidr`
     pulled in nothing at all.
     """
+    # The expected count is DERIVED from the registry, not written down. A
+    # literal here was wrong the moment a framework was added, and the failure
+    # it produced said nothing about the gate it was guarding.
     code = (
         "import xaidr, sys;"
+        "from xaidr.autopatch.frameworks import TARGETS;"
         "m = xaidr.protect(agent_id='bare');"
         "assert m.patched == [], m.patched;"
         "assert m.found_unpatchable == [], m.found_unpatchable;"
-        "assert len(m.not_present) == 12, m.not_present;"
+        "assert sorted(m.not_present) == sorted(t.name for t in TARGETS),"
+        " m.not_present;"
         "assert m.fully_covered;"
         "assert 'nothing was instrumented' in repr(m);"
         "print('bare-ok')"

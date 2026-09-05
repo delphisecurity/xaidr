@@ -117,6 +117,7 @@ Optional extras are installed only when you use the matching feature:
 |---|---|---|
 | `xaidr[langchain]` | LangChain middleware (all three boundaries) | `langchain`, `langchain-core` |
 | `xaidr[crewai]` | CrewAI `before_tool_call` hook + `Task(guardrail=…)` | `crewai` |
+| `xaidr[haystack]` | Haystack `Agent(hooks=…)` (all three boundaries) | `haystack-ai` |
 | `xaidr[policy]` | loading a YAML policy **file** (`set_policy(dict)` needs nothing) | `PyYAML` |
 | `xaidr[http]` | `protect_http` / `ProtectedHttpClient`, `WebhookReporter` | `httpx` |
 | `xaidr[otel]` | `OTelReporter` (emit events as OTel log records) | `opentelemetry-api` |
@@ -899,6 +900,7 @@ the reversal handle (`manifest.unprotect()`). Four rules govern it:
 | `autogen-core` / `autogen` | `BaseTool.run_json`, `ConversableAgent.execute_function` | tool |
 | `llama-index` | `FunctionTool.call` / `.acall` | tool |
 | `mcp` | `ClientSession.call_tool` | tool arguments + the server's returned content |
+| `haystack` | `components.agents.agent.Agent.__init__` | input + output + tool, via `delphi_hooks` injection. **Agents built *before* `protect()` are not covered** — a constructor seam cannot reach an object that already exists |
 
 **Known limits, in the manifest rather than the footnotes.** A framework
 imported *after* `protect()` is not patched — call `protect()` again. A
@@ -1135,6 +1137,103 @@ through.
 **MCP note:** MCP tool calls that flow through LangChain's tool interface are
 covered by `wrap_tool_call`. MCP-specific surfaces outside that path should be
 covered by scanning what enters through your normal tool boundary.
+
+### Haystack Agent hooks
+
+Haystack's hooks are a **constructor argument**, not a middleware list and not a
+global registry, so `delphi_hooks()` returns the `hooks=` mapping itself:
+
+```python
+from haystack.components.agents import Agent
+from xaidr.integrations.haystack import delphi_hooks
+
+agent = Agent(
+    chat_generator=OpenAIChatGenerator(),
+    tools=[search_tool, send_email],
+    hooks=delphi_hooks(agent_id="support-agent", enforcement_mode="block"),
+)
+```
+
+| Boundary | Hook point | Scans via | On block |
+|---|---|---|---|
+| Input | `before_run` | `scan` | refusal assistant message; **the chat generator is never called** |
+| Tool call | `before_tool` | `scan_tool_call` — name + args, **before execution** | the call is removed and a refusal tool-result takes its place; the tool is **not** invoked |
+| Output | `after_run` | `scan_output` | the final assistant message is replaced |
+
+Merge it with hooks of your own rather than replacing either —
+`hooks.setdefault("before_llm", []).append(my_hook)`. All three fail open, and
+`reporter=` and any `Sensor` keyword pass through. `Agent.run_async` is covered
+by the same hooks; it is a separate loop in Haystack and is tested separately here.
+
+**A hook cannot return a verdict, so each boundary blocks by rewriting `State`.**
+Haystack's `Hook` protocol is `run(state) -> None` — there is no `return False`
+as in CrewAI and no `jump_to` as in LangChain. Each rewrite uses the mechanism
+the Agent documents at that point, and the tool refusal is shaped exactly like
+Haystack's own `ConfirmationHook` shapes a rejection (an assistant message
+carrying the rejected call, then a `ChatMessage.from_tool(..., error=True)`), so
+the Agent loops on and can recover rather than dying on the rewrite. One blocked
+call in a parallel batch does not cancel its siblings.
+
+**The input boundary costs you two things, and you should know both.**
+Exhausting the Agent's step budget is the only way a `before_run` hook can stop
+the loop — a hook cannot `break` it — and that is the path Haystack labels
+`max_agent_steps`:
+
+* Haystack logs `Agent reached maximum agent steps of N, stopping.` at WARNING on
+  every blocked input. That line is Haystack's, from a hook it cannot be
+  suppressed, and it is not a real step-budget exhaustion.
+* `exit_reason` would otherwise read `"max_agent_steps"` with a step count of
+  `2**62`. The `after_run` hook rewrites both, to `"xaidr_blocked"` and `0`.
+  **`"xaidr_blocked"` is outside Haystack's documented set** (`"text"`, a tool
+  name, `"max_agent_steps"`), so a `ConditionalRouter` switching on `exit_reason`
+  needs a branch for it. A block that rendered as `"text"` would be a block
+  nothing downstream could route on, which is why it is not one.
+
+**Two things this does not cover, said here rather than left to be discovered.**
+
+* **Tool RESULTS are not scanned** — only tool ARGUMENTS are. Haystack *does*
+  offer the seam (`after_tool` runs once the result messages are in `State`);
+  this build deliberately does not register there, so a tool that returns an
+  injected payload reaches the model verbatim. It is reported as
+  `found_unpatchable` and pinned by a negative test. Close it yourself with an
+  `after_tool` hook calling `sensor.scan(result, direction="input")`.
+* **A `Pipeline` with no `Agent` in it gets nothing.** These are the *Agent's*
+  hooks. `Pipeline._run_component` calls `instance.run(**inputs)` on an
+  arbitrary per-component dict with no notion of a user message, so there is no
+  honest message-shaped scan to make there and none is attempted. Call
+  `sensor.scan()` / `scan_output()` at your own entry and exit points for a RAG
+  pipeline. Also pinned by a negative test.
+
+**Why the seam is `Agent.__init__` and not `Tool.invoke`,** which is the more
+robust *kind* of seam (a method seam reaches objects that already exist).
+Measured against haystack-ai 3.1.1: the Agent calls `tool.invoke(**args)` where
+`args` is `_prepare_tool_args(...)` output — the model's arguments *after*
+`_inject_state_args` has merged in `State` values and possibly a streaming
+callback — so scanning there means scanning a live `State` object alongside the
+model's text, and `Tool.invoke`'s only refusal channel is a return value, which
+records the call as having run. `before_tool` sees `tool_call.arguments`, which
+is exactly `scan_tool_call`'s input with nothing added and nothing lost, and
+removes the call before the executor sees it. The price of that choice is the
+constructor seam's one real limit, which is a test rather than a footnote: an
+`Agent` **constructed before `protect()`** keeps the hooks it was built with and
+is not instrumented. There is no import-order trap of the `deepagents` kind —
+`Agent.__init__` is a class attribute — so calling `protect()` again after
+importing your agent modules covers every `Agent` built from then on.
+
+**Serialization.** `Agent.to_dict()` and `Pipeline.dumps()` work with these
+hooks attached; what round-trips is `agent_id` and `enforcement_mode`, not a
+live `Sensor`, so a `reporter=` / `policy_file=` / circuit breaker must be
+rebuilt in the loading process. Loading also needs an explicit opt-in, because
+Haystack refuses to deserialize a class whose module is not on its trusted list:
+
+```python
+from haystack.core.serialization import allow_deserialization_module
+allow_deserialization_module("xaidr.integrations.haystack")
+```
+
+Everything above is pinned by
+`tests/test_real_frameworks.py::TestRealHaystack`, which imports the real
+`haystack-ai` and skips when it is absent.
 
 ---
 
@@ -2173,7 +2272,7 @@ detection ones.
 
 Verified with `python -m pytest -q`. **The figure quoted here is the `base`
 configuration — `pip install .` plus `pytest`, no extras at all, no framework
-installed: 7436 passed, 113 skipped, 0 failed**, identical across three
+installed: 7436 passed, 142 skipped, 0 failed**, identical across three
 consecutive serial runs. That configuration is quoted because it is the one that
 proves the headline claim: the core suite runs with **zero third-party
 dependencies**. The suite covers the public scan APIs, wrappers, policy,
@@ -2186,10 +2285,11 @@ macOS 26.6 / arm64:
 
 | configuration | install | result |
 |---|---|---|
-| `base` (CI job) | `pip install .` && `pip install pytest` | **7436 passed, 113 skipped** |
-| `full` (CI job) | `pip install ".[http,trace,dev]"` | **7493 passed, 91 skipped** |
-| `full` + the LangChain stack | &nbsp;&nbsp;+ `".[langchain]" langgraph deepagents llama-index-core` | **7530 passed, 59 skipped** |
-| `full` + CrewAI | &nbsp;&nbsp;+ `".[crewai]"` | **7504 passed, 80 skipped** |
+| `base` (CI job) | `pip install .` && `pip install pytest` | **7436 passed, 142 skipped** |
+| `full` (CI job) | `pip install ".[http,trace,dev]"` | **7493 passed, 120 skipped** |
+| `full` + the LangChain stack | &nbsp;&nbsp;+ `".[langchain]" langgraph deepagents llama-index-core` | **7530 passed, 88 skipped** |
+| `full` + CrewAI | &nbsp;&nbsp;+ `".[crewai]"` | **7504 passed, 109 skipped** |
+| `full` + Haystack | &nbsp;&nbsp;+ `".[haystack]"` | **7522 passed, 91 skipped** |
 | `corpus` (CI job) | `pip install .` && `python scripts/corpus_report.py` | benign gates **PASS**, exit 0 |
 | `corpus` (CI job) | &nbsp;&nbsp;&nbsp;&nbsp;then `python scripts/intent_metrics.py` | catch rate + denominator printed into the log; reported, not gated |
 
@@ -2197,7 +2297,14 @@ The LangChain-stack row is the one that exercises the real LangGraph `ToolNode`
 return contract and the real Deep Agents import-order check; the CrewAI row is
 what proves those two changes left the CrewAI seam alone. Framework versions in
 that measurement: langchain 1.4.0, langchain-core 1.6.1, langgraph 1.2.11,
-deepagents 0.7.13, llama-index-core 0.14.24, crewai 1.15.20.
+deepagents 0.7.13, llama-index-core 0.14.24, crewai 1.15.20, haystack-ai 3.1.1.
+
+**Read the four framework rows against each other, not one at a time.** Adding
+the Haystack integration moved the pass count in exactly one of them: every
+other config gained 29 skips and not a single pass, which is the new
+`TestRealHaystack` class skipping cleanly where `haystack-ai` is absent. A
+framework integration that changed a number in a config where its framework is
+not installed would be an integration that leaked out of its own extra.
 
 **A correction, because this paragraph was wrong through 1.6.1 and the CI it
 described was red.** It claimed "no optional extras installed: 7453 passed, 6
@@ -2217,6 +2324,7 @@ disabled test — each line names what to install to run it:
 | skips | why | how to run them |
 |---:|---|---|
 | 47 | `nano` needs `onnxruntime` + the pinned local artifact | `pip install ".[nano]"` and set `XAIDR_NANO_TEST_ARTIFACTS` |
+| 29 | real Haystack not installed | `pip install ".[haystack]"` |
 | 20 | needs the `[http]` extra | `pip install ".[http]"` |
 | 14 | real LangGraph (with LangChain) not installed | `pip install langgraph` |
 | 11 | real CrewAI not installed | `pip install ".[crewai]"` |
@@ -2227,9 +2335,9 @@ disabled test — each line names what to install to run it:
 
 The nano block dominates and is the least interesting: `[nano]` is an optional
 ML signal that is off by default, and its tests need a hash-pinned artifact that
-is not in the repository. The 43 framework skips are the ones worth installing
+is not in the repository. The 72 framework skips are the ones worth installing
 for — they are the tests that run against the real LangChain, LangGraph, Deep
-Agents and CrewAI rather than the in-repo fakes.
+Agents, CrewAI and Haystack rather than the in-repo fakes.
 
 That figure is a **source-tree** claim, not something you can reproduce from
 what you installed: the wheel and the sdist ship the `xaidr` package only, with
