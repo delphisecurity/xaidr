@@ -716,6 +716,96 @@
     "category": "eva003"
   },
   {
+    "id": "REC001_model_fingerprint",
+    "pattern": "(?:what|which|tell\\s+me)\\s+(?:AI\\s+)?(?:model|LLM|language\\s+model|version|architecture)\\s+(?:are\\s+you|do\\s+you\\s+use|powers?\\s+you|is\\s+this|are\\s+you\\s+(?:based\\s+on|built\\s+(?:on|with)))",
+    "score": 0.15,
+    "category": "rec001"
+  },
+  {
+    "id": "REC001_cutoff_probe",
+    "pattern": "(?:what\\s+is\\s+your|when\\s+is\\s+your|what'?s?\\s+your)\\s+(?:knowledge|training)\\s+(?:cutoff|cut-off)\\s+(?:date)?",
+    "score": 0.15,
+    "category": "rec001"
+  },
+  {
+    "id": "REC001_token_probe",
+    "pattern": "(?:respond|reply|generate|output)\\s+(?:with\\s+)?(?:exactly|precisely)\\s+(\\d+)\\s+(?:tokens?|words?|characters?)",
+    "score": 0.12,
+    "category": "rec001"
+  },
+  {
+    "id": "REC001_model_name_probe",
+    "pattern": "(?:are\\s+you|is\\s+this)\\s+(?:GPT|Claude|Llama|Gemini|Mistral|PaLM|Bard|ChatGPT|GPT-?[34])",
+    "score": 0.12,
+    "category": "rec001"
+  },
+  {
+    "id": "RAG005_enumerate_kb",
+    "_was": "(?:list|show|enumerate|display|output)\\s+(?:all|every)\\s+(?:document|file|source|page|article|entry|record)\\s+(?:in|from|of)\\s+(?:your|the)\\s+(?:knowledge|vector|document|data)\\s*(?:base|store|database|index|collection)",
+    "_why_changed": "Noun alternation was singular-only, so the rule could only match ungrammatical English: the natural plural phrasing this rule exists to catch did not fire. Added s? to the noun group. A rule that is inert against the traffic it names is worse than no rule -- it reads as coverage on the rule list while providing none. Measured: missed \"list all documents in your knowledge base\"; only \"every document\" fired.",
+    "pattern": "(?:list|show|enumerate|display|output)\\s+(?:all|every)\\s+(?:document|file|source|page|article|entry|record)s?\\s+(?:in|from|of)\\s+(?:your|the)\\s+(?:knowledge|vector|document|data)\\s*(?:base|store|database|index|collection)",
+    "score": 0.28,
+    "category": "rag005"
+  },
+  {
+    "id": "RAG005_verbatim_extraction",
+    "pattern": "(?:reproduce|repeat|output|copy|print|dump)\\s+(?:the\\s+)?(?:full|complete|entire|exact|verbatim|original)\\s+(?:text|content|body|document|source|article)",
+    "score": 0.25,
+    "category": "rag005"
+  },
+  {
+    "id": "RAG005_count_probe",
+    "_was": "(?:how\\s+many|count\\s+(?:the|all))\\s+(?:document|file|source|page|record|chunk|embedding)\\s+(?:do\\s+you\\s+have|are\\s+(?:there|stored|indexed)|in\\s+(?:your|the))",
+    "_why_changed": "Noun alternation was singular-only, so the rule could only match ungrammatical English: the natural plural phrasing this rule exists to catch did not fire. Added s? to the noun group. A rule that is inert against the traffic it names is worse than no rule -- it reads as coverage on the rule list while providing none. Measured: matched NOTHING grammatical: \"how many document do you have\" fired, \"how many documents do you have\" did not.",
+    "pattern": "(?:how\\s+many|count\\s+(?:the|all))\\s+(?:document|file|source|page|record|chunk|embedding)s?\\s+(?:do\\s+you\\s+have|are\\s+(?:there|stored|indexed)|in\\s+(?:your|the))",
+    "score": 0.15,
+    "category": "rag005"
+  },
+  {
+    "id": "RAG005_verification_pretext",
+    "pattern": "(?:for\\s+verification|to\\s+verify|for\\s+accuracy)\\s*,?\\s*(?:reproduce|include|provide|output)\\s+(?:the\\s+)?(?:complete|full|exact|original|raw)\\s+(?:text|content|source|passage|paragraph|quote)",
+    "score": 0.25,
+    "category": "rag005"
+  },
+  {
+    "id": "REC004_source_probe",
+    "pattern": "(?:what|which)\\s+(?:sources?|documents?|references?|files?)\\s+(?:did\\s+you|were)\\s+(?:use|consult|reference|access|retrieve|read|pull\\s+from)",
+    "score": 0.12,
+    "category": "rec004"
+  },
+  {
+    "id": "REC004_citation_probe",
+    "_was": "(?:cite|quote|attribute|reference)\\s+(?:the\\s+)?(?:document|source|file|page|database|passage)\\s+(?:you|that\\s+you)\\s+(?:just\\s+)?(?:used|cited|referenced|retrieved|accessed|read)",
+    "_why_changed": "Noun alternation was singular-only, so the rule could only match ungrammatical English: the natural plural phrasing this rule exists to catch did not fire. Added s? to the noun group. A rule that is inert against the traffic it names is worse than no rule -- it reads as coverage on the rule list while providing none. Measured: missed \"cite the sources you referenced\".",
+    "pattern": "(?:cite|quote|attribute|reference)\\s+(?:the\\s+)?(?:document|source|file|page|database|passage)s?\\s+(?:you|that\\s+you)\\s+(?:just\\s+)?(?:used|cited|referenced|retrieved|accessed|read)",
+    "score": 0.12,
+    "category": "rec004"
+  },
+  {
+    "id": "REC004_file_title_probe",
+    "pattern": "(?:what\\s+is\\s+the\\s+title|what\\s+file)\\s+(?:of\\s+)?(?:the\\s+)?(?:document|source|file)\\s+(?:that\\s+)?(?:contains?|mentions?|has|includes?)\\s+",
+    "score": 0.12,
+    "category": "rec004"
+  },
+  {
+    "id": "REC006_tool_enumeration",
+    "pattern": "(?:list|show|enumerate|display|what\\s+are)\\s+(?:all\\s+)?(?:your|the|available)\\s+(?:tools?|functions?|capabilities|actions?|commands?|APIs?)\\s+(?:you\\s+(?:have|can)|that\\s+(?:are|you))",
+    "score": 0.15,
+    "category": "rec006"
+  },
+  {
+    "id": "REC006_capability_probe",
+    "pattern": "(?:what|which)\\s+(?:tools?|functions?|APIs?|services?|capabilities)\\s+(?:can\\s+you|do\\s+you\\s+have|are\\s+you\\s+able\\s+to)\\s+(?:access|call|invoke|use|interact\\s+with)",
+    "score": 0.15,
+    "category": "rec006"
+  },
+  {
+    "id": "REC006_schema_probe",
+    "pattern": "describe\\s+(?:your\\s+)?(?:available|all)\\s+(?:capabilities|functions?|tools?|actions?)\\s+(?:in\\s+detail|including\\s+parameters?|with\\s+(?:their\\s+)?(?:arguments?|schemas?|inputs?))",
+    "score": 0.2,
+    "category": "rec006"
+  },
+  {
     "id": "LLM07_system_leak_broad",
     "pattern": "(?:output|print|display|show|reveal|share|echo|repeat|reproduce)\\s+(?:your|the|my)?\\s*(?:system\\s*(?:prompt|instructions?|message|config)|initial\\s*instructions?|original\\s*(?:prompt|instructions?))",
     "score": 0.25,
