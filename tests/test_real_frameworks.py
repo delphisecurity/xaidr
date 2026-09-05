@@ -1858,8 +1858,17 @@ class TestRealHaystack:
         )
 
     def test_the_manifest_names_the_tool_result_gap_and_the_two_costs(self):
-        """The manifest must not be readable as "Haystack is covered"."""
-        import haystack.components.agents  # noqa: F401  (must be in sys.modules)
+        """The manifest must not be readable as "Haystack is covered".
+
+        The import is of ``Agent`` ITSELF, not of ``haystack.components.agents``.
+        That package is a ``LazyImporter``, so importing it leaves
+        ``haystack.components.agents.agent`` absent from ``sys.modules`` — and an
+        earlier version of this test imported the package and passed anyway,
+        purely because a sibling test in this class had already imported
+        ``Agent``. A release-verification run in a fresh interpreter did not have
+        that luck and failed. Import what the assertion depends on.
+        """
+        from haystack.components.agents import Agent  # noqa: F401
 
         manifest = self._protect()
         try:
@@ -1917,6 +1926,80 @@ class TestRealHaystack:
             "the fail-open warning leaked the exception message, which can "
             "carry the prompt or tool argument that caused it"
         )
+
+    def test_the_lazy_agents_package_alone_is_NOT_reported_as_haystack(self):
+        """Touching `haystack.components.agents` must not raise a false alarm.
+
+        `haystack.components.agents` is a `LazyImporter`: importing it leaves
+        `haystack.components.agents.agent` — the module that DEFINES the class
+        protect() patches — absent from sys.modules. While that package was a
+        detection key, `present()` said yes, the patcher (which may only read
+        sys.modules, rule 1) could not resolve the class, and protect() reported
+        the WHOLE framework as unpatchable with an XaidrProtectionWarning and a
+        stderr line, at a user who had no Agent at all.
+
+        A Pipeline of retrievers and generators has no boundary this integration
+        can reach, so the honest report is `not_present`, silently. Run in a
+        child process because import state is process-global and this class has
+        certainly imported `Agent` by now.
+        """
+        result = _in_a_fresh_process('''
+import sys, warnings
+import haystack.components.agents          # the LAZY package, never .agent
+
+leaked = "haystack.components.agents.agent" in sys.modules
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    m = xaidr.protect(agent_id="child", enforcement_mode="block", quiet=True)
+emit(agent_module_loaded=leaked,
+     not_present="haystack" in m.not_present,
+     patched=[r.target for r in m.patched if r.framework.startswith("haystack")],
+     unpatchable=[r.target for r in m.found_unpatchable
+                  if r.framework.startswith("haystack")],
+     warnings=[str(w.message) for w in caught
+               if "haystack" in str(w.message)])
+''')
+        assert result["agent_module_loaded"] is False, (
+            "haystack.components.agents is no longer lazy — re-evaluate the "
+            "detection key, it may now be safe to detect on the package"
+        )
+        assert result["not_present"] is True, (
+            "protect() claimed to know about haystack from the lazy package "
+            "alone; it cannot reach an Agent class that is not imported"
+        )
+        assert result["patched"] == [], result["patched"]
+        assert result["unpatchable"] == [], (
+            "a user who merely imported the agents package was warned that a "
+            "boundary is UNPROTECTED — that is the false alarm this key avoids: "
+            f"{result['unpatchable']}"
+        )
+        assert result["warnings"] == [], result["warnings"]
+
+    def test_importing_the_Agent_IS_enough_for_protect_to_land(self):
+        """The other half: the one key we do detect on is sufficient.
+
+        Importing `Agent` must pull in every module `_patch_haystack` requires
+        under rule 1 — the hook protocol, the dataclasses, the state utils — so
+        that a detection hit can never become a patcher failure.
+        """
+        result = _in_a_fresh_process('''
+import sys
+from haystack.components.agents import Agent
+needed = ["haystack.components.agents.agent", "haystack.hooks.protocol",
+          "haystack.dataclasses", "haystack.components.agents.state.state_utils"]
+m = xaidr.protect(agent_id="child", enforcement_mode="block", quiet=True)
+emit(missing=[n for n in needed if n not in sys.modules],
+     patched=[r.target for r in m.patched if r.framework == "haystack"],
+     boundaries=[r.boundary for r in m.patched if r.framework == "haystack"])
+''')
+        assert result["missing"] == [], (
+            f"importing Agent no longer loads {result['missing']} — the patcher "
+            "requires them and may not import them itself (rule 1)"
+        )
+        assert result["patched"] == [
+            "haystack.components.agents.agent.Agent.__init__"
+        ], result["patched"]
+        assert result["boundaries"] == ["input+output+tool"], result["boundaries"]
 
     # ── API-drift canaries ───────────────────────────────────────────────
 

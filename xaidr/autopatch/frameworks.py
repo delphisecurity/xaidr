@@ -1016,15 +1016,28 @@ TARGETS: tuple[FrameworkTarget, ...] = (
         "mcp", ("mcp",), _patch_mcp,
         "MCP client call_tool arguments + returned content",
     ),
-    # Detected on the AGENTS module, not on `haystack`. Two reasons. A
-    # Haystack Pipeline with no Agent in it has no boundary this can reach, and
-    # warning that it is "present but unpatched" would be a false alarm — which
-    # is how a loud manifest stops being read. And the name `haystack` is also
-    # farm-haystack 1.x, which has no `components` package at all, so keying on
-    # this module cannot mistake one for the other.
+    # Detected on the module that DEFINES the class we patch, and on nothing
+    # else. Three reasons, the third measured rather than reasoned:
+    #
+    #  * a Haystack Pipeline with no Agent in it has no boundary this can
+    #    reach, so warning that it is "present but unpatched" would be a false
+    #    alarm — and false alarms are how a loud manifest stops being read;
+    #  * the name `haystack` is also farm-haystack 1.x, which has no
+    #    `components` package at all, so this key cannot mistake one for the
+    #    other;
+    #  * `haystack.components.agents` IS NOT A USABLE DETECTION KEY, because it
+    #    is a `LazyImporter`: `import haystack.components.agents` leaves
+    #    `haystack.components.agents.agent` ABSENT from sys.modules (measured on
+    #    haystack-ai 3.1.1). Listing it made `present()` true while the patcher
+    #    — which may only read sys.modules, rule 1 — could not resolve the class,
+    #    so the whole framework was reported UNPATCHABLE, with a warning and a
+    #    stderr line, at a user who had merely touched the package and had no
+    #    Agent at all. Anyone who actually holds an `Agent` has this module
+    #    loaded, and importing it pulls in every other module the patcher needs
+    #    (haystack.hooks.protocol, haystack.dataclasses, the state utils).
     FrameworkTarget(
         "haystack",
-        ("haystack.components.agents", "haystack.components.agents.agent"),
+        ("haystack.components.agents.agent",),
         _patch_haystack,
         "input + output + tool via delphi_hooks injection into Agent.__init__",
     ),
