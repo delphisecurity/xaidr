@@ -137,6 +137,11 @@ Nothing on this page should be taken on trust either.
   `python scripts/benchmark.py`, and see [BENCHMARKS.md](BENCHMARKS.md)
 * the privilege-tier semantics, including the absence cases:
   `tests/test_privilege_tiers.py`
+* the OWASP Agentic Top 10 coverage verdicts, probe by probe, with the two
+  mostly-or-entirely-uncovered categories and the one that is out of remit:
+  `python scripts/owasp_agentic_probe.py` (and `--check`, which fails if any
+  probe stopped returning what the
+  [table](README.md#owasp-agentic-top-10-asi01-to-asi10) records)
 * fail-open, bounded-input and malformed-content behavior:
   `tests/test_operational_resilience.py`,
   `tests/test_security_invariants.py`

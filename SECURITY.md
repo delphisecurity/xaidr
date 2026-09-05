@@ -98,6 +98,14 @@ to embed:
 - **Running with detection and no policy.** If you have not bound a
   `require_approval` rule to the classify-only families, they are observed and
   allowed. That is documented behaviour, not a flaw.
+- **A category we say we do not cover.** The [OWASP Agentic Top 10
+  mapping](README.md#owasp-agentic-top-10-asi01-to-asi10) gives a verdict for
+  ASI01 to ASI10 and names two categories as mostly or entirely uncovered and
+  one as out of remit, each with the structural reason. Demonstrating that
+  ASI06 memory poisoning is not caught is confirming a published limit, not
+  finding a vulnerability. What *would* be in scope is a **bypass of a category
+  the table claims**: `python scripts/owasp_agentic_probe.py --check` prints
+  exactly what is claimed and re-runs the evidence for it.
 - Findings from an automated scanner with no demonstrated impact.
 - Vulnerabilities in your own agent, model or tools, which the sensor observes
   but does not own.
