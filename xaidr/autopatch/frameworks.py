@@ -637,6 +637,25 @@ def _patch_crewai(ctx: PatchContext) -> None:
         "crewai", "Crew.kickoff", "input", kickoff_factory,
         "scans the string values of the kickoff inputs before the crew runs",
     )
+    # THE ASYNC KICKOFFS. `kickoff` alone left an async crew's inputs unscanned:
+    # `akickoff` and `kickoff_async` are separate coroutine methods that do not
+    # go through it. Found by the structural async-sibling guard in
+    # tests/test_async_tool_seam.py rather than by review, which is the point of
+    # having it. `make_wrapper` matches the wrapper's sync/async-ness, so the
+    # same factory serves all three. try_install rather than install: a build
+    # without one of these names records the gap instead of losing the others.
+    # Written out rather than looped: the structural guard reads these targets
+    # out of the SOURCE, and a target supplied through a loop variable is
+    # invisible to it. A patch a reader (or the guard) cannot see is how the
+    # gap it exists to catch gets reintroduced.
+    ctx.try_install(
+        "crewai", "Crew.akickoff", "input", kickoff_factory,
+        "same input coverage on the async kickoff path",
+    )
+    ctx.try_install(
+        "crewai", "Crew.kickoff_async", "input", kickoff_factory,
+        "same input coverage on the async kickoff path",
+    )
     ctx.note(
         "crewai: the tool boundary is a registered before_tool_call HOOK, not a "
         "patch. It covers agent-driven calls only; a direct tool.run() in your "
@@ -706,25 +725,33 @@ def _patch_autogen_legacy(ctx: PatchContext) -> None:
 
     ctx.install(
         "autogen", "ConversableAgent.execute_function", "tool", factory,
-        "SYNC function dispatch is scanned before it executes. The ASYNC path "
-        "is NOT covered — see the note below.",
+        "SYNC function dispatch is scanned before it executes",
+    )
+    # THE ASYNC HALF, which was declared unpatchable and is not. The async reply
+    # path is a_generate_tool_calls_reply -> _a_execute_tool_call ->
+    # a_execute_function, a SEPARATE method that never goes through
+    # execute_function — so the sync patch alone left every async tool call
+    # unscanned, and the manifest said so loudly rather than covering it.
+    #
+    # Saying so loudly was the right half of the response. The wrong half was
+    # concluding it could not be patched: `a_execute_function(self, func_call)`
+    # is an ordinary async method on the same class, taking the same func_call
+    # dict and returning the same (is_exec_success, response_dict) tuple, and
+    # `make_wrapper` has matched a wrapper's sync/async-ness since it was
+    # written. The entry described the gap accurately and then drew the wrong
+    # conclusion from it, which is how a documented gap becomes a permanent one.
+    # Measured against pyautogen 0.2.35: 1 execution of a blocked credential
+    # read before this patch, 0 after.
+    ctx.try_install(
+        "autogen", "ConversableAgent.a_execute_function", "tool", factory,
+        "ASYNC function dispatch is scanned before it executes, with the same "
+        "refusal tuple the sync path returns",
     )
     ctx.note(
         "autogen (0.2): this is the legacy pyautogen line. Its function-call "
         "shape has changed across 0.2.x minor releases; if the manifest stops "
-        "listing this target after an upgrade, the boundary is uninstrumented."
-    )
-    # KNOWN GAP, stated because a manifest that is loud about a boundary it does
-    # not have is the failure this package exists to avoid. Verified against
-    # pyautogen 0.2.35.
-    ctx.unpatchable(
-        "autogen.ConversableAgent.a_execute_function", "tool",
-        "ASYNC tool calls are UNINSTRUMENTED. The async reply path is "
-        "a_generate_tool_calls_reply -> _a_execute_tool_call -> "
-        "a_execute_function, which is a separate method that does NOT go "
-        "through the patched execute_function. Only the sync path is covered. "
-        "Scan async dispatches with handle.sensor.scan_tool_call(), or wrap the "
-        "functions themselves with protect_tools().",
+        "listing either target after an upgrade, that boundary is "
+        "uninstrumented."
     )
 
 

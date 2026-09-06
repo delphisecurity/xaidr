@@ -6,6 +6,7 @@ model (allow / flag / block). No account, no backend, no network escalation.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import time
@@ -1744,78 +1745,154 @@ class DelphiSensor:
         wrapped = []
         for t in tools:
             tool_name = getattr(t, "name", None) or getattr(t, "__name__", "unknown")
-            # LangChain tools carry the callable in .func; a plain callable IS
-            # the tool. (Previously plain callables were never invoked at all —
-            # the wrapper returned args[0] — silently no-op'ing benign tools.)
-            original_func = getattr(t, "func", None)
-            if original_func is None and callable(t):
+            # A LangChain tool is identified by HAVING the `.func` attribute,
+            # not by that attribute being non-None. An async-only `@tool` has
+            # `func=None` and `coroutine=<async fn>`, and testing the VALUE sent
+            # it straight past this branch into the CrewAI one below (its `_run`
+            # is callable, being StructuredTool._run), where it had its SYNC
+            # `_run` shadowed while every async call went `ainvoke` -> `arun` ->
+            # `_arun` -> `self.coroutine` and was never scanned. Measured on
+            # langchain_core 1.6.2: 1 execution of a blocked credential read.
+            is_langchain = hasattr(t, "func") or hasattr(t, "coroutine")
+            lc_func = getattr(t, "func", None) if is_langchain else None
+            lc_coroutine = getattr(t, "coroutine", None) if is_langchain else None
+
+            original_func = lc_func
+            if not is_langchain and callable(t):
+                # A plain callable IS the tool. (Previously plain callables were
+                # never invoked at all — the wrapper returned args[0] — silently
+                # no-op'ing benign tools.)
                 original_func = t
 
             # CrewAI's BaseTool is a THIRD shape: no `.func`, and the object is
-            # not itself callable — the implementation is `_run`. Passing one in
-            # used to fall through to the plain-callable branch, which returned
-            # a bare function with no `.run`, so the caller got an object that
-            # raised AttributeError on first use. Wrapping `_run` instead covers
-            # BOTH ways a CrewAI tool is invoked with one wrapper: the public
-            # `run()` calls `self._run`, and `to_structured_tool()` binds
-            # `func=self._run`, which is the agent path.
+            # not itself callable — the implementation is `_run`, with `_arun`
+            # for the async path. Passing one in used to fall through to the
+            # plain-callable branch, which returned a bare function with no
+            # `.run`, so the caller got an object that raised AttributeError on
+            # first use. Wrapping `_run` covers BOTH ways a CrewAI tool is
+            # invoked synchronously: the public `run()` calls `self._run`, and
+            # `to_structured_tool()` binds `func=self._run`, which is the agent
+            # path. `_arun` is wrapped alongside it for the same reason on the
+            # async side — `arun()` calls `self._arun` and never touches `_run`.
             crewai_run = None
-            if original_func is None and not callable(t):
+            crewai_arun = None
+            if original_func is None and not is_langchain and not callable(t):
                 candidate = getattr(t, "_run", None)
                 if callable(candidate):
                     crewai_run = candidate
                     original_func = candidate
+                    async_candidate = getattr(t, "_arun", None)
+                    if callable(async_candidate):
+                        crewai_arun = async_candidate
 
-            if getattr(original_func, "_xaidr_protect_tools", False):
+            # Idempotency reads whichever attribute this shape actually carries.
+            # An async-only LangChain tool has func=None, so testing only
+            # `original_func` would look unwrapped forever and re-wrap on every
+            # pass.
+            already = (
+                getattr(original_func, "_xaidr_protect_tools", False)
+                or getattr(lc_coroutine, "_xaidr_protect_tools", False)
+                or getattr(crewai_arun, "_xaidr_protect_tools", False)
+            )
+            if already:
                 wrapped.append(t)
                 continue
 
-            def make_wrapper(orig_func, tname):
-                def wrapper(*args, **kwargs):
-                    arguments = {f"arg{i}": v for i, v in enumerate(args)}
-                    arguments.update(kwargs)
-                    # scan_tool_call applies blocked-tools + L1 arg scan +
-                    # local YAML policy, emits telemetry, and NEVER raises
-                    # (internal faults fail open with a degraded signal).
-                    result = self.scan_tool_call(tname, arguments)
-                    if tname in self._blocked_tools:
-                        # Explicit operator block: enforced in both modes,
-                        # so monitor mode's downgrade does not soften it.
-                        print(f"[xaidr] TOOL BLOCKED: {tname}")
-                        return f"[BLOCKED] Tool '{tname}' has been blocked by local policy."
-                    # Both halting verdicts short-circuit: the original tool is
-                    # NOT invoked. "approval_required" (a require_approval
-                    # policy) halts autonomous execution exactly like a block,
-                    # but keeps a DISTINCT message — the operator must be able to
-                    # tell a denial (final) from a pending approval (routable).
-                    if result.action in ("blocked", "approval_required"):
-                        if result.action == "approval_required":
-                            print(
-                                f"[xaidr] TOOL APPROVAL REQUIRED: {tname} "
-                                f"({result.category}: {', '.join(result.rules)})"
-                            )
-                            return (
-                                f"[APPROVAL REQUIRED] Tool '{tname}' requires "
-                                f"human approval and was NOT executed "
-                                f"({result.category}). Route this action to a "
-                                "human approver."
-                            )
+            def tool_verdict(tname, args, kwargs):
+                """The whole decision, shared by the sync and async wrappers.
+
+                Returns the in-band refusal STRING when the call must not run,
+                or None to proceed. Factored out so the two wrappers cannot
+                drift: the async path shipped with no wrapper at all from the
+                day protect_tools was written, and the cheapest way to make that
+                recur is to write the verdict twice.
+                """
+                arguments = {f"arg{i}": v for i, v in enumerate(args)}
+                arguments.update(kwargs)
+                # scan_tool_call applies blocked-tools + L1 arg scan +
+                # local YAML policy, emits telemetry, and NEVER raises
+                # (internal faults fail open with a degraded signal).
+                result = self.scan_tool_call(tname, arguments)
+                if tname in self._blocked_tools:
+                    # Explicit operator block: enforced in both modes,
+                    # so monitor mode's downgrade does not soften it.
+                    print(f"[xaidr] TOOL BLOCKED: {tname}")
+                    return f"[BLOCKED] Tool '{tname}' has been blocked by local policy."
+                # Both halting verdicts short-circuit: the original tool is
+                # NOT invoked. "approval_required" (a require_approval
+                # policy) halts autonomous execution exactly like a block,
+                # but keeps a DISTINCT message — the operator must be able to
+                # tell a denial (final) from a pending approval (routable).
+                if result.action in ("blocked", "approval_required"):
+                    if result.action == "approval_required":
                         print(
-                            f"[xaidr] TOOL BLOCKED: {tname} "
+                            f"[xaidr] TOOL APPROVAL REQUIRED: {tname} "
                             f"({result.category}: {', '.join(result.rules)})"
                         )
                         return (
-                            f"[BLOCKED] Tool '{tname}' blocked by security policy "
-                            f"({result.category})."
+                            f"[APPROVAL REQUIRED] Tool '{tname}' requires "
+                            f"human approval and was NOT executed "
+                            f"({result.category}). Route this action to a "
+                            "human approver."
                         )
-                    if orig_func is not None:
-                        return orig_func(*args, **kwargs)
-                    return None
+                    print(
+                        f"[xaidr] TOOL BLOCKED: {tname} "
+                        f"({result.category}: {', '.join(result.rules)})"
+                    )
+                    return (
+                        f"[BLOCKED] Tool '{tname}' blocked by security policy "
+                        f"({result.category})."
+                    )
+                return None
+
+            def make_wrapper(orig_func, tname):
+                """Wrap one callable, MATCHING ITS SYNC/ASYNC-NESS.
+
+                An async implementation gets an `async def` wrapper that AWAITS
+                the original. That is not cosmetic. A sync wrapper around a
+                coroutine function is wrong twice over:
+
+                  * on a benign call it returns the un-awaited coroutine, which
+                    happens to work only because the caller awaits the result;
+                  * on a BLOCKED call it returns a `str` where the caller awaits,
+                    so a correctly-refused call raises
+                    `ValueError: a coroutine was expected` in the host. Measured
+                    on a plain `async def` tool before this change. That is the
+                    same class of defect as the LangGraph ToolMessage bug in
+                    1.9.0: the refusal was right and its TYPE was not, so
+                    enforcement crashed the caller instead of stopping it.
+
+                The refusal VALUE is identical on both paths, so anything
+                matching on `[BLOCKED]` / `[APPROVAL REQUIRED]` reads the same
+                string whichever way the tool is invoked.
+                """
+                if inspect.iscoroutinefunction(orig_func):
+                    async def wrapper(*args, **kwargs):
+                        refusal = tool_verdict(tname, args, kwargs)
+                        if refusal is not None:
+                            return refusal
+                        return await orig_func(*args, **kwargs)
+                else:
+                    def wrapper(*args, **kwargs):
+                        refusal = tool_verdict(tname, args, kwargs)
+                        if refusal is not None:
+                            return refusal
+                        if orig_func is not None:
+                            return orig_func(*args, **kwargs)
+                        return None
                 return wrapper
 
-            new_func = make_wrapper(original_func, tool_name)
-            # The idempotency marker, read at the top of the next pass.
-            new_func._xaidr_protect_tools = True
+            def mark(fn):
+                fn._xaidr_protect_tools = True
+                return fn
+
+            # `make_wrapper(None, ...)` is deliberate for the shape with no
+            # implementation at all (not callable, no func/coroutine/_run): it
+            # yields a wrapper that scans, enforces, and returns None, which is
+            # what this branch did before the async split. Building it
+            # unconditionally keeps that, and keeps the `else` branch below able
+            # to set __name__ on it.
+            new_func = mark(make_wrapper(original_func, tool_name))
 
             # CrewAI first: it also has model_copy, but its implementation hangs
             # off `_run`, not `func`, so the LangChain branch below would build a
@@ -1824,25 +1901,49 @@ class DelphiSensor:
             # branch here does.
             if crewai_run is not None:
                 new_tool = t.model_copy() if hasattr(t, "model_copy") else t
-                try:
-                    setattr(new_tool, "_run", new_func)
-                except Exception as exc:
-                    # A build that forbids shadowing `_run` would leave an
-                    # UNPROTECTED tool looking protected. Refuse to pretend.
-                    raise TypeError(
-                        f"protect_tools: {tool_name!r} looks like a CrewAI "
-                        f"BaseTool but its `_run` could not be wrapped, so it "
-                        f"was NOT protected. Use xaidr.protect() (which "
-                        f"registers CrewAI's before_tool_call hook and covers "
-                        f"every agent-driven call) instead."
-                    ) from exc
+                # `_arun` is wrapped alongside `_run`: `arun()` dispatches to
+                # `self._arun` and never touches `_run`, so wrapping only the
+                # sync half left every async CrewAI tool call unscanned.
+                targets = [("_run", new_func)]
+                if crewai_arun is not None:
+                    targets.append(("_arun", mark(make_wrapper(crewai_arun, tool_name))))
+                for attr, fn in targets:
+                    try:
+                        setattr(new_tool, attr, fn)
+                    except Exception as exc:
+                        # A build that forbids shadowing would leave an
+                        # UNPROTECTED tool looking protected. Refuse to pretend.
+                        raise TypeError(
+                            f"protect_tools: {tool_name!r} looks like a CrewAI "
+                            f"BaseTool but its `{attr}` could not be wrapped, so "
+                            f"it was NOT protected. Use xaidr.protect() (which "
+                            f"registers CrewAI's before_tool_call hook and covers "
+                            f"every agent-driven call) instead."
+                        ) from exc
                 wrapped.append(new_tool)
                 continue
 
             # Preserve LangChain tool metadata (name, description, args_schema)
-            # by copying the original tool with only `func` replaced. model_copy
-            # is the supported Pydantic v2 path for LangChain BaseTool.
-            if hasattr(t, "model_copy") and original_func is not None:
+            # by copying the original tool with only the implementation replaced.
+            # model_copy is the supported Pydantic v2 path for LangChain BaseTool.
+            #
+            # BOTH halves are replaced. A LangChain tool may carry `func`,
+            # `coroutine`, or both, and `ainvoke` reaches `coroutine` without
+            # ever touching `func`: wrapping only `func` is what let an async
+            # tool execute a blocked call. An absent half stays absent — a
+            # sync-only tool does not acquire a coroutine, because that would
+            # make `ainvoke` start working on a tool whose author never wrote an
+            # async implementation.
+            if is_langchain and hasattr(t, "model_copy") and (
+                lc_func is not None or lc_coroutine is not None
+            ):
+                update = {}
+                if lc_func is not None:
+                    update["func"] = new_func
+                if lc_coroutine is not None:
+                    update["coroutine"] = mark(make_wrapper(lc_coroutine, tool_name))
+                new_tool = t.model_copy(update=update)
+            elif hasattr(t, "model_copy") and original_func is not None:
                 new_tool = t.model_copy(update={"func": new_func})
             else:
                 # Non-LangChain callable — wrap and return as-is

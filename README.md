@@ -1056,19 +1056,28 @@ cover, said plainly rather than left to be discovered:
 Both facts are now pinned by `tests/test_real_frameworks.py`, which imports the
 real framework and skips when it is absent.
 
-**Two more gaps, found by asking the same question of every other seam.** The
+**One remaining gap, found by asking the same question of every other seam.** The
 CrewAI bug turned on "is this method on the path the framework itself takes",
 not "does this method exist", so each remaining fake was re-checked against the
-real library at a named version. Two boundaries fail that question. Neither is
-fixed here; both are now reported in the manifest as `found_unpatchable` with
-the mechanism, which is where an unprotected boundary belongs:
+real library at a named version:
 
 | Framework | What is uninstrumented | Mechanism |
 |---|---|---|
-| `autogen` (0.2 legacy) | **async** tool calls | the async reply path is `a_generate_tool_calls_reply` → `_a_execute_tool_call` → **`a_execute_function`**, a separate method that does not go through the patched `execute_function`. The sync path is covered. Verified against `pyautogen==0.2.35`. |
 | `llama-index` | `CodeActAgent` | it collects `tool.real_fn` and calls the underlying function directly, bypassing **both** `FunctionTool.call` and `FunctionTool.acall`. The workflow agents call `tool.acall(**input)` and are covered. Verified against `llama-index-core==0.14.24`. |
 
-For either, wrap the underlying functions with `sensor.protect_tools([...])`.
+Wrap the underlying functions with `sensor.protect_tools([...])` for that one.
+
+**`autogen` (0.2) async tool calls used to be listed here and are now covered.**
+The entry described the mechanism correctly — the async reply path is
+`a_generate_tool_calls_reply` → `_a_execute_tool_call` → **`a_execute_function`**,
+a separate method that never goes through the patched `execute_function` — and
+then drew the wrong conclusion, filing a patchable method as unpatchable.
+`a_execute_function(self, func_call)` is an ordinary async method on the same
+class, taking the same `func_call` dict and returning the same
+`(is_exec_success, response_dict)` tuple, and it is now patched with the same
+factory and the same refusal shape. Measured against `pyautogen==0.2.35`: a
+blocked credential read executed once before, zero times after. A documented gap
+is still a gap, and documenting it is not the same as being unable to close it.
 
 **Enforcement shape.** Tool boundaries return a `[BLOCKED]` / `[APPROVAL
 REQUIRED]` refusal the agent can read and recover from, rather than raising.
