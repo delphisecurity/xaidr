@@ -489,16 +489,127 @@ def test_every_sync_seam_has_its_async_counterpart_patched_or_declared():
                     f"declared unpatchable"
                 )
 
-    assert checked, (
-        "no sync class-method seam with an async sibling was resolvable; "
-        "install a framework (langchain-core, llama-index-core, pyautogen) or "
-        "this test is vacuous"
-    )
+    if not checked:
+        # NOTHING TO CHECK IS NOT A FAILURE, and asserting it was one shipped a
+        # red `base` and `full` job in 1.11.0. Resolving an async sibling needs
+        # the framework's classes importable, and NO CI job installs one: `base`
+        # is `pip install .` plus pytest, `full` is `.[http,trace,dev]`. So this
+        # assertion could never hold in either, and the guard failed everywhere
+        # it was supposed to be quiet.
+        #
+        # Skipping here does NOT drop the non-vacuity requirement. It moves it,
+        # deliberately, to two places that can actually hold it -- see
+        # `test_the_guard_harness_is_not_blind` (runs everywhere, including here)
+        # and `test_the_guard_is_not_vacuous_when_a_framework_is_present` (runs
+        # where a framework exists). A guard that always skips is the failure it
+        # exists to prevent, so the requirement is kept; it is just no longer
+        # kept by a line that cannot pass in the configuration it runs in.
+        pytest.skip(
+            "no framework with a resolvable class seam is installed "
+            "(langchain-core, llama-index-core, pyautogen); non-vacuity is "
+            "held by test_the_guard_harness_is_not_blind and "
+            "test_the_guard_is_not_vacuous_when_a_framework_is_present"
+        )
     assert not gaps, (
         "async seam(s) silently uncovered:\n  " + "\n  ".join(gaps)
         + "\n\nPatch it, or record it with ctx.unpatchable(...) and a reason. "
         "An async boundary we cannot reach belongs in the manifest, not in "
         "silence."
+    )
+
+
+def test_the_guard_harness_is_not_blind():
+    """CONFIG-INDEPENDENT non-vacuity. Runs in bare, base and full.
+
+    WHY THIS ONE AND NOT ONLY THE FRAMEWORK-GATED ONE BELOW. The obvious home
+    for non-vacuity is a test gated on a framework being present, and that test
+    exists. On its own it is not enough here, for a measured reason: no CI job
+    installs a framework, so a framework-gated check skips in 100% of CI runs
+    and protects nothing in the configuration this guard actually breaks in.
+
+    And the framework is not how this guard died in practice. It went blind once
+    already, during the change that introduced it: the CrewAI async-kickoff fix
+    was first written as a `for` loop over target names, `_patched_targets()`
+    reads targets out of the SOURCE by AST and cannot see a loop variable, so
+    the guard reported a gap that had just been closed. Nothing about a
+    framework was involved. That failure mode is a property of the harness's
+    INPUTS, it is config-independent, and it is checkable with nothing
+    installed:
+
+      * the AST still finds patch targets at all,
+      * they still look like real `module.Class.method` seams rather than
+        whatever a broken parse returns,
+      * the naming convention still derives the async spellings the seams in
+        this package actually use.
+
+    If any of those breaks, the guard silently checks nothing forever, in every
+    configuration. This is the test that fails first.
+    """
+    targets = _patched_targets()
+    assert len(targets) >= 5, (
+        f"the AST found only {len(targets)} patch targets ({sorted(targets)}); "
+        f"frameworks.py has more than that, so the parse is broken and the "
+        f"structural guard is checking nothing"
+    )
+    # A target supplied through a variable is invisible to the AST, which is
+    # exactly how this guard went blind before. Every one must be a literal
+    # dotted path.
+    malformed = [t for t in targets if "." not in t or t != t.strip()]
+    assert not malformed, f"patch targets that are not dotted paths: {malformed}"
+
+    # The seams this package patches, by name, independent of any import. If a
+    # patcher is renamed or dropped, this names it.
+    for expected in ("BaseTool.run", "FunctionTool.call",
+                     "ConversableAgent.execute_function"):
+        assert any(t.endswith(expected) for t in targets), (
+            f"no patch target ends with {expected!r}; either the seam was "
+            f"removed or _patched_targets() stopped seeing it"
+        )
+
+    # And the convention still derives the spellings those seams actually use.
+    assert "arun" in _async_names("run")
+    assert "acall" in _async_names("call")
+    assert "_arun" in _async_names("_run")
+    assert "a_execute_function" in _async_names("execute_function")
+    assert "invoke_async" in _async_names("invoke")
+
+
+@pytest.mark.skipif(
+    not (HAVE_LC or HAVE_LLAMA or HAVE_AG_LEGACY),
+    reason="needs a framework whose classes expose a sync seam with an async "
+           "sibling (langchain-core, llama-index-core, pyautogen)",
+)
+def test_the_guard_is_not_vacuous_when_a_framework_is_present():
+    """TRUE non-vacuity: with a framework installed the guard really resolved
+    something.
+
+    This is the check the main guard used to make inline. It belongs here rather
+    than there because "a framework is installed" is a precondition for the
+    check, not a property of the code under test -- expressing it as a skipif
+    lets the configuration that cannot satisfy it say so, instead of failing.
+    """
+    patched = _patched_targets()
+    resolved = []
+    for target in sorted(patched):
+        parts = target.split(".")
+        cls = attr = None
+        for cut in range(len(parts) - 1, 0, -1):
+            cls, attr = _resolve_class(".".join(parts[:cut]), ".".join(parts[cut:]))
+            if cls is not None:
+                break
+        if cls is None or attr is None:
+            continue
+        sync_impl = getattr(cls, attr, None)
+        if sync_impl is None or inspect.iscoroutinefunction(sync_impl):
+            continue
+        for candidate in _async_names(attr):
+            sibling = getattr(cls, candidate, None)
+            if sibling is not None and inspect.iscoroutinefunction(sibling):
+                resolved.append(f"{cls.__name__}.{candidate}")
+    assert resolved, (
+        "a framework is installed but the guard resolved NO sync seam with an "
+        "async sibling, so it checked nothing. Either the framework's class "
+        "layout moved, or _resolve_class / _async_names stopped working"
     )
 
 
