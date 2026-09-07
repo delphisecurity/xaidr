@@ -355,12 +355,28 @@ def test_a_pathological_value_stays_inside_the_budget():
 
 
 def test_a_semicolon_heavy_blob_does_not_explode():
+    """Bounded work, AND the bound is reported.
+
+    The count assertion moved from `<= 32` to `<= 32 + the markers` when the caps
+    were made fail-closed. Parsed STATEMENTS are still capped at 32 -- that is
+    what keeps the work bounded -- but parse_sql now appends an `unparsed` shape
+    naming each bound that fired, because a short list was indistinguishable from
+    a short input and that was a measured bypass. Asserting the parsed statements
+    separately from the markers keeps both properties pinned.
+    """
+    from xaidr.scanner.sql_parse import UNPARSED_STATEMENT
+
     payload = "; ".join(["SELECT 1"] * 5_000)
     start = time.process_time()
     shapes = parse_sql("SELECT 1; " + payload)
     elapsed = time.process_time() - start
     assert elapsed < 1.0, f"parse took {elapsed:.3f}s"
-    assert len(shapes) <= 32, f"statement cap not honoured: {len(shapes)}"
+
+    parsed = [s for s in shapes if s.statement != UNPARSED_STATEMENT]
+    markers = [s for s in shapes if s.statement == UNPARSED_STATEMENT]
+    assert len(parsed) <= 32, f"statement cap not honoured: {len(parsed)}"
+    assert markers, "the statement cap fired but nothing said so"
+    assert len(shapes) <= 32 + 3, f"unbounded shape list: {len(shapes)}"
 
 
 def test_a_string_literal_cannot_forge_a_predicate():

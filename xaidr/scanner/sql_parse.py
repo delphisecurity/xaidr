@@ -55,6 +55,34 @@ MAX_SQL_CHARS = 20_000
 # one classification into thousands.
 MAX_STATEMENTS = 32
 
+# THE STATEMENT VALUE THAT MEANS "WE DID NOT READ ALL OF THIS".
+#
+# Every bound in this module is a place where the parser stops. A bound that
+# DROPS what it did not reach reports the same thing as an input that contained
+# nothing: a caller cannot tell "there was no DELETE" from "we stopped before the
+# DELETE". Both of those bypasses were measured on 1.12.0-rc, one by padding past
+# MAX_SQL_CHARS and one by preceding the payload with MAX_STATEMENTS harmless
+# statements; in both the destructive statement ran.
+#
+# So every bound now emits this shape IN ADDITION to whatever it did manage to
+# parse, and `sql.unparsed_input` in impact-classes.json gates it. The shape is
+# deliberately NOT a fabricated DELETE: it says "a SQL value exceeded what this
+# parser can read", which is true, and the rule that gates it says why. The
+# pattern is borrowed from L1, which already does exactly this for over-length
+# input via OVERSIZED_INPUT_RULE rather than truncating in silence.
+UNPARSED_STATEMENT = "unparsed"
+
+
+def _unparsed_shape(text, reason: str):
+    """The fail-closed shape for input a bound stopped us from reading."""
+    return SqlShape(
+        statement=UNPARSED_STATEMENT,
+        object_kind=None,
+        object=None,
+        predicate="unknown",
+        raw=f"[{reason}] {str(text)[:200]}",
+    )
+
 # The leading verbs we recognise. A value whose first meaningful token is not one
 # of these is NOT SQL as far as this module is concerned, which is the whole
 # false-positive defence: prose that merely mentions a statement ("we had to DROP
@@ -357,12 +385,25 @@ def tokenize(text: str) -> list:
 _MAX_TOKENS = 20000
 
 
-def _split_token_statements(tokens: list) -> list:
-    """Split on `;` at depth 0. Comments are dropped; strings are kept opaque.
+def _split_token_statements(tokens: list) -> tuple:
+    """Split on `;` at depth 0 -> (statements, over_cap).
 
-    Statement splitting on TOKENS is what fixes `SELECT '--'; DELETE ...`: the
-    `--` is inside a string token, so it is not a comment, so the `;` after it
-    is still a statement boundary and the DELETE is still inspected.
+    Comments are dropped; strings are kept opaque. Statement splitting on TOKENS
+    is what fixes `SELECT '--'; DELETE ...`: the `--` is inside a string token,
+    so it is not a comment, so the `;` after it is still a statement boundary and
+    the DELETE is still inspected.
+
+    THE SECOND RETURN VALUE IS THE POINT. This used to return a short list when
+    it hit MAX_STATEMENTS, and a short list is indistinguishable from a short
+    input: "we stopped looking" read as "there was nothing there". A batch of
+    MAX_STATEMENTS harmless statements followed by an unbounded DELETE parsed to
+    harmless statements only, and the DELETE ran. The cap is now reported, and
+    parse_sql turns the report into a shape the classifier must gate.
+
+    This is also the ONLY place MAX_STATEMENTS is enforced. It was enforced here,
+    again as a slice in parse_sql, and a third time in a string splitter that the
+    token rewrite had already made unreachable. One constant with three
+    enforcement points is a constant nobody can reason about.
     """
     stmts, cur, depth = [], [], 0
     for tok in tokens:
@@ -378,12 +419,12 @@ def _split_token_statements(tokens: list) -> list:
                     stmts.append(cur)
                 cur = []
                 if len(stmts) >= MAX_STATEMENTS:
-                    return stmts
+                    return stmts, True
                 continue
         cur.append(tok)
     if cur:
         stmts.append(cur)
-    return stmts
+    return stmts, False
 
 
 def _skip_cte(tokens: list) -> list:
@@ -527,61 +568,6 @@ def _strip_comments(text: str) -> str:
     return text
 
 
-def _split_statements(text: str) -> list:
-    """Split on semicolons that are not inside a single-quoted literal.
-
-    A hand-rolled scan rather than a regex: the alternative is a pattern with a
-    quantified alternation over quotes, which is exactly the shape the ReDoS
-    invariants exist to keep out of this codebase.
-    """
-    out, buf, in_str = [], [], False
-    i, n = 0, len(text)
-    while i < n:
-        ch = text[i]
-        if in_str:
-            if ch == "'":
-                # '' is an escaped quote inside a literal, not the end of it.
-                if i + 1 < n and text[i + 1] == "'":
-                    buf.append("''")
-                    i += 2
-                    continue
-                in_str = False
-            buf.append(ch)
-        elif ch == "'":
-            in_str = True
-            buf.append(ch)
-        elif ch == ";":
-            out.append("".join(buf))
-            buf = []
-            if len(out) >= MAX_STATEMENTS:
-                return out
-        else:
-            buf.append(ch)
-        i += 1
-    out.append("".join(buf))
-    return out
-
-
-def _predicate_state(stmt: str) -> str:
-    """"none" | "bounded" | "tautology" for a single statement.
-
-    The tautology patterns run on the WHERE CLAUSE ONLY, never on the whole
-    statement. `UPDATE counters SET hits = hits + 1 WHERE id = 7` is ordinary
-    work, and `hits = hits` in its SET list matches the column-compared-with-
-    itself form exactly. The SET list is an assignment, the WHERE clause is a
-    comparison, and only the second one can be a tautology. Scoping to the
-    clause is what keeps the two apart.
-    """
-    m = _WHERE_RE.search(stmt)
-    if not m:
-        return "none"
-    clause = stmt[m.start():]
-    for pat in _TAUTOLOGIES:
-        if pat.search(clause):
-            return "tautology"
-    return "bounded"
-
-
 def _statement_head(text: str) -> Optional[tuple]:
     """(verb, remainder) when `text` opens with real SQL grammar, else None.
 
@@ -642,6 +628,8 @@ def parse_sql(text: str) -> list:
     try:
         if not isinstance(text, str) or not text.strip():
             return []
+        # Read the caps BEFORE truncating, so "we stopped" is recoverable.
+        over_chars = len(text) > MAX_SQL_CHARS
         text = text[:MAX_SQL_CHARS]
         if not looks_like_sql(text):
             return []
@@ -649,7 +637,8 @@ def parse_sql(text: str) -> list:
         shapes = []
         tokens = tokenize(text)
         truncated = len(tokens) > _MAX_TOKENS
-        for stmt_tokens in _split_token_statements(tokens)[:MAX_STATEMENTS]:
+        statements, over_statements = _split_token_statements(tokens)
+        for stmt_tokens in statements:
             body = _skip_cte(stmt_tokens)
             if not body:
                 continue
@@ -684,6 +673,21 @@ def parse_sql(text: str) -> list:
                 predicate=predicate,
                 raw=stmt,
             ))
+
+        # A bound stopped us. Say so, IN ADDITION to what was parsed, so the
+        # classifier gates on the part we could not read rather than on the
+        # harmless part we could. Each reason is named separately because they
+        # fail for different lengths of input and a maintainer tuning one cap
+        # needs to know which one fired.
+        if over_chars:
+            shapes.append(_unparsed_shape(
+                text, f"input over MAX_SQL_CHARS={MAX_SQL_CHARS}"))
+        if over_statements:
+            shapes.append(_unparsed_shape(
+                text, f"batch over MAX_STATEMENTS={MAX_STATEMENTS}"))
+        if truncated:
+            shapes.append(_unparsed_shape(
+                text, f"token stream over _MAX_TOKENS={_MAX_TOKENS}"))
         return shapes
     except Exception:
         # Fail CLOSED on a lexer fault: an unparseable value that begins with a

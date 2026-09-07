@@ -583,6 +583,40 @@ def _walk_values(node, path=""):
     return out
 
 
+def _walk_was_truncated(node) -> bool:
+    """Did _walk_values stop before the end of this argument tree?
+
+    Counted independently rather than returned alongside the values, because
+    `extract_sql_all` and `extract_url_all` are called from five places
+    including the sensor, and widening their return type to carry one boolean
+    would be a larger change than the defect warrants. The walk is bounded and
+    cheap, and this one exits as soon as the answer is known.
+    """
+    seen = 0
+
+    def count(n) -> bool:
+        nonlocal seen
+        if isinstance(n, str):
+            if n.strip():
+                seen += 1
+            return seen > _MAX_CANDIDATE_VALUES
+        if isinstance(n, dict):
+            for v in n.values():
+                if count(v):
+                    return True
+        elif isinstance(n, (list, tuple)):
+            for v in n:
+                if count(v):
+                    return True
+        return seen > _MAX_CANDIDATE_VALUES
+
+    try:
+        return count(node)
+    except RecursionError:
+        # A tree too deep to count is also a tree we did not read.
+        return True
+
+
 def extract_sql_all(arguments: dict) -> list:
     """EVERY SQL-looking value in the arguments, as (path, statement).
 
@@ -830,6 +864,21 @@ def classify(
                     url_class, url_tier = found
                     if _TIER_ORDER.get(url_tier, -1) > _TIER_ORDER.get(tier, -1):
                         impact_class, tier = url_class, url_tier
+
+        # THE CANDIDATE WALK HAS A BOUND, AND A BOUND THAT DROPS IS A BYPASS.
+        # _walk_values stops at _MAX_CANDIDATE_VALUES string leaves, so an
+        # argument tree with more than that hid everything past the cap from
+        # both the SQL and the URL reader above. Dropping them reports the same
+        # thing as arguments that contained nothing dangerous. Same defect as
+        # the SQL parser's caps, same fix: say we stopped, and fail closed.
+        #
+        # Ordered AFTER the SQL and URL blocks on purpose. If a value BEFORE the
+        # cap already classified at critical, that answer is more specific than
+        # this one and is kept; this only raises a call that would otherwise be
+        # let through on the strength of a walk that did not finish.
+        if isinstance(arguments, dict) and arguments and _walk_was_truncated(arguments):
+            if _TIER_ORDER.get("critical", -1) > _TIER_ORDER.get(tier, -1):
+                impact_class, tier = "delete", "critical"
 
         if isinstance(arguments, dict) and arguments:
             tier = _apply_escalations(tier, arguments)

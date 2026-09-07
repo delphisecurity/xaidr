@@ -1713,14 +1713,15 @@
         "id": "sql.unbounded_mutation",
         "impact_class": "delete",
         "impact_tier": "critical",
-        "comment": "CLASSIFY-ONLY. A DELETE or UPDATE with no WHERE clause rewrites every row. `DELETE FROM sessions` (force a re-login) and `UPDATE feature_flags SET enabled = false` (a kill switch) are real operations an agent performs on purpose, and nothing in the statement distinguishes them from `UPDATE accounts SET balance = 0`. Same argument as infra_destruction: name the class at critical, let a policy decide. Deliberately ordered AFTER sql.tautological_mutation, which is the same family with a signal this one does not have.",
+        "comment": "CLASSIFY-ONLY. A DELETE or UPDATE with no WHERE clause rewrites every row. `DELETE FROM sessions` (force a re-login) and `UPDATE feature_flags SET enabled = false` (a kill switch) are real operations an agent performs on purpose, and nothing in the statement distinguishes them from `UPDATE accounts SET balance = 0`. Same argument as infra_destruction: name the class at critical, let a policy decide. Deliberately ordered AFTER sql.tautological_mutation, which is the same family with a signal this one does not have. PREDICATE 'unknown' IS MATCHED HERE TOO, and that is a fix rather than a widening. parse_sql already reported predicate='unknown' when its token cap or its lexer gave out, and its docstring promised that callers 'treat unknown exactly as they treat an unrestricted mutation'. No rule matched it, so the promise was false and every fail-closed path in that module was a fail-open wearing a fail-closed comment. A DELETE or UPDATE whose predicate we could not settle is exactly the case this rule exists for: we cannot show it is bounded.",
         "match": {
           "statement": [
             "delete",
             "update"
           ],
           "predicate": [
-            "none"
+            "none",
+            "unknown"
           ]
         }
       },
@@ -1737,6 +1738,17 @@
           "object_kind": [
             "role",
             "user"
+          ]
+        }
+      },
+      {
+        "id": "sql.unparsed_input",
+        "impact_class": "delete",
+        "impact_tier": "critical",
+        "comment": "CLASSIFY-ONLY, and it fires on a PARSER STATE rather than on a statement. parse_sql emits statement='unparsed' when one of its bounds stopped it before the end of the value: input over MAX_SQL_CHARS, a batch over MAX_STATEMENTS, or a token stream over the lexer's own cap. Those bounds used to drop what they had not reached, which reports the same thing as an input that contained nothing, and two bypasses were measured on that: padding a value past the character cap, and prefixing a payload with MAX_STATEMENTS harmless statements. In both the destructive statement ran. The class is the FAIL-CLOSED ASSUMPTION, not a claim about content -- we did not read the value, so we cannot say it is safe, and the worst thing SQL routinely does to data is remove it. The rule id is what tells an operator the real reason, and the shape's `raw` names which bound fired. Deliberately classify-only: a legitimate 20k migration should require approval under a policy, not block.",
+        "match": {
+          "statement": [
+            "unparsed"
           ]
         }
       }

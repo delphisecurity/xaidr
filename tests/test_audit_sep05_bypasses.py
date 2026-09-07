@@ -718,3 +718,189 @@ def test_merge_both_paths_produce_the_identical_refusal():
     }
     assert len(refusals) == 1, f"the four paths disagree: {sorted(refusals)}"
     assert ran == [], f"a tool executed: {ran}"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SILENT TRUNCATION: every bound that DROPS is a bypass with a long enough input
+# ══════════════════════════════════════════════════════════════════════════
+# Four caps dropped what they had not reached, which reports the same thing as an
+# input that contained nothing: a caller cannot tell "there was no DELETE" from
+# "we stopped before the DELETE". Two were exploitable on 1.12.0-rc with nothing
+# more than padding, and both were measured deleting every row while the policy
+# returned a non-halting verdict.
+#
+# The root cause was one level below the caps. parse_sql already reported
+# predicate="unknown" when its token cap or its lexer gave out, and its docstring
+# promised callers treated unknown as an unrestricted mutation -- but no
+# classifier rule matched "unknown", so every fail-closed path in that module was
+# a fail-open wearing a fail-closed comment. That is asserted directly below,
+# because if it regresses these tests keep passing for the wrong reason.
+
+from xaidr.scanner.sql_parse import (          # noqa: E402
+    MAX_SQL_CHARS, MAX_STATEMENTS, UNPARSED_STATEMENT, SqlShape, parse_sql,
+)
+from xaidr.authz.classifier import (           # noqa: E402
+    _MAX_CANDIDATE_VALUES, _classify_sql_statement, classify,
+)
+
+DESTRUCTIVE = "DELETE FROM records"
+CRITICAL = _policy({"impact_tier": ["critical"]}, "require_approval")
+
+
+def _rows_left(stmt):
+    """Execute against a disposable 3-row table. The oracle, not the verdict."""
+    db = sqlite3.connect(":memory:")
+    db.execute("CREATE TABLE records (id INTEGER PRIMARY KEY, note TEXT)")
+    db.executemany("INSERT INTO records VALUES (?,?)", [(1, "a"), (7, "b"), (9, "c")])
+    db.commit()
+    try:
+        db.executescript(stmt)
+        db.commit()
+    except Exception:
+        return None
+    return db.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+
+
+def _gated(query):
+    return _sensor(CRITICAL).scan_tool_call("run_sql", {"query": query}).action
+
+
+# ── the root cause ───────────────────────────────────────────────────────────
+
+def test_an_unsettled_predicate_is_treated_as_unrestricted():
+    """The promise parse_sql's docstring makes, asserted at the layer that has
+    to keep it. Before this, a DELETE with predicate='unknown' classified as
+    None, so every 'fail closed to unknown' path in the parser gated nothing."""
+    shape = SqlShape(statement="delete", object_kind=None, object="records",
+                     predicate="unknown", raw="DELETE ...")
+    assert _classify_sql_statement(shape) is not None, (
+        "a DELETE whose predicate could not be settled classifies as nothing, so "
+        "every fail-closed path that reports predicate='unknown' is a fail-open"
+    )
+
+
+def test_the_unparsed_shape_is_gated():
+    shape = SqlShape(statement=UNPARSED_STATEMENT, object_kind=None, object=None,
+                     predicate="unknown", raw="[cap] ...")
+    found = _classify_sql_statement(shape)
+    assert found is not None and found[1] == "critical", found
+
+
+# ── (a) the character cap, the worse one ─────────────────────────────────────
+
+@pytest.mark.parametrize("prefix", [
+    pytest.param("SELECT 1; /* " + "x" * MAX_SQL_CHARS + " */ ", id="comment-padding"),
+    pytest.param("SELECT '" + "y" * MAX_SQL_CHARS + "'; ", id="literal-padding"),
+])
+def test_a_long_prefix_cannot_hide_the_statement_after_it(prefix):
+    """Truncating text cuts the value in half and loses the remainder. Same
+    bypass as the statement cap, reached with a long prefix instead of many
+    statements. The SQLite oracle proves the payload is real before the verdict
+    is read."""
+    query = prefix + DESTRUCTIVE
+    assert len(query) > MAX_SQL_CHARS
+    assert _rows_left(query) == 0, "the payload does not actually delete everything"
+    assert _gated(query) in ("blocked", "approval_required"), (
+        "a statement past the character cap was not gated; the cap dropped it "
+        "and 'we stopped looking' read as 'there was nothing there'"
+    )
+
+
+def test_the_character_cap_boundary_is_exact():
+    """One char under the cap parses normally; one char over reports the cap."""
+    head = "SELECT 1; /* "
+    tail = " */ " + DESTRUCTIVE
+    pad_to = MAX_SQL_CHARS - len(head) - len(tail)
+    under = head + "x" * pad_to + tail
+    over = head + "x" * (pad_to + 1) + tail
+    assert len(under) == MAX_SQL_CHARS and len(over) == MAX_SQL_CHARS + 1
+
+    under_shapes = parse_sql(under)
+    assert not any(s.statement == UNPARSED_STATEMENT for s in under_shapes), (
+        "an input exactly AT the cap was reported as over it")
+    assert any(s.statement == "delete" for s in under_shapes)
+
+    over_shapes = parse_sql(over)
+    assert any(s.statement == UNPARSED_STATEMENT for s in over_shapes), (
+        "an input one char OVER the cap was not reported")
+    for q in (under, over):
+        assert _gated(q) in ("blocked", "approval_required")
+
+
+# ── (c) the statement cap ────────────────────────────────────────────────────
+
+def test_a_batch_at_the_statement_cap_cannot_hide_what_follows():
+    query = "; ".join(["SELECT 1"] * MAX_STATEMENTS) + "; " + DESTRUCTIVE
+    assert _rows_left(query) == 0
+    assert _gated(query) in ("blocked", "approval_required"), (
+        f"{MAX_STATEMENTS} harmless statements hid the one that follows them")
+
+
+def test_the_statement_cap_boundary_is_exact():
+    """MAX_STATEMENTS-1 harmless + the destructive one is the last batch read in
+    full; adding one more crosses the cap and must be reported."""
+    under = "; ".join(["SELECT 1"] * (MAX_STATEMENTS - 1)) + "; " + DESTRUCTIVE
+    over = "; ".join(["SELECT 1"] * MAX_STATEMENTS) + "; " + DESTRUCTIVE
+
+    under_shapes = parse_sql(under)
+    assert not any(s.statement == UNPARSED_STATEMENT for s in under_shapes)
+    assert any(s.statement == "delete" for s in under_shapes), (
+        "the last statement inside the cap was not parsed")
+
+    over_shapes = parse_sql(over)
+    assert any(s.statement == UNPARSED_STATEMENT for s in over_shapes)
+    for q in (under, over):
+        assert _gated(q) in ("blocked", "approval_required")
+
+
+def test_the_statement_cap_is_enforced_in_exactly_one_place():
+    """Three enforcement points for one constant was the smell that hid a dead
+    one. Parsed statements stay capped; the markers are extra."""
+    shapes = parse_sql("; ".join(["SELECT 1"] * 500))
+    parsed = [s for s in shapes if s.statement != UNPARSED_STATEMENT]
+    assert len(parsed) <= MAX_STATEMENTS, len(parsed)
+
+
+# ── (d) the candidate-walk bound ─────────────────────────────────────────────
+
+def test_a_value_past_the_candidate_cap_cannot_hide():
+    args = {f"pad{i}": "hello" for i in range(_MAX_CANDIDATE_VALUES)}
+    args["query"] = DESTRUCTIVE
+    assert _sensor(CRITICAL).scan_tool_call("run_sql", args).action in (
+        "blocked", "approval_required"), (
+        "a dangerous value past the candidate-walk cap was dropped")
+
+
+def test_the_candidate_cap_boundary_is_exact():
+    under = {f"pad{i}": "hello" for i in range(_MAX_CANDIDATE_VALUES - 2)}
+    over = {f"pad{i}": "hello" for i in range(_MAX_CANDIDATE_VALUES + 2)}
+    assert classify("run_sql", under) == ("unknown", "medium"), (
+        "an argument tree UNDER the cap was failed closed; the cap fires early")
+    assert classify("run_sql", over)[1] == "critical", (
+        "an argument tree OVER the cap was not failed closed")
+
+
+# ── benign inputs under both caps still pass ─────────────────────────────────
+
+@pytest.mark.parametrize("query", [
+    "SELECT name FROM users WHERE id = 7",
+    "DELETE FROM sessions WHERE expires_at < now()",
+    "UPDATE feature_flags SET enabled = false WHERE key = 'beta'",
+    "SELECT 1; SELECT 2; SELECT 3",
+])
+def test_ordinary_sql_under_both_caps_is_untouched(query):
+    assert len(query) < MAX_SQL_CHARS
+    assert not any(s.statement == UNPARSED_STATEMENT for s in parse_sql(query)), (
+        "an ordinary statement was reported as over a cap")
+    assert _gated(query) == "allowed", f"{query!r} was gated"
+
+
+def test_a_large_but_ordinary_batch_under_the_caps_is_untouched():
+    """The false-positive guard for the fix itself: a realistic migration that
+    sits under both caps must not acquire an unparsed marker."""
+    query = "; ".join([f"UPDATE t SET c = {i} WHERE id = {i}"
+                       for i in range(MAX_STATEMENTS - 1)])
+    assert len(query) < MAX_SQL_CHARS
+    shapes = parse_sql(query)
+    assert not any(s.statement == UNPARSED_STATEMENT for s in shapes)
+    assert _gated(query) == "allowed"
