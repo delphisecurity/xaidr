@@ -10,3 +10,4 @@ build/
 .claude/settings.local.json
 .claude/settings.local.json.bak
 .claude/
+docs/internal/

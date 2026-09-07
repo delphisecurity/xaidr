@@ -84,18 +84,19 @@ classified, 165 blocked. Do not quote `165 / 281` as a detection rate — that i
 the figure this project retired, and it counts `terraform destroy` as a failure.
 
 **The 19 misses are the work.** They are marked `detection_intent: GAP` in the
-fixture and named in
-[Coverage and limitations](README.md#coverage-and-limitations); the five
-`exfiltration` cases among them are the best place to start.
+fixture, and `python scripts/intent_metrics.py` prints every one of them with its
+reason. That output is where to look for a specific entry; the families below are
+where the work clusters. The five `exfiltration` cases are the best place to
+start.
 
 If you are looking for somewhere your work will matter:
 
 | family | GAP entries | why it is open |
 |---|---|---|
-| `exfiltration` | 5 of 22 | The clearest misses in the corpus. Bulk copy to a remote host, DNS tunnelling, `git push --mirror` to an attacker remote. Not dual-use in these shapes. |
-| `obfuscation` | 5 of 10 | Quote-splitting, variable-splicing and hex-decode-and-pipe forms that hide the object from a rule that would otherwise enforce. `$IFS$()cat$IFS/etc/shadow` IS blocked, which shows the shape is reachable. |
-| `execute` | 5 of 59 | Windows LOLBins (`rundll32 javascript:`, `mshta http://`), `powershell -enc`, and a fetch in command-substitution position. |
-| `discovery` | 3 of 11 | `ls -la /root`, whole-filesystem SUID enumeration, and `id && whoami && hostname` — the chain is visible in one call and we do not read it. |
+| `exfiltration` | 5 of 22 | The clearest misses in the corpus: bulk transfer to a remote destination, and out-of-band channels. Not dual-use in these shapes. |
+| `obfuscation` | 5 of 10 | Forms that hide the object of a command from a rule that would otherwise enforce on it. Sibling shapes in the same family DO block, which shows the family is reachable. |
+| `execute` | 5 of 59 | Non-POSIX interpreters and living-off-the-land binaries, plus fetch in command-substitution position. |
+| `discovery` | 3 of 11 | Enumeration of privileged paths, and chained inspection where the chain is visible in one call and we do not read it. |
 | `infra_destruction` | 0 of 8 | **By design, not a gap.** Destroying managed infrastructure is indistinguishable from a legitimate teardown at the command level, so every rule in the family is classify-only and all 8 are marked `INTENDED`. Do not "fix" this by adding a `detect` block. Improving it means better classification, or a worked policy example. |
 
 Note what is *not* on that list. `persist` blocks 17 of 31, above the median,
@@ -119,20 +120,17 @@ The obvious fix was to teach the scanner to recognise a documentary frame,
 because it is a bypass: an attacker prefixes `Runbook: ` to a live command and
 is dampened by the same code.
 
-What shipped instead is structural, and all three conditions are required:
+What shipped instead is structural rather than lexical, and it requires several
+independent conditions to hold at once, so that no single string an attacker can
+write is sufficient on its own. A frame cue is only ever a corroborator, never
+the anchor. Result: 30 blocked became 1, 35 became 0, and the movement was block
+to flag rather than block to allow, so the passages still surface.
 
-1. the dangerous content sits inside a markdown code span, so it is quoted
-   rather than issued;
-2. a documentary frame cue appears in the prose outside that span;
-3. the **prose residue**, the input with every code span removed, carries no
-   dangerous signal of its own.
-
-Condition 3 is the anti-bypass half. A bare prefixed attack has no code span, so
-1 fails. A mixed payload (`Runbook: \`ls -la\`, then rm -rf /`) has a live
-command in the residue, so 3 fails. Both stay blocked. The frame cue is only a
-corroborator and is never the anchor. Result: 30 blocked became 1, 35 became 0,
-and the movement was block to flag rather than block to allow, so the passages
-still surface.
+> **Maintainers.** The conditions themselves, the candidates that were measured
+> and rejected, and the numbers behind them are not in this repository. They are
+> in the private `delphisecurity/xaidr-internal` repository under `detection/`.
+> Read that before proposing a change to this area; the public summary above is
+> deliberately not enough to design against.
 
 The lesson generalises. **When a rule fires on something benign, the fix is
 almost never a keyword that recognises the benign case**, because the attacker
