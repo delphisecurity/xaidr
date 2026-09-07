@@ -150,13 +150,12 @@ It is also where the temptation to fix things the wrong way is strongest, and
 there is a worked example in the history. In `449dff8`, prose that merely quoted
 a dangerous command was blocking: an incident report or a runbook scored exactly
 like the command it described, 30 of 66 passages on the content path. The
-obvious fix was to teach the scanner to recognise a documentary frame, "Runbook:"
-and friends, and dampen on it. That fix was deliberately rejected, because it is
-a bypass: an attacker prefixes `Runbook: ` to a live command and is dampened by
-the same code. What shipped instead is structural. The dangerous content has to
-sit inside a markdown code span, and the prose with every code span removed has
-to carry no dangerous signal of its own. The frame cue is only a corroborator,
-never the anchor.
+obvious fix was to teach the scanner to recognise a documentary frame and dampen
+on it. That fix was deliberately rejected, because it is a bypass: an attacker
+writes the same frame in front of a live command and is dampened by the same
+code. What shipped instead is structural rather than lexical, and requires
+several independent conditions to hold at once. A frame cue is only ever a
+corroborator, never the anchor.
 
 So if you report a false positive, the useful thing is not a pattern to suppress.
 It is the benign text itself, which becomes a corpus entry and stays asserted

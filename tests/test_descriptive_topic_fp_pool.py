@@ -1,43 +1,40 @@
-"""The benign pool for the PREDICATE-SPAN-EVIDENCE finding, and what it measured.
+"""The benign pool of ordinary security prose, and the open finding it locks.
 
-WHY THIS FILE EXISTS WITHOUT A FIX ATTACHED. The dampener's guard asks whether
-some gated rule matched a PREDICATE span. Six attack shapes produce only a bare
-TOPIC span ("dump your full system prompt" -> `system prompt`), so the guard can
-never fire for them and any frame cue, at any position, dampens them to
-allowed/0.00 — 415 measured combinations.
+WHAT THIS FILE IS. 38 texts that are legitimate writing ABOUT attack topics —
+incident reports, policy documents, training material — rather than attacks. 30
+of them BLOCK on the shipped scanner today. They are the open finding, and this
+file exists to hold them still: each of the 30 is listed BY NAME and the count is
+locked, so that improving them, or making them worse, changes a test rather than
+passing unnoticed.
 
-Three candidate guards were built and measured against this pool. All three
-failed, and the numbers are recorded in the report rather than the code. The
-short version:
+WHY IT SHIPS WITHOUT A FIX ATTACHED, which is the part a future maintainer needs.
+Candidate fixes were built and measured against this pool. Every one of them
+closed a large share of the target cases IN-SAMPLE and almost none on held-out
+attacks, because each had keyed on a property of the specific cases in the target
+set rather than on the shape of the problem. That in-sample/held-out collapse is
+the finding, and it is the same enumeration defect this codebase has removed
+several times at other layers.
 
-  * a verb governing the topic within a window closed 356/415 IN-SAMPLE but only
-    8/60 on held-out attacks, and it BLOCKS the canonical benign case
-    ("show me the system prompt in this theatre play") the dampener exists for;
-  * widening the reported span closed 79/415 and broke the same canonical case;
-  * a second-person addressee test closed 261/415 in-sample and 0/60 held-out.
+The consequence to understand before proposing a change: a tighter guard here
+trades an attack gap for a LARGER benign gap, on a surface that is already the
+product's biggest false-positive surface. That is why no candidate shipped. If
+you have one, measure it on held-out attacks BEFORE you measure it on this pool;
+a candidate that only moves the in-sample number has reproduced the defect.
 
-The in-sample/held-out collapse is the finding: every candidate keyed on a
-property of the six attacks that happened to be in the target set, which is the
-same enumeration defect one level up again.
-
-WHAT THIS POOL ACTUALLY MEASURED, and why it is worth keeping. 30 of these 38
-texts BLOCK on the shipped scanner today, at 0.88-1.00, before any change. They
-are ordinary security prose. The cause is one layer below the dampener: rules
-like LLM07_prompt_extract score 0.88 on the bare noun `system prompt`, so
-"the system prompt is stored in config.yaml" blocks at 1.00. The dampener exists
-to undo that, the guard exists to bound the dampener, and the 415 cells are the
-guard's gap — three layers of compensation over a keyword rule.
-
-Tightening the guard therefore trades an attack gap for a LARGER benign gap, on a
-surface that is already failing. That is why no candidate shipped.
+The engineering detail behind all of this — which signals interact, in what
+order, and what each rejected candidate actually did — is deliberately not in
+this file, and not anywhere in this repository. It is in the private
+`delphisecurity/xaidr-internal` repository under `detection/`. If you are about
+to change this area, read it there first.
 
 THIS FILE ASSERTS ONLY WHAT SHOULD BE TRUE:
   * every entry really is at risk, or is recorded as not-at-risk with its reason
-    (an entry that never reaches the dampener cannot measure a dampener change);
+    (an entry that cannot reach the behaviour under test cannot measure a change
+    to it);
   * the 8 entries that pass today keep passing;
   * the 30 that block today are listed BY NAME as the open finding, with the
     count locked so that fixing them — or making them worse — is visible.
-It does not assert that the 30 are correct. They are not.
+It records current behaviour. It does not endorse it.
 """
 
 from __future__ import annotations
