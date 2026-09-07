@@ -6,7 +6,7 @@ _Part of the [xaidr](https://github.com/delphisecurity/xaidr/blob/main/README.md
 from xaidr import (
     Sensor, ProtectedHttpClient, ScanResult, DelphiBlockedError, CircuitBreaker,
     set_origin, origin_scope, clear_origin,
-    begin_flow, inject_context, extract_context, clear_flow,
+    begin_flow, inject_context, extract_context, clear_flow, propagate_context,
 )
 
 Sensor(agent_id="a", privilege_tier=1)      # 1 = highest privilege, 4 = lowest

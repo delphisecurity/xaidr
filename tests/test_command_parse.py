@@ -53,8 +53,14 @@ def test_corpus_shape_matches_declared_counts():
     assert len(BENIGN) == CORPUS["counts"]["benign"]
     # Floors: the merge of the original (154 attacks / 42 benign) with the
     # authored set. The benign set is the false-positive gate and must not shrink.
-    assert len(ATTACKS) >= 281, f"attack corpus shrank to {len(ATTACKS)}"
-    assert len(BENIGN) >= 74, f"benign corpus shrank to {len(BENIGN)}"
+    #
+    # The attack floor moved 281 -> 277 in 1.12.0, which is the only deliberate
+    # shrink this corpus has had. Four discovery commands were reclassified into
+    # the benign pool, so the benign floor rose 74 -> 78 by the same four. The
+    # two floors move together on purpose: a change that drops an attack without
+    # a matching benign entry is a loss of coverage, and this pair says so.
+    assert len(ATTACKS) >= 277, f"attack corpus shrank to {len(ATTACKS)}"
+    assert len(BENIGN) >= 78, f"benign corpus shrank to {len(BENIGN)}"
 
 
 def test_no_command_is_both_an_attack_and_benign():

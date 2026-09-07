@@ -15,11 +15,11 @@ leaves your process by default.
 **Measured on the committed corpus:** of the **186 shell attacks we intend to
 catch**, **167 are caught with no configuration — 167 of 186, 89.8%.** A catch
 is `blocked` **or** `flagged`; both emit a scored, logged event. If you only act
-on blocks, read 165 of 186. On the benign side: 0 of 74 benign commands, 0 of 12
+on blocks, read 165 of 186. On the benign side: 0 of 78 benign commands, 0 of 12
 templates and 0 of 38 ordinary DevOps operations blocked or flagged. Scan latency
 median 0.43 ms, p95 0.57 ms.
 
-The denominator is 186 and not 281 because **95 corpus attacks are recognised and
+The denominator is 186 and not 277 because **91 corpus attacks are recognised and
 deliberately left to a policy you write** — `terraform destroy -auto-approve` is
 the clearest one. [Coverage and limitations](#coverage-and-limitations) explains
 the split, and `python scripts/intent_metrics.py` prints the denominator and every
@@ -316,7 +316,7 @@ caveat: [docs/nano.md](https://github.com/delphisecurity/xaidr/blob/main/docs/na
 ## Coverage and limitations
 
 Every number here is measured on the committed corpus at
-`tests/fixtures/shell_corpus.json` (281 shell attacks, 74 benign commands, 89
+`tests/fixtures/shell_corpus.json` (277 shell attacks, 78 benign commands, 89
 benign prose passages — 66 that quote a shell command, 7 that carry a
 model-directed jailbreak / prompt-leak / encoding / DoS / forged-trust payload in
 plain prose, and 16 benign inversions that use safety-negation reframing
@@ -356,9 +356,9 @@ your deployment only acts on blocks, read the tool-path block count — 165 of 1
 operations are 0 on both columns.
 
 **Why `corpus_report.py` prints a different, worse-looking number.** It reports
-165 of 281 blocked. That is the raw block count over the whole corpus, and it is
+165 of 277 blocked. That is the raw block count over the whole corpus, and it is
 not a detection rate: it counts `terraform destroy` as a failure. The denominator
-is 186 and not 281 because **95 corpus attacks are recognised and deliberately
+is 186 and not 277 because **91 corpus attacks are recognised and deliberately
 left to a policy you write**, the command being genuinely dual-use.
 `terraform destroy -auto-approve` is the clearest example: it is the documented
 inverse of `terraform apply`, ephemeral-environment automation runs it on a
@@ -376,18 +376,32 @@ stranger reading the repo rather than something you have to take on trust:
 |---|---:|---|
 | in scope and caught (blocked or flagged) | **167** | yes — and caught |
 | in scope and missed | **19** | yes — and missed |
-| `INTENDED`: recognised, deliberately left to policy | **95** | **no** |
+| `INTENDED`: recognised, deliberately left to policy | **91** | **no** |
 
-167 + 19 + 95 = 281. Absence of the field is fail-closed: an entry that stops
+167 + 19 + 91 = 277. Absence of the field is fail-closed: an entry that stops
 being caught after a rule change lands in the denominator automatically rather
 than disappearing from it.
 
-**Read the split sceptically, because it flatters us.** It excludes 95 of the
-116 attacks the ruleset does not block — 82% of the misses declared intentional —
+**The corpus shrank by four in 1.12.0, and this is the only time it has.** An
+independent audit measured that four discovery commands carried as attacks —
+ordinary operational inspection of identity, sockets and containers — returned
+`unknown` from the classifier. They were marked `INTENDED`, which asserts a
+deliberate decision to leave something to your policy, but with no impact class
+there was nothing for a policy to match and no such decision had in fact been
+taken. Calling them "recognised and left to policy" was wrong. They were moved
+into the benign pool, where they score zero and now assert that they must keep
+scoring zero, which is a claim worth holding. That is 281 attacks to 277 and 74
+benign commands to 78. **The denominator is unchanged at 186 and the headline is
+unchanged at 167**, because these four were never in the denominator: they were
+among the exclusions, which is why the miscount was invisible in the figure that
+gets quoted.
+
+**Read the split sceptically, because it flatters us.** It excludes 91 of the
+112 attacks the ruleset does not block — 81% of the misses declared intentional —
 and that is exactly the shape of a denominator chosen to produce a nicer number.
-Two things are on the record against that reading. First, 73 of the 95 rest on a
+Two things are on the record against that reading. First, 72 of the 91 rest on a
 classify-only rationale that was written into the ruleset *before* this metric
-existed, so the argument predates the number that benefits from it; the other 22
+existed, so the argument predates the number that benefits from it; the other 19
 are judgements made when the field was added and are marked as such. Second, 14
 entries were genuinely hard to call and are named as hard calls in the script's
 output, several of them called `GAP` against our own interest. If you disagree
@@ -400,25 +414,25 @@ These are the evidence and they are not going anywhere.
 
 | | attacks | classified | detected (score > 0) | blocked |
 |---|---:|---:|---:|---:|
-| Total | 281 | 267 (95%) | 165 | 165 |
+| Total | 277 | 267 (96%) | 165 | 165 |
 
 **What a deployer with a policy actually gets.** The classify-only families are
 not out of reach — they are the reason the policy engine exists. Measured on the
 same corpus, with `require_approval` bound to the ten impact classes. The
-denominator here is all 281 on purpose: this table is about how much of the
+denominator here is all 277 on purpose: this table is about how much of the
 corpus a policy *stops*, including the dual-use commands you may well want
 stopped in your environment.
 
 | policy | attacks gated (the action does not execute) | ordinary DevOps operations gated |
 |---|---:|---:|
-| none (shipped default) | 165 of 281 — the block count, not a detection rate | 0 of 38 |
-| `impact_tier: [critical]` | 188 of 281 | 0 of 38 |
-| `impact_tier: [critical, high]` | 253 of 281 | 4 of 38 |
-| `impact_class:` all ten | **265 of 281** | **5 of 38** |
+| none (shipped default) | 165 of 277 — the block count, not a detection rate | 0 of 38 |
+| `impact_tier: [critical]` | 188 of 277 | 0 of 38 |
+| `impact_tier: [critical, high]` | 253 of 277 | 4 of 38 |
+| `impact_class:` all ten | **265 of 277** | **5 of 38** |
 
-**With `require_approval` bound to the ten impact classes, 265 of 281 attacks are
+**With `require_approval` bound to the ten impact classes, 265 of 277 attacks are
 gated — the action does not execute — at a cost of 5 of 38 ordinary DevOps
-operations requiring approval.** Benign commands stay at 0 of 74 under every
+operations requiring approval.** Benign commands stay at 0 of 78 under every
 policy width above.
 
 One thing to know before you write that rule: binding to `impact_tier` and
@@ -451,14 +465,14 @@ of output you already have. Use it to decide where a policy earns its keep.
 `intent_metrics.py` prints each one with its reason, which is where to look if
 you want to close one. They are not enumerated here.
 
-**What "classified" does and does not mean.** 267 of 281 are assigned *a* class.
-232 of 281 are assigned the class the corpus labels them with. The second is the
+**What "classified" does and does not mean.** 267 of 277 are assigned *a* class.
+232 of 277 are assigned the class the corpus labels them with. The second is the
 one to reason about: the sensor's classifier emits eight classes against the
 corpus's ten, so three corpus families cannot be emitted at all and their entries
 come back as something else. Improving that mapping is open work.
 
 **False positives that exist today.** The benign gates are asserted on every run:
-0 of 74 benign shell commands score above zero, and 1 of 89 benign prose passages
+0 of 78 benign shell commands score above zero, and 1 of 89 benign prose passages
 blocks. That one is `bp-055`, documented by ID with its cause in
 `tests/test_benign_prose.py`. It is listed rather than suppressed so that a
 second one shows up as a new entry instead of disappearing into a percentage.
@@ -612,7 +626,7 @@ telemetry rather than crashing the receiving agent.
 Detection ships tuned and needs no configuration. A **policy** is the layer on
 top: a local YAML file (or a dict) that decides what to do with the actions
 detection deliberately leaves alone — the dual-use commands behind the
-186-not-281 denominator above.
+186-not-277 denominator above.
 
 ```yaml
 # xaidr-policy.yaml

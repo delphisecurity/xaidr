@@ -446,54 +446,225 @@ def _corpus():
         return json.load(fh)
 
 
-def test_step4_exactly_four_exclusions_classify_unknown():
-    """The count is derived, never written down twice.
+def test_step4_every_remaining_exclusion_is_actually_classified():
+    """What the audit finding became once the corpus was corrected.
 
-    If a rule later classifies one of these, this fails and the README's
-    "91 of the 95" sentence has to move with it.
+    The finding was that four INTENDED entries returned `unknown` from
+    classify(), so they carried no impact class, nothing existed for a policy to
+    match, and calling them "recognised and handed to your policy" was false.
+    1.12.0 resolved that by MOVING them rather than by rewording it: they are
+    benign commands now, not attacks.
+
+    So the invariant is no longer "exactly four are unclassifiable". It is the
+    stronger one that the move was supposed to buy: EVERY exclusion that remains
+    is genuinely recognised. If a future entry is excluded on the strength of a
+    classification it does not have, this fails.
     """
     from xaidr.authz.classifier import classify
 
     exclusions = [e for e in _corpus()["attacks"]
                   if e.get("detection_intent") == "INTENDED"]
-    assert len(exclusions) == 95, len(exclusions)
-    unknown = {e["command"] for e in exclusions
-               if classify("run_command", {"command": e["command"]})[0] == "unknown"}
-    assert unknown == NEITHER_DETECTED_NOR_CLASSIFIED, (
-        f"the set of unclassifiable exclusions moved: {sorted(unknown)}"
+    assert len(exclusions) == 91, len(exclusions)
+    unknown = sorted(e["command"] for e in exclusions
+                     if classify("run_command", {"command": e["command"]})[0] == "unknown")
+    assert not unknown, (
+        "these entries are excluded from the denominator as 'recognised and left "
+        "to policy', but classify() returns unknown for them, so there is no "
+        f"impact class for a policy to match: {unknown}"
     )
 
 
-def test_step4_the_readme_no_longer_claims_all_95_are_recognised():
-    import os
-    import re
+def test_step4_the_four_are_now_benign_and_stay_silent():
+    """The other half of the move, asserted where it now lives.
 
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    with open(os.path.join(root, "README.md"), encoding="utf-8") as fh:
-        readme = " ".join(fh.read().split())
-    for false_claim in (
-        "95 corpus attacks are recognised and deliberately left",
-        "95 are recognised and deliberately left",
-        "ones that are recognised and deliberately not caught",
-    ):
-        assert false_claim not in readme, (
-            f"the README claims again that all 95 are recognised: {false_claim!r}"
-        )
-    assert "91 of the 95, not all 95, are recognised" in readme
-
-
-def test_step4_the_four_would_hold_the_benign_gate():
-    """The evidence for the reclassification recommendation.
-
-    They score zero on both paths, so moving them into the benign pool would not
-    break the gate that pool exists to enforce. Recorded as a measurement; the
-    move itself is a corpus-curation decision and is NOT made here.
+    They were reclassified into the benign pool because they score zero, so the
+    thing to hold is that they keep scoring zero. That is a real assertion: it
+    fails if a future discovery rule starts firing on ordinary operational
+    inspection, which is the false positive the benign gate exists to catch.
     """
+    corpus = _corpus()
+    benign = {b["command"] for b in corpus["benign"]}
+    attacks = {a["command"] for a in corpus["attacks"]}
+    assert NEITHER_DETECTED_NOR_CLASSIFIED <= benign, (
+        "the reclassified four are not in the benign pool: "
+        f"{sorted(NEITHER_DETECTED_NOR_CLASSIFIED - benign)}"
+    )
+    assert not (NEITHER_DETECTED_NOR_CLASSIFIED & attacks), (
+        "a reclassified command is still carried as an attack: "
+        f"{sorted(NEITHER_DETECTED_NOR_CLASSIFIED & attacks)}"
+    )
     s = _sensor()
     for command in sorted(NEITHER_DETECTED_NOR_CLASSIFIED):
         tool = s.scan_tool_call("run_command", {"command": command})
         content = s.scan(command, direction="input")
         assert tool.score == 0.0 and content.score == 0.0, (
-            f"{command!r} scores {tool.score}/{content.score}; it could not move "
-            f"into the 74-command benign pool without failing that gate"
+            f"{command!r} now scores {tool.score}/{content.score}; it is in the "
+            f"benign pool, so this breaks the false-positive gate"
         )
+
+
+def test_step4_the_published_exclusion_count_matches_the_corpus():
+    """The number in the documentation is the number in the fixture.
+
+    This guard exists because the merge that brought 1.11.0's README onto this
+    branch silently reintroduced "95 corpus attacks are recognised", a sentence
+    that was false when it was written and false again when it came back. A
+    claim about the corpus that is typed rather than derived will drift every
+    time a branch crosses another, so it is pinned here in both directions: the
+    stale count must be absent, and the live one must be present.
+    """
+    import os
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    docs = [os.path.join(root, "README.md")]
+    docs_dir = os.path.join(root, "docs")
+    if os.path.isdir(docs_dir):
+        docs += [os.path.join(docs_dir, f) for f in sorted(os.listdir(docs_dir))
+                 if f.endswith(".md")]
+
+    live = sum(1 for e in _corpus()["attacks"]
+               if e.get("detection_intent") == "INTENDED")
+    assert live == 91, live
+
+    for path in docs:
+        with open(path, encoding="utf-8") as fh:
+            text = " ".join(fh.read().split())
+        for stale in ("95 corpus attacks are recognised",
+                      "95 are recognised and deliberately left",
+                      "ones that are recognised and deliberately not caught",
+                      "281 attacks in the corpus"):
+            assert stale not in text, (
+                f"{os.path.basename(path)} carries a corpus count that the "
+                f"fixture no longer supports: {stale!r}"
+            )
+
+    with open(docs[0], encoding="utf-8") as fh:
+        readme = " ".join(fh.read().split())
+    assert f"{live} corpus attacks are recognised" in readme, (
+        f"the README does not state the live exclusion count ({live})"
+    )
+
+
+# ── THE MERGE CASE: async AND positional AND dangerous ───────────────────────
+# This is the case that neither branch could have written, and it is the reason
+# the 1.12.0 merge was resolved rather than decided.
+#
+#   1.11.0 fixed the ASYNC half: protect_tools had never wrapped a coroutine
+#          function, so an async tool ran unscanned.
+#   The audit fixed the POSITIONAL half: arguments were labelled arg0/arg1, and
+#          every structural extractor keys on the parameter name, so a policy
+#          matched run_command(command=...) and missed run_command(...).
+#
+# On 1.11.0 the async+positional call is unscanned because it is async. On the
+# audit branch it is unscanned because... there is no async wrapper at all. Only
+# a tree carrying both fixes can even reach the question, and the answer is only
+# correct if they compose in the right ORDER: bind the arguments, then decide.
+# Bind after deciding, or in only one of the two wrappers, and this file goes
+# red while every other test in the suite stays green.
+
+_DANGEROUS = "terraform destroy -auto-approve"
+_BENIGN = "terraform plan"
+
+
+def _infra_policy():
+    return _policy({"impact_class": ["infra_destruction"]}, "require_approval")
+
+
+def _sync_and_async_tools(ran):
+    """One sync tool and one async tool with identical signatures and canaries."""
+    def run_command(command):
+        ran.append(("sync", command))
+        return "executed"
+
+    async def run_command_async(command):
+        ran.append(("async", command))
+        return "executed"
+
+    return run_command, run_command_async
+
+
+@pytest.mark.parametrize("positional", [True, False], ids=["positional", "keyword"])
+def test_merge_sync_tool_is_gated_either_calling_convention(positional):
+    ran = []
+    sync_tool, _ = _sync_and_async_tools(ran)
+    protected, = _sensor(_infra_policy()).protect_tools([sync_tool])
+
+    out = protected(_DANGEROUS) if positional else protected(command=_DANGEROUS)
+
+    assert ran == [], f"the tool EXECUTED: {ran}"
+    assert "[APPROVAL REQUIRED]" in out, out
+    assert isinstance(out, str)
+
+
+@pytest.mark.parametrize("positional", [True, False], ids=["positional", "keyword"])
+def test_merge_async_tool_is_gated_either_calling_convention(positional):
+    """The composition case. Async, positional, dangerous, zero executions."""
+    import asyncio
+
+    ran = []
+    _, async_tool = _sync_and_async_tools(ran)
+    protected, = _sensor(_infra_policy()).protect_tools([async_tool])
+
+    assert asyncio.iscoroutinefunction(protected), (
+        "protect_tools returned a SYNC wrapper for a coroutine function; a "
+        "refusal would then be a str where the caller awaits"
+    )
+
+    async def call():
+        return await (protected(_DANGEROUS) if positional
+                      else protected(command=_DANGEROUS))
+
+    out = asyncio.run(call())
+
+    assert ran == [], f"the async tool EXECUTED: {ran}"
+    assert "[APPROVAL REQUIRED]" in out, out
+    assert isinstance(out, str), (
+        f"refusal type is {type(out).__name__}; the caller awaited and must get "
+        "the same string the sync path returns"
+    )
+
+
+def test_merge_the_gate_is_not_simply_refusing_everything():
+    """Non-vacuity. A benign call on both paths must still execute and return
+    the tool's own value, or the two tests above would pass on a wrapper that
+    blocked unconditionally."""
+    import asyncio
+
+    ran = []
+    sync_tool, async_tool = _sync_and_async_tools(ran)
+    sensor = _sensor(_infra_policy())
+    p_sync, = sensor.protect_tools([sync_tool])
+    p_async, = sensor.protect_tools([async_tool])
+
+    assert p_sync(_BENIGN) == "executed"
+    assert asyncio.run(p_async(_BENIGN)) == "executed"
+    assert ran == [("sync", _BENIGN), ("async", _BENIGN)], ran
+
+
+def test_merge_both_paths_produce_the_identical_refusal():
+    """The two wrappers share one decision function, so the refusal a caller
+    matches on cannot differ by calling convention or by sync/async-ness."""
+    import asyncio
+
+    ran = []
+    sync_tool, async_tool = _sync_and_async_tools(ran)
+    sensor = _sensor(_infra_policy())
+    p_sync, = sensor.protect_tools([sync_tool])
+    p_async, = sensor.protect_tools([async_tool])
+
+    # The refusal names the tool, and the two tools must have distinct names for
+    # protect_tools to treat them as distinct, so the tool name is normalised out
+    # before comparing. Everything else -- the verdict, the category, the wording
+    # and the type -- has to be identical across all four paths.
+    def shape(text, tool):
+        assert isinstance(text, str), f"{tool} refusal is {type(text).__name__}"
+        return text.replace(tool, "<tool>")
+
+    refusals = {
+        shape(p_sync(_DANGEROUS), "run_command"),
+        shape(p_sync(command=_DANGEROUS), "run_command"),
+        shape(asyncio.run(p_async(_DANGEROUS)), "run_command_async"),
+        shape(asyncio.run(p_async(command=_DANGEROUS)), "run_command_async"),
+    }
+    assert len(refusals) == 1, f"the four paths disagree: {sorted(refusals)}"
+    assert ran == [], f"a tool executed: {ran}"
