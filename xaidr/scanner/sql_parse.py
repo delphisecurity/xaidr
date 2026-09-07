@@ -185,6 +185,342 @@ class SqlShape(NamedTuple):
     raw: str                  # the statement text, comments stripped
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# THE LEXER, and why this is a lexer and not either a regex layer or a parser
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# An independent audit measured three bypasses and two false positives that all
+# have ONE cause: string and comment boundaries were decided by regexes run over
+# raw text, so a quoted literal changed the structural reading of routine valid
+# SQL. Against a real SQLite oracle, each of these deleted every row while the
+# scanner returned allowed at score 0.00 under a critical-tier approval policy:
+#
+#   DELETE FROM records RETURNING 'where id=7'   the WHERE inside a STRING made
+#                                                the statement look bounded
+#   WITH x AS (SELECT 1) DELETE FROM records     the leading CTE was classified
+#                                                instead of the real mutation
+#   SELECT '--'; DELETE FROM records WHERE 1=1   the `--` inside a STRING was
+#                                                read as a comment, swallowing
+#                                                the statement that followed
+#
+# and two the other way, blocking work that deletes 0 and 1 row respectively:
+#
+#   DELETE FROM records WHERE note='1=1'         `1=1` inside a STRING
+#   DELETE FROM records WHERE id=7 AND 1=1       a tautology as one CONJUNCT of
+#                                                an otherwise bounded predicate
+#
+# WHY A LEXER RATHER THAN FAILING CLOSED ON THE CURRENT RECOGNISER. Failing
+# closed was the alternative considered, and on its own it does not work: to
+# decide "I cannot confidently parse this" you must ALREADY know where strings
+# and comments end. `SELECT '--'; DELETE ...` cannot even be split into
+# statements without that, so a fail-closed rule bolted onto the regex layer
+# would fail closed on the wrong inputs and still miss this one. Tokenization is
+# the precondition for an honest "I do not know".
+#
+# WHY NOT A REAL PARSER. What the classifier consumes is a verb, an object, and
+# whether the predicate restricts the rows — token-level structure, not a
+# grammar. A full parser (sqlglot, sqlparse) would be a runtime dependency, and
+# `pip install xaidr` pulling in nothing is the product's headline claim, not a
+# detail to trade away for a scanner that already declines to be a semantic
+# authority. A lexer is ~150 lines, linear-time, dialect-tolerant, and testable
+# against a real database.
+#
+# SO: TOKENIZE, THEN FAIL CLOSED ON WHAT THE TOKENS DO NOT SETTLE. Anything the
+# lexer can read but the recogniser cannot confidently classify gets
+# predicate="unknown", which callers treat as UNRESTRICTED. A shallow
+# recogniser that is confidently wrong is worse than one that says it does not
+# know.
+
+#: Token kinds. `str` and `comment` are opaque: their CONTENT never reaches a
+#: structural question, which is the whole point.
+_TOK_WORD, _TOK_STR, _TOK_COMMENT, _TOK_PUNCT = "word", "str", "comment", "punct"
+
+_IDENT_START = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_")
+_IDENT_CHARS = _IDENT_START | set("0123456789$")
+
+
+class SqlToken(NamedTuple):
+    kind: str
+    text: str          # verbatim source slice
+    lower: str         # lowercased, for word comparisons; "" for str/comment
+
+
+def tokenize(text: str) -> list:
+    """SQL text -> tokens, with correct string and comment boundaries.
+
+    Handles, because each appears in ordinary SQL an agent will send:
+      * single-quoted literals with the '' escape,
+      * double-quoted and backtick-quoted identifiers (ANSI and MySQL),
+      * dollar-quoted bodies, $$...$$ and $tag$...$tag$ (PostgreSQL),
+      * -- and # line comments,
+      * /* */ block comments, nested (PostgreSQL nests; treating them as nested
+        is the conservative reading either way).
+
+    Linear in the input and allocation-bounded: no regex, no backtracking, so
+    it cannot become the ReDoS surface the invariants in this package exist to
+    keep out. An unterminated string or comment runs to end-of-input and is
+    returned as one token, which is what makes the caller able to notice it.
+    """
+    out: list = []
+    i, n = 0, min(len(text), MAX_SQL_CHARS)
+    while i < n:
+        ch = text[i]
+
+        if ch in " \t\r\n":
+            i += 1
+            continue
+
+        # ── comments ────────────────────────────────────────────────────
+        if text.startswith("--", i) or ch == "#":
+            j = text.find("\n", i)
+            j = n if j == -1 else j
+            out.append(SqlToken(_TOK_COMMENT, text[i:j], ""))
+            i = j
+            continue
+        if text.startswith("/*", i):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if text.startswith("/*", j):
+                    depth += 1
+                    j += 2
+                elif text.startswith("*/", j):
+                    depth -= 1
+                    j += 2
+                else:
+                    j += 1
+            out.append(SqlToken(_TOK_COMMENT, text[i:j], ""))
+            i = j
+            continue
+
+        # ── strings and quoted identifiers ──────────────────────────────
+        if ch == "'":
+            j = i + 1
+            while j < n:
+                if text[j] == "'":
+                    if j + 1 < n and text[j + 1] == "'":
+                        j += 2
+                        continue
+                    j += 1
+                    break
+                j += 1
+            out.append(SqlToken(_TOK_STR, text[i:j], ""))
+            i = j
+            continue
+        if ch in '"`':
+            j = i + 1
+            while j < n and text[j] != ch:
+                j += 1
+            j = min(j + 1, n)
+            # A quoted IDENTIFIER is a name, not a literal: it keeps its text so
+            # `DELETE FROM "records"` still resolves an object.
+            out.append(SqlToken(_TOK_WORD, text[i:j], text[i + 1:j - 1].lower()))
+            i = j
+            continue
+        if ch == "$":
+            close = text.find("$", i + 1)
+            if close != -1 and close - i <= 64:
+                tag = text[i:close + 1]
+                end = text.find(tag, close + 1)
+                end = n if end == -1 else end + len(tag)
+                out.append(SqlToken(_TOK_STR, text[i:end], ""))
+                i = end
+                continue
+
+        # ── words and punctuation ───────────────────────────────────────
+        if ch in _IDENT_START:
+            j = i
+            while j < n and text[j] in _IDENT_CHARS:
+                j += 1
+            word = text[i:j]
+            out.append(SqlToken(_TOK_WORD, word, word.lower()))
+            i = j
+            continue
+        if ch.isdigit():
+            j = i
+            while j < n and (text[j].isdigit() or text[j] == "."):
+                j += 1
+            out.append(SqlToken(_TOK_WORD, text[i:j], text[i:j]))
+            i = j
+            continue
+
+        out.append(SqlToken(_TOK_PUNCT, ch, ch))
+        i += 1
+
+        if len(out) > _MAX_TOKENS:
+            break
+    return out
+
+
+#: Bound on tokens per value. A pathological argument must not turn one tool
+#: call into unbounded work; hitting it is also a fail-CLOSED signal, because a
+#: truncated token stream cannot settle a predicate.
+_MAX_TOKENS = 20000
+
+
+def _split_token_statements(tokens: list) -> list:
+    """Split on `;` at depth 0. Comments are dropped; strings are kept opaque.
+
+    Statement splitting on TOKENS is what fixes `SELECT '--'; DELETE ...`: the
+    `--` is inside a string token, so it is not a comment, so the `;` after it
+    is still a statement boundary and the DELETE is still inspected.
+    """
+    stmts, cur, depth = [], [], 0
+    for tok in tokens:
+        if tok.kind == _TOK_COMMENT:
+            continue
+        if tok.kind == _TOK_PUNCT:
+            if tok.text == "(":
+                depth += 1
+            elif tok.text == ")":
+                depth = max(0, depth - 1)
+            elif tok.text == ";" and depth == 0:
+                if cur:
+                    stmts.append(cur)
+                cur = []
+                if len(stmts) >= MAX_STATEMENTS:
+                    return stmts
+                continue
+        cur.append(tok)
+    if cur:
+        stmts.append(cur)
+    return stmts
+
+
+def _skip_cte(tokens: list) -> list:
+    """Drop a leading WITH ... AS (...) [, ...] so the real verb is reachable.
+
+    `WITH x AS (SELECT 1) DELETE FROM records` classified as the leading WITH —
+    a read — while deleting every row. The CTE is a preamble; the statement is
+    what follows it.
+    """
+    if not tokens or tokens[0].lower != "with":
+        return tokens
+    i = 1
+    if i < len(tokens) and tokens[i].lower == "recursive":
+        i += 1
+    while i < len(tokens):
+        # name [ (cols) ] AS ( body )
+        while i < len(tokens) and tokens[i].lower != "as":
+            if tokens[i].kind == _TOK_PUNCT and tokens[i].text == "(":
+                depth = 1
+                i += 1
+                while i < len(tokens) and depth:
+                    if tokens[i].text == "(":
+                        depth += 1
+                    elif tokens[i].text == ")":
+                        depth -= 1
+                    i += 1
+                continue
+            i += 1
+        if i >= len(tokens):
+            return []                      # malformed -> nothing to classify
+        i += 1                             # past AS
+        if i < len(tokens) and tokens[i].text == "(":
+            depth = 1
+            i += 1
+            while i < len(tokens) and depth:
+                if tokens[i].text == "(":
+                    depth += 1
+                elif tokens[i].text == ")":
+                    depth -= 1
+                i += 1
+        if i < len(tokens) and tokens[i].text == ",":
+            i += 1
+            continue                       # another CTE
+        return tokens[i:]
+    return []
+
+
+#: Words that BOUND a predicate: a comparison against one of these restricts the
+#: rows. Anything else in a WHERE clause leaves the predicate unsettled.
+_PREDICATE_TERMINATORS = frozenset({
+    "returning", "order", "limit", "group", "having", "window", "offset",
+    "fetch", "for", "into", "on",
+})
+
+
+def _predicate_state_tokens(tokens: list) -> str:
+    """"none" | "bounded" | "tautology" | "unknown", from TOKENS.
+
+    Two things the regex version could not do, both of which the audit measured:
+
+      * a WHERE inside a string literal is not a WHERE, and `1=1` inside a
+        string literal is not a tautology. String tokens are opaque here, so
+        neither can be seen.
+      * a tautology as ONE CONJUNCT of a predicate does not make the predicate
+        unrestricted. `WHERE id=7 AND 1=1` deletes one row; calling it
+        tautological was a false positive. The clause is split on top-level OR
+        into disjuncts, and each disjunct on AND into conjuncts: a disjunct is
+        unrestricted only when EVERY one of its conjuncts is a tautology, and
+        the predicate is unrestricted only when ANY disjunct is. That is the
+        auditor's criterion — never treat a substring tautology as evidence the
+        whole predicate is unrestricted — expressed as boolean structure rather
+        than as a longer regex.
+    """
+    where_at = None
+    depth = 0
+    for idx, tok in enumerate(tokens):
+        if tok.kind == _TOK_PUNCT:
+            if tok.text == "(":
+                depth += 1
+            elif tok.text == ")":
+                depth = max(0, depth - 1)
+        elif tok.kind == _TOK_WORD and depth == 0 and tok.lower == "where":
+            where_at = idx
+            break
+    if where_at is None:
+        return "none"
+
+    clause, depth = [], 0
+    for tok in tokens[where_at + 1:]:
+        if tok.kind == _TOK_PUNCT:
+            if tok.text == "(":
+                depth += 1
+            elif tok.text == ")":
+                depth = max(0, depth - 1)
+        elif tok.kind == _TOK_WORD and depth == 0 and tok.lower in _PREDICATE_TERMINATORS:
+            break
+        clause.append(tok)
+    if not clause:
+        return "unknown"                   # `WHERE` with nothing after it
+
+    def split_top(toks, word):
+        parts, cur, d = [], [], 0
+        for t in toks:
+            if t.kind == _TOK_PUNCT:
+                if t.text == "(":
+                    d += 1
+                elif t.text == ")":
+                    d = max(0, d - 1)
+            elif t.kind == _TOK_WORD and d == 0 and t.lower == word:
+                parts.append(cur)
+                cur = []
+                continue
+            cur.append(t)
+        parts.append(cur)
+        return parts
+
+    def is_tautology(term):
+        """A three-token comparison whose two sides are identical constants."""
+        real = [t for t in term if t.kind != _TOK_COMMENT]
+        # bare truthy: `WHERE 1` / `WHERE true`
+        if len(real) == 1 and real[0].lower in ("1", "true"):
+            return True
+        if len(real) == 3 and real[1].kind == _TOK_PUNCT and real[1].text == "=":
+            left, right = real[0], real[2]
+            if left.kind == _TOK_STR or right.kind == _TOK_STR:
+                # 'a'='a' is a tautology; 'a'='b' is not. Compare the literals
+                # themselves, never their contents against anything else.
+                return left.kind == right.kind and left.text == right.text
+            return left.lower == right.lower
+        return False
+
+    for disjunct in split_top(clause, "or"):
+        conjuncts = split_top(disjunct, "and")
+        if conjuncts and all(is_tautology(c) for c in conjuncts):
+            return "tautology"
+    return "bounded"
+
 def _strip_comments(text: str) -> str:
     text = _BLOCK_COMMENT_RE.sub(" ", text)
     text = _LINE_COMMENT_RE.sub(" ", text)
@@ -291,6 +627,16 @@ def looks_like_sql(text: str) -> bool:
 def parse_sql(text: str) -> list:
     """Return a list of SqlShape, one per statement. Empty when this is not SQL.
 
+    TOKEN-DRIVEN since the audit. Every statement is inspected, not just the
+    first; a leading CTE is skipped so the real verb is classified; strings and
+    comments are opaque, so neither their contents nor a `--` inside a literal
+    can change the structural reading.
+
+    FAILS CLOSED. A statement whose predicate the token structure cannot settle
+    gets predicate="unknown", and callers treat unknown exactly as they treat an
+    unrestricted mutation. The recogniser is allowed to say it does not know; it
+    is not allowed to say "bounded" when it means "I could not tell".
+
     Never raises.
     """
     try:
@@ -301,47 +647,54 @@ def parse_sql(text: str) -> list:
             return []
 
         shapes = []
-        for raw_stmt in _split_statements(_strip_comments(text))[:MAX_STATEMENTS]:
-            stmt = raw_stmt.strip()
-            if not stmt:
+        tokens = tokenize(text)
+        truncated = len(tokens) > _MAX_TOKENS
+        for stmt_tokens in _split_token_statements(tokens)[:MAX_STATEMENTS]:
+            body = _skip_cte(stmt_tokens)
+            if not body:
                 continue
+            # The grammar gate still decides whether this is SQL at all, and it
+            # runs on the RECONSTRUCTED statement so the shell-shape checks in
+            # _statement_head keep working.
+            stmt = " ".join(t.text for t in body)
             head = _statement_head(stmt)
             if head is None:
-                # A trailing fragment after a semicolon that is not itself a
-                # statement, or one that fails the grammar gate. Not an error,
-                # just nothing to say about it. Applying the SAME gate per
-                # statement matters: without it a shell command sitting after a
-                # semicolon in an otherwise-SQL value would be read as SQL.
                 continue
             statement = head[0]
 
-            # Literals are removed only for the STRUCTURAL questions below; the
-            # tautology check needs them intact, so it runs on `stmt`.
             structural = _DQ_LITERAL_RE.sub(" ", stmt)
-
             object_kind = None
             km = _OBJECT_KIND_RE.match(structural)
             if km:
                 object_kind = re.sub(r"\s+", " ", km.group(1).lower())
-
-            # ALTER TABLE x DROP COLUMN y is a column operation, not a table drop.
             if statement == "alter":
                 am = _ALTER_DROP_RE.search(structural)
                 if am:
                     object_kind = am.group(1).lower()
-
             obj = None
             om = _OBJECT_RE.search(structural)
             if om:
                 obj = om.group(1).lower()
 
+            predicate = "unknown" if truncated else _predicate_state_tokens(body)
             shapes.append(SqlShape(
                 statement=statement,
                 object_kind=object_kind,
                 object=obj,
-                predicate=_predicate_state(stmt),
+                predicate=predicate,
                 raw=stmt,
             ))
         return shapes
     except Exception:
+        # Fail CLOSED on a lexer fault: an unparseable value that begins with a
+        # SQL verb is reported as an unknown-predicate statement of that verb,
+        # not as "not SQL". Returning [] here is what would let a crafted value
+        # vanish from the structural path entirely.
+        try:
+            head = _statement_head(text if isinstance(text, str) else "")
+            if head is not None:
+                return [SqlShape(statement=head[0], object_kind=None, object=None,
+                                 predicate="unknown", raw=str(text)[:MAX_SQL_CHARS])]
+        except Exception:
+            pass
         return []

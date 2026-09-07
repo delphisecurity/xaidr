@@ -6,6 +6,7 @@ model (allow / flag / block). No account, no backend, no network escalation.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import time
@@ -28,7 +29,9 @@ from .authz.classifier import (
     classify_url_findings as _url_findings,
     extract_shell_command as _extract_shell_command,
     extract_sql as _extract_sql,
+    extract_sql_all as _extract_sql_all,
     extract_url as _extract_url,
+    extract_url_all as _extract_url_all,
 )
 from .circuit_breaker import (
     CIRCUIT_OPEN_CATEGORY,
@@ -179,6 +182,13 @@ _TOOL_ARG_FLAG_CATEGORIES = frozenset({
 # The KEEP filter for the tool-argument L1 scan: a threat in neither tier is
 # discarded (PII and the out-of-remit categories). Block ∪ flag.
 _TOOL_ARG_KEEP_CATEGORIES = _TOOL_ARG_BLOCK_CATEGORIES | _TOOL_ARG_FLAG_CATEGORIES
+
+#: Tool names whose arguments could NOT be bound to the callable's signature, so
+#: their positional values are scanned under `arg0`-style labels and the
+#: name-keyed structural extractors (shell/SQL/URL) cannot recognise them. This
+#: is real coverage degradation and is reported rather than absorbed: read it
+#: with `Sensor.binding_degraded()`.
+_BIND_FAILURES: set = set()
 
 
 def _resolve_provenance(
@@ -1404,8 +1414,13 @@ class DelphiSensor:
             # `detect` block appear, so a migration's `DROP TABLE` classifies for
             # policy and does not block, and additive to `danger`, so this can
             # only raise a verdict and never lower one.
-            sql_statement = _extract_sql(arguments or {})
-            if sql_statement:
+            # EVERY SQL-looking value, not the first. A tool taking more than
+            # one relevant argument lost structural enforcement to dictionary
+            # order before this: {"first": "SELECT 1", "query": "DELETE ...
+            # WHERE 1=1"} allowed, and the same pair reversed blocked.
+            # Aggregating over all candidates is monotonic — it can only ADD a
+            # finding — so no call that was gated before stops being gated.
+            for _path, sql_statement in _extract_sql_all(arguments or {}):
                 for f in _sql_findings(sql_statement):
                     if f["rule"] in {x.rule for x in danger}:
                         continue
@@ -1431,8 +1446,9 @@ class DelphiSensor:
             # a `detect` block appear, so a private/loopback destination (the
             # normal case in a service mesh) classifies for policy and does not
             # block, and additive to `danger`, so this can only raise a verdict.
-            url_value = _extract_url(arguments or {})
-            if url_value:
+            # Every URL-looking value, same reasoning and same monotonicity as
+            # the SQL loop above.
+            for _path, url_value in _extract_url_all(arguments or {}):
                 for f in _url_findings(url_value):
                     if f["rule"] in {x.rule for x in danger}:
                         continue
@@ -1770,10 +1786,61 @@ class DelphiSensor:
                 wrapped.append(t)
                 continue
 
-            def make_wrapper(orig_func, tname):
-                def wrapper(*args, **kwargs):
+            def bind_arguments(orig_func, tname, args, kwargs):
+                """The call's arguments UNDER THEIR REAL PARAMETER NAMES.
+
+                Positional and keyword invocation of the same function must
+                produce the same scan input. They did not: positional values
+                were labelled `arg0`, `arg1`, and every structural extractor
+                here keys on the PARAMETER NAME (`command`, `query`, `url`, …)
+                to decide what a value is. So `run_command(command="terraform
+                destroy -auto-approve")` was gated by an infra_destruction
+                policy and `run_command("terraform destroy -auto-approve")`
+                executed. Measured on 1.10.0: 0 executions keyword, 1
+                positional. A policy that depends on Python call syntax is not
+                a policy.
+
+                `Signature.bind` plus `apply_defaults` gives the real mapping,
+                keeps keyword-only semantics, and fills defaults so a dangerous
+                DEFAULT value is scanned rather than invisible.
+
+                DEGRADATION IS EXPLICIT, NOT SILENT. Some callables have no
+                introspectable signature (C builtins, some functools objects)
+                and some calls genuinely do not match the signature. Those fall
+                back to the positional-index labelling, which is what this
+                always did — but the fallback is RECORDED on the wrapper so
+                `protect_tools` can report it, rather than being a quiet
+                downgrade that looks identical to full coverage.
+                """
+                try:
+                    bound = inspect.signature(orig_func).bind(*args, **kwargs)
+                    bound.apply_defaults()
+                    arguments = dict(bound.arguments)
+                    # *args / **kwargs parameters arrive as a tuple/dict under
+                    # one name. Flatten them so their VALUES are scanned rather
+                    # than a container being handed to a string scanner.
+                    for name, param in inspect.signature(orig_func).parameters.items():
+                        if name not in arguments:
+                            continue
+                        if param.kind is inspect.Parameter.VAR_POSITIONAL:
+                            extra = arguments.pop(name)
+                            for i, v in enumerate(extra or ()):
+                                arguments[f"{name}{i}"] = v
+                        elif param.kind is inspect.Parameter.VAR_KEYWORD:
+                            arguments.update(arguments.pop(name) or {})
+                    # `self` is the bound instance on a class seam, never an
+                    # argument the caller supplied; scanning it is noise.
+                    arguments.pop("self", None)
+                    return arguments
+                except (TypeError, ValueError):
+                    _BIND_FAILURES.add(tname)
                     arguments = {f"arg{i}": v for i, v in enumerate(args)}
                     arguments.update(kwargs)
+                    return arguments
+
+            def make_wrapper(orig_func, tname):
+                def wrapper(*args, **kwargs):
+                    arguments = bind_arguments(orig_func, tname, args, kwargs)
                     # scan_tool_call applies blocked-tools + L1 arg scan +
                     # local YAML policy, emits telemetry, and NEVER raises
                     # (internal faults fail open with a degraded signal).
@@ -1853,6 +1920,21 @@ class DelphiSensor:
             wrapped.append(new_tool)
 
         return wrapped
+
+    @staticmethod
+    def binding_degraded() -> list:
+        """Tool names whose arguments could not be bound to their signature.
+
+        A non-empty list is COVERAGE DEGRADATION, not a warning to ignore: those
+        tools' positional values are scanned under `arg0`-style labels, so the
+        structural shell/SQL/URL extractors — which key on the parameter name —
+        cannot recognise them, and a policy written against an impact class may
+        not fire. Callables with no introspectable signature (some C builtins)
+        are the usual cause. Wrap such a tool in a thin Python function with a
+        named parameter, or gate it by tool NAME in policy instead of by
+        impact class.
+        """
+        return sorted(_BIND_FAILURES)
 
     def protect_http(self, client: "httpx.Client") -> "ProtectedHttpClient":
         """Wrap an httpx.Client to enforce on outgoing HTTP calls.

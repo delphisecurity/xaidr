@@ -531,6 +531,11 @@ def classify_sql_findings(text: str) -> list:
         return []
 
 
+#: Hard cap on how many string leaves one tool call contributes. Structural
+#: scanning is per-value work, and an argument dict is attacker-influenced.
+_MAX_CANDIDATE_VALUES = 64
+
+
 def extract_sql(arguments: dict) -> Optional[str]:
     """Pull a SQL statement out of tool arguments, or None.
 
@@ -547,15 +552,57 @@ def extract_sql(arguments: dict) -> Optional[str]:
     shell path separate (`psql -c "..."` starts with a binary name), without
     caring what the argument is called.
     """
+    candidates = extract_sql_all(arguments)
+    return candidates[0][1] if candidates else None
+
+
+def _walk_values(node, path=""):
+    """(path, str) for every string leaf, bounded.
+
+    Nested structures are ordinary in tool arguments — `{"body": {"query": …}}`,
+    `{"statements": [...]}` — and a scanner that only reads the top level cannot
+    see them. Bounded by _MAX_CANDIDATE_VALUES so a pathological payload cannot
+    turn one tool call into an unbounded scan.
+    """
+    out = []
+
+    def walk(n, p):
+        if len(out) >= _MAX_CANDIDATE_VALUES:
+            return
+        if isinstance(n, str):
+            if n.strip():
+                out.append((p or "<root>", n))
+        elif isinstance(n, dict):
+            for k, v in n.items():
+                walk(v, f"{p}.{k}" if p else str(k))
+        elif isinstance(n, (list, tuple)):
+            for i, v in enumerate(n):
+                walk(v, f"{p}[{i}]")
+
+    walk(node, path)
+    return out
+
+
+def extract_sql_all(arguments: dict) -> list:
+    """EVERY SQL-looking value in the arguments, as (path, statement).
+
+    The singular form stopped at the FIRST match, so a tool taking more than one
+    relevant value lost structural enforcement to dictionary order:
+    `{"first": "SELECT 1", "query": "DELETE FROM records WHERE 1=1"}` allowed and
+    the same pair in the other order blocked. Measured on 1.10.0. Enforcement
+    that depends on key order is not enforcement.
+
+    Every candidate is returned, with the path it was found at, so the caller can
+    scan all of them and aggregate. Nested containers are walked, because
+    `{"body": {"query": …}}` is an ordinary argument shape.
+    """
     try:
         from ..scanner.sql_parse import looks_like_sql
 
-        for value in arguments.values():
-            if isinstance(value, str) and value.strip() and looks_like_sql(value):
-                return value
-        return None
+        return [(path, v) for path, v in _walk_values(arguments)
+                if looks_like_sql(v)]
     except Exception:
-        return None
+        return []
 
 
 # ── URL carried in a tool argument ───────────────────────────────────────────
@@ -670,13 +717,21 @@ def extract_url(arguments: dict) -> Optional[str]:
     separate (`curl http://…` starts with a binary name), without caring what the
     argument is called.
     """
+    candidates = extract_url_all(arguments)
+    return candidates[0][1] if candidates else None
+
+
+def extract_url_all(arguments: dict) -> list:
+    """EVERY URL-looking value in the arguments, as (path, url).
+
+    Same defect and same fix as `extract_sql_all`: a benign URL sitting before
+    the metadata address in the same dict hid it, and reversing the keys blocked.
+    """
     try:
         from ..scanner.url_parse import looks_like_url
 
-        for value in arguments.values():
-            if isinstance(value, str) and value.strip() and looks_like_url(value):
-                return value
-        return None
+        return [(path, v) for path, v in _walk_values(arguments)
+                if looks_like_url(v)]
     except Exception:
         return None
 
@@ -753,8 +808,9 @@ def classify(
         # statement's tier is HIGHER than the one already assigned. A call can
         # therefore get more severe from reading its SQL and never less.
         if isinstance(arguments, dict) and arguments:
-            statement = extract_sql(arguments)
-            if statement:
+            # EVERY SQL value, taking the most severe. Stopping at the first
+            # made the classification depend on dictionary order.
+            for _path, statement in extract_sql_all(arguments):
                 found = classify_sql(statement)
                 if found is not None:
                     sql_class, sql_tier = found
@@ -768,8 +824,7 @@ def classify(
         # Allowed to override only when the URL's tier is HIGHER, so a call can
         # get more severe from reading its URL and never less.
         if isinstance(arguments, dict) and arguments:
-            url_value = extract_url(arguments)
-            if url_value:
+            for _path, url_value in extract_url_all(arguments):
                 found = classify_url(url_value)
                 if found is not None:
                     url_class, url_tier = found

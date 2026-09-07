@@ -856,7 +856,7 @@ def print_report(args, corpus, devops):
     if on:
         print(f"  with nano, combined  : {_frac(on[2], denom)}"
               f"   of {denom} attacks we intend to catch")
-    print(f"  ({len(intended)} further attacks are recognised and deliberately left to policy;")
+    print(f"  ({len(intended)} further attacks are deliberately left to policy;")
     print("   they are named with reasons above and are not in the denominator.)")
     print(_rule("="))
     return 0

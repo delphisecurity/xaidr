@@ -175,6 +175,38 @@ def current_correlation_id() -> str | None:
     return _corr_ctx.get()
 
 
+def propagate_context(fn):
+    """Bind `fn` to the CURRENT provenance context so a thread keeps it.
+
+    `contextvars` follow `await`, and they do NOT follow a raw thread. A plain
+    `ThreadPoolExecutor.submit(work)` starts with an empty context, so the chain,
+    the tiers and the inbound mark are all gone in the worker — and a
+    `min_chain_tier_above` policy that gated the action on the calling thread
+    ALLOWS it in the pool. Measured: approval_required inline, allowed in the
+    pool, approval_required again under `copy_context().run`.
+
+    That is Python's threading semantics, not something this package can patch,
+    so what it can do is make the correct form short::
+
+        from xaidr import propagate_context
+
+        with ThreadPoolExecutor() as pool:
+            pool.submit(propagate_context(handle_request), payload)
+
+    Equivalent to `contextvars.copy_context().run(fn, ...)`, captured at the
+    moment `propagate_context` is called, which is the calling thread.
+    """
+    import functools
+
+    ctx = contextvars.copy_context()
+
+    @functools.wraps(fn)
+    def runner(*args, **kwargs):
+        return ctx.run(fn, *args, **kwargs)
+
+    return runner
+
+
 def mark_inbound() -> None:
     """Mark the current context as having arrived from another agent.
 
@@ -386,7 +418,27 @@ def extract_context(headers: dict[str, str] | None) -> bool:
     Reads the chain + correlation id a caller injected, and seeds this context
     so subsequent record_hop()/build_provenance() continue the same chain.
     Returns True if context was found and restored, False otherwise.
+
+    THE RETURN VALUE IS NOT THE SECURITY-RELEVANT PART. Calling this function IS
+    the trusted-ingress signal: the caller is telling us it is processing a
+    request that arrived from somewhere else. So the inbound mark is set FIRST,
+    before any parse can fail, and it stays set whether or not a chain could be
+    restored. `is_delegated()` then reports "delegation with no provenance",
+    which resolves the upstream to tier 4.
+
+    THIS IS THE FIX FOR A MEASURED BYPASS. The mark used to be set on the LAST
+    line, after two early returns — one for absent headers and one for an
+    absent correlation id. So against a `min_chain_tier_above` policy with a
+    tier-4 sender and a tier-1 receiver: valid headers required approval, and
+    stripping ALL headers, or just the correlation id, returned ALLOWED. The
+    computed ceiling fell from 4 to 1, because with nothing marked inbound the
+    action looked local. Removing evidence made the verdict weaker, which
+    inverts the guarantee THREAT_MODEL.md states — "every tampering that REMOVES
+    information tightens the verdict" — and hands an attacker a strictly better
+    move than leaving the headers alone.
     """
+    # Set BEFORE any early return. See the docstring: this is the whole fix.
+    _inbound_ctx.set(True)
     if not headers:
         return False
     # case-insensitive header lookup
@@ -434,9 +486,8 @@ def extract_context(headers: dict[str, str] | None) -> bool:
             tiers = claimed
     _tiers_ctx.set(tiers)
 
-    # This context was restored from an INBOUND call: whatever happens next is
-    # work that arrived from another agent, even if the chain header was absent
-    # or stripped. is_delegated() reads this to tell "no delegation" from
-    # "delegation whose provenance was removed".
+    # Already set at the top of this function, where it cannot be skipped by an
+    # early return. Kept as a no-op restatement so a reader of the success path
+    # still sees that this context is inbound.
     _inbound_ctx.set(True)
     return True

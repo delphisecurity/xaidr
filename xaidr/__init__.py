@@ -10,6 +10,7 @@ from .circuit_breaker import CircuitBreaker
 from .provenance import set_origin, origin_scope, clear_origin
 from .provenance_chain import (
     begin_flow, inject_context, extract_context, clear_flow,
+    propagate_context,
 )
 from .types import DelphiBlockedError, ScanResult
 # Auto-instrumentation. Importing this binds names and NOTHING else — no
@@ -39,5 +40,6 @@ __all__ = [
     "inject_context",
     "extract_context",
     "clear_flow",
+    "propagate_context",
     "__version__",
 ]
