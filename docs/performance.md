@@ -47,7 +47,7 @@ nothing.
 
 Verified with `python -m pytest -q`. The headline figure is the `base`
 configuration — `pip install .` plus `pytest`, no extras and no framework
-installed: **7436 passed, 144 skipped, 0 failed**, identical across three
+installed: **7566 passed, 159 skipped, 0 failed**, identical across three
 consecutive serial runs. That is the configuration quoted because it is the one
 that proves the zero-dependency claim.
 
