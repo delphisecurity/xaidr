@@ -136,21 +136,68 @@ def test_f2_benign_positional_calls_still_run():
     assert executed == ["ls -la"]
 
 
+class _UnreadableSignature:
+    """A callable whose signature genuinely cannot be read, on every version.
+
+    DO NOT replace this with a C builtin. Two drafts of this test tried that and
+    both were wrong for the same reason: which builtins expose
+    `__text_signature__` is a CPython implementation detail that moves between
+    releases. `len` is readable on 3.12, so the first draft passed vacuously.
+    `time.time` raises ValueError on 3.12 and returns `()` on 3.14, so the second
+    draft passed on the development interpreter and FAILED on the newer end of
+    the CI matrix, which is how it was caught. The behaviour under test is what
+    the wrapper does when a signature cannot be read, so the fixture should
+    guarantee that condition rather than borrow it from the interpreter.
+    """
+
+    __name__ = "unreadable_tool"
+
+    @property
+    def __signature__(self):
+        raise ValueError("signature unavailable")
+
+    def __call__(self, *args, **kwargs):
+        return "executed"
+
+
 def test_f2_unbindable_callables_are_reported_not_silently_degraded():
     """Explicit coverage degradation. A callable whose signature cannot be read
     falls back to positional labels, and that fact is retrievable."""
-    import time as _time
+    import inspect
 
-    # `time.time` is a C builtin whose signature genuinely cannot be read
-    # (`inspect.signature` raises ValueError). `len` and `print` CAN be read on
-    # CPython 3.12, so they would not exercise this path -- the first draft of
-    # this test used `len` and passed for the wrong reason.
+    tool = _UnreadableSignature()
+    with pytest.raises(ValueError):
+        inspect.signature(tool)          # the premise, asserted not assumed
+
     s = _sensor()
-    protected, = s.protect_tools([_time.time])
-    protected()
-    assert "time" in s.binding_degraded(), (
+    protected, = s.protect_tools([tool])
+    assert protected("ls -la") == "executed", "a benign call must still run"
+    assert "unreadable_tool" in s.binding_degraded(), (
         "an unbindable callable was degraded silently; binding_degraded() must "
         "name it so the loss of structural coverage is visible"
+    )
+
+
+def test_f2_binding_degraded_names_only_the_tools_that_failed():
+    """The other half, so the test above cannot pass on a list that is always
+    populated.
+
+    Asserted as DISCRIMINATION rather than as emptiness: binding_degraded() is a
+    staticmethod over a process-wide set that is deliberately never cleared, so
+    a bare `== []` here would pass or fail on test ORDER rather than on
+    behaviour. What has to be true is that a tool which binds cleanly never
+    appears in it, whatever else has run first.
+    """
+    def a_tool_that_binds(command):
+        return "executed"
+
+    s = _sensor()
+    protected, = s.protect_tools([a_tool_that_binds])
+    protected("ls -la")
+    protected(command="ls -la")
+    assert "a_tool_that_binds" not in s.binding_degraded(), (
+        "a tool whose signature reads fine was reported as degraded, so "
+        f"binding_degraded() cannot distinguish: {s.binding_degraded()}"
     )
 
 
@@ -600,12 +647,15 @@ def test_merge_sync_tool_is_gated_either_calling_convention(positional):
 def test_merge_async_tool_is_gated_either_calling_convention(positional):
     """The composition case. Async, positional, dangerous, zero executions."""
     import asyncio
+    import inspect
 
     ran = []
     _, async_tool = _sync_and_async_tools(ran)
     protected, = _sensor(_infra_policy()).protect_tools([async_tool])
 
-    assert asyncio.iscoroutinefunction(protected), (
+    # inspect, not asyncio: asyncio.iscoroutinefunction is deprecated in 3.14
+    # and removed in 3.16, and this suite runs the whole classifier matrix.
+    assert inspect.iscoroutinefunction(protected), (
         "protect_tools returned a SYNC wrapper for a coroutine function; a "
         "refusal would then be a str where the caller awaits"
     )
