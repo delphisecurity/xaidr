@@ -15,11 +15,11 @@ macOS 26.6 / arm64:
 
 | configuration | install | result |
 |---|---|---|
-| `base` (CI job) | `pip install .` && `pip install pytest` | **7566 passed, 159 skipped** |
-| `full` (CI job) | `pip install ".[http,trace,dev]"` | **7623 passed, 137 skipped** |
-| `full` + the LangChain stack | &nbsp;&nbsp;+ `".[langchain]" langgraph deepagents llama-index-core` | **7670 passed, 95 skipped** |
-| `full` + CrewAI | &nbsp;&nbsp;+ `".[crewai]"` | **7636 passed, 124 skipped** |
-| `full` + Haystack | &nbsp;&nbsp;+ `".[haystack]"` | **7654 passed, 106 skipped** |
+| `base` (CI job) | `pip install .` && `pip install pytest` | **7603 passed, 163 skipped** |
+| `full` (CI job) | `pip install ".[http,trace,dev]"` | **7664 passed, 137 skipped** |
+| `full` + the LangChain stack | &nbsp;&nbsp;+ `".[langchain]" langgraph deepagents llama-index-core` | **7711 passed, 95 skipped** |
+| `full` + CrewAI | &nbsp;&nbsp;+ `".[crewai]"` | **7677 passed, 124 skipped** |
+| `full` + Haystack | &nbsp;&nbsp;+ `".[haystack]"` | **7695 passed, 106 skipped** |
 | `corpus` (CI job) | `pip install .` && `python scripts/corpus_report.py` | benign gates **PASS**, exit 0 |
 | `corpus` (CI job) | &nbsp;&nbsp;&nbsp;&nbsp;then `python scripts/intent_metrics.py` | catch rate + denominator printed into the log; reported, not gated |
 
