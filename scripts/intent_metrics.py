@@ -464,7 +464,10 @@ def print_denominator(corpus, intended, in_scope):
     gaps = [e for e in corpus["attacks"] if e.get("detection_intent") == "GAP"]
     blocked_unlabelled = [e for e in corpus["attacks"] if "detection_intent" not in e]
 
-    print("  THE 281, DECOMPOSED BY INTENT")
+    # DERIVED, not typed. This header read "THE 281" until 1.13.0, four attacks
+    # after the corpus became 277 -- a hardcoded count in the output of the
+    # script whose whole purpose is to make the denominator auditable.
+    print(f"  THE {len(corpus['attacks'])}, DECOMPOSED BY INTENT")
     print(f"    {'blocked, so never labelled (fail-closed default)':<62}{len(blocked_unlabelled):>4}")
     print(f"    {'INTENDED  — left to policy, OUT of the denominator':<62}{len(intended):>4}")
     print(f"    {'    basis: a classify-only rule comment predating this field':<62}"
@@ -845,9 +848,33 @@ def print_report(args, corpus, devops):
      guarantee, and it does not transfer across onnxruntime versions — the
      runtime is named in the header for that reason.
 
-  5. IT IS ONE CORPUS. 281 commands assembled by two authors. A percentage on
+  5. IT IS ONE CORPUS. 277 commands assembled by two authors. A percentage on
      this sample is not a claim about your traffic.
 """)
+    if args.nano:
+        # NAME THE BAND THIS DOES NOT MEASURE. Everything above is the SHELL
+        # corpus, and nano was not built for it -- it was built for
+        # prompt-shaped attacks that the rules score at exactly 0.0. That
+        # population is not in this repository, so the number for it is absent
+        # rather than low, and an absent number that nothing mentions reads as a
+        # number that is fine.
+        print(_rule("="))
+        print("NOT MEASURED HERE — THE BAND NANO WAS ACTUALLY BUILT FOR")
+        print(_rule("="))
+        print("  Everything above is the SHELL corpus. Nano's own case is")
+        print("  prompt-shaped attacks the rules score at exactly 0.0, and no corpus")
+        print("  for that population ships in this repository or in the wheel, so")
+        print("  --nano cannot regenerate a recovery figure for it.")
+        print()
+        print("  The corpus, its derivation and the ruleset it was scored against are")
+        print("  preserved in the PRIVATE delphisecurity/xaidr-internal repository,")
+        print("  under nano/. They are not published: the population is a working set")
+        print("  of attacks that defeat the shipped rules.")
+        print()
+        print("  The withdrawn 23-of-26 recovery figure is documented in docs/nano.md,")
+        print("  including why it is not being replaced with a fresh one.")
+        print()
+
     print(_rule("="))
     print("HEADLINE")
     print(_rule("="))

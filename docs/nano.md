@@ -19,10 +19,16 @@ distinction a keyword scanner can make. Those inputs come out of the rules
 pipeline at exactly 0.0. That band is what nano was built for, and it is the only
 place it runs.
 
-**That population is not currently measured in this repository, and the figures
-that used to appear here are withdrawn.** Two numbers stood in this section: a
-recovery count of 23 of 26 on an acceptance corpus, and 582 of 595 frame cells
-recovered. Neither regenerates from the shipped package.
+**That population is not measured in this repository, and the figures that used
+to appear here are withdrawn.** Two numbers stood in this section: a recovery
+count of 23 of 26 on an acceptance corpus, and 582 of 595 frame cells recovered.
+Neither regenerates from the shipped package.
+
+The corpus and its full derivation now exist in the private
+`delphisecurity/xaidr-internal` repository under `nano/`, together with the exact
+ruleset they were scored against. They are not published here and will not be:
+the population is a working set of attacks that defeat the shipped rules. What is
+published is the method, which is everything below.
 
   * **582 of 595 frame cells: withdrawn, no derivation exists.** The committed
     generator in `tests/test_descriptive_frame_matrix.py` produces **4320**
@@ -33,14 +39,35 @@ recovered. Neither regenerates from the shipped package.
     shapes, and no such corpus has ever been committed to this repository. The
     figure survived only as prose.
   * **23 of 26 recovery: withdrawn, measured elsewhere against other rules.**
-    That corpus lives in a separate bench repository, not in this one and not in
+    That corpus lived in a separate bench repository, not in this one and not in
     the wheel, and it was scored there against a pinned older ruleset rather
     than against shipped code. Re-derived with shipped code the denominator is
     26, and the catch count is neither 23 nor stable: it moves with the
     onnxruntime version, the same drift documented below for false positives,
-    on the detection side where nobody had looked. No replacement number is
-    published here, because a figure from a corpus you cannot obtain is how the
-    first one went wrong.
+    on the detection side where nobody had looked.
+
+    **It was never reproducible, even before the rules moved.** The pin it was
+    scored against is a commit *plus* 59,554 bytes of uncommitted working-tree
+    diff, preserved beside it. So the ruleset that produced 23 of 26 was a
+    working tree that existed on one machine and in no commit anywhere. That is a
+    process failure and it is disclosed here rather than quietly fixed, because
+    a reader deciding how much weight to give a withdrawn figure should know it
+    could not have been checked by anyone at the time either.
+
+    **And the denominator is computed, not stored.** The 26 is "of the 50 attack
+    texts, the ones the ruleset scored at exactly 0.0" — a selection made at
+    measurement time, not a file. So the population moves when the rules move: a
+    new rule that catches one of those 50 makes the denominator 25 without anyone
+    editing a corpus. Any recovery figure over this band therefore has to name
+    the ruleset that selected it, in the same way the false-positive figures
+    below have to name the onnxruntime version.
+
+    The corpus, the derivation and that pinned tree are preserved in
+    `delphisecurity/xaidr-internal` under `nano/`, so the measurement can be
+    reconstructed by someone with access. No replacement number is published
+    here, and the reason is unchanged: a figure from a corpus you cannot obtain
+    is how the first one went wrong. Publishing one again needs a corpus that can
+    itself be published, not a rediscovery of this one.
 
 Both are withdrawn rather than corrected. When a corpus for this band is
 committed to this repository, with a script that regenerates the number, the

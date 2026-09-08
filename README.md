@@ -312,6 +312,17 @@ experimental, it can flag but never block, and its score is **not calibrated
 confidence**. Full detail, including the false-positive cost and the runtime
 caveat: [docs/nano.md](https://github.com/delphisecurity/xaidr/blob/main/docs/nano.md).
 
+**The corpus for the band nano was actually built for is not in this repository
+or in the wheel.** That band is prompt-shaped attacks the rules score at exactly
+0.0, and the population is a working set of attacks that defeat the shipped
+rules — it is preserved privately in `delphisecurity/xaidr-internal` under
+`nano/` and it is not published. So the 167→172 figure above is nano measured on
+the SHELL corpus, which is the only nano recovery figure this repository can
+regenerate; `python scripts/intent_metrics.py --nano` now says so in its own
+output rather than leaving the gap unmentioned. The withdrawn 23-of-26 figure
+for the real band, and why it is not being replaced with a fresh one, are in
+[docs/nano.md](https://github.com/delphisecurity/xaidr/blob/main/docs/nano.md).
+
 
 ## Coverage and limitations
 
