@@ -78,6 +78,10 @@ _KNOWN_L1_CATEGORIES = frozenset({
     # regex rule, but a real category the tool path surfaces and that must be a
     # recognised member of the tier sets. privileged_action comes from
     # scanner.privilege_action (see sensor._TOOL_ARG_FLAG_CATEGORIES).
+    # scanner.resource_bound also emits structurally, but under the EXISTING
+    # dos_attempt category above — it is the same OWASP family as the LLM04
+    # flood rules and already a recognised FLAG-tier tool-argument category, so
+    # it needs no entry of its own.
     "privileged_action",
 })
 
