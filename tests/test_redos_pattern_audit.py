@@ -24,7 +24,7 @@ showed each catching rules the other missed:
     ``LLM04_repeat_loop``, whose curve is only ~n^1.35 in the tested range but
     whose constant is enormous (495ms at 20k, 2548ms at the 100k cap). Every time
     bound in this file is CPU time rather than wall clock, and the reason is
-    recorded at TRIGGER_CPU_CEILING_SEC: wall clock measures the CI box as much
+    recorded at TRIGGER_CPU_PER_RULE_SEC: wall clock measures the CI box as much
     as the code, and this file had already produced two unexplained failures
     because of it.
   * a GROWTH RATIO across a 4x size step. This is what catches the six rules that
@@ -131,7 +131,7 @@ def _run(rule, text: str) -> float:
     """CPU seconds one pattern spends on one input.
 
     ``process_time`` and not ``perf_counter``, for the reason set out at
-    TRIGGER_CPU_CEILING_SEC below: backtracking is CPU burn, and CPU is the only
+    TRIGGER_CPU_PER_RULE_SEC below: backtracking is CPU burn, and CPU is the only
     one of the two clocks that a busy neighbour cannot move. Measured on a
     10-core box with three busy loops per core, the worst pattern in this battery
     reads 318ms by wall clock and 86ms by CPU; the ceiling is 250ms, so the wall
@@ -297,7 +297,61 @@ TRIGGERS = {
 # enough to catch a stall that burns no CPU (a lock, a sleep, an I/O wait) which
 # the CPU bound cannot see. Its floor is the engine's own documented per-scan
 # latency ceiling.
-TRIGGER_CPU_CEILING_SEC = 0.5
+#
+# ── WHY THE AGGREGATE BOUND IS PER-RULE AND THE ABSOLUTE ONE IS CAPACITY ─────
+# This bound used to be a single number, `TRIGGER_CPU_CEILING_SEC = 0.5`, and it
+# was asking two questions at once with one answer:
+#
+#   Q1  "did a pattern go superlinear?"   -- that is the ReDoS question
+#   Q2  "is the whole scan getting slow?" -- that is a capacity question
+#
+# They have different shapes, so one number cannot separate them. A backtracker
+# is 100x to non-terminating: the retired `(.{5,50})\s*(?:\1\s*){20,}` still does
+# not finish in TEN MINUTES on `" " * 104 + "!"` on CPython 3.12.2, measured, and
+# 103 chars completes instantly. Honest rule growth is a straight line: 160 rules
+# cost 64.5ms per L1 pass and 223 cost 77.6ms, which is 0.40 and 0.35 ms/rule.
+# Adding 63 rules moved the worst trigger 0.170s -> 0.203s here, and a profile
+# attributes 100% of that delta to `re.Pattern.search` across more rules, with
+# `parse_command` and `classify` flat to within a millisecond.
+#
+# A fixed TOTAL therefore reddens for the honest reason, and the only move it
+# leaves is to raise it, which is a ratchet that quietly buys down the ReDoS
+# signal by an amount nobody can state. So the total is not the ReDoS gate, and
+# it never was. The ReDoS gate is FOUR bounds above and below this one, none of
+# which move when rules are added:
+#
+#   * PER_PATTERN_CEILING_SEC (0.25s), every rule x every adversarial shape at
+#     AUDIT_N=20_000 -- two orders of magnitude past the 104-char cliff, so the
+#     retired pattern cannot pass it at any rule count.
+#   * test_growth_is_not_superlinear -- shape, not stopwatch: 4x input, <=8x time.
+#   * test_no_rule_reintroduces_a_variable_width_quantified_backreference.
+#   * test_no_rule_uses_an_unbounded_wildcard.
+#
+# So Q1 is answered elsewhere and stays answered. What is left here is Q2, split
+# in two:
+#
+#   TRIGGER_CPU_PER_RULE_SEC -- the aggregate, normalised. Flat under honest
+#     growth (measured 1.06 ms/rule at 160 rules, 0.91 at 223 -- the new rules
+#     are CHEAPER than the existing mean), and a single rule that costs many
+#     times its peers moves it. 5ms leaves ~2x over the slowest machine this has
+#     been measured on, where the same code costs 2.5 ms/rule.
+#
+#   TRIGGER_CPU_ABSOLUTE_SEC -- capacity, anchored to production rather than
+#     guessed. `l1._L1_SCAN_BUDGET_SEC` is 0.5s per L1 pass; past it the scanner
+#     SKIPS remaining rules and flags `budget_blown`. The trigger drives ~2.3
+#     passes, so ~1.15s of L1 is where production starts degrading. 2.0s sits
+#     just above that, and because CPU <= wall the check is conservative in the
+#     right direction: if CPU alone reaches it, production degraded already.
+#
+# NOT DONE, and recorded so it is not re-attempted blind: normalising by a
+# same-process CPU calibration to cancel machine SPEED (the same code measures
+# 0.203s here and 0.51s on the reporting machine -- CPU time is load-independent,
+# which is why it was chosen, but it is NOT speed-independent). The ratio looked
+# stable here (0.39 idle, 0.39 at 3x load) but that run failed to reproduce
+# contention at all -- wall moved 1.04x against the 4.5x recorded above -- so it
+# tests nothing and does not overturn the rejection recorded above it.
+TRIGGER_CPU_PER_RULE_SEC = 0.005
+TRIGGER_CPU_ABSOLUTE_SEC = 2.0
 WALL_BACKSTOP_FLOOR_SEC = 2.0
 WALL_BACKSTOP_MULTIPLE = 6
 
@@ -339,14 +393,28 @@ def test_trigger_and_variants_scan_in_bounded_time(sensor, name, wall_backstop):
     content_wall, content_cpu = _timed(sensor, text)
     tool_wall, tool_cpu = _timed(sensor, text, tool=True)
 
-    assert content_cpu < TRIGGER_CPU_CEILING_SEC, (
-        f"{name}: content path burned {content_cpu:.2f}s of CPU "
-        f"(ceiling {TRIGGER_CPU_CEILING_SEC}s, wall {content_wall:.2f}s)"
-    )
-    assert tool_cpu < TRIGGER_CPU_CEILING_SEC, (
-        f"{name}: tool path burned {tool_cpu:.2f}s of CPU "
-        f"(ceiling {TRIGGER_CPU_CEILING_SEC}s, wall {tool_wall:.2f}s)"
-    )
+    # Q2a, the aggregate: cost per rule, which honest rule growth leaves flat.
+    # Q2b, capacity: an absolute anchored to production's own degradation point.
+    n_rules = len(L1.INPUT_RULES)
+    for path, cpu, wall in (("content", content_cpu, content_wall),
+                            ("tool", tool_cpu, tool_wall)):
+        per_rule = cpu / n_rules
+        assert per_rule < TRIGGER_CPU_PER_RULE_SEC, (
+            f"{name}: {path} path burned {cpu:.3f}s of CPU across {n_rules} "
+            f"rules = {per_rule*1000:.2f} ms/rule, over the "
+            f"{TRIGGER_CPU_PER_RULE_SEC*1000:.0f} ms/rule ceiling. This is NOT "
+            f"'we added rules' — that leaves this figure flat. One rule is "
+            f"costing many times its peers on this input; profile per rule and "
+            f"find it (wall {wall:.2f}s)."
+        )
+        assert cpu < TRIGGER_CPU_ABSOLUTE_SEC, (
+            f"{name}: {path} path burned {cpu:.2f}s of CPU against the "
+            f"{TRIGGER_CPU_ABSOLUTE_SEC}s capacity ceiling. At this cost one L1 "
+            f"pass is near l1._L1_SCAN_BUDGET_SEC "
+            f"({L1._L1_SCAN_BUDGET_SEC}s), past which the scanner SKIPS rules "
+            f"and flags budget_blown — so this is a production degradation, not "
+            f"only a slow test (wall {wall:.2f}s, {n_rules} rules)."
+        )
     assert content_wall < wall_backstop, (
         f"{name}: content path took {content_wall:.2f}s of wall clock against a "
         f"machine-derived backstop of {wall_backstop:.2f}s, while burning only "
@@ -360,6 +428,63 @@ def test_trigger_and_variants_scan_in_bounded_time(sensor, name, wall_backstop):
         f"{tool_cpu:.2f}s of CPU, so the scan stalled on something other "
         f"than "
         f"regex work"
+    )
+
+
+# ── 3b. the per-rule bound must be able to fire ──────────────────────────────
+# A normalised bound has a failure mode an absolute one does not: it can be set
+# so loose, or normalised by so large a denominator, that no single rule can ever
+# reach it — and then it reads as a guard while performing none. Both halves are
+# pinned here rather than argued.
+
+def test_the_per_rule_ceiling_catches_one_expensive_rule(sensor):
+    """Inject ONE rule that costs far more than its peers and confirm the bound
+    fires. This is the failure the per-rule form exists to catch, and it is the
+    one an absolute total hides: at 223 rules a single rule could burn 0.29s —
+    320x the 0.91 ms/rule mean — and still leave the old 0.5s total green."""
+    burn_sec = 1.5
+
+    def _expensive(text):
+        end = time.process_time() + burn_sec
+        while time.process_time() < end:
+            pass
+        return None
+
+    hog = {"id": "TEST_cpu_hog", "pattern": None, "detector": _expensive,
+           "score": 0.0, "category": "prompt_injection",
+           "filter_reserved_email": False}
+    original = L1.INPUT_RULES
+    L1.INPUT_RULES = list(original) + [hog]
+    try:
+        _, cpu = _timed(sensor, TRIGGERS["verb-flood"])
+        per_rule = cpu / len(L1.INPUT_RULES)
+    finally:
+        L1.INPUT_RULES = original
+
+    assert per_rule > TRIGGER_CPU_PER_RULE_SEC, (
+        f"one rule burning {burn_sec}s left the per-rule figure at "
+        f"{per_rule*1000:.2f} ms/rule, under the "
+        f"{TRIGGER_CPU_PER_RULE_SEC*1000:.0f} ms/rule ceiling. The bound cannot "
+        f"fire, so it is not a bound."
+    )
+
+
+def test_the_per_rule_ceiling_is_not_set_so_loose_it_is_decorative(sensor):
+    """The measured figure and the ceiling must stay within sight of each other.
+    Raising the ceiling to make a red run green is the ratchet this split was
+    written to remove; if the headroom ever exceeds 20x, the number stopped
+    describing the system. Measured when written: 0.91 ms/rule against a 5
+    ms/rule ceiling (5.5x), and 2.29 ms/rule (2.2x) on the slower machine that
+    reported the original failure."""
+    worst = max(_timed(sensor, TRIGGERS[n], tool=t)[1]
+                for n in ("verb-flood", "spaces-10k") for t in (False, True))
+    per_rule = worst / len(L1.INPUT_RULES)
+    headroom = TRIGGER_CPU_PER_RULE_SEC / per_rule
+    assert headroom < 20.0, (
+        f"worst measured {per_rule*1000:.2f} ms/rule against a ceiling of "
+        f"{TRIGGER_CPU_PER_RULE_SEC*1000:.0f} ms/rule is {headroom:.0f}x of "
+        f"headroom. A ceiling that far above the system cannot fire on any real "
+        f"regression — tighten it to what is actually measured."
     )
 
 
