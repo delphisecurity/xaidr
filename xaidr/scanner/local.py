@@ -10,6 +10,7 @@ import time
 from typing import Optional
 from uuid import uuid4
 
+from ..enforcement import MONITOR as _MONITOR, resolve as _resolve_enforcement
 from ..types import ScanResult
 from .compositional import CompositionalScanner
 from .directive_context import (
@@ -322,7 +323,15 @@ class LocalScanner:
         self.shadow_mode = shadow_mode
         self.dlp_enabled = dlp_enabled
         # shadow_mode forces observe-only: it IS monitor mode.
-        self.enforcement_mode = "monitor" if shadow_mode else enforcement_mode
+        #
+        # Accepts either the mode NAME or an already-resolved policy — the
+        # sensor passes the object it holds, while a caller constructing a bare
+        # LocalScanner (the test suite, mostly) still passes "block". Both go
+        # through resolve(), so a scanner built directly with a mode nobody
+        # implements now raises here instead of silently behaving as monitor,
+        # which is what an unrecognised string used to do at the gate below.
+        self.enforcement = _MONITOR if shadow_mode else _resolve_enforcement(enforcement_mode)
+        self.enforcement_mode = self.enforcement.name
         self._normalizer = TypoNormalizer()
         self._compositional = CompositionalScanner()
 
@@ -689,10 +698,10 @@ class LocalScanner:
         else:
             verdict = "allow"
 
-        # enforcement_mode gates whether a block verdict actually blocks.
+        # The enforcement policy gates whether a block verdict actually blocks.
         # monitor (default): nothing is blocked; everything is emitted/logged.
         # block: a "block" verdict is enforced.
-        if verdict == "block" and self.enforcement_mode == "block":
+        if verdict == "block" and self.enforcement.enforces():
             action = "blocked"
         elif verdict == "block":
             action = "flagged"  # monitor mode: block-worthy but observe-only
