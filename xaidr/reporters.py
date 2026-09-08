@@ -23,10 +23,95 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 from typing import Any, Protocol, runtime_checkable
+from urllib.parse import urlsplit, urlunsplit
 
 logger = logging.getLogger("xaidr.reporters")
+
+
+# ── CREDENTIALS MUST NOT REACH THE LOGS ──────────────────────────────────────
+# A webhook destination is user-supplied and routinely carries its own
+# authentication in the URL: `?token=...`, `?api_key=...`, or `user:pass@host`.
+# On a delivery failure this module logged the destination and the exception,
+# and the credential appeared in BOTH. That is worth spelling out because it is
+# the thing that made the first fix incomplete: the URL and the exception are
+# SEPARATE SINKS. httpx puts the full request URL inside the text of
+# HTTPStatusError ("Server error '500 ...' for url '<url>'"), so redacting
+# `self._url` and interpolating `exc` still emits the secret, once instead of
+# twice. Measured on 1.12.0 with a canary in the query: two occurrences on one
+# line, and two again with the credential in userinfo.
+#
+# The logs are the wrong place for this to land. They are the artefact most
+# likely to be shipped to a third party, retained longest, and read by the
+# widest audience, and a reporter failure is exactly when an operator pastes one
+# into a ticket.
+
+_URL_IN_TEXT_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]{0,15}://[^\s'\"<>)\]}]{0,2000}")
+
+_REDACTED = "<redacted>"
+
+
+def redact_url(url: Any) -> str:
+    """A URL safe to log: host and path kept, every secret-bearing part removed.
+
+    Keeps what an operator needs to identify the destination (scheme, host,
+    port, path) and removes what only an attacker benefits from (userinfo, query
+    VALUES, fragment). Query KEYS are kept: knowing the call carried a `token`
+    parameter is diagnostic, knowing its value is a leak.
+
+    Never raises. A value that cannot be parsed is reported as unloggable rather
+    than passed through, because "we could not parse it" must not become "so we
+    printed it".
+    """
+    try:
+        text = url if isinstance(url, str) else str(url)
+        parts = urlsplit(text)
+        if not parts.scheme and not parts.netloc:
+            return text                      # not a URL; nothing to redact
+        netloc = parts.netloc
+        if "@" in netloc:                    # strip userinfo entirely
+            netloc = f"{_REDACTED}@{netloc.rsplit('@', 1)[1]}"
+        query = parts.query
+        if query:
+            out = []
+            for pair in query.split("&"):
+                if not pair:
+                    continue
+                key = pair.split("=", 1)[0]
+                out.append(f"{key}={_REDACTED}" if "=" in pair else pair)
+            query = "&".join(out)
+        fragment = _REDACTED if parts.fragment else ""
+        return urlunsplit((parts.scheme, netloc, parts.path, query, fragment))
+    except Exception:
+        return "<unloggable-url>"
+
+
+def redact_text(value: Any) -> str:
+    """Exception text with every URL inside it redacted.
+
+    The second sink. Applied to anything derived from an exception before it is
+    interpolated into a log record, because the libraries we call put the
+    request URL into their own error strings and we do not control that.
+
+    The pattern is bounded and has no nested quantifier, per the ReDoS
+    invariants this project holds for anything that runs on attacker-influenced
+    text.
+    """
+    try:
+        text = value if isinstance(value, str) else str(value)
+        return _URL_IN_TEXT_RE.sub(lambda m: redact_url(m.group(0)), text)
+    except Exception:
+        return "<unloggable>"
+
+
+def safe_exc(exc: BaseException) -> str:
+    """What to log for an exception: its type and its redacted message."""
+    try:
+        return f"{type(exc).__name__}: {redact_text(exc)}"
+    except Exception:
+        return "<unloggable-exception>"
 
 
 def _apply_schema(event, schema):
@@ -98,7 +183,7 @@ class StdoutReporter:
                 payload = _apply_schema(event, self._schema)
                 self._stream.write(json.dumps(payload, separators=(",", ":")) + "\n")
             except Exception as exc:  # never break the batch
-                logger.warning("StdoutReporter failed to write event: %s", exc)
+                logger.warning("StdoutReporter failed to write event: %s", safe_exc(exc))
         try:
             self._stream.flush()
         except Exception:
@@ -130,7 +215,7 @@ class FileReporter:
                 self._fh.write(json.dumps(payload, separators=(",", ":")) + "\n")
             self._fh.flush()
         except Exception as exc:
-            logger.warning("FileReporter failed (%s): %s", self._path, exc)
+            logger.warning("FileReporter failed (%s): %s", redact_url(self._path), safe_exc(exc))
 
     def close(self) -> None:
         try:
@@ -194,9 +279,12 @@ class WebhookReporter:
             resp = self._client.post(self._url, content=body)
             resp.raise_for_status()
         except Exception as exc:
+            # BOTH arguments are sanitised. The URL because the destination
+            # carries the credential, and the exception because httpx repeats
+            # the full URL inside its own message.
             logger.warning(
                 "WebhookReporter failed to deliver %d events to %s: %s",
-                len(events), self._url, exc,
+                len(events), redact_url(self._url), safe_exc(exc),
             )
 
     def close(self) -> None:
@@ -232,7 +320,7 @@ class OTelReporter:
         try:
             otel_logger = self._otel_logs.get_logger(self._logger_name)
         except Exception as exc:
-            logger.warning("OTelReporter could not get OTel logger: %s", exc)
+            logger.warning("OTelReporter could not get OTel logger: %s", safe_exc(exc))
             return
         for event in events:
             try:
@@ -242,7 +330,7 @@ class OTelReporter:
                     self._build_record(event)
                 )
             except Exception as exc:
-                logger.warning("OTelReporter failed to emit event: %s", exc)
+                logger.warning("OTelReporter failed to emit event: %s", safe_exc(exc))
 
     def _build_record(self, event: dict[str, Any]) -> Any:
         # The OTel reporter's natural output IS the OpenA2A schema: map the
@@ -275,7 +363,7 @@ class MultiReporter:
             try:
                 r.report(events)
             except Exception as exc:
-                logger.warning("reporter %r failed: %s", r, exc)
+                logger.warning("reporter %s failed: %s", type(r).__name__, safe_exc(exc))
 
     def close(self) -> None:
         for r in self._reporters:

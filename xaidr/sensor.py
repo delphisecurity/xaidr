@@ -217,6 +217,32 @@ def _resolve_provenance(
     return _chain.build_provenance(agent_id, on_behalf_of=obo, tier=tier)
 
 
+def _canonical_arguments(arguments) -> str:
+    """A stable rendering of tool arguments, for hashing and for length.
+
+    CANONICAL, because the point of the hash is correlation. Two calls carrying
+    the same arguments in a different key order are the same payload, and a
+    digest that disagreed would make the field useless for exactly the query it
+    exists to serve. ``sort_keys`` gives that; ``default=str`` keeps a value the
+    JSON encoder cannot handle (a datetime, a model object) from turning a
+    telemetry detail into a raised exception on the scan path.
+
+    Never raises. A structure that cannot be rendered at all falls back to
+    ``repr``, and if even that fails the call is reported as having no
+    renderable arguments rather than taking the scan down with it.
+    """
+    if arguments is None:
+        return ""
+    try:
+        return json.dumps(arguments, sort_keys=True, separators=(",", ":"),
+                          default=str, ensure_ascii=False)
+    except Exception:
+        try:
+            return repr(arguments)
+        except Exception:
+            return "<unrenderable-arguments>"
+
+
 def _coerce_scannable(value) -> Optional[str]:
     """Return a scannable string, or None if the input is not scannable.
 
@@ -1289,6 +1315,13 @@ class DelphiSensor:
         """
         mcp_server = mcp_server or server_name
 
+        # Start the clock BEFORE any scanning work. The tool path reported a
+        # latency of 0 on every call, which is not "we chose not to measure" but
+        # a measurable falsehood: this path runs an L1 argument scan, structural
+        # extraction, classification and policy evaluation, and a deployer sizing
+        # the sensor reads this number. Monotonic, matching the other boundaries.
+        _t0 = time.perf_counter()
+
         # Crash guard: tool_name must be a string (it is hashed + matched against
         # the blocked-tools list). A wrong-typed name is a caller bug — fail open
         # gracefully rather than crash on tool_name.encode()/membership.
@@ -1619,8 +1652,12 @@ class DelphiSensor:
                 if policy_severity > score:
                     score = policy_severity
 
+        _scan_ms = round((time.perf_counter() - _t0) * 1000, 3)
+        _canonical_args = _canonical_arguments(arguments)
+
         result = ScanResult(
-            action=action, score=score, category=category, rules=rules, latency_ms=0,
+            action=action, score=score, category=category, rules=rules,
+            latency_ms=_scan_ms,
         )
 
         # Emit telemetry (mirrors the scan() enqueue shape, direction=tool_call)
@@ -1660,9 +1697,26 @@ class DelphiSensor:
             "leastPrivilegedTier": _least_priv,
             "delegated": _chain.is_delegated(self.agent_id),
             "chainTiers": _chain.current_tiers(),
-            "scanTimeMs": 0,
-            "promptLength": 0,
-            "promptHash": safe_content_hash(tool_name),
+            # THE SCANNED CONTENT ON THIS PATH IS THE ARGUMENTS, and these three
+            # said otherwise. `scanTimeMs` and `promptLength` were the literal
+            # constant 0 and `promptHash` was a digest of the TOOL NAME, so every
+            # call to one tool shared one hash however different its arguments
+            # were. Measured on 1.12.0: three distinct commands to `run_command`
+            # produced one hash.
+            #
+            # That is not a cosmetic defect. The attribute this maps to is named
+            # `gen_ai.security.interaction.content_hash`, and correlating a
+            # payload across agents and across time is the only thing a content
+            # hash is for. A tool-name digest under that name gives a SIEM a
+            # column that always matches, which is worse than an absent one
+            # because it looks like it works.
+            #
+            # The other three boundaries already hash what they scanned; this one
+            # now does too, over a CANONICAL rendering so that argument order
+            # cannot change the digest of an identical call.
+            "scanTimeMs": _scan_ms,
+            "promptLength": len(_canonical_args),
+            "promptHash": safe_content_hash(_canonical_args),
         }
         if prov:
             data["provenance"] = prov

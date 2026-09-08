@@ -177,7 +177,12 @@ class SyncTelemetryQueue:
             state.reporter.report(batch)
             logger.debug("reported %d telemetry events", len(batch))
         except Exception as exc:
-            logger.warning("reporter failed, dropping %d events: %s", len(batch), exc)
+            # The outer catch around EVERY reporter. A webhook exception that
+            # escapes its own handler arrives here still carrying the full
+            # destination URL, so it is sanitised at this sink too.
+            from .reporters import safe_exc
+            logger.warning("reporter failed, dropping %d events: %s",
+                           len(batch), safe_exc(exc))
 
     @staticmethod
     def _drain_and_stop(state: _WorkerState) -> None:

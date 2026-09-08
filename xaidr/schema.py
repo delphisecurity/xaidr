@@ -361,6 +361,38 @@ def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
     if authz_policy:
         out["gen_ai.security.authz.policy_id"] = authz_policy
 
+    # PRIVILEGE TIER: the working, not just the answer.
+    #
+    # The internal event has carried these five since the ASI03 work and this
+    # mapping dropped all five, so an openA2A consumer saw `decision:
+    # require_approval` with nothing explaining it. That is the failure the
+    # emitting side was written to avoid, undone one layer later: an operator
+    # asking "why did this need approval?" should get the computed ceiling, this
+    # agent's own tier, whether the call arrived by delegation, and the chain the
+    # ceiling was derived from -- rather than having to reproduce the call.
+    #
+    # `privilege_tier_configured` is carried even when False because False is a
+    # fact rather than an absence: it says the tier is the DEFAULT rather than
+    # something the deployer chose, which is the difference between a control
+    # that was configured and one that merely exists. `delegated` likewise.
+    # `chain_tiers` is omitted when empty, matching how `rules` is handled above:
+    # an empty chain is already fully described by delegated=false and
+    # least_privileged_tier == privilege_tier, so emitting [] adds a key without
+    # adding a fact.
+    for _src, _attr in (
+        ("privilegeTier", "gen_ai.security.authz.privilege_tier"),
+        ("privilegeTierConfigured",
+         "gen_ai.security.authz.privilege_tier_configured"),
+        ("leastPrivilegedTier", "gen_ai.security.authz.least_privileged_tier"),
+        ("delegated", "gen_ai.security.authz.delegated"),
+    ):
+        _value = data.get(_src)
+        if _value is not None:
+            out[_attr] = _value
+    _chain_tiers = data.get("chainTiers")
+    if _chain_tiers:
+        out["gen_ai.security.authz.chain_tiers"] = list(_chain_tiers)
+
     # --- provenance (forward-compatible: emitted when present) --------------
     # Populated in the provenance phase. If the internal event already carries
     # any of these (e.g. an origin_context was supplied), pass them through.
