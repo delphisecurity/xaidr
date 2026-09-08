@@ -46,6 +46,7 @@ from .reporters import Reporter
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
 from .scanner.command_parse import reconstruct as _reconstruct_command
 from .scanner.privilege_action import scan_privileged_action as _privilege_findings
+from .scanner.resource_bound import scan_resource_bounds as _resource_findings
 from .scanner.dlp import (
     HIGH_CONFIDENCE_SECRET_CATEGORIES as _HIGH_CONFIDENCE_SECRETS,
     scan_dlp as _scan_dlp,
@@ -1876,6 +1877,29 @@ class DelphiSensor:
             # review rather than blocking. Additive to `danger`, so it can only
             # raise a verdict.
             for f in _privilege_findings(tool_name, arguments or {}):
+                if f["rule"] in {x.rule for x in danger}:
+                    continue
+                danger.append(_StructuralThreat(
+                    rule=f["rule"], category=f["category"], score=f["score"]
+                ))
+            # STRUCTURAL removed-bound findings (ASI04 / LLM04 — resource
+            # exhaustion, denial-of-wallet). Same seat and same discipline as the
+            # privilege scanner directly above, and structural for the same
+            # reason: a bound is a (key, value) PAIR — `budget_cap="none"` and
+            # `retention_policy="7-year"` both collapse to a bare token once the
+            # values are joined, and the key is what tells them apart.
+            #
+            # It reads NO magnitude. `rows=1200000` and `employees_estimate=5200`
+            # are invisible to it; `spend_limit="off"` is not. That is deliberate:
+            # a magnitude threshold is deployment-relative (the argument that
+            # correctly keeps delegation_rate_threshold off by default), and
+            # "the caller named a ceiling and removed it" is not. The
+            # deployment-relative half of ASI04 — "5000 workers is 100x normal
+            # FOR US" — is NOT built here; it needs a per-deployment baseline and
+            # stays with policy and the circuit breaker. FLAG-tier via the
+            # existing dos_attempt category (no new tier plumbing); additive to
+            # `danger`, so it can only raise a verdict.
+            for f in _resource_findings(tool_name, arguments or {}):
                 if f["rule"] in {x.rule for x in danger}:
                     continue
                 danger.append(_StructuralThreat(
