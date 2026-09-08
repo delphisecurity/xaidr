@@ -19,6 +19,34 @@ perform the action and the receiver may. That is a property of your deployment,
 not of the message, so the control is a **control**: a privilege lattice you
 configure, enforced by policy.
 
+## The privileged-action shape detector (new in 1.14.0)
+
+Separately from the tier lattice and the policy engine, the tool boundary now
+checks tool arguments for the *shapes* a privilege subversion takes, by default,
+with no configuration. It is structural: it walks the argument key/value pairs
+(the same way the command, SQL and URL parsers already do), so it reads the
+action rather than regexing a joined value string. It fires on a self-granted
+role (`principal: agent://self`), a disabled control (approval, safety,
+monitoring, backup retention, or a trust root invalidated without reissue), a
+waived approval (`approval: none`, `confirm: skip`), an escalation to admin or
+root carrying no governance marker, a network rule opened to `0.0.0.0/0`, and a
+concealed grant (`visible: false`). An argument that carries none of those shapes
+is silent, so an approved scoped grant, a scheduled credential rotation and a
+payroll run produce nothing.
+
+It flags; it does not block, and the reason matters. Every governance marker it
+reads is app-supplied and unsigned, so a fabricated approval reference on a
+self-grant evades it exactly as it evades a policy. It raises the cost of the
+obvious shapes; it is not an authorization boundary.
+
+That is why the tier lattice and policy below still exist and still do the real
+work: they are the control. The shape detector is a default-on signal that
+surfaces the crude attempts for review; the policy is what actually stops a
+privileged action a deployer has decided must not happen. One deliberate
+non-goal: crypto-mining as a workload has no structural tell — its only signal is
+a denylist of miner image names — so it is left to policy rather than folded into
+the shape detector.
+
 **Assigning a tier.** One constructor argument, 1 to 4, where **1 is the highest
 privilege** and 4 the lowest:
 
