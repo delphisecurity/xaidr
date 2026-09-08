@@ -28,7 +28,7 @@
     "pattern": "<\\|system\\|>|###\\s*(System|Instruction)",
     "score": 0.93,
     "category": "prompt_injection",
-    "comment": "CHAT-TEMPLATE / PROMPT-ROLE injection: a message trying to forge a role turn in the model's own chat template (<|system|>) or a markdown role header (### System). The rule id says 'template injection' and that has cost real false positives, because it reads as SERVER-SIDE template injection, which this is not and must not become. A third arm, \\{\\{.*system.*\\}\\}, was REMOVED: it matched any template variable whose NAME contains the substring 'system', so {{system_name}}, {{ config.system.timezone }}, {{ system.hostname }}, {{system_status}}, {{ ecosystem }} and {{ subsystem_id }} \u2014 six of six ordinary Jinja templates \u2014 BLOCKED at 0.93. Scored against 11 real SSTI payloads and 30 realistic templates it was 9% recall against 10% false positives, and it matched nothing at all in the attack corpus or in 8143 test string literals. Its one apparent catch, {% import os %}{{os.system('id')}}, matched on the literal 'system' inside os.system and is caught by LLM08_os_exec regardless. SSTI detection was deliberately NOT built to replace it: measured 64% recall at 10% FP across five incompatible grammars (Jinja, SpEL, ERB, Freemarker, Ruby), which is a phrase list, and the inversion bar rules those out."
+    "comment": "CHAT-TEMPLATE / PROMPT-ROLE injection: a message trying to forge a role turn in the model's own chat template (<|system|>) or a markdown role header (### System). The rule id says 'template injection' and that has cost real false positives, because it reads as SERVER-SIDE template injection, which this is not and must not become. A third arm, \\{\\{.*system.*\\}\\}, was REMOVED: it matched any template variable whose NAME contains the substring 'system', so {{system_name}}, {{ config.system.timezone }}, {{ system.hostname }}, {{system_status}}, {{ ecosystem }} and {{ subsystem_id }} — six of six ordinary Jinja templates — BLOCKED at 0.93. Scored against 11 real SSTI payloads and 30 realistic templates it was 9% recall against 10% false positives, and it matched nothing at all in the attack corpus or in 8143 test string literals. Its one apparent catch, {% import os %}{{os.system('id')}}, matched on the literal 'system' inside os.system and is caught by LLM08_os_exec regardless. SSTI detection was deliberately NOT built to replace it: measured 64% recall at 10% FP across five incompatible grammars (Jinja, SpEL, ERB, Freemarker, Ruby), which is a phrase list, and the inversion bar rules those out."
   },
   {
     "id": "LLM01_authority_claim",
@@ -45,7 +45,7 @@
   {
     "id": "LLM01_translate_smuggle",
     "_was": "translate\\s+.*to\\s+.*:\\s*.*(ignore|forget|override)",
-    "_why_changed": "Three chained unbounded .* \u2014 the engine re-splits the same span at every offset, and each extra .* multiplies the work. Measured: did not finish in 5s on a 100k input. The first two spans cannot contain the ':' that anchors them, so a negated class makes those two splits deterministic and only one lazy span remains.",
+    "_why_changed": "Three chained unbounded .* — the engine re-splits the same span at every offset, and each extra .* multiplies the work. Measured: did not finish in 5s on a 100k input. The first two spans cannot contain the ':' that anchors them, so a negated class makes those two splits deterministic and only one lazy span remains.",
     "pattern": "translate\\b[^\\n:]{0,80}\\bto\\s+[^\\n:]{0,40}:[^\\n]{0,200}?\\b(?:ignore|forget|override)\\b",
     "score": 0.78,
     "category": "prompt_injection"
@@ -861,7 +861,7 @@
   },
   {
     "id": "ASI09_memory_behavior_injection",
-    "pattern": "\\b(?:write|create|add|store)\\s+(?:a\\s+)?(?:memory|note|entry|record)\\s+(?:that|which)\\s+(?:will|would|should)\\s+(?:cause|make|force)\\s+(?:you|the\\s+(?:model|agent|assistant))\\s+(?:to\\s+)?(?:behave|act|respond|operate)\\s+(?:differently|in\\s+a\\s+(?:different|new)\\s+way)",
+    "pattern": "\\b(?:write|create|add|store|save|insert|append)\\s+(?:an?\\s+)?(?:memory|note|entry|record|fact|instruction)\\b[^\\n]{0,60}?\\b(?:that|which|so)\\b[^\\n]{0,60}?\\b(?:caus|mak|forc|ensur)(?:e|es|ing)\\b[^\\n]{0,30}?\\b(?:you|your|the\\s+(?:model|agent|assistant|system|bot))\\b",
     "score": 0.8,
     "category": "asi09"
   },
@@ -963,7 +963,7 @@
   },
   {
     "id": "ASI05_self_safety_removal",
-    "pattern": "\\b(?:modify|edit|change|update|alter)\\s+(?:your\\s+)?(?:own\\s+)?(?:source\\s*code|code|config(?:uration)?)\\s+to\\s+(?:remove|disable|bypass|turn\\s+off|eliminate)\\s+(?:safety|security|guardrails?|checks?|filters?|restrictions?)",
+    "pattern": "\\b(?:modify|edit|change|update|alter|patch|rewrite)\\s+(?:your\\s+|the\\s+)?(?:own\\s+)?(?:source\\s*code|code|config(?:uration)?|settings?)\\s+to\\s+(?:remove|disable|bypass|turn\\s+off|eliminate|strip|drop|skip)\\s+(?:(?:the|all|any|its|your)\\s+)?(?:\\w+[-\\s]){0,2}?(?:safety|security|guardrails?|checks?|filters?|restrictions?|limits?|controls?|protections?)",
     "score": 0.88,
     "category": "asi05"
   },
@@ -975,7 +975,7 @@
   },
   {
     "id": "ASI05_pipe_to_shell",
-    "pattern": "\\b(?:curl|wget|fetch)\\s+[^\\n|]{0,300}\\|\\s*(?:bash|sh|zsh|dash|exec|python\\d?|perl|ruby|node|php|pwsh)\\b|\\b(?:base64\\s+(?:-d|-D|--decode)|openssl\\s+(?:base64|enc)[^\\n|]{0,60}?-d|xxd\\s+-r|gunzip|zcat|gzip\\s+-d)\\b[^\\n|]{0,120}\\|\\s*(?:bash|sh|zsh|dash|python\\d?|perl|ruby|node|php|pwsh)\\b|\\beval\\s+[\"']?\\$\\([^)]{0,300}(?:base64\\s+(?:-d|--decode)|xxd\\s+-r|openssl\\s+(?:base64|enc)[^)]{0,40}?-d)|\\b(?:ba|z|k|da)?sh\\s*<\\(\\s*(?:curl|wget|fetch)\\b|\\b(?:curl|wget|fetch)\\s+[^\\n|]{0,300}\\|\\s*(?:sudo|doas)\\s+(?:ba|z|k|da)?sh\\b|(?:eval|(?:ba|z|k|da)?sh\\s+-c)\\s+[\\\"']?\\$\\(\\s*(?:curl|wget)\\b|`\\s*(?:curl|wget)\\s+[^`]{0,200}`\\s*\\|?\\s*(?:ba|z|k|da)?sh\\b",
+    "pattern": "\\b(?:curl|wget|fetch)\\s+[^\\n|]{0,300}\\|\\s*(?:(?:sudo|doas)\\s+)?(?:bash|sh|zsh|dash|exec|python\\d?|perl|ruby|node|php|pwsh)\\b|\\b(?:base64\\s+(?:-d|-D|--decode)|openssl\\s+(?:base64|enc)[^\\n|]{0,60}?-d|xxd\\s+-r|gunzip|zcat|gzip\\s+-d)\\b[^\\n|]{0,120}\\|\\s*(?:bash|sh|zsh|dash|python\\d?|perl|ruby|node|php|pwsh)\\b|\\beval\\s+[\"']?\\$\\([^)]{0,300}(?:base64\\s+(?:-d|--decode)|xxd\\s+-r|openssl\\s+(?:base64|enc)[^)]{0,40}?-d)|\\b(?:ba|z|k|da)?sh\\s*<\\(\\s*(?:curl|wget|fetch)\\b|(?:eval|(?:ba|z|k|da)?sh\\s+-c)\\s+[\\\"']?\\$\\(\\s*(?:curl|wget)\\b|`\\s*(?:curl|wget)\\s+[^`]{0,200}`\\s*\\|?\\s*(?:ba|z|k|da)?sh\\b",
     "score": 0.9,
     "category": "asi05"
   },
@@ -1152,7 +1152,7 @@
   {
     "id": "LPCI_S6_split_payload",
     "_was": "(?:part|piece|fragment|segment|half)\\s+(?:1|one|A|first)\\s*(?:of\\s+\\d+)?[:\\s]+.*?(?:part|piece|fragment|segment|half)\\s+(?:2|two|B|second)",
-    "_why_changed": "Lazy .*? between two anchors is still quadratic per start position \u2014 laziness changes the order the engine tries the split, not how many splits there are \u2014 and the audit rejects the shape. Bounded to [\\s\\S]{0,400}? rather than [^\\n]{0,\u2026} because a split payload is deliberately spread ACROSS lines; 400 spans the gap between the two fragment markers in every observed instance.",
+    "_why_changed": "Lazy .*? between two anchors is still quadratic per start position — laziness changes the order the engine tries the split, not how many splits there are — and the audit rejects the shape. Bounded to [\\s\\S]{0,400}? rather than [^\\n]{0,…} because a split payload is deliberately spread ACROSS lines; 400 spans the gap between the two fragment markers in every observed instance.",
     "pattern": "(?:part|piece|fragment|segment|half)\\s+(?:1|one|A|first)\\s*(?:of\\s+\\d+)?[:\\s]+[\\s\\S]{0,400}?(?:part|piece|fragment|segment|half)\\s+(?:2|two|B|second)",
     "score": 0.75,
     "category": "lpci"
@@ -1201,7 +1201,7 @@
   },
   {
     "id": "LLM01_agent_authority_impersonation",
-    "pattern": "(?:i\\s*am|i['\u2019]?m|this\\s+(?:message\\s+)?is\\s+from|message\\s+from\\s*:|this\\s+is\\s+the|speaking\\s+as|on\\s+(?:the\\s+)?authority\\s+of)(?:\\s+(?:the|your|an?|a))?[^.!?\\n]{0,30}?\\b(?:administrator|admin|trusted|authoriz(?:ed|er)|verified|superuser|supervisor|privileged|root\\s+(?:controller|access|user|admin|privileged)|system\\s+admin(?:istrator)?|security\\s*admin(?:istrator)?)\\b",
+    "pattern": "(?:i\\s*am|i['’]?m|this\\s+(?:message\\s+)?is\\s+from|message\\s+from\\s*:|this\\s+is\\s+the|speaking\\s+as|on\\s+(?:the\\s+)?authority\\s+of)(?:\\s+(?:the|your|an?|a))?[^.!?\\n]{0,30}?\\b(?:administrator|admin|trusted|authoriz(?:ed|er)|verified|superuser|supervisor|privileged|root\\s+(?:controller|access|user|admin|privileged)|system\\s+admin(?:istrator)?|security\\s*admin(?:istrator)?)\\b",
     "score": 0.72,
     "category": "prompt_injection"
   },
@@ -1219,37 +1219,37 @@
   },
   {
     "id": "LLM01_multilingual_russian",
-    "pattern": "(?:\u0438\u0433\u043d\u043e\u0440\u0438\u0440\u0443\u0439|\u0437\u0430\u0431\u0443\u0434\u044c|\u043e\u0442\u0431\u0440\u043e\u0441\u044c|\u043e\u0442\u043c\u0435\u043d\u0438|\u043f\u0440\u043e\u0438\u0433\u043d\u043e\u0440\u0438\u0440\u0443\u0439|\u043f\u0440\u043e\u043f\u0443\u0441\u0442\u0438)\\s+(?:\u0432\u0441\u0435\\s+)?(?:\u043f\u0440\u0435\u0434\u044b\u0434\u0443\u0449\u0438\u0435|\u043d\u0430\u0447\u0430\u043b\u044c\u043d\u044b\u0435|\u0442\u0435\u043a\u0443\u0449\u0438\u0435|\u043f\u0440\u0435\u0436\u043d\u0438\u0435)?\\s*(?:\u0438\u043d\u0441\u0442\u0440\u0443\u043a\u0446\u0438\u0438|\u043f\u0440\u0430\u0432\u0438\u043b\u0430|\u0443\u043a\u0430\u0437\u0430\u043d\u0438\u044f|\u043e\u0433\u0440\u0430\u043d\u0438\u0447\u0435\u043d\u0438\u044f|\u0434\u0438\u0440\u0435\u043a\u0442\u0438\u0432\u044b|\u0440\u0443\u043a\u043e\u0432\u043e\u0434\u0441\u0442\u0432\u0430)",
+    "pattern": "(?:игнорируй|забудь|отбрось|отмени|проигнорируй|пропусти)\\s+(?:все\\s+)?(?:предыдущие|начальные|текущие|прежние)?\\s*(?:инструкции|правила|указания|ограничения|директивы|руководства)",
     "score": 0.88,
     "category": "prompt_injection"
   },
   {
     "id": "LLM01_multilingual_portuguese",
-    "pattern": "(?:ignore|esque\u00e7a|descarte|abandone|desconsidere)\\s+(?:as\\s+)?(?:instru\u00e7\u00f5es|regras|diretrizes|restri\u00e7\u00f5es)\\s+(?:anteriores|iniciais|originais)",
+    "pattern": "(?:ignore|esqueça|descarte|abandone|desconsidere)\\s+(?:as\\s+)?(?:instruções|regras|diretrizes|restrições)\\s+(?:anteriores|iniciais|originais)",
     "score": 0.88,
     "category": "prompt_injection"
   },
   {
     "id": "LLM01_multilingual_japanese",
-    "pattern": "(?:\u4ee5\u524d\u306e|\u524d\u306e|\u5143\u306e)(?:\u6307\u793a|\u547d\u4ee4|\u30eb\u30fc\u30eb|\u30ac\u30a4\u30c9\u30e9\u30a4\u30f3|\u5236\u7d04|\u5236\u9650)(?:\u3092|\u306f)(?:\u7121\u8996|\u5fd8\u308c|\u7834\u68c4|\u53d6\u308a\u6d88)",
+    "pattern": "(?:以前の|前の|元の)(?:指示|命令|ルール|ガイドライン|制約|制限)(?:を|は)(?:無視|忘れ|破棄|取り消)",
     "score": 0.88,
     "category": "prompt_injection"
   },
   {
     "id": "LLM01_multilingual_chinese",
-    "pattern": "(?:\u5ffd\u7565|\u65e0\u89c6|\u5fd8\u8bb0|\u653e\u5f03|\u4e22\u5f03|\u53d6\u6d88)(?:\u6240\u6709|\u4e4b\u524d\u7684|\u5148\u524d\u7684|\u539f\u59cb\u7684)?(?:\u6307\u4ee4|\u6307\u793a|\u89c4\u5219|\u51c6\u5219|\u9650\u5236|\u7ea6\u675f|\u8bf4\u660e)",
+    "pattern": "(?:忽略|无视|忘记|放弃|丢弃|取消)(?:所有|之前的|先前的|原始的)?(?:指令|指示|规则|准则|限制|约束|说明)",
     "score": 0.88,
     "category": "prompt_injection"
   },
   {
     "id": "LLM01_multilingual_korean",
-    "pattern": "(?:\uc774\uc804|\uc6d0\ub798|\uae30\uc874)(?:\uc758)?\\s*(?:\uc9c0\uc2dc|\uba85\ub839|\uaddc\uce59|\uac00\uc774\ub4dc\ub77c\uc778|\uc81c\uc57d|\uc81c\ud55c)(?:\uc744|\ub97c)?\\s*(?:\ubb34\uc2dc|\uc78a\uc5b4|\ucde8\uc18c|\ud3d0\uae30)",
+    "pattern": "(?:이전|원래|기존)(?:의)?\\s*(?:지시|명령|규칙|가이드라인|제약|제한)(?:을|를)?\\s*(?:무시|잊어|취소|폐기)",
     "score": 0.88,
     "category": "prompt_injection"
   },
   {
     "id": "LLM01_multilingual_arabic",
-    "pattern": "(?:\u062a\u062c\u0627\u0647\u0644|\u0627\u0646\u0633\u064e|\u062a\u062e\u0644\u064e\u0651 \u0639\u0646|\u0623\u0644\u063a\u0650|\u0627\u062a\u0631\u0643)\\s*(?:\u062c\u0645\u064a\u0639\\s+)?(?:\u0627\u0644\u062a\u0639\u0644\u064a\u0645\u0627\u062a|\u0627\u0644\u0642\u0648\u0627\u0639\u062f|\u0627\u0644\u062a\u0648\u062c\u064a\u0647\u0627\u062a|\u0627\u0644\u0642\u064a\u0648\u062f|\u0627\u0644\u0623\u0648\u0627\u0645\u0631)\\s*(?:\u0627\u0644\u0633\u0627\u0628\u0642\u0629|\u0627\u0644\u0623\u0648\u0644\u064a\u0629|\u0627\u0644\u0623\u0635\u0644\u064a\u0629)",
+    "pattern": "(?:تجاهل|انسَ|تخلَّ عن|ألغِ|اترك)\\s*(?:جميع\\s+)?(?:التعليمات|القواعد|التوجيهات|القيود|الأوامر)\\s*(?:السابقة|الأولية|الأصلية)",
     "score": 0.88,
     "category": "prompt_injection"
   },
@@ -1352,7 +1352,7 @@
   },
   {
     "id": "ADI_forged_tool_result",
-    "_why_changed": "Every \\s* before a required literal was unbounded, so on a whitespace flood the engine consumed the whole run, failed the literal, and gave back one character at a time \u2014 at every start offset. Did not finish in 5s on 100k of whitespace. Bounding each run to {0,8} makes the per-start cost a constant; no real tool-result header has eight consecutive spaces.",
+    "_why_changed": "Every \\s* before a required literal was unbounded, so on a whitespace flood the engine consumed the whole run, failed the literal, and gave back one character at a time — at every start offset. Did not finish in 5s on 100k of whitespace. Bounding each run to {0,8} makes the per-start cost a constant; no real tool-result header has eight consecutive spaces.",
     "pattern": "(?:\\[?\\s{0,8}(?:tool|function)[_\\s-]?(?:call[_\\s-]?)?(?:result|output|response)\\s{0,8}(?:\\([^)]{0,80}\\))?\\s{0,8}\\]?\\s{0,8}[:\\]=]|<\\s{0,8}(?:tool|function)[_\\s-]?(?:result|output)\\s{0,8}>)[\\s\\S]{0,200}?\\b(?:access[_\\s-]?level|privileges?|permissions?|role|auth(?:enticated|orized|orization)?|is[_\\s-]?admin|admin[_\\s-]?access|clearance|trust[_\\s-]?level|verified|approval[_\\s-]?status|mfa|status)\\b\\s*[:=]?\\s*[\"']?(?:admin|root|superuser|system|elevated|granted|approved|full|unrestricted|true|verified|success|bypassed)\\b",
     "score": 0.48,
     "category": "forged_trust"
