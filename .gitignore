@@ -16,3 +16,7 @@ docs/internal/
 heldout/last_run.json
 asi_battery/last_run.json
 benign_toolcalls/last_run.json
+
+# Local symlinks some worktrees carry; never intended to be tracked.
+.claude
+.venv
