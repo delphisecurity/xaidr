@@ -46,6 +46,11 @@ _KNOWN_L1_CATEGORIES = frozenset({
     "supply_chain", "system_prompt_leak",
     # output categories (output-l1-rules.json)
     "out", "social_engineering",
+    # structural categories: emitted by a parse-based scanner, not by an L1
+    # regex rule, but a real category the tool path surfaces and that must be a
+    # recognised member of the tier sets. privileged_action comes from
+    # scanner.privilege_action (see sensor._TOOL_ARG_FLAG_CATEGORIES).
+    "privileged_action",
 })
 
 

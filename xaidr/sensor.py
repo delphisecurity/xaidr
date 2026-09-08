@@ -42,6 +42,7 @@ from .circuit_breaker import (
 from .reporters import Reporter
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
 from .scanner.command_parse import reconstruct as _reconstruct_command
+from .scanner.privilege_action import scan_privileged_action as _privilege_findings
 from .scanner.dlp import (
     HIGH_CONFIDENCE_SECRET_CATEGORIES as _HIGH_CONFIDENCE_SECRETS,
     scan_dlp as _scan_dlp,
@@ -177,6 +178,13 @@ _TOOL_ARG_BLOCK_CATEGORIES = frozenset({
 _TOOL_ARG_FLAG_CATEGORIES = frozenset({
     "data_exfiltration", "jailbreak", "system_prompt_leak", "encoding_evasion",
     "dos_attempt", "forged_trust",
+    # Privilege-subversion shapes from scanner.privilege_action (self-grant,
+    # disabled control, waived approval, admin-with-no-governance, world-open,
+    # concealed grant). FLAG-tier, not block: the governance markers the detector
+    # reads are app-supplied and unverified, so a fabricated approval reference
+    # defeats it, exactly as it defeats the policy engine. It surfaces the shape
+    # for review; POLICY remains the block layer for a deployer who wants it hard.
+    "privileged_action",
 })
 
 # The KEEP filter for the tool-argument L1 scan: a threat in neither tier is
@@ -1488,6 +1496,25 @@ class DelphiSensor:
                     danger.append(_StructuralThreat(
                         rule=f["rule"], category=f["impact_class"], score=f["score"]
                     ))
+            # STRUCTURAL privilege-subversion findings (ASI03, and the privilege
+            # edge of ASI02/ASI05/ASI08). Same discipline as the command/SQL/URL
+            # scanners above and OUTSIDE the shell block for the same reason: the
+            # subversion lives in the (key, value) STRUCTURE of the argument, not
+            # in a joined value string, so it is read from the parsed dict rather
+            # than regexed out of text. Keyed on the SHAPE (self-grant, disabled
+            # control, waived approval, admin-with-no-governance, world-open,
+            # concealed grant), never on the tool name, so an approved scoped
+            # grant, a scheduled rotation and a payroll run are silent. FLAG-tier
+            # (see privileged_action in _TOOL_ARG_FLAG_CATEGORIES): the governance
+            # markers it reads are app-supplied and unverified, so it surfaces for
+            # review rather than blocking. Additive to `danger`, so it can only
+            # raise a verdict.
+            for f in _privilege_findings(tool_name, arguments or {}):
+                if f["rule"] in {x.rule for x in danger}:
+                    continue
+                danger.append(_StructuralThreat(
+                    rule=f["rule"], category=f["category"], score=f["score"]
+                ))
             # The flag tier (_TOOL_ARG_FLAG_CATEGORIES) is surfaced but FLAG-
             # DEFAULT: data_exfiltration (agents make legit outbound calls
             # constantly) plus the ambiguous jailbreak/system_prompt_leak/
