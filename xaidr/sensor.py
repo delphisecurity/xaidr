@@ -39,6 +39,7 @@ from .circuit_breaker import (
     CircuitBreaker,
     _CircuitRuntime,
 )
+from .enforcement import MONITOR as _MONITOR, resolve as _resolve_enforcement
 from .reporters import Reporter
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
 from .scanner.command_parse import reconstruct as _reconstruct_command
@@ -297,10 +298,10 @@ class DelphiSensor:
     ):
         if not agent_id:
             raise ValueError("agent_id is required")
-        if enforcement_mode not in ("monitor", "block"):
-            raise ValueError(
-                f"enforcement_mode must be 'monitor' or 'block', got {enforcement_mode!r}"
-            )
+        # Resolved HERE, before any other validation, so the raise order for a
+        # constructor given several bad arguments is what it has always been.
+        # resolve() owns the message and the accepted set (see enforcement.py).
+        enforcement = _resolve_enforcement(enforcement_mode)
 
         # PRIVILEGE TIER (OWASP ASI03) — CONFIG-SOURCED, and only here.
         #
@@ -330,14 +331,22 @@ class DelphiSensor:
         self.agent_id = agent_id
         self.shadow_mode = shadow_mode
         # shadow_mode forces observe-only — it IS monitor mode.
-        self.enforcement_mode = "monitor" if shadow_mode else enforcement_mode
+        self.enforcement = _MONITOR if shadow_mode else enforcement
+        # The NAME stays a plain string and stays public: it is emitted as
+        # `enforcementMode` in every telemetry event, handed to _CircuitRuntime,
+        # and round-tripped through ProtectionManifest and the framework
+        # integrations. Those want a JSON-serialisable name, not a policy.
+        self.enforcement_mode = self.enforcement.name
 
         self._scanner = LocalScanner(
             block_threshold=block_threshold,
             flag_threshold=flag_threshold,
             shadow_mode=shadow_mode,
             dlp_enabled=dlp_enabled,
-            enforcement_mode=self.enforcement_mode,
+            # The resolved policy, not its name — the scanner asks it the same
+            # question the sensor does, and re-parsing a string on the way down
+            # is how a policy an extension registered would get lost.
+            enforcement_mode=self.enforcement,
             # Opt-in ML signal for the rules-silent band. OFF by default; needs
             # BOTH this flag and `pip install xaidr[nano]`. A missing extra or a
             # hash-mismatched artifact raises HERE, at construction — never a
@@ -492,7 +501,7 @@ class DelphiSensor:
         if self._breaker is None:
             return False
         try:
-            if self.enforcement_mode != "block":
+            if not self.enforcement.enforces():
                 return False
             return self._breaker.state() == "open"
         except Exception as exc:
@@ -677,13 +686,17 @@ class DelphiSensor:
         a block does, so leaving it un-downgraded would make monitor mode stop
         traffic. Telemetry keeps the true pre-downgrade verdict (it is emitted
         from the composed action BEFORE this gate runs); only the returned action
-        is softened. The local scanner already gates on enforcement_mode; this is
-        a belt-and-suspenders guard. Quarantine is never downgraded."""
-        if self.enforcement_mode == "monitor" and result.action in (
-            "blocked", "approval_required",
-        ):
+        is softened. The local scanner already gates on the policy; this is a
+        belt-and-suspenders guard. Quarantine is never downgraded.
+
+        Which actions are halting, and what they soften to, is the policy's to
+        say — see EnforcementPolicy.downgrade. Calling it unconditionally and
+        comparing the result is deliberate: it is identity for every case that
+        used to fall through the `if`, so there is no mode test left here."""
+        downgraded = self.enforcement.downgrade(result.action)
+        if downgraded != result.action:
             return ScanResult(
-                action="flagged",
+                action=downgraded,
                 score=result.score,
                 category=result.category,
                 rules=result.rules,
@@ -1526,14 +1539,14 @@ class DelphiSensor:
                 # key — run_command(command=…) & friends are an execution request,
                 # never documentation, so the whole attack corpus and every
                 # prefixed-attack probe are structurally out of reach of this cap.
-                if hard and self.enforcement_mode == "block" and self._prose_mention_arg(
+                if hard and self.enforcement.enforces() and self._prose_mention_arg(
                     arguments, f"{tool_name} {arg_text}"
                 ):
                     hard = []
                 # Only the hard (destructive/injection) categories enforce a block;
                 # the flag tier (data_exfiltration + the ambiguous model-directed
                 # categories) surfaces as a flag (monitor-default).
-                if hard and self.enforcement_mode == "block":
+                if hard and self.enforcement.enforces():
                     action = "blocked"
                 else:
                     action = "flagged"
@@ -1569,7 +1582,7 @@ class DelphiSensor:
                     score = max(score, max(t.score for t in dlp_hits))
                     category = category or dlp_hits[0].category
                     rules = rules + [t.rule for t in dlp_hits if t.rule not in rules]
-                    if self.enforcement_mode == "block":
+                    if self.enforcement.enforces():
                         action = "blocked"
                     elif action == "allowed":
                         action = "flagged"
