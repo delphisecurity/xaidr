@@ -295,6 +295,21 @@ def test_scan_paths_never_emit_quarantine_category():
         assert "QUARANTINE_ENFORCED" not in (r.rules or [])
 
 
+def test_no_gate_other_than_the_circuit_gate_on_a_bare_sensor():
+    """A-12, restated for the S5 gate chain.
+
+    Quarantine is the enterprise package's GATE. Open now has the seam that a
+    gate plugs into, so "no quarantine in open" is no longer provable by the
+    absence of the concept — it is provable by the absence of anything
+    REGISTERED. A bare sensor must carry an empty extension tuple, which is what
+    makes the gate chain a single ``_circuit_is_blocking()`` call and nothing
+    else.
+    """
+    s = Sensor(agent_id="a12c")
+    assert s.extensions == ()
+    assert s._extension_faults == set()
+
+
 # ── A-3 ──────────────────────────────────────────────────────────────────────
 
 def test_no_agt_stub_or_state_on_open_sensor():
