@@ -34,6 +34,23 @@ concealed grant (`visible: false`). An argument that carries none of those shape
 is silent, so an approved scoped grant, a scheduled credential rotation and a
 payroll run produce nothing.
 
+**Each of those is a RELATION between two keys, not a keyword anywhere in the
+call — corrected in 1.14.1, where reading them as unrelated facts flagged
+ordinary work.** A self-directed principal is a self-*grant* only when the call
+also names what is granted: `get_profile(user="self")` is a read and is silent,
+`grant_role(principal="agent://self", role="org-admin")` fires. An admin-shaped
+role is an escalation only when nothing in the call makes it a query: beside a
+filter key it is a listing (`list_repos(visibility="all", role="admin")` asks for
+repos you already administer), and a read-only marker on the same value is a
+scope request (`admin.directory.user.readonly`). A control NAME appearing as a
+value is a disabled control only when a disabling value sits in the same setting
+record — `set_flag(flag="enforce_approvals", value=false)` fires,
+`plot_series(panel="monitoring", offset=0)` is pagination and does not.
+
+The correction only ever removes flags. Nothing that was silent before became
+loud, and the detector fires on the same set of held-out battery shapes it fired
+on at 1.14.0.
+
 It flags; it does not block, and the reason matters. Every governance marker it
 reads is app-supplied and unsigned, so a fabricated approval reference on a
 self-grant evades it exactly as it evades a policy. It raises the cost of the
