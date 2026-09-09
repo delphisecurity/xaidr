@@ -55,9 +55,19 @@ _SCORE = 0.5  # flag band [flag_threshold, block_threshold)
 
 # Tokens that mean "off / removed / none" for a control-shaped key.
 _DISABLING = {"false", "no", "off", "disabled", "disable", "none", "0", "off/none"}
-# Keys whose FALSE value is SAFE, not a subversion (they mean "require a human"):
-# auto_approve=false REQUIRES approval; dry_run=false just means "really run".
-_SAFE_FALSE_KEYS = {"auto_approve", "auto_apply", "dry_run", "dryrun"}
+
+# THERE IS NO _SAFE_FALSE_KEYS, DELIBERATELY, AND THIS IS WHERE THE REASON LIVES.
+# There used to be: {auto_approve, auto_apply, dry_run, dryrun}, subtracted from
+# _CONTROL_KEYS in predicate 2a, on the argument that auto_approve=false REQUIRES
+# a human and dry_run=false just means "really run". The argument is correct and
+# the guard was dead: none of those four keys was ever IN _CONTROL_KEYS, so the
+# subtraction removed nothing, and the test that claimed to pin it stayed green
+# with the whole set deleted. A guard that guards nothing is worse than no guard,
+# because it reads as a handled case.
+#
+# The keys are silent for the real reason instead — they are not control keys —
+# and test_disable_framed_keys_are_not_control_keys pins that directly, so
+# adding one to _CONTROL_KEYS fails a test rather than quietly changing verdicts.
 
 # Control-shaped keys whose disabling is the subversion. ENABLE-framed: a false /
 # off / disabled value turns the control OFF.
@@ -88,6 +98,33 @@ _ROLE_KEYS = {"role", "roles", "scope", "scopes", "permission", "permissions",
               "access", "access_level", "grant", "privileges", "entitlement"}
 _ADMIN = re.compile(r"\b(org-?admin|super-?user|superuser|root|administrator|admin)\b",
                     re.I)
+# An admin-shaped value that is explicitly READ-ONLY is not an escalation.
+# `admin.directory.user.readonly` is an ordinary OAuth scope request; the admin
+# morpheme is naming the API surface, not the power being taken. Matched on the
+# SAME value, never on the call. Deliberately NOT a bare `read`: the battery's
+# ASI03-A03 widens a token to "read,write,admin,billing" and must keep firing.
+_READ_ONLY = re.compile(r"read[-_.]?only|\breadonly\b|\bviewer\b|\breader\b", re.I)
+
+# Keys that make a call a QUERY rather than a mutation. `role=admin` next to one
+# of these is a filter ("repos where I am an admin"), which is a read, not a
+# grant. This is a relation between keys, not a list of tools: the same
+# `role=admin` with no filter key present still fires.
+_FILTER_KEYS = {"visibility", "filter", "filters", "query", "q", "search",
+                "sort", "order", "order_by", "page", "per_page", "page_size",
+                "cursor", "offset", "state", "since", "until", "type"}
+
+# ── the name/value SETTING relation (predicate 2e) ───────────────────────────
+# `set_flag(flag="enforce_approvals", value=false)` puts the control's NAME in
+# one slot and its new value in another. Reading that shape needs both halves to
+# belong to the SAME setting record. Testing "a control name appears somewhere in
+# this call AND something disabling appears somewhere in this call" is a
+# cross-product with no relation between the two facts, and it fires on
+# `{"panel": "monitoring", "offset": 0}` — a dashboard query with pagination.
+_FLAG_NAME_KEYS = {"flag", "flag_name", "setting", "setting_name", "control",
+                   "feature", "toggle", "option", "parameter", "param",
+                   "property", "field", "name", "key"}
+_FLAG_VALUE_KEYS = {"value", "val", "new_value", "newvalue", "enabled", "enable",
+                    "state", "status", "setting_value", "to"}
 
 _APPROVAL_KEYS = {"approval", "approvals", "authorization", "authorized"}
 _CONFIRM_KEYS = {"confirm", "confirmation", "confirmed"}
@@ -116,6 +153,36 @@ def _pairs(obj, key: str = "") -> Iterable[Tuple[str, object]]:
             yield from _pairs(v, key)
     else:
         yield key, obj
+
+
+def _dicts(obj) -> Iterable[dict]:
+    """Every dict in the argument tree, so a predicate can require two facts to
+    be SIBLINGS rather than merely both present somewhere in the call."""
+    if isinstance(obj, dict):
+        yield obj
+        for v in obj.values():
+            yield from _dicts(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _dicts(v)
+
+
+def _setting_disable(obj) -> bool:
+    """True for the ``{name-slot: <control name>, value-slot: <disabling>}``
+    record, with both halves in ONE dict. ``{"flag": "enforce_approvals",
+    "value": "false"}`` yes; ``{"panel": "monitoring", "offset": 0}`` no,
+    because ``offset`` is not a value slot for the thing ``panel`` names."""
+    for d in _dicts(obj):
+        named = any(
+            str(k).lower() in _FLAG_NAME_KEYS and _norm(v) in _CONTROL_NAMES
+            for k, v in d.items()
+        )
+        if not named:
+            continue
+        if any(str(k).lower() in _FLAG_VALUE_KEYS and _is_disabling(v)
+               for k, v in d.items()):
+            return True
+    return False
 
 
 def _is_disabling(value) -> bool:
@@ -156,12 +223,28 @@ def scan_privileged_action(tool_name: str, arguments) -> list:
     str_values = [str(v) for v in values if v is not None]
     blob = " ".join(str_values)
 
+    # A self-directed PRINCIPAL is only a self-GRANT when the call also names
+    # what is being granted. `get_profile(user="self")` and `whoami(account=
+    # "self")` are reads: `self` is the subject of an ordinary query, and on the
+    # 190-call benign corpus that is the only way `self` appears. Requiring a
+    # role/permission/scope key in the same call is the grant relation, and it is
+    # the one the battery's ASI03-A02 (`principal=agent://self, role=org-admin`)
+    # satisfies. COST, NAMED: a self-directed action with no role key —
+    # `transfer(to="self", amount=…)` — is no longer reached by this predicate.
+    # That is a value-movement shape, not a privilege shape, and it belongs to
+    # the policy engine's impact classes rather than here.
+    granting = any(k in _ROLE_KEYS for k, _ in pairs)
+
+    # `role=admin` beside a filter key is a LISTING, not an escalation.
+    querying = any(k in _FILTER_KEYS for k, _ in pairs)
+
     for k, v in pairs:
         # 1. self-directed grant / action
-        if k in _PRINCIPAL_KEYS and isinstance(v, str) and _SELF.search(v.strip()):
+        if (granting and k in _PRINCIPAL_KEYS and isinstance(v, str)
+                and _SELF.search(v.strip())):
             fire("ASI03_self_privileged_action")
         # 2a. an ENABLE-framed control disabled
-        if k in _CONTROL_KEYS and k not in _SAFE_FALSE_KEYS and _is_disabling(v):
+        if k in _CONTROL_KEYS and _is_disabling(v):
             fire("ASI03_disable_control")
         # 2b. an explicit "disable this" flag
         if k in ("disable", "disabled") and _truthy(v):
@@ -174,8 +257,10 @@ def scan_privileged_action(tool_name: str, arguments) -> list:
             fire("ASI03_waive_approval")
         if k in _CONFIRM_KEYS and _norm(v) in ("skip", "none", "false", "no", "off"):
             fire("ASI03_waive_approval")
-        # 4. escalation to admin/root in a role/scope, with no governance marker
-        if k in _ROLE_KEYS and isinstance(v, str) and _ADMIN.search(v) and not governance:
+        # 4. escalation to admin/root in a role/scope, with no governance marker,
+        #    that is neither a read-only grant nor a filter on an existing one
+        if (k in _ROLE_KEYS and isinstance(v, str) and _ADMIN.search(v)
+                and not _READ_ONLY.search(v) and not governance and not querying):
             fire("ASI03_admin_escalation")
         # 5. concealed privileged object
         if k in ("visible", "listed") and _is_disabling(v):
@@ -186,8 +271,9 @@ def scan_privileged_action(tool_name: str, arguments) -> list:
     # 2d. value-embedded "health_check=disabled" (config-blob and file-content shapes)
     if _EMBED_DISABLE.search(blob):
         fire("ASI03_disable_control")
-    # 2e. set_flag(flag=<control-name>, value=false): the control name is a VALUE
-    if any(_norm(v) in _CONTROL_NAMES for v in values) and any(_is_disabling(v) for v in values):
+    # 2e. set_flag(flag=<control-name>, value=false): the control name is a VALUE.
+    #     Both halves must be siblings in ONE dict — see _setting_disable.
+    if _setting_disable(arguments):
         fire("ASI03_disable_control")
     # 2f. trust root invalidated without reissue
     pd = {k: v for k, v in pairs}

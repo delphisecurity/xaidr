@@ -93,10 +93,87 @@ def test_admin_to_self_without_governance_fires():
     assert scan("grant_role", {"principal": "agent://self", "role": "admin"})
 
 
-def test_safe_false_keys_are_not_disable():
-    # auto_approve=false REQUIRES approval; dry_run=false just means "really run"
+def test_disable_framed_keys_are_not_control_keys():
+    """Replaces test_safe_false_keys_are_not_disable, which could not fail.
+
+    That test asserted `auto_approve=False` produces nothing, and it passed with
+    the `_SAFE_FALSE_KEYS` guard deleted entirely — because those keys were never
+    in `_CONTROL_KEYS`, so the guard subtracted nothing. It pinned the behaviour
+    and not the reason, which is exactly the shape of a decorative test: green
+    before the guard, green after, green without it.
+
+    This asserts the REASON. `auto_approve=false` REQUIRES a human and
+    `dry_run=false` just means "really run", so neither belongs in the set whose
+    false value is a subversion. Adding one fails HERE, at the definition, rather
+    than silently changing verdicts on every terraform call in production.
+    """
+    from xaidr.scanner.privilege_action import _CONTROL_KEYS
+
+    for key in ("auto_approve", "auto_apply", "dry_run", "dryrun"):
+        assert key not in _CONTROL_KEYS, (
+            f"{key!r} was added to _CONTROL_KEYS, so `{key}=false` now reads as a "
+            "disabled control -- but a false value on this key means MORE "
+            "governance, not less, and every `terraform apply` in monitor mode "
+            "will start flagging"
+        )
+    # and the behaviour those definitions produce
     assert not scan("terraform_apply", {"workspace": "prod", "auto_approve": False})
     assert not scan("delete_old_snapshots", {"older_than_days": 90, "dry_run": False})
+
+
+# ── the three false-positive mechanisms, each pinned ──────────────────────────
+
+@pytest.mark.parametrize("args", [
+    pytest.param({"panel": "monitoring", "offset": 0}, id="dashboard-pagination"),
+    pytest.param({"index": "logging", "size": 0}, id="es-count-only-query"),
+    pytest.param({"table": "audit_log", "offset": 0, "limit": 100}, id="audit-log-page"),
+    pytest.param({"table": "audit_log", "dry_run": False}, id="audit-log-real-run"),
+])
+def test_a_control_name_and_a_disabling_value_must_be_the_same_setting(args):
+    """MECHANISM 3. Predicate 2e used to AND "a control name appears somewhere"
+    with "something disabling appears somewhere" across the whole flattened
+    dict, with no relation between the two. `_norm(0) == "0"` is disabling, so
+    ordinary pagination over a panel named `monitoring` fired."""
+    assert not scan("some_tool", args), (
+        f"{args} is a query with pagination and it flagged as a disabled "
+        "control; the control name and the disabling value are unrelated keys"
+    )
+
+
+def test_the_real_setting_shape_still_fires():
+    """Non-vacuity for the test above: the shape 2e exists to catch."""
+    assert scan("set_flag", {"flag": "enforce_approvals", "value": "false"})
+    assert scan("update_setting", {"setting": "monitoring", "enabled": False})
+
+
+@pytest.mark.parametrize("args", [
+    pytest.param({"user": "self"}, id="read-own-profile"),
+    pytest.param({"account": "self", "fields": "name,email"}, id="whoami"),
+])
+def test_a_self_principal_without_a_role_is_a_read_not_a_grant(args):
+    assert not scan("get_profile", args), (
+        f"{args} reads the agent's own profile and flagged as a self-grant; "
+        "nothing is being granted, there is no role in the call"
+    )
+
+
+@pytest.mark.parametrize("args", [
+    pytest.param({"visibility": "all", "role": "admin"}, id="list-repos-filter"),
+    pytest.param({"scopes": ["https://www.googleapis.com/auth/"
+                             "admin.directory.user.readonly"]}, id="readonly-scope"),
+])
+def test_admin_as_a_filter_or_a_readonly_scope_is_not_an_escalation(args):
+    assert not scan("list_repos", args), (
+        f"{args} is a listing filtered by role, or a read-only scope request, "
+        "and it flagged as an admin escalation"
+    )
+
+
+def test_admin_escalation_still_fires_without_a_filter_or_readonly_marker():
+    """Non-vacuity, and the battery case the narrowing had to preserve."""
+    assert scan("update_token", {"token_id": "svc-77",
+                                 "scopes": "read,write,admin,billing"})
+    assert scan("grant_role", {"principal": "agent://self", "role": "org-admin"})
 
 
 def test_crypto_mining_is_deliberately_not_claimed():
