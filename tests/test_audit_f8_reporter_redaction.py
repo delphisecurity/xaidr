@@ -40,6 +40,17 @@ CANARY = "s3cr3t-CANARY-token-9f2a"
 QUERY_URL = f"https://collector.example.com/ingest?token={CANARY}&team=ops"
 USERINFO_URL = f"https://svc:{CANARY}@collector.example.com/ingest"
 
+# The three destinations a WebhookReporter is actually pointed at. On every one
+# of them the credential is the PATH, which is why redacting query values and
+# userinfo alone left the leak in published 1.13.0 and 1.14.0. Real URL shapes,
+# canary substituted for the secret.
+SLACK_URL = f"https://hooks.slack.com/services/T0A1B2C3/B9Z8Y7X6/{CANARY}"
+DISCORD_URL = f"https://discord.com/api/webhooks/1104857392017/{CANARY}"
+TEAMS_URL = (
+    "https://acme.webhook.office.com/webhookb2/"
+    f"9f1b-4c2e@6d3a-11ee/IncomingWebhook/{CANARY}/2b7c-40aa"
+)
+
 
 class _Capture:
     """Everything a failure could write: the xaidr loggers, stdout, stderr."""
@@ -86,6 +97,14 @@ class _Capture:
     (QUERY_URL, "collector.example.com"),
     (USERINFO_URL, "collector.example.com"),
     (f"https://h.example.com/p?a={CANARY}#frag{CANARY}", "h.example.com"),
+    # THE PATH, which the first fix left carrying the secret. These three are
+    # the shapes a WebhookReporter is actually pointed at in production, not
+    # hypotheticals: on Slack, Discord and Teams the credential IS the path.
+    (SLACK_URL, "hooks.slack.com"),
+    (DISCORD_URL, "discord.com"),
+    (TEAMS_URL, "acme.webhook.office.com"),
+    # the token in the FIRST segment — the reason no positional rule works
+    (f"https://relay.example.com/{CANARY}", "relay.example.com"),
 ])
 def test_redact_url_removes_the_secret_and_keeps_the_destination(url, keep):
     out = redact_url(url)
@@ -146,9 +165,23 @@ def _webhook_failing(url, handler=None):
     return reporter
 
 
+def test_redact_url_keeps_the_path_segment_count():
+    """The shape survives, the content does not. Two endpoints on one host stay
+    distinguishable, which is the only diagnostic the path was carrying that a
+    log line is entitled to."""
+    out = redact_url(SLACK_URL)
+    assert out.count("<redacted>") == 4, out       # services/T…/B…/token
+    assert redact_url("https://h.example.com/ingest").count("<redacted>") == 1
+    assert redact_url("https://h.example.com/") == "https://h.example.com/"
+    assert redact_url("https://h.example.com") == "https://h.example.com"
+
+
 @pytest.mark.parametrize("url,shape", [
     (QUERY_URL, "query parameter"),
     (USERINFO_URL, "userinfo"),
+    (SLACK_URL, "Slack path (hooks.slack.com/services/…)"),
+    (DISCORD_URL, "Discord path (discord.com/api/webhooks/…)"),
+    (TEAMS_URL, "Teams path (webhookb2/…/IncomingWebhook/…)"),
 ])
 def test_webhook_failure_does_not_log_the_credential(url, shape):
     reporter = _webhook_failing(url)

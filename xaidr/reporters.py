@@ -47,19 +47,88 @@ logger = logging.getLogger("xaidr.reporters")
 # likely to be shipped to a third party, retained longest, and read by the
 # widest audience, and a reporter failure is exactly when an operator pastes one
 # into a ticket.
+#
+# THE PATH IS ALSO A CREDENTIAL SINK, and the first fix missed it. Query values
+# and userinfo are where a credential goes when the URL is an API endpoint; they
+# are NOT where it goes on the destinations this reporter is actually pointed at.
+# The three most common webhook sinks carry the whole secret in the PATH:
+#
+#   Slack     https://hooks.slack.com/services/T0A1B2C3/B9Z8Y7X6/<token>
+#   Discord   https://discord.com/api/webhooks/<id>/<token>
+#   Teams     https://<org>.webhook.office.com/webhookb2/<guid>@<guid>/IncomingWebhook/<guid>/<guid>
+#
+# Measured on published 1.13.0 and 1.14.0 and on the 1.15.0 candidate: a Slack
+# webhook URL put the token on the log line FOUR times (the reporter's own line
+# and httpx's exception text, each seen by the handler and again on stderr).
+#
+# WHAT IS KEPT, AND THE ARGUMENT FOR IT.
+#
+#   scheme, host, port   KEPT. This is what "the destination is still named"
+#                        means: an operator can tell a failing Slack webhook from
+#                        a failing internal collector. A hostname is not a
+#                        secret; it is the thing you need to fix the outage.
+#   query KEYS           KEPT, as before. `token=<redacted>` says the call
+#                        carried a token without saying which.
+#   path SEGMENT COUNT   KEPT. It distinguishes two endpoints on one host, and a
+#                        count carries no content.
+#   path segment TEXT    REMOVED, every segment, including the first.
+#   userinfo, query
+#     VALUES, fragment   REMOVED, as before.
+#
+# WHY EVERY SEGMENT AND NOT A CLEVERER RULE. There is no positional rule: Slack's
+# secret is the last three taken together, Discord's is the last, Teams' is
+# spread across four, and some services put the token in the FIRST segment
+# (`https://host/<token>`). There is no shape rule either that is not entropy
+# guessing, and entropy guessing fails open on a short token and fails closed on
+# a hashed route id — so it would hand back the exact bug this comment describes,
+# with a heuristic in front of it. `redact_url`'s own contract already says "we
+# could not parse it" must not become "so we printed it"; the same reasoning says
+# "we could not tell whether this segment is a secret" must not become "so we
+# printed it". Fail closed on the whole path.
+#
+# THE COST IS REAL AND IT IS ACCEPTED: a log line no longer says WHICH route on a
+# host failed, only that a 3-segment one did. Weighed against a credential in a
+# ticket, that is the correct trade, and the reporter class name plus the host
+# already narrow a failure to one configured destination in every shipped setup.
 
 _URL_IN_TEXT_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]{0,15}://[^\s'\"<>)\]}]{0,2000}")
 
 _REDACTED = "<redacted>"
 
 
-def redact_url(url: Any) -> str:
-    """A URL safe to log: host and path kept, every secret-bearing part removed.
+def _redact_path(path: str) -> str:
+    """Every path segment replaced, the SHAPE of the path kept.
 
-    Keeps what an operator needs to identify the destination (scheme, host,
-    port, path) and removes what only an attacker benefits from (userinfo, query
-    VALUES, fragment). Query KEYS are kept: knowing the call carried a `token`
-    parameter is diagnostic, knowing its value is a leak.
+    ``/services/T0A1B2C3/B9Z8Y7X6/xoxb-secret`` becomes
+    ``/<redacted>/<redacted>/<redacted>/<redacted>``: four segments, no content.
+    A leading slash and a trailing slash are preserved because they are
+    structure; an empty path stays empty and ``/`` stays ``/``.
+
+    See the module comment for why no segment survives, not even the first.
+    """
+    if not path or path == "/":
+        return path
+    trailing = path.endswith("/")
+    segments = [s for s in path.split("/") if s]
+    if not segments:
+        return path
+    out = "/" + "/".join(_REDACTED for _ in segments)
+    return out + "/" if trailing else out
+
+
+def redact_url(url: Any) -> str:
+    """A URL safe to log: the destination named, every secret-bearing part gone.
+
+    Keeps what an operator needs to identify the destination (scheme, host, port,
+    and the NUMBER of path segments) and removes what only an attacker benefits
+    from (userinfo, path segment text, query VALUES, fragment). Query KEYS are
+    kept: knowing the call carried a `token` parameter is diagnostic, knowing its
+    value is a leak.
+
+    The path is redacted in full. The canonical WebhookReporter destinations —
+    Slack, Discord, Teams — carry the entire secret in path segments, and there
+    is no positional or shape rule that separates a route segment from a token
+    without guessing. See the module comment.
 
     Never raises. A value that cannot be parsed is reported as unloggable rather
     than passed through, because "we could not parse it" must not become "so we
@@ -83,7 +152,8 @@ def redact_url(url: Any) -> str:
                 out.append(f"{key}={_REDACTED}" if "=" in pair else pair)
             query = "&".join(out)
         fragment = _REDACTED if parts.fragment else ""
-        return urlunsplit((parts.scheme, netloc, parts.path, query, fragment))
+        return urlunsplit(
+            (parts.scheme, netloc, _redact_path(parts.path), query, fragment))
     except Exception:
         return "<unloggable-url>"
 
