@@ -10,6 +10,7 @@ import inspect
 import json
 import logging
 import time
+from dataclasses import replace
 from typing import Optional, Sequence
 from uuid import uuid4
 
@@ -1019,13 +1020,15 @@ class DelphiSensor:
         used to fall through the `if`, so there is no mode test left here."""
         downgraded = self.enforcement.downgrade(result.action)
         if downgraded != result.action:
-            result = ScanResult(
-                action=downgraded,
-                score=result.score,
-                category=result.category,
-                rules=result.rules,
-                latency_ms=result.latency_ms,
-            )
+            # `replace`, NOT a fresh ScanResult: this used to name five of the
+            # dataclass's eight fields, so a softened verdict silently lost
+            # `input_status`, `nano_score` and `nano_raw`. Those vanished in
+            # MONITOR mode — the default, and the mode you run while you are
+            # still measuring — and survived in block mode, which is exactly
+            # backwards. Constructing by field list means every field added to
+            # ScanResult is dropped here until someone remembers this call site;
+            # `replace` cannot have that bug.
+            result = replace(result, action=downgraded)
         # S6 · verdict transform, AFTER the open downgrade and after telemetry
         # and the breaker have both seen the true verdict. No-op with no
         # extensions, which is why it is safe to call unconditionally here.
