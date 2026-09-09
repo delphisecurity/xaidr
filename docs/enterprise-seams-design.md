@@ -1,6 +1,6 @@
 # Enterprise seams for open `xaidr` — design against `864243e`
 
-**Status:** S7 built (PR 1 of the sequencing below); S1 + S5 + S6 built (PR 2). S2, S3, S4, S8–S13 still design. Base: `delphisecurity/xaidr` main at `864243e` (release 1.11.0); the seam line numbers in §2 are on that commit and have since shifted — read them as "which function", not "which line". PR #3 (ASI/LPCI rules) shifts `local.py` by +34 lines and touches no seam site.
+**Status:** S7 built (PR 1 of the sequencing below); S1 + S5 + S6 built (PR 2); S2 built (PR 3). S3, S4, S8–S13 still design. Base: `delphisecurity/xaidr` main at `864243e` (release 1.11.0); the seam line numbers in §2 are on that commit and have since shifted — read them as "which function", not "which line". PR #3 (ASI/LPCI rules) shifts `local.py` by +34 lines and touches no seam site.
 **Companion:** `docs/enterprise-overlay-spec.md` (the bucket classification, currently sitting in `~/delphi-sentinel/docs/`, to be moved to the SDK repo). This document replaces its §5 hook table.
 **Goal:** paid = pinned open `xaidr` + an enterprise package. Every behaviour paid has today that open lacks must plug into open through a public, tested, validated-at-construction seam, so that the next open release cannot silently break the enterprise package and the next enterprise feature cannot fork a shared file.
 
@@ -54,13 +54,23 @@ Validate every item is a `SensorExtension` (raise otherwise), store the tuple, c
 
 Inherits fresh code: `self._breaker_faults` (`:372-375`) is in the same function. Insert after the breaker wiring at `:386` so extensions see a fully built sensor.
 
-### S2 · policy conditions — `authz/policy.py:79` and `:161` (was H2 + H10)
+### S2 · policy conditions — `authz/policy.py` + `local_policy.py` (was H2 + H10), BUILT
 
 The spec's two sites are one seam. Today `_CONDITION_FIELDS` is a module-level frozenset consulted inside `parse_action_policy`, `trust_below` is rejected at `:161` in both placements, and `_reject_unknown_keys` (`:82`, applied `:175/:177`) would reject it a second time with a misleading did-you-mean.
 
 Design: `parse_action_policy(doc, *, extra_conditions: Mapping[str, ConditionEvaluator] = {})`. `load_policy` gains the same kwarg and forwards it. `DelphiSensor.__init__` collects `policy_conditions()` from every extension, merges (duplicate key across extensions → construction error), and passes the merged map. Inside the parser, the valid-key set for the unknown-key validator is `_CONDITION_FIELDS | extra.keys()`, and the `:161` rejection is skipped for any key in `extra`. The evaluator is called at evaluation time with the request context and the extension owns its semantics (`trust_below` reads `subject_trust`, S9).
 
 Open's stricter behaviour is unchanged when `extra` is empty: `trust_below` stays rejected, pinned by the existing test. The paid control test (`test_trust_below_still_supported_here`) moves to the enterprise package unchanged.
+
+**Census correction — the design above named two entry points; the tree has three.** `parse_action_policy` is reached from `local_policy.load_policy` (a policy FILE) *and* from `local_policy.set_policy_dict`, which backs the public `Sensor.set_policy()` runtime API. `load_policy` also does not live in `authz/policy.py` at all. Wiring only what this section named would have left `Sensor(extensions=[...]).set_policy({...})` rejecting the extension's own condition — a live gap in the shipped API, invisible to any test that only loads policies from disk. **This is the S7 lesson repeating for the third time: enumerate sites from the tree, never from a document's line list.** All three now take `extra_conditions`, and `test_set_policy_accepts_an_extension_condition` is the test that would have caught the omission.
+
+**Ordering: S1 had to be split.** The policy is parsed inside `__init__` (`sensor.py`, at the `load_policy` call), but S1's attach block ran at the END of the constructor, so `policy_conditions()` had not been collected when the parser ran. Validation and condition-collection are now "part 1 of 2", hoisted above the policy load; `on_attach` stays last and still receives a fully built sensor. Both halves of S1's contract survive, and the split is commented at both sites.
+
+**The exemption is keyed on the KEY, not on "an extension is present".** `if "trust_below" not in _extra and (...)` — writing it as `if not _extra and (...)` passes every other test in the file and lets `trust_below` through whenever *any* unrelated condition is registered. `test_trust_below_still_rejected_when_a_DIFFERENT_condition_is_registered` is the discriminating case and was proven red against exactly that mis-implementation. (Only its `conditions:` parametrisation discriminates: under `match:`, `trust_below` is caught a second time by the `_MATCH_FIELDS` unknown-key validator.)
+
+Duplicate condition names across two extensions raise at construction naming both extensions and the key, rather than last-write-wins: two packages both believing they own a condition, one silently inert, is the ADV-2 shape.
+
+Measured: corpus oracle byte-identical with no extensions (456 rows, `80f31ff0…`); full suite 7931 → 7951, which is exactly the 20 new tests; skips unchanged at 137.
 
 ### S3 · escalation chain — `scanner/local.py:684` (was H3 + H8)
 
@@ -176,7 +186,7 @@ Per extension per hook per sensor: first fault logs ERROR with extension name, h
 
 1. **S7** enforcement policy object (four sites + grep tripwire). Everything else reads it.
 2. **S1 + S5 + S6** extension object, attach, gate chain, verdict transform, ordering tests. BUILT.
-3. **S2** policy conditions through `parse_action_policy`.
+3. **S2** policy conditions through `parse_action_policy`. BUILT.
 4. **S3** escalation chain in `LocalScanner`, flag-band cap, degraded signal, manifest health.
 5. **S9 + S10 + S11** trust, destination policy, blocked-URL provider.
 6. **S12** egress header consolidation, with `inject_context` wiring as its own commit.

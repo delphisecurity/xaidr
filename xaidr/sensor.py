@@ -11,7 +11,7 @@ import json
 import logging
 import time
 from dataclasses import replace
-from typing import Optional, Sequence
+from typing import Mapping, Optional, Sequence
 from uuid import uuid4
 
 # NOTE: httpx is an OPTIONAL dependency, imported lazily only when the HTTP-
@@ -514,10 +514,44 @@ class DelphiSensor:
             str(u) for u in (blocked_urls or ()) if u
         ]
 
+        # ── S1 · attach, part 1 of 2: validate + collect ──────────────────
+        # BEFORE the policy load below, because S2 lets an extension supply
+        # condition names and `parse_action_policy` has to know them at parse
+        # time. on_attach still runs LAST (see part 2 at the end of __init__).
+        #
+        # Validated the way circuit_breaker above is validated, and for the same
+        # reason (ADV-2): a security control handed something it does not
+        # understand must fail at construction, not default to inert.
+        #
+        # `extensions` is normalised to a tuple so a caller that keeps and
+        # mutates its list afterwards cannot change what this sensor runs.
+        if isinstance(extensions, (str, bytes)) or not isinstance(
+            extensions, (list, tuple)
+        ):
+            raise ValueError(
+                "extensions must be a list or tuple of SensorExtension "
+                f"instances, got {type(extensions).__name__}"
+            )
+        for index, extension in enumerate(extensions):
+            if not isinstance(extension, SensorExtension):
+                raise ValueError(
+                    f"extensions[{index}] must be a SensorExtension instance, "
+                    f"got {type(extension).__name__}"
+                )
+        self._extensions: tuple = tuple(extensions)
+        #: (extension name, hook name) pairs whose fault has already been
+        #: reported, so a broken hook is stated ONCE per sensor rather than
+        #: once per scan. Same discipline as ``_breaker_faults``.
+        self._extension_faults: set = set()
+        #: S2 · the merged extension-supplied policy condition evaluators.
+        self._policy_conditions: dict = self._collect_policy_conditions()
+
         # Local YAML policy source (no backend). None if absent/malformed —
         # load_policy fails safe and logs what it loads. Auto-loads
         # ./xaidr-policy.yaml when no explicit file is given.
-        self._policy = _policy.load_policy(policy_file)
+        self._policy = _policy.load_policy(
+            policy_file, extra_conditions=self._policy_conditions
+        )
 
         # A2A structural validation (Tier A, content-blind) + local id tracking
         # (Tier B, LOCAL ONLY — catches references to ids this sensor never
@@ -559,35 +593,17 @@ class DelphiSensor:
                 )
                 self._breaker._emit_hook = self._emit_circuit_event
 
-        # ── S1 · attach ──────────────────────────────────────────────────
+        # ── S1 · attach, part 2 of 2: on_attach ──────────────────────────
         # LAST in the constructor, deliberately: on_attach receives a fully
         # built sensor, so an extension may read the breaker, the policy and
         # the reporter it is being installed alongside.
         #
-        # Validated the way circuit_breaker above is validated, and for the same
-        # reason (ADV-2): a security control handed something it does not
-        # understand must fail at construction, not default to inert.
-        #
-        # `extensions` is normalised to a tuple so a caller that keeps and
-        # mutates its list afterwards cannot change what this sensor runs.
-        if isinstance(extensions, (str, bytes)) or not isinstance(
-            extensions, (list, tuple)
-        ):
-            raise ValueError(
-                "extensions must be a list or tuple of SensorExtension "
-                f"instances, got {type(extensions).__name__}"
-            )
-        for index, extension in enumerate(extensions):
-            if not isinstance(extension, SensorExtension):
-                raise ValueError(
-                    f"extensions[{index}] must be a SensorExtension instance, "
-                    f"got {type(extension).__name__}"
-                )
-        self._extensions: tuple = tuple(extensions)
-        #: (extension name, hook name) pairs whose fault has already been
-        #: reported, so a broken hook is stated ONCE per sensor rather than
-        #: once per scan. Same discipline as ``_breaker_faults``.
-        self._extension_faults: set = set()
+        # Validation and policy_conditions() collection happen EARLIER (see
+        # "S1 · attach, part 1 of 2" above), because the policy is parsed at
+        # construction and the parser needs the extension-supplied condition
+        # names before it runs. Splitting the seam is what keeps both true:
+        # conditions are known before the policy loads, and on_attach still
+        # sees a finished object.
         for extension in self._extensions:
             # NOT wrapped: a fault here is a construction failure and raises.
             # See SensorExtension.on_attach for why this one hook is different.
@@ -602,6 +618,54 @@ class DelphiSensor:
     def extensions(self) -> tuple:
         """The attached extensions, in the order they will be called."""
         return self._extensions
+
+    @property
+    def policy_conditions(self) -> dict:
+        """S2 · extension-supplied `conditions:` evaluators, by field name.
+
+        Empty on a bare sensor, which is what keeps the open parser's behaviour
+        identical: an unregistered condition key still rejects exactly as before.
+        """
+        return dict(self._policy_conditions)
+
+    def _collect_policy_conditions(self) -> dict:
+        """Merge every extension's `policy_conditions()` into one map.
+
+        A DUPLICATE key across two extensions RAISES at construction rather than
+        letting one win. Silent last-write-wins is the ADV-2 shape: two packages
+        both believe they own `trust_below`, one is quietly inert, and the
+        deployment cannot tell which. The message names both extensions and the
+        key so the collision is actionable without reading either package.
+
+        Not wrapped in the fail-safe hook handler for the same reason on_attach
+        is not: this runs at CONSTRUCTION, and a mis-declared condition set is an
+        install error, not a runtime fault.
+        """
+        merged: dict = {}
+        owner: dict = {}
+        for extension in self._extensions:
+            name = getattr(extension, "name", type(extension).__name__)
+            conditions = extension.policy_conditions()
+            if not conditions:
+                continue
+            if not isinstance(conditions, Mapping):
+                raise ValueError(
+                    f"extension {name!r} returned {type(conditions).__name__} "
+                    "from policy_conditions(); expected a mapping of "
+                    "{condition_name: evaluator}"
+                )
+            for key, evaluator in conditions.items():
+                if key in merged:
+                    raise ValueError(
+                        f"extensions {owner[key]!r} and {name!r} both declare "
+                        f"the policy condition {key!r}. Two extensions cannot "
+                        "own the same condition name: one would silently win "
+                        "and the other's control would be inert. Rename one, or "
+                        "attach only one of them."
+                    )
+                merged[key] = evaluator
+                owner[key] = name
+        return merged
 
     def _extension_failed(self, extension, hook: str, exc: Exception) -> None:
         """Report a fault inside an extension hook. ONCE per extension per hook.
@@ -997,7 +1061,13 @@ class DelphiSensor:
         if policy is None:
             self._policy = None
             return False
-        parsed = _policy.set_policy_dict(policy)
+        # Same extension conditions the constructor parsed with: a policy set
+        # at runtime must accept exactly the keys a policy FILE would have.
+        # Missing this is how set_policy() would reject an extension's own
+        # condition on a sensor that was built to understand it.
+        parsed = _policy.set_policy_dict(
+            policy, extra_conditions=self._policy_conditions
+        )
         self._policy = parsed
         return parsed is not None
 

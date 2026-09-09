@@ -295,6 +295,19 @@ def test_scan_paths_never_emit_quarantine_category():
         assert "QUARANTINE_ENFORCED" not in (r.rules or [])
 
 
+def test_bare_sensor_supplies_no_policy_conditions():
+    """A-11, restated for the S2 seam.
+
+    `trust_below` is rejected in open because nothing computes a trust score.
+    S2 makes the condition NAME set extensible, so "open rejects trust_below" is
+    now provable only by showing a bare sensor contributes no condition names at
+    all — an empty map is what keeps `_CONDITION_FIELDS | extra` equal to
+    `_CONDITION_FIELDS` and the trust_below guard unconditional.
+    """
+    s = Sensor(agent_id="a11-s2")
+    assert s.policy_conditions == {}
+
+
 def test_no_gate_other_than_the_circuit_gate_on_a_bare_sensor():
     """A-12, restated for the S5 gate chain.
 

@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from .authz.policy import (
     AuthzDecision,
@@ -82,6 +82,7 @@ def load_policy(
     policy_file: Optional[str] = None,
     *,
     auto_default: bool = True,
+    extra_conditions: Optional[Mapping[str, Any]] = None,
 ) -> Optional[dict]:
     """Load and parse a policy from a file (or the conventional default).
 
@@ -114,7 +115,7 @@ def load_policy(
         logger.warning("[xaidr] could not read policy file %s: %s (detection-only)", path, exc)
         return None
 
-    policy = parse_action_policy(raw)
+    policy = parse_action_policy(raw, extra_conditions=extra_conditions)
     if policy is None:
         logger.warning(
             "[xaidr] policy file %s is malformed or unsupported; "
@@ -126,9 +127,19 @@ def load_policy(
     return policy
 
 
-def set_policy_dict(raw: Any) -> Optional[dict]:
-    """Parse a policy supplied programmatically as a dict. Fail-safe (None on bad)."""
-    policy = parse_action_policy(raw)
+def set_policy_dict(
+    raw: Any,
+    *,
+    extra_conditions: Optional[Mapping[str, Any]] = None,
+) -> Optional[dict]:
+    """Parse a policy supplied programmatically as a dict. Fail-safe (None on bad).
+
+    Takes `extra_conditions` for the same reason `load_policy` does: this backs
+    the public `Sensor.set_policy()`, so a policy set at RUNTIME must accept the
+    same extension-supplied condition names a policy FILE would. The seam design
+    named only `load_policy`; the grep found this one too.
+    """
+    policy = parse_action_policy(raw, extra_conditions=extra_conditions)
     if policy is None:
         logger.warning("[xaidr] set_policy: malformed policy ignored (detection-only)")
     return policy
