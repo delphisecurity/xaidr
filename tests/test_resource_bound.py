@@ -238,6 +238,60 @@ def test_aspectual_continuation_is_not_a_non_termination_claim():
             s.scan(benign, direction="input").rules), benign
 
 
+# ── the discriminator pool: a CONTRACT, not a report ─────────────────────────
+#
+# WHY THIS TEST EXISTS AND WHY IT IS SEPARATE FROM THE 190. The 190-call corpus
+# was authored from agent workflows before any tool-path detector existed, and
+# that blindness is the whole reason "0 / 190" is worth quoting. It is also
+# exactly why it CANNOT see this class: it holds 656 leaf key/value pairs, twelve
+# booleans and no integer zeros, so a detector can read `limit_reached: False` as
+# a removed ceiling and still score a clean 0/190. G2 shipped in 1.14.0 flagging
+# 11 of these 50 with 0/190 green over it; G4 as first written flagged 12 of 50
+# with 0/190 and 0/628 green over it. Same blindness, same green suite, twice.
+#
+# The two ALLOWED entries are a residual, not an exemption. `retention: "forever"`
+# on an archive bucket and `expires: "never"` on a perpetual licence are real
+# bound keys holding real strong nullifiers, and the only thing separating them
+# from an attack is an app-supplied authorisation reference an attacker can type.
+# Listing them by id means gaining a third cannot happen quietly: this test names
+# what regressed and on which axis, because the axis IS the diagnosis.
+
+#: The two discriminator entries this detector cannot separate from an attack.
+#: See the RESIDUAL section of xaidr/scanner/resource_bound.py.
+G4_KNOWN_RESIDUAL = {"DSC-RES-03", "DSC-FIN-04"}
+
+
+def test_discriminator_pool_flags_only_the_named_residual():
+    disc = _jsonl("benign_toolcalls/discriminator.jsonl")
+    assert len(disc) == 50, len(disc)
+    fired = {}
+    for e in disc:
+        rules = sorted(f["rule"] for f in scan(e["tool"], e["args"]))
+        if rules:
+            fired[e["id"]] = (e["axis"], rules, e["args"])
+    unexpected = {k: v for k, v in fired.items() if k not in G4_KNOWN_RESIDUAL}
+    assert not unexpected, (
+        f"G4 flags {len(fired)} of 50 realistic production tool calls; "
+        f"{len(unexpected)} beyond the named residual. Each is an agent doing "
+        f"its job, and a detector that flags these gets switched off:\n"
+        + "\n".join(f"  {k}  axis={v[0]}  {v[1]}  {v[2]}"
+                    for k, v in sorted(unexpected.items())))
+    assert set(fired) == G4_KNOWN_RESIDUAL, (
+        "a named residual stopped firing; if that is a real improvement, remove "
+        f"it from G4_KNOWN_RESIDUAL. fired={sorted(fired)}")
+
+
+def test_the_discriminator_exclusions_did_not_cost_a_catch():
+    """The discriminating direction: the four battery tool-call attacks whose
+    bound is removed must still fire after the exclusions above. A pool that
+    goes clean because the detector went quiet is not a result."""
+    attacks = {a["id"]: a for a in _jsonl("asi_battery/attacks.jsonl")}
+    for case_id in ("ASI04-A02", "ASI04-A05", "ASI04-A09", "ASI04-A12"):
+        a = attacks[case_id]
+        rules = sorted(f["rule"] for f in scan(a["tool"], a["args"]))
+        assert rules, (case_id, a["args"], "no longer caught")
+
+
 # ── the residual, recorded as a residual and not as a design choice ──────────
 # strict xfail: these are attacks in the held-out battery that this detector does
 # NOT catch. They are here so the misses survive outside a session transcript,
