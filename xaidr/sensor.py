@@ -656,6 +656,30 @@ class DelphiSensor:
         """S3 · the escalation chain, in the order it will be consulted."""
         return self._escalators
 
+    def _subject_trust(self, agent_id: str) -> Optional[float]:
+        """S9 · the subject's trust score, or None when nobody computes one.
+
+        Asks each extension in order and returns the FIRST non-None answer —
+        the same Optional-means-proceed convention every other seam uses.
+
+        Returns None on a bare sensor, which is the whole point: open computes
+        no per-agent trust, which is exactly why `trust_below` is rejected at
+        policy-parse time (A-11). This method is what an enterprise package
+        replaces to make that condition meaningful, and S2 is what lets it
+        register the condition NAME alongside.
+        """
+        if not self._extensions:
+            return None
+        for extension in self._extensions:
+            try:
+                trust = extension.subject_trust(agent_id)
+            except Exception as exc:
+                self._extension_failed(extension, "subject_trust", exc)
+                continue
+            if trust is not None:
+                return trust
+        return None
+
     def _collect_escalators(self) -> tuple:
         """Flatten every extension's `escalators()` into one chain, in order.
 
@@ -2150,7 +2174,10 @@ class DelphiSensor:
             pol = _policy.evaluate_policy(
                 self._policy,
                 agent_id=self.agent_id,
-                trust=None,                       # standalone sensor has no trust score
+                # S9: None on a bare sensor (open computes no per-agent trust,
+                # which is why A-11 rejects `trust_below` at parse time). An
+                # extension that supplies one is what makes that condition real.
+                trust=self._subject_trust(self.agent_id),
                 tool_name=tool_name,
                 impact_class=impact_class,        # from the existing classifier
                 impact_tier=impact_tier,          # from the existing classifier
@@ -3185,7 +3212,7 @@ class ProtectedHttpClient:
                     pol = _policy.evaluate_policy(
                         policy,
                         agent_id=self._sensor.agent_id,
-                        trust=None,
+                        trust=self._sensor._subject_trust(self._sensor.agent_id),
                         tool_name="http_request",
                         impact_class="network",
                         impact_tier="external",

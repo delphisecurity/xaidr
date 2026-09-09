@@ -346,7 +346,17 @@ def test_no_agt_stub_or_state_on_open_sensor():
     s = Sensor(agent_id="a3")
     assert not hasattr(s, "_evaluate_policy")
     assert not hasattr(s, "_action_policy")
+    # S9 reworded this line. `_trust_score` never existed as an attribute, so
+    # asserting its absence stopped meaning anything the moment a trust SEAM
+    # arrived: the question is no longer "is there a field" but "does anything
+    # compute a score". A bare sensor must answer None, and no attribute may
+    # cache one.
     assert not hasattr(s, "_trust_score")
+    assert s._subject_trust("a3") is None
+    assert not any(
+        "trust" in name and not callable(getattr(s, name, None))
+        for name in vars(s)
+    ), "no attribute on a bare sensor may hold a trust score"
 
 
 def test_blocked_tools_and_arg_scan_still_work():
