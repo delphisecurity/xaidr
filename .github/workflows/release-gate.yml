@@ -1,0 +1,92 @@
+name: release gate
+
+# A version tag with no published release object is a release that was never
+# cut. The notes exist only in the release commit body, where nobody watching
+# the repository sees them -- which is the state this repo was in on
+# 2026-09-09: fifteen tags, zero releases.
+#
+# WHY THIS IS A SEPARATE WORKFLOW FROM ci.yml. ci.yml proves the TREE is
+# self-consistent: it runs pytest and the corpus report against a checkout. It
+# has no running Brain, no credentials, no database and no view of GitHub, and
+# a green run there says nothing about server-side state. This workflow reads
+# GitHub's API for BOTH sides of the comparison -- the tag list and the release
+# list -- so it is an outside-the-process check in the sense that matters:
+# nothing in the checkout can make it pass.
+#
+# `actions/checkout` is here only to fetch the script. Its default fetch-depth
+# of 1 pulls no tags at all, and that is left deliberately unchanged: if this
+# job ever starts reading `git tag`, the missing tags will make it fail loudly
+# rather than quietly measure the runner instead of the repository.
+
+on:
+  push:
+    tags:
+      - "v*"
+  # The backstop. The tag-push job only ever sees the tag being pushed, so it
+  # cannot notice a release object deleted, un-published, or never created for
+  # some earlier tag. This sweep re-checks every tag at or above the floor.
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+    inputs:
+      floor:
+        description: "Lowest tag to check (vMAJOR.MINOR.PATCH)"
+        required: false
+        default: "v1.10.0"
+
+concurrency:
+  group: release-gate-${{ github.ref }}
+  cancel-in-progress: false
+
+# The gate reads public metadata and writes nothing.
+permissions:
+  contents: read
+
+jobs:
+  # ── the tag that was just pushed ───────────────────────────────────────────
+  # docs/releasing.md step 4 puts release creation IMMEDIATELY after the tag
+  # push, so the tag reaches GitHub a moment before the release does. That gap
+  # is real and this job waits it out -- `--wait-seconds 600`, ten minutes of
+  # grace, then it FAILS. It is a bounded grace, not a retry-until-green loop:
+  # a job that polls until it passes is a job that cannot fail.
+  pushed-tag:
+    name: "${{ github.ref_name }} has a published release object"
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # No `pip install` of anything, including this package. The gate is
+      # stdlib-only on purpose: it must still run on a tag whose wheel does not
+      # build, which is exactly when you most want to know the release is
+      # incomplete.
+      - name: Gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/release_objects_gate.py \
+            --tag "${{ github.ref_name }}" \
+            --wait-seconds 600
+
+  # ── every tag at or above the floor ────────────────────────────────────────
+  sweep:
+    name: every tag at or above the floor
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/release_objects_gate.py \
+            --floor "${{ inputs.floor || 'v1.10.0' }}"
