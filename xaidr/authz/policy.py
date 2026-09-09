@@ -212,7 +212,18 @@ def parse_action_policy(
         if defaults["effect"] not in EFFECTS or defaults["unclassified"] not in EFFECTS:
             return None
 
-        return {"version": str(raw["version"]), "defaults": defaults, "rules": rules}
+        # The registered evaluators ride WITH the parsed policy. `evaluate()`
+        # takes (policy, request) and is called from one place; threading a
+        # third argument through every caller would leave the two halves of this
+        # seam able to drift apart — a policy parsed with one condition set and
+        # evaluated against another. Carrying them here makes that impossible by
+        # construction. Absent (not empty) when nobody registered any, so a
+        # policy parsed by open is byte-identical to what it was before S2.
+        parsed = {"version": str(raw["version"]), "defaults": defaults,
+                  "rules": rules}
+        if _extra:
+            parsed["condition_evaluators"] = dict(_extra)
+        return parsed
     except Exception as exc:
         logger.warning(f"[xaidr] action_policy parse failed: {exc}")
         return None
@@ -258,7 +269,7 @@ def _glob_any(value: Any, patterns: Any) -> bool:
     return any(fnmatch.fnmatchcase(lowered, str(p).lower()) for p in patterns)
 
 
-def _rule_matches(rule: dict, request: dict) -> bool:
+def _rule_matches(rule: dict, request: dict, evaluators: Optional[Mapping[str, Any]] = None) -> bool:
     matched_anything = False
     for field, (section, key) in _MATCH_FIELDS.items():
         patterns = rule["match"].get(field)
@@ -300,6 +311,49 @@ def _rule_matches(rule: dict, request: dict) -> bool:
         except (TypeError, ValueError):
             return False
 
+    # S2 · extension-supplied conditions. The parser ACCEPTED these keys, so
+    # they must be EVALUATED here — a condition that parses and is then ignored
+    # does not merely fail to fire, it WIDENS the rule: `geo_outside: EU` is
+    # written to narrow a `tools:` match, and dropping it makes that rule fire
+    # on every tool call instead of the non-EU ones. That is the same silent
+    # disarming the unknown-key validator exists to prevent, inverted.
+    #
+    # An unknown key here (registered at parse time, no evaluator at eval time)
+    # fails CLOSED — the rule does not match — because the alternative is the
+    # widening above.
+    # BUILT-IN condition names keep built-in semantics even when an extension
+    # also registers them. `trust_below` is the case that matters: an extension
+    # registers the name to lift A-11's parse-time rejection and supplies the
+    # SCORE through S9's subject_trust; the comparison stays here. Registration
+    # means "I provide the input", not "I replace the comparison".
+    handled = ("trust_below", "min_chain_tier_above")
+    extra_keys = [k for k in rule["conditions"] if k not in handled]
+    if extra_keys:
+        matched_anything = True
+        evaluators = evaluators or {}
+        for key in extra_keys:
+            evaluator = evaluators.get(key)
+            if evaluator is None:
+                logger.error(
+                    "[xaidr] action_policy rule %r uses condition %r but no "
+                    "evaluator is registered for it — the rule does NOT match. "
+                    "This happens when a policy parsed with an extension "
+                    "attached is evaluated without it.",
+                    rule.get("id"), key,
+                )
+                return False
+            try:
+                if not evaluator(request, rule["conditions"][key]):
+                    return False
+            except Exception as exc:
+                logger.error(
+                    "[xaidr] condition evaluator %r raised (%s: %s) — rule %r "
+                    "does NOT match. A condition that cannot answer must not "
+                    "widen the rule it was written to narrow.",
+                    key, type(exc).__name__, exc, rule.get("id"),
+                )
+                return False
+
     # A rule with no recognized matchers or conditions matches nothing —
     # an empty rule must not silently become a catch-all.
     return matched_anything
@@ -318,7 +372,8 @@ def evaluate(policy: Optional[dict], request: dict) -> AuthzDecision:
             return MONITOR_DECISION
 
         for rule in policy["rules"]:
-            if _rule_matches(rule, request):
+            if _rule_matches(rule, request,
+                             policy.get("condition_evaluators")):
                 return AuthzDecision(
                     decision=_EFFECT_TO_DECISION[rule["effect"]],
                     policy_id=rule["id"],

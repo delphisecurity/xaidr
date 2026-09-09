@@ -219,3 +219,85 @@ def test_the_property_is_a_copy():
     s = Sensor(agent_id="s2-copy", extensions=[_GeoExtension()])
     s.policy_conditions["injected"] = lambda ctx, v: True
     assert "injected" not in s.policy_conditions
+
+
+# ── S2 completion: the evaluator must actually RUN ───────────────────────────
+#
+# S2 as first merged threaded `extra_conditions` into `parse_action_policy` and
+# stopped there. `evaluate()` never received them and matched only the two
+# built-in conditions, so a registered condition parsed cleanly and was then
+# DROPPED at evaluation. That does not merely fail to fire — it WIDENS the rule.
+
+def test_a_registered_condition_is_actually_evaluated():
+    calls = []
+
+    class Geo(SensorExtension):
+        name = "geo-eval"
+
+        def policy_conditions(self):
+            def outside(request, value):
+                calls.append(value)
+                return False            # declines -> the rule must NOT fire
+            return {"geo_outside": outside}
+
+    s = Sensor(agent_id="s2-eval", enforcement_mode="block",
+               extensions=[Geo()])
+    assert s.set_policy(_policy({CUSTOM: "EU"}, rule_id="geo")) is True
+    r = s.scan_tool_call("deploy", {"env": "prod"})
+    assert calls == ["EU"], "the registered evaluator was never called"
+    assert r.action != "blocked", (
+        "a declining condition must NARROW the rule; dropping it makes a "
+        "`tools:` match fire unconditionally"
+    )
+
+
+def test_a_matching_condition_lets_the_rule_fire():
+    """The other direction, so the test above cannot pass by the rule being
+    broken outright."""
+    class Geo(SensorExtension):
+        name = "geo-eval-yes"
+
+        def policy_conditions(self):
+            return {CUSTOM: lambda request, value: True}
+
+    s = Sensor(agent_id="s2-eval-yes", enforcement_mode="block",
+               extensions=[Geo()])
+    assert s.set_policy(_policy({CUSTOM: "EU"}, rule_id="geo")) is True
+    assert s.scan_tool_call("deploy", {"env": "prod"}).action == "blocked"
+
+
+def test_an_evaluator_that_raises_fails_CLOSED():
+    """A condition that cannot answer must not widen the rule it narrows."""
+    class Broken(SensorExtension):
+        name = "geo-broken"
+
+        def policy_conditions(self):
+            def boom(request, value):
+                raise RuntimeError("geo service down")
+            return {CUSTOM: boom}
+
+    s = Sensor(agent_id="s2-eval-boom", enforcement_mode="block",
+               extensions=[Broken()])
+    assert s.set_policy(_policy({CUSTOM: "EU"}, rule_id="geo")) is True
+    assert s.scan_tool_call("deploy", {"env": "prod"}).action != "blocked"
+
+
+def test_the_evaluator_receives_the_request_and_the_configured_value():
+    seen = {}
+
+    class Geo(SensorExtension):
+        name = "geo-args"
+
+        def policy_conditions(self):
+            def outside(request, value):
+                seen["request"] = request
+                seen["value"] = value
+                return True
+            return {CUSTOM: outside}
+
+    s = Sensor(agent_id="s2-eval-args", enforcement_mode="block",
+               extensions=[Geo()])
+    s.set_policy(_policy({CUSTOM: "EU"}, rule_id="geo"))
+    s.scan_tool_call("deploy", {"env": "prod"})
+    assert seen["value"] == "EU"
+    assert seen["request"]["subject"]["agent_id"] == "s2-eval-args"
