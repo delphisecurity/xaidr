@@ -143,6 +143,26 @@ The one passage that still blocks, `bp-055`, is documented by ID with its cause
 in `tests/test_benign_prose.py` rather than suppressed, so that a second one
 shows up as a new entry instead of disappearing into a percentage.
 
+## Cutting a release (maintainers)
+
+Nothing in this section is something an outside contributor can do — it needs
+push access to tags and a token — which is why it lives in
+[`docs/releasing.md`](docs/releasing.md) rather than here.
+
+Two things about it are worth knowing even if you never cut one, because they
+change what a pull request is expected to carry:
+
+- **A tag is not a release.** The release object is created as part of cutting
+  the release, and `.github/workflows/release-gate.yml` fails a `v*` tag push
+  that has no published release behind it. That gate reads GitHub's API rather
+  than the checkout, so it is the one check here that a green tree cannot make
+  pass.
+- **U-1: no figure without a regenerator.** Any number you put in a release
+  body, in `README.md`, or in `docs/` needs a committed script that recomputes
+  it, named alongside it. This applies to your pull request too — it is the same
+  rule as [Every detection change is measured](#every-detection-change-is-measured),
+  extended to every published figure rather than just the corpus tables.
+
 ## Code of conduct
 
 This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). Reports go
