@@ -24,7 +24,7 @@ from .autopatch import (
     protect, unprotect, ProtectionManifest, XaidrProtectionWarning,
 )
 
-__version__ = "1.14.1"
+__version__ = "1.15.0"
 
 __all__ = [
     "Sensor",

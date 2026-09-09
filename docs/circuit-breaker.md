@@ -76,6 +76,45 @@ on upgrade, without editing anything — and there is no honest default value,
 since a supervisor fanning out to twenty workers is routine in one deployment and
 an incident in another.
 
+### The removed-bound detector (new in 1.15.0), and where the line is
+
+That last sentence is the reason every threshold here is opt-in, and it is worth
+saying exactly what it does and does not rule out. **A volume is deployment-
+relative. A nulled bound is not.**
+
+Since 1.15.0 the tool boundary checks tool arguments for a ceiling the caller
+*named and then removed* — `budget_cap: none`, `spend_limit: off`, `max_cost:
+unset`, `concurrency: unbounded`, `instances: unlimited`, `expires: never` — and
+the input and A2A boundaries check for the same claim written as an instruction
+("retry immediately forever", "never give up", "keep expanding it indefinitely
+without ever finishing"). It is on by default and takes no configuration.
+
+**It reads no magnitude at all.** `rows=1200000`, `employees_estimate=5200`,
+`partitions_estimate=10000` and `count=5000` are invisible to it; a bound whose
+value is a number is silent whatever the number is. So the nightly payroll run,
+a 2.1-million-row scoring job and a 10 000-partition backfill produce nothing,
+and there is no threshold to tune, raise, or turn off.
+
+That is the split:
+
+| | who reads it | default |
+|---|---|---|
+| the bound was **declared absent** in this message | the removed-bound detector | on, no configuration |
+| the **observed volume** is unusual *for this deployment* | this circuit breaker, and policy | off, you set the number |
+
+"Whoever wrote `budget_cap` did not mean `none`" holds in every deployment, so it
+can ship as a detector. "5000 workers is 100× normal for us" needs a baseline the
+sensor does not have, so it stays here, where you supply the number.
+
+It **flags**, it does not block: an unbounded job is a cost and availability
+problem, not an authorization boundary, and blocking a mis-read batch job in
+production is the worse failure. Three deliberate non-goals are named rather than
+folded in — numeric sentinels (`max_retries=0` means "do not retry" in one API
+and "unlimited" in another, and telling them apart needs to know which tool it
+is), an absent or `null` argument (that is a tool-contract question, not
+something an argument dict can show), and recursive fan-out, which is *observed*
+rather than declared and is therefore `delegation_rate_threshold`'s job above.
+
 > **Fixed in this release, and it was live.** Through 1.10.0 the sensor called a
 > `record_delegation` method the breaker runtime did not implement. Every
 > outbound `scan_a2a` with a breaker configured raised `AttributeError`, the
