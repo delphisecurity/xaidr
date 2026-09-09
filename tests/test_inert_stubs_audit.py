@@ -295,6 +295,15 @@ def test_scan_paths_never_emit_quarantine_category():
         assert "QUARANTINE_ENFORCED" not in (r.rules or [])
 
 
+def test_bare_sensor_adds_nothing_to_the_destination_decision():
+    """S10/S11: a bare sensor's effective blocklist is exactly the operator's
+    own list, and no extension is consulted before it."""
+    s = Sensor(agent_id="a3-s10", blocked_urls=["op.example"])
+    assert s.extensions == ()
+    assert s.effective_blocked_urls() == ["op.example"]
+    assert s._effective_blocked_urls() == list(s._blocked_urls)
+
+
 def test_bare_sensor_has_no_escalation_chain():
     """A-12/S3: open is a THREE-STATE local scanner and stays one.
 
