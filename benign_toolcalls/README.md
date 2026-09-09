@@ -54,25 +54,30 @@ key-vocabulary error or a value-polarity error — so both read 0 while:
 | measured at | `corpus.jsonl` | `discriminator.jsonl` |
 |---|---:|---:|
 | 1.14.0 as published (G2) | 0 / 190 | **11 / 50 (22.0%)** |
-| **1.14.1, this release — G2 corrected** | **0 / 190** | **0 / 50 (0.0%)** |
-| 1.15.0 candidate `fedd7e9` (G2 + G4), *not on `main`* | 0 / 190 | **23 / 50 (46.0%)** |
-| after the G4 correction, *not on `main`* | 0 / 190 | **2 / 50 (4.0%)** |
+| 1.14.1, G2 corrected | 0 / 190 | **0 / 50 (0.0%)** |
+| 1.15.0 candidate, G2 + G4 as first written, *never shipped* | 0 / 190 | **23 / 50 (46.0%)** |
+| **1.15.0, this release — G4 corrected** | **0 / 190** | **2 / 50 (4.0%)** |
 
-**The bottom two rows are measurements of `feat/asi-g4-resource-abuse`, and they
-are quoted here rather than on that branch because this file is where the pool is
-described.** Neither is a claim about `main`.
+**Read the third row: it is why this pool exists.** 23 = the 11 G2 false
+positives (that candidate was cut before the 1.14.1 fix) plus 12 from G4, which
+read `limit_reached: False` as a removed ceiling, `ttl: "none"` as one, and
+`cost_center: "none"` as one. It scored **0 / 190 and 0 / 628 committed benign
+inputs** the whole time. That is the same blindness that hid the G2 defect for
+five weeks, reproduced on a different detector within one release, which is the
+argument for keeping the two pools separate rather than a hypothetical about it.
 
-Read the 0 / 50 on this release for exactly what it is. Eleven of the eleven
-1.14.0 false positives are gone because the privilege detector was corrected.
-The other two rows' residual pair — `retention: "forever"` on an archive bucket
-and `expires: "never"` on a perpetual licence — is 0 here for a different and
-weaker reason: `main` ships no removed-bound detector, so nothing on `main` reads
-those two entries at all. They are in the pool already, waiting for G4, and the
-honest statement is that this release's 0 / 50 is 48 discriminations plus 2
-abstentions. Both genuinely ARE a named bound removed, and both are routine; the
-only thing separating them from the attack is an authorisation reference in the
-same call, which an attacker supplies by typing one. The residual note lives with
-the detector, in `xaidr/scanner/resource_bound.py` on that branch.
+**The 2 / 50 on this release is 48 discriminations plus 2 abstentions, and the
+abstentions are named:** `retention: "forever"` on an archive bucket (DSC-RES-03)
+and `expires: "never"` on a perpetual licence (DSC-FIN-04). Both genuinely ARE a
+named bound holding a strong nullifier, and both are routine traffic. The only
+thing separating them from the attack is an authorisation reference in the same
+call (`approval="LEGAL-88"`, `contract="PERPETUAL-2024"`), which is app-supplied
+and unsigned — an attacker types it as easily as the archivist does — so reading
+it would be a courtesy rather than a discrimination and it is deliberately not
+read. They flag; this is written down instead. The residual note lives with the
+detector, in `xaidr/scanner/resource_bound.py`, and
+`tests/test_resource_bound.py::test_discriminator_pool_flags_only_the_named_residual`
+pins the pair by id so a third cannot be gained quietly.
 
 ## How it was written
 

@@ -58,6 +58,19 @@ WHAT IS DELIBERATELY EXCLUDED, AND WHY.
     bounded); ``limit=0`` means "unlimited" in some APIs; ``min_replicas=0`` is a
     legitimate scale-to-zero floor. Reading them correctly requires knowing which
     tool it is — i.e. a tool list. So they are not read. Stated, not folded in.
+  * BOOLEANS, in either polarity and spelled either way (``False``, ``"false"``,
+    ``"no"``). Identical argument to the sentinels: ``rate_limit=false`` removes
+    a ceiling, ``limit_reached=false`` says the ceiling HELD, and
+    ``concurrent=false`` is the bounded direction outright. Same word, opposite
+    readings, separable only by knowing the tool.
+  * A DURATION, AGE OR ALERT LEVEL LEFT UNSET (``ttl="none"``,
+    ``deadline="none"``, ``threshold="none"``). Nulling one of these consumes
+    nothing — no spend, no fan-out — and "optional field the caller left unset"
+    is the commonest shape in production arguments. These keys take only a
+    STRONG nullifier, the same escalation the EXTENT class gets.
+  * A BOUND NOUN QUALIFIED INTO A LABEL (``cost_center``, ``budget_code``,
+    ``limit_type``). An accounting dimension is not a ceiling, and
+    ``cost_center="none"`` means the expense is not yet allocated.
   * AN ABSENT ARGUMENT. Only a bound the caller explicitly nulled is read, never
     one that was never supplied, and JSON ``null`` counts as absent rather than as
     "off" because in most SDKs it selects the default. A tool that defaults to
@@ -73,6 +86,24 @@ WHAT IS DELIBERATELY EXCLUDED, AND WHY.
     read here without matching a bound morpheme as a SUBSTRING of arbitrary text,
     which makes ``generate:`` a "rate" key. Named as a residual rather than
     shipped with that behaviour.
+
+THE RESIDUAL THIS DETECTOR CANNOT SEPARATE, stated because it is measured and
+not hypothetical. A STRONG nullifier in a genuine duration bound still fires on
+two shapes in benign_toolcalls/discriminator.jsonl:
+
+    archive_source(bucket="acme-archive", retention="forever", approval="LEGAL-88")
+    create_licence(customer="acme", expires="never", contract="PERPETUAL-2024")
+
+Both are routine. An archive bucket really is retained forever and a perpetual
+licence really does not expire, and both say so in exactly the words an ASI04
+attack uses — ``retention``/``expires`` are real bound keys and ``forever``/
+``never`` are real strong nullifiers, so there is no lexical difference to read.
+The ONLY thing separating them from an attack is the authorisation reference
+sitting beside them (``LEGAL-88``, ``PERPETUAL-2024``), and that is app-supplied
+and unsigned: an attacker types ``approval="LEGAL-88"`` as easily as the
+archivist does. Reading it would not be a discrimination, it would be a
+courtesy, so it is NOT read — the two flag, and this is written down instead.
+That is the same reason scanner.privilege_action is FLAG rather than block.
 
 FLAG, not block. An unbounded job is a cost and availability problem, not an
 authorization boundary, and the failure mode of blocking a mis-read batch job in
@@ -105,11 +136,23 @@ _NULLIFIER_STRONG = frozenset({
     "indefinite", "indefinitely", "never", "nonstop", "non-stop",
 })
 # WEAK: the word means "not set / turned off". Ambiguous on its own — a feature
-# flag is legitimately "off" — so it only counts in a BOUND-shaped slot.
+# flag is legitimately "off" — so it only counts in a COST-BEARING bound slot
+# (see _DURATION_MORPHEMES).
+#
+# "no" and "false" are NOT here, and neither is "yes"/"true": they are BOOLEAN
+# LITERALS spelled as words, and a boolean is not read at all (see _BOOLEAN_WORDS
+# and _slot_value). `over_budget: "no"` is a state report saying the budget held.
 _NULLIFIER_WEAK = frozenset({
-    "none", "off", "unset", "no", "false", "disabled", "disable",
+    "none", "off", "unset", "disabled", "disable",
     "null",  # the STRING "null"; JSON null is absence, see _slot_value
 })
+
+#: Booleans spelled as words. Excluded for the SAME reason as numeric sentinels
+#: (see the module docstring): `rate_limit=false` removes a ceiling, while
+#: `limit_reached=false` says the ceiling HELD, and `concurrent=false` is the
+#: bounded direction outright. Telling those apart requires knowing which tool it
+#: is — i.e. a tool list — so they are not read. Stated, not folded in.
+_BOOLEAN_WORDS = frozenset({"true", "false", "yes", "no", "y", "n"})
 # Multi-word nullifiers, matched against the WHOLE normalised value.
 _NULLIFIER_PHRASE = re.compile(
     r"^no\s*(?:hard\s+|upper\s+)?"
@@ -126,6 +169,33 @@ _BOUND_MORPHEMES = frozenset({
     "expiration", "threshold", "ceiling", "bound", "bounds", "rate",
     "ratelimit", "throttle", "throttling", "concurrency", "concurrent",
     "backoff", "cooldown", "lifetime",
+})
+#: The subset of _BOUND_MORPHEMES that names a DURATION, an AGE or an ALERT
+#: LEVEL rather than a rate of spend. Nulling one of these consumes nothing:
+#: `ttl: "none"` is a cache entry with no expiry, `deadline: "none"` is a
+#: reminder with no due date, `threshold: "none"` alerts on every event. All
+#: three are the commonest shape in production arguments — an OPTIONAL FIELD
+#: LEFT UNSET — and none of them is denial-of-wallet.
+#:
+#: So these take only a STRONG nullifier, which is exactly the escalation
+#: _EXTENT_MORPHEMES already gets and for the same reason: the weak class cannot
+#: carry the claim on its own here. `retention: "forever"` and
+#: `expires: "never"` still fire — see the RESIDUAL note at the end of this
+#: module for why that is not obviously right either.
+_DURATION_MORPHEMES = frozenset({
+    "ttl", "retention", "retain", "timeout", "timeouts", "deadline",
+    "expiry", "expires", "expiration", "threshold", "backoff", "cooldown",
+    "lifetime",
+})
+#: Nominal qualifiers that turn a bound NOUN into a LABEL. `cost_center` is an
+#: accounting dimension, `budget_code` a ledger reference, `limit_type` a
+#: category name — none of them is a ceiling, and `cost_center: "none"` means
+#: the expense is not yet allocated. A key carrying one of these is not read as
+#: a bound however bound-shaped its other component is.
+_LABEL_MORPHEMES = frozenset({
+    "center", "centre", "code", "codes", "id", "ids", "uuid", "name", "names",
+    "type", "types", "category", "group", "owner", "label", "tag", "tags",
+    "ref", "reference", "unit", "department", "team", "project", "reason",
 })
 # EXTENT: the slot names HOW MUCH WORK. A number here is ordinary at any size,
 # so only a STRONG nullifier counts.
@@ -168,17 +238,22 @@ def _slot_value(value) -> str | None:
     """The value normalised for reading as a SLOT, or None when it is not one.
 
     None (absence, and JSON null — which selects the default in most SDKs, so it
-    is not a declaration that the bound is off), numbers, and prose longer than
-    ``_MAX_SLOT_WORDS`` words are all not slots this reads.
+    is not a declaration that the bound is off), numbers, BOOLEANS in either
+    polarity and spelled either way, and prose longer than ``_MAX_SLOT_WORDS``
+    words are all not slots this reads.
     """
     if value is None or isinstance(value, (int, float)) and not isinstance(value, bool):
         return None
-    if value is True:
+    if isinstance(value, bool):
+        # Both polarities, for the reason given at _BOOLEAN_WORDS. `False` used
+        # to normalise to the string "false" and reach the weak-nullifier set,
+        # which read `limit_reached: False` — the ceiling HELD — as the ceiling
+        # being removed.
         return None
-    if value is False:
-        return "false"
     text = str(value).strip().lower()
     if not text or len(_WORD_SPLIT.split(text)) > _MAX_SLOT_WORDS:
+        return None
+    if text in _BOOLEAN_WORDS:
         return None
     return text
 
@@ -210,8 +285,17 @@ def scan_resource_bounds(tool_name: str, arguments) -> list:
         if text is None:
             continue
         parts = _key_parts(key)
-        if parts & _BOUND_MORPHEMES and _is_nullifier(text):
-            # A ceiling the caller named and then removed.
+        if parts & _LABEL_MORPHEMES:
+            # A bound noun qualified into a label (cost_center, budget_code).
+            # Not a ceiling at all, so neither branch below applies.
+            continue
+        if parts & _BOUND_MORPHEMES and (
+            _is_strong_nullifier(text)
+            or (text in _NULLIFIER_WEAK and not parts & _DURATION_MORPHEMES)
+        ):
+            # A ceiling the caller named and then removed. The weak class is
+            # admitted only for the COST-BEARING bounds; a duration or an alert
+            # level left unset is an optional field, not a removed ceiling.
             fire("ASI04_bound_removed")
         elif parts & _EXTENT_MORPHEMES and _is_strong_nullifier(text):
             # How much work to do, declared as "no ceiling". A NUMBER here — at
