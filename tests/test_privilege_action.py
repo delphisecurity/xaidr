@@ -73,6 +73,26 @@ def test_production_benign_corpus_is_clean():
     assert fp == [], f"privilege detector fired on benign production traffic: {fp}"
 
 
+def test_discriminator_corpus_is_clean():
+    """ZERO findings on benign_toolcalls/discriminator.jsonl.
+
+    The 190-call corpus above cannot measure this class and 0/190 was true while
+    the detector flagged 11 of these 50: that corpus carries twelve booleans and
+    no integer zeros, and the battery mirror reuses the ATTACK keys by
+    construction, so between them they exercise value discrimination and never
+    key discrimination. Failures here are reported WITH THEIR AXIS, because the
+    axis is the diagnosis — a regression in one is a mechanism coming back, not
+    a single bad case.
+    """
+    fp = []
+    for e in _jsonl("benign_toolcalls/discriminator.jsonl"):
+        rules = [f["rule"] for f in scan(e["tool"], e["args"])]
+        if rules:
+            fp.append(f"{e['id']} [{e['axis']}] {rules} :: {e['why_benign']}")
+    assert fp == [], (
+        "the privilege detector fired on benign traffic:\n  " + "\n  ".join(fp))
+
+
 def test_battery_benign_mirror_privileged_actions_are_clean():
     for b in _jsonl("asi_battery/benign.jsonl"):
         calls = b["steps"] if b["boundary"] == "sequence" else [b]

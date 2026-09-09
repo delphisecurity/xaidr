@@ -171,6 +171,31 @@ jobs:
       - name: Intent metrics (catch rate + its denominator, reported not gated)
         run: python scripts/intent_metrics.py
 
+      # ── the held-out reports, added because one of them went stale ──────────
+      # asi_battery/RESULTS.md published rules-only 21/120 for five weeks after
+      # 1.14.0 moved the real number to 35/120. Nothing regenerated it and
+      # nothing compared it to a fresh run, so the staleness was invisible until
+      # a wheel-level audit. These three are the regeneration commands named in
+      # the docs that carry those figures; running them here puts the current
+      # numbers in every PR log, where a diff against the committed RESULTS.md
+      # is something a reviewer can actually see.
+      #
+      # Reported, not gated, for the same reason as intent_metrics: they are
+      # measurements, not contracts. The CONTRACT is in pytest —
+      # tests/test_privilege_action.py asserts 0 false positives on BOTH benign
+      # pools (test_production_benign_corpus_is_clean over the 190 and
+      # test_discriminator_corpus_is_clean over the 50), and it runs in the gate
+      # job above. Name only tests that exist here: a comment citing a file this
+      # branch does not carry reads as coverage while providing none.
+      - name: Held-out ASI battery (regenerates asi_battery/RESULTS.md figures)
+        run: python scripts/asi_battery_report.py
+
+      - name: Held-out nano set (regenerates heldout/RESULTS.md figures)
+        run: python scripts/heldout_report.py
+
+      - name: Benign tool-call corpora (the false-positive bar, both pools)
+        run: python scripts/benign_toolcall_report.py
+
   # ── Rules-in-wheel guard (carries Step 1's package-data protection into CI) ─
   # A future change must never silently drop the rules/*.json package data and
   # ship a wheel that loads 0 rules. Build the wheel, assert all 7 JSON files are

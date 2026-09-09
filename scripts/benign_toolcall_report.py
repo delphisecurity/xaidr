@@ -243,6 +243,56 @@ def main():
             print(f"  [{e['id']}] {e['persona']}/{e['tool']}: {e['why_benign']}")
         print()
 
+    # ---- the discriminator pool ----
+    # A SECOND pool, and the reason it is second rather than merged: the 190
+    # above were authored blind, from agent workflows, before any detector
+    # existed, and that property is what makes 0/190 worth quoting. These 50 are
+    # detector-INFORMED — written against the argument-value properties the
+    # structural detectors read — so merging them would launder an acceptance
+    # set into a blind one. Kept apart, reported apart.
+    #
+    # They exist because the blind corpus cannot exhibit two whole classes of
+    # error: it carries twelve booleans and no integer zeros, and the battery
+    # mirror reuses the attack KEYS by construction. Measured at 1.14.0 the
+    # privilege detector flagged 11 of these 50 while both committed pools read
+    # clean; at 1.14.1 it flags 0. (The 1.15.0 candidate flagged 23 of 50 — a
+    # branch measurement, quoted because it is what put this pool here, not a
+    # claim about this tree.)
+    disc_path = os.path.join(REPO, "benign_toolcalls", "discriminator.jsonl")
+    disc, disc_fp = [], []
+    if os.path.exists(disc_path):
+        with open(disc_path, encoding="utf-8") as fh:
+            disc = [json.loads(l) for l in fh if l.strip()]
+        for e in disc:
+            r = rs.scan_tool_call(e["tool"], e["args"])
+            if r.action != "allowed":
+                disc_fp.append((e, r))
+        print(_rule("="))
+        print("DISCRIMINATOR POOL  -  the axes the blind corpus cannot measure")
+        print(_rule("="))
+        by_axis = defaultdict(lambda: [0, 0])
+        for e in disc:
+            by_axis[e["axis"]][0] += 1
+        for e, _ in disc_fp:
+            by_axis[e["axis"]][1] += 1
+        print(f"{'axis':<38}{'n':>4}{'fp':>5}")
+        print(_rule())
+        for axis in sorted(by_axis):
+            n, f = by_axis[axis]
+            print(f"{axis:<38}{n:>4}{f:>5}")
+        print(_rule())
+        print(f"{'TOTAL':<38}{len(disc):>4}{len(disc_fp):>5}")
+        print()
+        if disc_fp:
+            print("FALSE POSITIVES (each names the axis, which is the diagnosis):")
+            for e, r in disc_fp:
+                print(f"  [{e['id']}] {e['axis']}: {','.join(r.rules)}")
+                print(f"      {e['tool']}({json.dumps(e['args'])[:88]})")
+                print(f"      benign because: {e['why_benign']}")
+        else:
+            print("No false positives on the discriminator pool.")
+        print()
+
     # ---- machine-readable ----
     summary = {
         "n": len(corpus),
@@ -253,6 +303,12 @@ def main():
         },
         "per_persona": {p: {"n": v[0], "rules_fp": v[1]} for p, v in per_persona.items()},
         "acceptance_surface": {n: [e["id"] for e in h] for n, h in surface.items()},
+        "discriminator": {
+            "n": len(disc),
+            "rules_fp": [e["id"] for e, _ in disc_fp],
+            "rules_fp_rate": (len(disc_fp) / len(disc)) if disc else None,
+            "by_axis": {e["axis"]: e["id"] for e, _ in disc_fp},
+        },
     }
     out = os.path.join(REPO, "benign_toolcalls", "last_run.json")
     with open(out, "w", encoding="utf-8") as fh:

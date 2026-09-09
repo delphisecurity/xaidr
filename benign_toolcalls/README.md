@@ -20,13 +20,59 @@ alone. This corpus is the production-shaped benign set they have to clear.
 
 | File | What it is |
 |---|---|
-| `corpus.jsonl` | 190 benign tool calls, full argument dicts |
+| `corpus.jsonl` | 190 benign tool calls, full argument dicts — **authored blind** |
+| `discriminator.jsonl` | 50 benign tool calls, **detector-informed**, one `axis` each |
 | `../scripts/benign_toolcall_report.py` | regenerates the numbers below |
 | `last_run.json` | machine-readable summary of the last local run (git-ignored) |
 
 Each entry records `persona`, `tool`, a full `args` dict with realistic names
 and values, and two prose fields, `represents` and `why_benign`, so a reader can
 dispute any single entry's benignness.
+
+### Two pools, and why they are not one file
+
+`corpus.jsonl` was written from agent workflows before any tool-path detector
+existed. Nothing in it was chosen against a regex, which is the property that
+makes "0 / 190" worth quoting — and it is a property that merging would destroy.
+
+`discriminator.jsonl` is the opposite by design: each entry targets an argument
+property the structural detectors read, and carries an `axis` naming it
+(`boolean-false-sense-inversion`, `polysemous-bound-key`,
+`control-name-as-unrelated-value`, `integer-zero`, `admin-as-filter`,
+`self-principal-read`, …). It is an ACCEPTANCE set, not a sample, and it is
+reported separately for that reason.
+
+**It exists because the blind pools are structurally unable to exhibit two whole
+classes of error.** `corpus.jsonl` has 656 leaf key/value pairs, **twelve
+booleans and no integer zeros**, and its only False-valued control-shaped keys
+are `auto_approve` and `dry_run`. `../asi_battery/benign.jsonl` is a
+*register-matched mirror*: its tool-call steps reuse the attack KEYS on purpose,
+so it tests whether a detector can tell two VALUES apart under one key and never
+whether it can tell two KEYS apart. Between them they cannot measure a
+key-vocabulary error or a value-polarity error — so both read 0 while:
+
+| measured at | `corpus.jsonl` | `discriminator.jsonl` |
+|---|---:|---:|
+| 1.14.0 as published (G2) | 0 / 190 | **11 / 50 (22.0%)** |
+| **1.14.1, this release — G2 corrected** | **0 / 190** | **0 / 50 (0.0%)** |
+| 1.15.0 candidate `fedd7e9` (G2 + G4), *not on `main`* | 0 / 190 | **23 / 50 (46.0%)** |
+| after the G4 correction, *not on `main`* | 0 / 190 | **2 / 50 (4.0%)** |
+
+**The bottom two rows are measurements of `feat/asi-g4-resource-abuse`, and they
+are quoted here rather than on that branch because this file is where the pool is
+described.** Neither is a claim about `main`.
+
+Read the 0 / 50 on this release for exactly what it is. Eleven of the eleven
+1.14.0 false positives are gone because the privilege detector was corrected.
+The other two rows' residual pair — `retention: "forever"` on an archive bucket
+and `expires: "never"` on a perpetual licence — is 0 here for a different and
+weaker reason: `main` ships no removed-bound detector, so nothing on `main` reads
+those two entries at all. They are in the pool already, waiting for G4, and the
+honest statement is that this release's 0 / 50 is 48 discriminations plus 2
+abstentions. Both genuinely ARE a named bound removed, and both are routine; the
+only thing separating them from the attack is an authorisation reference in the
+same call, which an attacker supplies by typing one. The residual note lives with
+the detector, in `xaidr/scanner/resource_bound.py` on that branch.
 
 ## How it was written
 
