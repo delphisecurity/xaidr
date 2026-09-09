@@ -41,6 +41,7 @@ from .circuit_breaker import (
     _CircuitRuntime,
 )
 from .enforcement import MONITOR as _MONITOR, resolve as _resolve_enforcement
+from .escalation import Escalator
 from .extensions import ScanRequest, SensorExtension
 from .reporters import Reporter
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
@@ -107,6 +108,14 @@ logger = logging.getLogger("xaidr.sensor")
 _ACTION_SEVERITY = {
     "allowed": 0,
     "flagged": 1,
+    # S3 · an escalator's verdict. Sits with `flagged` rather than above it: an
+    # escalation is a second OPINION, not a halt, and nothing in open treats it
+    # as one. Before S3 this key was absent and `Action.ESCALATED` was produced
+    # by nothing, so the unguarded `_ACTION_SEVERITY[before.action]` below could
+    # not be reached; S3 is the first code that can emit it, and without this
+    # entry that lookup raises KeyError into the fail-open handler and turns an
+    # escalated verdict into a silent `allowed`.
+    "escalated": 1,
     "approval_required": 2,
     "blocked": 3,
 }
@@ -468,6 +477,47 @@ class DelphiSensor:
         # integrations. Those want a JSON-serialisable name, not a policy.
         self.enforcement_mode = self.enforcement.name
 
+        # ── S1 · attach, part 1 of 2: validate + collect ──────────────────
+        # FIRST of the three things that consume extensions, because both of the
+        # others are built below and need their contributions at CONSTRUCTION:
+        #
+        #   S3  the escalation chain, passed into LocalScanner (next block)
+        #   S2  policy condition names, needed by parse_action_policy
+        #
+        # on_attach still runs LAST (see part 2 at the end of __init__), so the
+        # split preserves its contract: hooks that CONTRIBUTE run early, the
+        # hook that OBSERVES runs on a finished object.
+        #
+        # Validated the way circuit_breaker above is validated, and for the same
+        # reason (ADV-2): a security control handed something it does not
+        # understand must fail at construction, not default to inert.
+        #
+        # `extensions` is normalised to a tuple so a caller that keeps and
+        # mutates its list afterwards cannot change what this sensor runs.
+        if isinstance(extensions, (str, bytes)) or not isinstance(
+            extensions, (list, tuple)
+        ):
+            raise ValueError(
+                "extensions must be a list or tuple of SensorExtension "
+                f"instances, got {type(extensions).__name__}"
+            )
+        for index, extension in enumerate(extensions):
+            if not isinstance(extension, SensorExtension):
+                raise ValueError(
+                    f"extensions[{index}] must be a SensorExtension instance, "
+                    f"got {type(extension).__name__}"
+                )
+        self._extensions: tuple = tuple(extensions)
+        #: (extension name, hook name) pairs whose fault has already been
+        #: reported, so a broken hook is stated ONCE per sensor rather than
+        #: once per scan. Same discipline as ``_breaker_faults``.
+        self._extension_faults: set = set()
+        #: S2 · the merged extension-supplied policy condition evaluators.
+        self._policy_conditions: dict = self._collect_policy_conditions()
+
+        #: S3 · the escalation chain, in extension order. Empty in open.
+        self._escalators: tuple = self._collect_escalators()
+
         self._scanner = LocalScanner(
             block_threshold=block_threshold,
             flag_threshold=flag_threshold,
@@ -483,8 +533,13 @@ class DelphiSensor:
             # silent downgrade of a signal the operator asked for.
             nano_enabled=enable_nano,
             nano_model_dir=nano_model_dir,
+            # S3 · second-opinion links, in extension order. Empty in open, and
+            # the scanner short-circuits on that before building anything.
+            escalators=self._escalators,
         )
-        self._scanner_mode = "local"
+        # Derived, not a literal: an operator reading the manifest must be able
+        # to tell a purely local scanner from one that consults a link.
+        self._scanner_mode = "local+escalation" if self._escalators else "local"
 
         # Telemetry delivery is decoupled from any backend via the Reporter seam.
         # Default to StdoutReporter so the sensor emits events with no account
@@ -513,38 +568,6 @@ class DelphiSensor:
         self._blocked_urls: list[str] = [
             str(u) for u in (blocked_urls or ()) if u
         ]
-
-        # ── S1 · attach, part 1 of 2: validate + collect ──────────────────
-        # BEFORE the policy load below, because S2 lets an extension supply
-        # condition names and `parse_action_policy` has to know them at parse
-        # time. on_attach still runs LAST (see part 2 at the end of __init__).
-        #
-        # Validated the way circuit_breaker above is validated, and for the same
-        # reason (ADV-2): a security control handed something it does not
-        # understand must fail at construction, not default to inert.
-        #
-        # `extensions` is normalised to a tuple so a caller that keeps and
-        # mutates its list afterwards cannot change what this sensor runs.
-        if isinstance(extensions, (str, bytes)) or not isinstance(
-            extensions, (list, tuple)
-        ):
-            raise ValueError(
-                "extensions must be a list or tuple of SensorExtension "
-                f"instances, got {type(extensions).__name__}"
-            )
-        for index, extension in enumerate(extensions):
-            if not isinstance(extension, SensorExtension):
-                raise ValueError(
-                    f"extensions[{index}] must be a SensorExtension instance, "
-                    f"got {type(extension).__name__}"
-                )
-        self._extensions: tuple = tuple(extensions)
-        #: (extension name, hook name) pairs whose fault has already been
-        #: reported, so a broken hook is stated ONCE per sensor rather than
-        #: once per scan. Same discipline as ``_breaker_faults``.
-        self._extension_faults: set = set()
-        #: S2 · the merged extension-supplied policy condition evaluators.
-        self._policy_conditions: dict = self._collect_policy_conditions()
 
         # Local YAML policy source (no backend). None if absent/malformed —
         # load_policy fails safe and logs what it loads. Auto-loads
@@ -627,6 +650,47 @@ class DelphiSensor:
         identical: an unregistered condition key still rejects exactly as before.
         """
         return dict(self._policy_conditions)
+
+    @property
+    def escalators(self) -> tuple:
+        """S3 · the escalation chain, in the order it will be consulted."""
+        return self._escalators
+
+    def _collect_escalators(self) -> tuple:
+        """Flatten every extension's `escalators()` into one chain, in order.
+
+        Duplicates are NOT an error here, unlike the policy-condition names in
+        `_collect_policy_conditions`: two condition names collide over one
+        namespace slot and one would silently win, whereas two escalators are
+        just two links consulted in turn. Order is the only contract.
+
+        Not wrapped in the fail-safe hook handler, for the same reason
+        `on_attach` is not: this runs at CONSTRUCTION, and an extension that
+        cannot say what its links are has failed to install.
+        """
+        chain: list = []
+        for extension in self._extensions:
+            name = getattr(extension, "name", type(extension).__name__)
+            links = extension.escalators()
+            if not links:
+                continue
+            if isinstance(links, (str, bytes)) or not isinstance(
+                links, (list, tuple)
+            ):
+                raise ValueError(
+                    f"extension {name!r} returned {type(links).__name__} from "
+                    "escalators(); expected a list or tuple of Escalator "
+                    "instances"
+                )
+            for link in links:
+                if not isinstance(link, Escalator):
+                    raise ValueError(
+                        f"extension {name!r} returned a "
+                        f"{type(link).__name__} from escalators(); every item "
+                        "must be an Escalator instance"
+                    )
+                chain.append(link)
+        return tuple(chain)
 
     def _collect_policy_conditions(self) -> dict:
         """Merge every extension's `policy_conditions()` into one map.

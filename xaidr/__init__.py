@@ -13,6 +13,7 @@ from .provenance_chain import (
     propagate_context,
 )
 from .types import DelphiBlockedError, ScanResult
+from .escalation import Escalator, HealthReport
 from .extensions import (
     SensorExtension, ScanRequest, ResponseView, DestinationView, ToolView,
 )
@@ -37,6 +38,8 @@ __all__ = [
     "DelphiBlockedError",
     "CircuitBreaker",
     "SensorExtension",
+    "Escalator",
+    "HealthReport",
     "ScanRequest",
     "ResponseView",
     "DestinationView",

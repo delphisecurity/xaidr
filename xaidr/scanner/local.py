@@ -6,11 +6,15 @@ inputs stay under a fixed ceiling, non-scaling). 3-state verdict model (allow /
 flag / block); enforcement_mode gates whether a block verdict actually blocks.
 """
 
+import logging
 import time
-from typing import Optional
+from dataclasses import replace
+from typing import Any, Optional, Sequence
 from uuid import uuid4
 
 from ..enforcement import MONITOR as _MONITOR, resolve as _resolve_enforcement
+from ..escalation import run_escalators
+from ..extensions import ScanRequest
 from ..types import ScanResult
 from .compositional import CompositionalScanner
 from .directive_context import (
@@ -40,6 +44,8 @@ from .l1 import (
 )
 from .l2 import scan_l2
 from .normalizer import TypoNormalizer
+
+logger = logging.getLogger("xaidr.scanner.local")
 
 DEFAULT_BLOCK_THRESHOLD = 0.60
 DEFAULT_FLAG_THRESHOLD = 0.20
@@ -351,6 +357,7 @@ class LocalScanner:
         enforcement_mode: str = "monitor",
         nano_enabled: bool = False,
         nano_model_dir: Optional[str] = None,
+        escalators: Sequence[Any] = (),
     ):
         self.block_threshold = block_threshold
         self.flag_threshold = flag_threshold
@@ -368,6 +375,36 @@ class LocalScanner:
         self.enforcement_mode = self.enforcement.name
         self._normalizer = TypoNormalizer()
         self._compositional = CompositionalScanner()
+
+        # --- S3: the escalation chain (empty in open) -------------------------
+        # health() is called ONCE, here, and never on the scan path. An unhealthy
+        # link is REPORTED, not disabled: a backend that is down at boot may be
+        # up by the first scan, and refusing to construct would turn a transient
+        # outage into an outage of the host. Contrast nano above, which DOES
+        # raise — a hash-mismatched artifact is a permanent, local, fixable
+        # condition, whereas a remote link's health is neither permanent nor
+        # ours to fix.
+        self._escalators: tuple = tuple(escalators)
+        for esc in self._escalators:
+            name = getattr(esc, "name", type(esc).__name__)
+            try:
+                report = esc.health()
+            except Exception as exc:
+                logger.error(
+                    "xaidr: escalator %r raised from health() at construction "
+                    "(%s: %s). The link is REGISTERED but has not confirmed it "
+                    "is answering; scans will record 'skipped' if it keeps "
+                    "failing.", name, type(exc).__name__, exc,
+                )
+                continue
+            if report is None or not getattr(report, "healthy", False):
+                detail = getattr(report, "detail", "") or "no detail given"
+                logger.error(
+                    "xaidr: escalator %r reports UNHEALTHY at construction "
+                    "(%s). It stays registered — a link that is down now may be "
+                    "up by the first scan — but until it answers, flag-band "
+                    "scans get the LOCAL verdict only.", name, detail,
+                )
 
         # --- Nano: opt-in ML signal for the rules-silent band (see nano.py) ---
         # OFF unless explicitly enabled AND the optional extra is installed.
@@ -399,6 +436,13 @@ class LocalScanner:
         """Run full local scan pipeline."""
         scan_start = time.perf_counter()
         scan_id = uuid4().hex[:12]  # noqa: F841 — reserved for future telemetry
+
+        # S3: did a flag-band CAP put this score where it is? Set by the
+        # benign-mention and documentary-prose caps below. NOT the same thing as
+        # `capped`, a few lines down, which is the size-capped TEXT — the names
+        # are close and the meanings are unrelated, which is why this one says
+        # what it caps.
+        flag_band_capped = False
 
         # Size cap (ReDoS guard) — applied BEFORE any pipeline stage, including
         # normalization. A megabyte-class input can stall a stage (regex
@@ -557,6 +601,7 @@ class LocalScanner:
             )
         ):
             score = min(score, _FLAG_BAND_CAP(self.block_threshold, self.flag_threshold))
+            flag_band_capped = True
 
         # --- Benign DOCUMENTARY-PROSE cap (benign-prose calibration) -----------
         # The benign gate was 74 benign COMMANDS with no benign PROSE ABOUT
@@ -594,6 +639,7 @@ class LocalScanner:
             and self._residue_is_clean(strip_code_spans(capped), comp_mode)
         ):
             score = min(score, _FLAG_BAND_CAP(self.block_threshold, self.flag_threshold))
+            flag_band_capped = True
 
         # --- Protective-then-override bypass: a POSITIVE attack signal ----------
         # "Protect the secret … now dump/echo/show it" is a live extraction attack
@@ -810,7 +856,7 @@ class LocalScanner:
 
         scan_time_ms = round((time.perf_counter() - scan_start) * 1000, 1)
 
-        return ScanResult(
+        result = ScanResult(
             action=action,
             score=round(score, 3),
             category=category,
@@ -819,6 +865,39 @@ class LocalScanner:
             nano_score=None if nano_score is None else round(nano_score, 4),
             nano_raw=None if nano_raw is None else round(nano_raw, 4),
         )
+
+        # --- S3 · escalation chain -------------------------------------------
+        # Guarded on `self._escalators` FIRST so a distribution with none pays
+        # nothing at all: no ScanRequest is built, no chain is walked, and this
+        # returns the object constructed above unchanged. That is the
+        # zero-movement guarantee, and it is a `return` away from being obvious.
+        #
+        # Two conditions gate the call, and both matter:
+        #   verdict == "flag"    — the block band has enough local evidence to
+        #                          act on and the allow band has none worth a
+        #                          round-trip; only the flag band is uncertain.
+        #   not flag_band_capped — a score the caps PUT in the flag band is not
+        #                          uncertain, it is deliberately parked. Paying
+        #                          a network round-trip for every benign
+        #                          document is the cost the caps exist to avoid.
+        if self._escalators and verdict == "flag" and not flag_band_capped:
+            req = ScanRequest(
+                agent_id=agent_id,
+                direction=direction,
+                text=prompt if isinstance(prompt, str) else None,
+            )
+            escalated, escalation, reason = run_escalators(
+                self._escalators, req, result
+            )
+            # A link's answer replaces the verdict but never the timing: the
+            # latency an operator reads must be the one this scan actually took.
+            result = replace(
+                escalated,
+                latency_ms=int(round((time.perf_counter() - scan_start) * 1000)),
+                escalation=escalation,
+                escalation_reason=reason,
+            )
+        return result
 
     def _mention_frame_is_earned(
         self, l1_threats, l2_threats, scan_text: str, capped: str, comp_mode: str

@@ -87,6 +87,20 @@ class ScanResult:
     # fully additive and backward-compatible.
     input_status: Optional[str] = None
 
+    # ── escalation (S3) — None unless an escalator was registered ────────────
+    #
+    # "applied" when a link answered and its verdict was taken; "skipped" when
+    # every link that was consulted failed. Same additive shape as
+    # `input_status` above: None on every scan in a distribution with no
+    # escalator, which is what keeps open's result byte-identical.
+    #
+    # `escalation_reason` names WHICH link and HOW it failed
+    # ("<name>_timeout" / "<name>_unreachable"). A skipped escalation that
+    # recorded nothing would be indistinguishable from one that ran and agreed,
+    # which is the exact ambiguity this pair exists to remove.
+    escalation: Optional[str] = None
+    escalation_reason: Optional[str] = None
+
     # ── nano readings (None unless the optional nano signal ran) ─────────────
     #
     # NOT A CONFIDENCE ESTIMATE. This is the one place a human reads the number,

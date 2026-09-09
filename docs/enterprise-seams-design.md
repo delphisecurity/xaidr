@@ -1,6 +1,6 @@
 # Enterprise seams for open `xaidr` — design against `864243e`
 
-**Status:** S7 built (PR 1 of the sequencing below); S1 + S5 + S6 built (PR 2); S2 built (PR 3). S3, S4, S8–S13 still design. Base: `delphisecurity/xaidr` main at `864243e` (release 1.11.0); the seam line numbers in §2 are on that commit and have since shifted — read them as "which function", not "which line". PR #3 (ASI/LPCI rules) shifts `local.py` by +34 lines and touches no seam site.
+**Status:** S7 built (PR 1 of the sequencing below); S1 + S5 + S6 built (PR 2); S2 built (PR 3); S3 built (PR 4). S4, S8–S13 still design. Base: `delphisecurity/xaidr` main at `864243e` (release 1.11.0); the seam line numbers in §2 are on that commit and have since shifted — read them as "which function", not "which line". PR #3 (ASI/LPCI rules) shifts `local.py` by +34 lines and touches no seam site.
 **Companion:** `docs/enterprise-overlay-spec.md` (the bucket classification, currently sitting in `~/delphi-sentinel/docs/`, to be moved to the SDK repo). This document replaces its §5 hook table.
 **Goal:** paid = pinned open `xaidr` + an enterprise package. Every behaviour paid has today that open lacks must plug into open through a public, tested, validated-at-construction seam, so that the next open release cannot silently break the enterprise package and the next enterprise feature cannot fork a shared file.
 
@@ -72,7 +72,7 @@ Duplicate condition names across two extensions raise at construction naming bot
 
 Measured: corpus oracle byte-identical with no extensions (456 rows, `80f31ff0…`); full suite 7931 → 7951, which is exactly the 20 new tests; skips unchanged at 137.
 
-### S3 · escalation chain — `scanner/local.py:684` (was H3 + H8)
+### S3 · escalation chain — `scanner/local.py` (was H3 + H8), BUILT
 
 Open is three-state with no escalation. Add, after the local verdict is computed and only in the flag band:
 
@@ -89,6 +89,26 @@ Rules that carry over from paid unchanged: escalate only in the flag band; `_fla
 The enterprise package registers exactly one escalator: the Brain (`scanner/remote.py`). Per the Sept 6 decision the nano and CPU-L4 sidecar sits beside the Brain and is the Brain's concern; the SDK never addresses it. In-process nano stays the open `[nano]` extra, default off, in both.
 
 Note for the ledger thread: with `ext_authz` on a gateway egress route, escalation inherits the 200 ms PEP timeout. Any scan on that path must stay in the fast band or the timeout must be per-route.
+
+**Census corrections — five, and one of them was a latent bug.** As with S2, the doc's line numbers were the least of it:
+
+* `_flag_band_cap(escalate_threshold)` does not exist. The tree has **`_FLAG_BAND_CAP(block_threshold, flag_threshold)`** (`scanner/local.py:330`), and **`escalate_threshold` appears nowhere in the tree**. There is no separate escalation threshold to cap against; the cap is the existing flag-band clamp.
+* **Nothing recorded that a cap had fired.** Both cap sites were bare `score = min(score, _FLAG_BAND_CAP(...))`. "Do not escalate documentary prose" needed a new `flag_band_capped` flag, deliberately NOT named `capped` — that name is already taken in `scan()` for the size-capped TEXT, and the two meanings are unrelated.
+* `scan()` has **one** return, not an insertion point at `:684`. Escalation goes immediately before it, after `verdict`/`action` are decided.
+* **"reported in the manifest" has no home.** `ProtectionManifest` is built only by `xaidr.protect()`, never for a plain `Sensor(...)`. `health()` failures are logged at ERROR at construction instead, following the log-once discipline S1 set for extension code. An unhealthy link is **reported, not disabled** — a backend down at boot may be up by the first scan, and refusing to construct would turn a transient outage into an outage of the host. (Contrast nano, which *does* raise: a hash-mismatched artifact is permanent, local and fixable.)
+* **`Action.ESCALATED` already existed** (`types.py:70`), produced by nothing and referenced only in one test's tolerance list. S3 is the first code that can emit it — and `_ACTION_SEVERITY` (S6, `sensor.py`) had no entry for it, while `_ACTION_SEVERITY[before.action]` is an **unguarded** lookup. Reproduced on clean main before the fix:
+
+  ```
+  KeyError: 'escalated' <-- unguarded _ACTION_SEVERITY[before.action]
+  ```
+
+  In a real scan that KeyError reaches the outer fail-open handler, so an escalated verdict plus any transforming extension would have become a silent `allowed`. S3 adds the map entry (`"escalated": 1` — a second *opinion*, not a halt) and a test.
+
+**S1 is now split three ways in `__init__`,** because three things consume extensions at construction and two of them are built early: the escalation chain (into `LocalScanner`), the policy condition names (into `parse_action_policy`), and `on_attach` last. Hooks that CONTRIBUTE run early; the hook that OBSERVES runs on a finished object.
+
+**Timeouts use a daemon thread, not `concurrent.futures`.** The executor joins its workers at interpreter exit, so a genuinely hung link would hang the HOST's shutdown — trading a slow scan for an unkillable process. An abandoned daemon thread leaks a thread until the process ends, which is the lesser failure and the visible one.
+
+Measured: corpus oracle byte-identical with no escalators (456 rows, `80f31ff0…`); full suite 7997 → 8020, exactly the 23 new tests; skips 137 and xfails 3 unchanged.
 
 ### S4 · before_scan — `DelphiSensor.scan` (`sensor.py:774`)
 
@@ -187,7 +207,7 @@ Per extension per hook per sensor: first fault logs ERROR with extension name, h
 1. **S7** enforcement policy object (four sites + grep tripwire). Everything else reads it.
 2. **S1 + S5 + S6** extension object, attach, gate chain, verdict transform, ordering tests. BUILT.
 3. **S2** policy conditions through `parse_action_policy`. BUILT.
-4. **S3** escalation chain in `LocalScanner`, flag-band cap, degraded signal, manifest health.
+4. **S3** escalation chain in `LocalScanner`, flag-band cap, degraded signal, manifest health. BUILT.
 5. **S9 + S10 + S11** trust, destination policy, blocked-URL provider.
 6. **S12** egress header consolidation, with `inject_context` wiring as its own commit.
 7. **S4 + S8 + S13** before_scan, on_response, tools declared.
