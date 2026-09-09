@@ -22,7 +22,7 @@ import difflib
 import fnmatch
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 logger = logging.getLogger("xaidr.authz")
 
@@ -117,7 +117,11 @@ class AuthzDecision:
 MONITOR_DECISION = AuthzDecision(decision="monitor")
 
 
-def parse_action_policy(raw: Any) -> Optional[dict]:
+def parse_action_policy(
+    raw: Any,
+    *,
+    extra_conditions: Optional[Mapping[str, Any]] = None,
+) -> Optional[dict]:
     """Validate and normalize an action_policy payload.
 
     Returns the normalized policy dict, or None for anything malformed —
@@ -129,6 +133,13 @@ def parse_action_policy(raw: Any) -> Optional[dict]:
     elsewhere (top level, rule level) remain ignored — those do not disarm
     anything.
     """
+    # S2 · extension-supplied condition names. Resolved ONCE, here, so the two
+    # places below that consult it cannot drift apart. Empty for every caller
+    # that does not pass it, which is what makes this seam a no-op in open:
+    # `_condition_fields` is then `_CONDITION_FIELDS` and the trust_below guard
+    # is unconditional, exactly as before.
+    _extra: Mapping[str, Any] = extra_conditions or {}
+    _condition_fields = _CONDITION_FIELDS | set(_extra)
     try:
         if not isinstance(raw, dict):
             return None
@@ -158,7 +169,14 @@ def parse_action_policy(raw: Any) -> Optional[dict]:
             # Only `conditions.trust_below` is ever read at evaluation time, so a
             # rule that puts it under `match:` (the placement the README shows) is
             # exactly the silent no-op this guard exists to prevent.
-            if "trust_below" in conditions or "trust_below" in match:
+            # S2: an extension that REGISTERED `trust_below` has supplied the
+            # per-agent trust score this rejection exists to protect against, so
+            # the rule can fire and the guard does not apply. With no extension
+            # registered `_extra` is empty and this reads exactly as it did
+            # before the seam: the rejection below is unchanged for open.
+            if "trust_below" not in _extra and (
+                "trust_below" in conditions or "trust_below" in match
+            ):
                 logger.error(
                     "[xaidr] action_policy rule %r uses 'trust_below' (under "
                     "'conditions:' or 'match:' — both are rejected), which "
@@ -174,7 +192,9 @@ def parse_action_policy(raw: Any) -> Optional[dict]:
             # Checked AFTER trust_below so that key keeps its specific message.
             if _reject_unknown_keys(r.get("id"), "match", match, _MATCH_FIELDS.keys()):
                 return None
-            if _reject_unknown_keys(r.get("id"), "conditions", conditions, _CONDITION_FIELDS):
+            if _reject_unknown_keys(
+                r.get("id"), "conditions", conditions, _condition_fields
+            ):
                 return None
             rules.append({
                 "id": str(r.get("id")) if r.get("id") is not None else None,
