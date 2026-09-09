@@ -332,19 +332,40 @@ def test_the_breaker_still_trips_when_a_transform_downgrades():
     assert s.scan(BENIGN).action == "blocked"
 
 
+class _Strengthen(SensorExtension):
+    """Returns a STRICTER verdict than it was handed. Always a contract error."""
+
+    name = "over-eager"
+
+    def transform_verdict(self, req, result):
+        return ScanResult(action="blocked", score=1.0,
+                          category="made-up", rules=["X"])
+
+
 def test_a_strengthening_transform_raises():
     """Ordering invariant (c). gate() is the supported way to halt a call."""
-
-    class Strengthen(SensorExtension):
-        name = "over-eager"
-
-        def transform_verdict(self, req, result):
-            return ScanResult(action="blocked", score=1.0,
-                              category="made-up", rules=["X"])
-
-    s = _sensor(extensions=[Strengthen()])
+    s = _sensor(extensions=[_Strengthen()])
     with pytest.raises(RuntimeError, match="strengthened a verdict"):
         s.scan(BENIGN)
+
+
+def test_a_strengthening_transform_raises_on_the_a2a_boundary():
+    """Each entry point wraps its own body in a fail-open handler, so each one
+    needs its own proof that the contract error is re-raised rather than
+    softened to `allowed` + SCAN_FAILED_OPEN. One passing boundary says nothing
+    about the other two."""
+    s = _sensor(extensions=[_Strengthen()])
+    a2a = {"jsonrpc": "2.0", "id": "1", "method": "message/send",
+           "params": {"message": {"role": "user", "messageId": "m1",
+                                  "parts": [{"kind": "text", "text": BENIGN}]}}}
+    with pytest.raises(RuntimeError, match="strengthened a verdict"):
+        s.scan_a2a(a2a, destination="peer")
+
+
+def test_a_strengthening_transform_raises_on_the_tool_boundary():
+    s = _sensor(extensions=[_Strengthen()])
+    with pytest.raises(RuntimeError, match="strengthened a verdict"):
+        s.scan_tool_call("get_weather", {"city": "Toronto"})
 
 
 def test_transform_fault_is_fail_safe_and_keeps_the_open_verdict(caplog):

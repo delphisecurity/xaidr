@@ -105,7 +105,7 @@ Built in `xaidr/extensions.py` (`SensorExtension` plus the four frozen views) an
 
 Measured, no extensions vs one no-op extension: median 0.320 ms → 0.324 ms, p95 0.348 ms → 0.347 ms (budget 3 ms).
 
-### S7 · enforcement policy object (was H7) — seven sites, BUILT (commit 29b3430)
+### S7 · enforcement policy object (was H7) — seven sites, BUILT (`876dbf1` on main)
 
 `enforcement_mode` was compared as a string literal in six places plus one membership test: `_circuit_is_blocking`, `_apply_mode`, three sites in the tool-argument hard-category path (`_scan_tool_call_impl` region), `LocalScanner.scan` (which collapses block→flagged inside the scanner before the sensor sees it), and the constructor's `not in ("monitor", "block")`. The recon listed four; the grep found seven. **Census lesson: enumerate sites from the tree, never from a document's line list.**
 
