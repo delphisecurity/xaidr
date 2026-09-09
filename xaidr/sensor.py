@@ -10,7 +10,7 @@ import inspect
 import json
 import logging
 import time
-from typing import Optional
+from typing import Optional, Sequence
 from uuid import uuid4
 
 # NOTE: httpx is an OPTIONAL dependency, imported lazily only when the HTTP-
@@ -40,6 +40,7 @@ from .circuit_breaker import (
     _CircuitRuntime,
 )
 from .enforcement import MONITOR as _MONITOR, resolve as _resolve_enforcement
+from .extensions import ScanRequest, SensorExtension
 from .reporters import Reporter
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
 from .scanner.command_parse import reconstruct as _reconstruct_command
@@ -94,6 +95,29 @@ class _StructuralThreat:
         self.score = score
 
 logger = logging.getLogger("xaidr.sensor")
+
+# How strict each action is, for S6's "a transform may only soften" contract.
+# This is an ORDERING, not a scale: the only question asked of it is whether one
+# action is stricter than another. `approval_required` sits above `flagged` and
+# below `blocked` for the reason enforcement.py gives for putting it in
+# _HALTING_ACTIONS — an approval gate stops autonomous execution, so softening
+# a block to it is still a softening, and hardening a flag to it is not.
+_ACTION_SEVERITY = {
+    "allowed": 0,
+    "flagged": 1,
+    "approval_required": 2,
+    "blocked": 3,
+}
+
+
+class _VerdictStrengthenedError(RuntimeError):
+    """An extension's transform_verdict() returned a STRICTER verdict.
+
+    Deliberately not caught by the fail-safe wrapper around the other hooks:
+    this is a contract violation in the extension, not a fault in its
+    environment, and swallowing it would silently drop a control the extension
+    author believes is enforcing. See ``_run_verdict_transforms``.
+    """
 
 # Marker emitted when a scan entry point receives a non-scannable input. A
 # security sensor must never crash on bad input — it fails OPEN (a non-string is
@@ -398,6 +422,7 @@ class DelphiSensor:
         blocked_urls: list | None = None,
         circuit_breaker: Optional[CircuitBreaker] = None,
         privilege_tier: int | None = None,
+        extensions: Sequence[SensorExtension] = (),
     ):
         if not agent_id:
             raise ValueError("agent_id is required")
@@ -532,6 +557,79 @@ class DelphiSensor:
                 )
                 self._breaker._emit_hook = self._emit_circuit_event
 
+        # ── S1 · attach ──────────────────────────────────────────────────
+        # LAST in the constructor, deliberately: on_attach receives a fully
+        # built sensor, so an extension may read the breaker, the policy and
+        # the reporter it is being installed alongside.
+        #
+        # Validated the way circuit_breaker above is validated, and for the same
+        # reason (ADV-2): a security control handed something it does not
+        # understand must fail at construction, not default to inert.
+        #
+        # `extensions` is normalised to a tuple so a caller that keeps and
+        # mutates its list afterwards cannot change what this sensor runs.
+        if isinstance(extensions, (str, bytes)) or not isinstance(
+            extensions, (list, tuple)
+        ):
+            raise ValueError(
+                "extensions must be a list or tuple of SensorExtension "
+                f"instances, got {type(extensions).__name__}"
+            )
+        for index, extension in enumerate(extensions):
+            if not isinstance(extension, SensorExtension):
+                raise ValueError(
+                    f"extensions[{index}] must be a SensorExtension instance, "
+                    f"got {type(extension).__name__}"
+                )
+        self._extensions: tuple = tuple(extensions)
+        #: (extension name, hook name) pairs whose fault has already been
+        #: reported, so a broken hook is stated ONCE per sensor rather than
+        #: once per scan. Same discipline as ``_breaker_faults``.
+        self._extension_faults: set = set()
+        for extension in self._extensions:
+            # NOT wrapped: a fault here is a construction failure and raises.
+            # See SensorExtension.on_attach for why this one hook is different.
+            extension.on_attach(self)
+
+    # ── extensions (S1/S5/S6) ────────────────────────────────────────────
+    # Every hook below except on_attach is fail-SAFE: a fault degrades to "this
+    # extension declined" rather than breaking a scan, and says so once at ERROR.
+    # Same discipline as the circuit breaker, applied to third-party code.
+
+    @property
+    def extensions(self) -> tuple:
+        """The attached extensions, in the order they will be called."""
+        return self._extensions
+
+    def _extension_failed(self, extension, hook: str, exc: Exception) -> None:
+        """Report a fault inside an extension hook. ONCE per extension per hook.
+
+        ERROR, not WARNING, and the message says the control is inert: an
+        enterprise gate that is throwing is not protecting anything, and the
+        sensor will keep returning healthy-looking verdicts without it. That is
+        the ``_breaker_counter_failed`` lesson applied to extension code.
+        """
+        name = getattr(extension, "name", type(extension).__name__)
+        key = (name, hook)
+        if key in self._extension_faults:
+            return
+        self._extension_faults.add(key)
+        logger.error(
+            "xaidr: extension %r raised in %s() (%s: %s). THIS CONTROL IS INERT "
+            "until the sensor is rebuilt — the scan continued on the open "
+            "verdict. This message is logged once per extension per hook.",
+            name, hook, type(exc).__name__, exc,
+        )
+
+    def _build_scan_request(self, direction: str, **fields) -> ScanRequest:
+        """The view handed to every extension hook on the scan paths."""
+        return ScanRequest(
+            agent_id=self.agent_id,
+            direction=direction,
+            enforcement_mode=self.enforcement_mode,
+            **fields,
+        )
+
     # ── circuit breaker ──────────────────────────────────────────────────
     # Every method below is fail-SAFE: a fault anywhere in the breaker degrades
     # to "no breaker" rather than breaking a scan or taking the host down. That
@@ -651,6 +749,127 @@ class DelphiSensor:
             })
         except Exception:
             pass
+        return result
+
+    def _emit_gate_verdict(
+        self, result: ScanResult, gate_name: str, direction: str, **extra
+    ) -> ScanResult:
+        """Emit telemetry for a verdict produced by an EXTENSION gate.
+
+        The circuit gate keeps its own emitter (``_emit_circuit_open_verdict``)
+        rather than being folded into this one. That is deliberate: the circuit
+        verdict's telemetry shape is asserted by existing tests, and a seam PR
+        that quietly re-routed it would be changing behaviour under cover of a
+        refactor. This function is the SAME shape, with the gate's own category
+        and rules, so an operator can tell which control halted the call.
+        """
+        try:
+            data = {
+                "timestamp": utc_now_rfc3339(),
+                "scanId": uuid4().hex[:12],
+                "agentId": self.agent_id,
+                "action": result.action,
+                "score": float(result.score),
+                "category": result.category,
+                "rules": list(result.rules or []),
+                "direction": direction,
+                "enforcementMode": self.enforcement_mode,
+                "scanTimeMs": 0,
+                "promptLength": 0,
+                "promptHash": None,
+                "gate": gate_name,
+            }
+            data.update(extra)
+            self._telemetry.enqueue({
+                "type": "scan",
+                "agentId": self.agent_id,
+                "data": data,
+            })
+        except Exception:
+            pass
+        return result
+
+    def _run_gates(self, direction: str, req_fields, **extra):
+        """S5 · the gate chain: circuit first, then each extension in order.
+
+        Returns a ScanResult to short-circuit on, or None to run detection.
+
+        ORDERING IS THE POINT. A gated verdict is returned BEFORE telemetry
+        enqueue, before ``_breaker_observe`` and before ``_apply_mode`` — that
+        is the "quarantine gates before the mode transform" invariant, and it
+        holds by construction here because a gated verdict never reaches
+        ``_apply_mode`` at all.
+
+        The circuit gate is first and keeps its exact existing behaviour, so a
+        sensor with no extensions runs the identical code path it ran before
+        this seam existed: one ``_circuit_is_blocking()`` call, then an empty
+        loop.
+        """
+        if self._circuit_is_blocking():
+            return self._emit_circuit_open_verdict(direction, **extra)
+        if not self._extensions:
+            # Nothing to walk. `req_fields` is a THUNK precisely so this path
+            # never runs it: on the tool boundary it hashes the arguments, and
+            # a sensor with no extensions must not pay for a view nobody reads.
+            return None
+        req = self._build_scan_request(direction, **req_fields())
+        for extension in self._extensions:
+            try:
+                result = extension.gate(req)
+            except Exception as exc:
+                self._extension_failed(extension, "gate", exc)
+                continue
+            if result is not None:
+                name = getattr(extension, "name", type(extension).__name__)
+                return self._emit_gate_verdict(result, name, direction, **extra)
+        return None
+
+    def _run_verdict_transforms(
+        self, result: ScanResult, direction: str, req_fields
+    ) -> ScanResult:
+        """S6 · let each extension have the last look at the verdict.
+
+        Runs AFTER telemetry enqueue and ``_breaker_observe``, so both keep the
+        TRUE verdict — a fleet-driven downgrade must not be able to hide a block
+        from the operator's own logs or stop the breaker from tripping.
+
+        A transform may only move a verdict toward ``allowed``. Returning
+        something stricter RAISES, and unlike every other hook here that fault
+        is not caught: strengthening is a contract violation rather than an
+        environment fault, it would bypass the breaker, and ``gate`` is the
+        supported way to halt a call.
+        """
+        if not self._extensions:
+            return result
+        req = self._build_scan_request(direction, **req_fields())
+        for extension in self._extensions:
+            before = result
+            try:
+                candidate = extension.transform_verdict(req, before)
+            except _VerdictStrengthenedError:
+                raise
+            except Exception as exc:
+                self._extension_failed(extension, "transform_verdict", exc)
+                continue
+            if candidate is None or candidate is before:
+                continue
+            name = getattr(extension, "name", type(extension).__name__)
+            if _ACTION_SEVERITY.get(candidate.action, -1) < 0:
+                self._extension_failed(
+                    extension, "transform_verdict",
+                    ValueError(f"unknown action {candidate.action!r}"),
+                )
+                continue
+            if _ACTION_SEVERITY[candidate.action] > _ACTION_SEVERITY[before.action]:
+                raise _VerdictStrengthenedError(
+                    f"extension {name!r} strengthened a verdict from "
+                    f"{before.action!r} to {candidate.action!r} in "
+                    "transform_verdict(). A transform may only move a verdict "
+                    "toward 'allowed'; telemetry and the circuit breaker have "
+                    "already recorded the original verdict, so a stricter "
+                    "return would bypass both. Use gate() to halt a call."
+                )
+            result = candidate
         return result
 
     def _breaker_observe(self, result: ScanResult) -> None:
@@ -780,7 +999,9 @@ class DelphiSensor:
         self._policy = parsed
         return parsed is not None
 
-    def _apply_mode(self, result: ScanResult) -> ScanResult:
+    def _apply_mode(
+        self, result: ScanResult, direction: Optional[str] = None, req_fields=None
+    ) -> ScanResult:
         """In monitor mode, downgrade a halting verdict to 'flagged'.
 
         Both halting actions are downgraded: 'blocked' and 'approval_required'
@@ -798,13 +1019,18 @@ class DelphiSensor:
         used to fall through the `if`, so there is no mode test left here."""
         downgraded = self.enforcement.downgrade(result.action)
         if downgraded != result.action:
-            return ScanResult(
+            result = ScanResult(
                 action=downgraded,
                 score=result.score,
                 category=result.category,
                 rules=result.rules,
                 latency_ms=result.latency_ms,
             )
+        # S6 · verdict transform, AFTER the open downgrade and after telemetry
+        # and the breaker have both seen the true verdict. No-op with no
+        # extensions, which is why it is safe to call unconditionally here.
+        if self._extensions and direction is not None:
+            result = self._run_verdict_transforms(result, direction, req_fields)
         return result
 
     def _emit_not_scannable(self, direction: str, **extra) -> ScanResult:
@@ -940,17 +1166,24 @@ class DelphiSensor:
         With an OPEN circuit breaker in block mode this returns the
         ``CIRCUIT_BREAKER_OPEN`` verdict without running detection.
         """
-        if self._circuit_is_blocking():
-            return self._emit_circuit_open_verdict(
-                direction,
-                destinationType="external_api",
-                destinationIdentifier=destination or provider or "llm",
-            )
+        gated = self._run_gates(
+            direction,
+            lambda: {"text": prompt if isinstance(prompt, str) else None,
+                     "destination": destination, "provider": provider},
+            destinationType="external_api",
+            destinationIdentifier=destination or provider or "llm",
+        )
+        if gated is not None:
+            return gated
         try:
             return self._scan_impl(
                 prompt, direction, destination, provider, origin_context, parent_context
             )
-        except DelphiBlockedError:
+        except (DelphiBlockedError, _VerdictStrengthenedError):
+            # _VerdictStrengthenedError is a CONTRACT violation in an
+            # extension, not an environment fault. Failing it open would
+            # turn a mis-written enterprise control into a silent
+            # 'allowed', which is the exact shape this sensor refuses.
             raise
         except Exception as exc:
             return self._emit_scan_error(
@@ -1067,7 +1300,11 @@ class DelphiSensor:
 
         # Breaker sees the TRUE verdict — before _apply_mode softens it.
         self._breaker_observe(result)
-        return self._apply_mode(result)
+        return self._apply_mode(
+            result, direction,
+            lambda: {"text": prompt if isinstance(prompt, str) else None,
+                     "destination": destination, "provider": provider},
+        )
 
     def scan_output(
         self,
@@ -1111,17 +1348,24 @@ class DelphiSensor:
         already rejected by an open circuit do not keep re-counting.
         """
         emit_direction = "a2a_inbound" if received else "a2a"
-        if self._circuit_is_blocking():
-            return self._emit_circuit_open_verdict(
-                emit_direction, destinationAgent=destination,
-            )
+        gated = self._run_gates(
+            emit_direction,
+            lambda: {"destination": destination},
+            destinationAgent=destination,
+        )
+        if gated is not None:
+            return gated
         if not received:
             self._breaker_delegation_tick()
         try:
             return self._scan_a2a_impl(
                 message, destination, origin_context, parent_context, received
             )
-        except DelphiBlockedError:
+        except (DelphiBlockedError, _VerdictStrengthenedError):
+            # _VerdictStrengthenedError is a CONTRACT violation in an
+            # extension, not an environment fault. Failing it open would
+            # turn a mis-written enterprise control into a silent
+            # 'allowed', which is the exact shape this sensor refuses.
             raise
         except Exception as exc:
             return self._emit_scan_error(
@@ -1280,7 +1524,9 @@ class DelphiSensor:
         })
         # Breaker sees the TRUE verdict — before _apply_mode softens it.
         self._breaker_observe(result)
-        return self._apply_mode(result)
+        return self._apply_mode(
+            result, emit_direction, lambda: {"destination": destination},
+        )
 
     def _arg_normalizer(self) -> TypoNormalizer:
         """The unicode/typo normalizer used for tool-argument content scanning.
@@ -1312,19 +1558,28 @@ class DelphiSensor:
         tick happens after the open-circuit check, so calls rejected by an open
         circuit do not keep re-counting.
         """
-        if self._circuit_is_blocking():
-            return self._emit_circuit_open_verdict(
-                "tool_call",
-                toolName=tool_name if isinstance(tool_name, str) else None,
-                destinationType="mcp_server" if (mcp_server or server_name) else "tool_call",
-                destinationIdentifier=mcp_server or server_name,
-            )
+        gated = self._run_gates(
+            "tool_call",
+            lambda: {"tool_name": tool_name if isinstance(tool_name, str) else None,
+                     "mcp_server": mcp_server or server_name,
+                     "arguments_hash": safe_content_hash(
+                         _canonical_arguments(arguments))},
+            toolName=tool_name if isinstance(tool_name, str) else None,
+            destinationType="mcp_server" if (mcp_server or server_name) else "tool_call",
+            destinationIdentifier=mcp_server or server_name,
+        )
+        if gated is not None:
+            return gated
         self._breaker_tool_tick()
         try:
             return self._scan_tool_call_impl(
                 tool_name, arguments, mcp_server, origin_context, server_name
             )
-        except DelphiBlockedError:
+        except (DelphiBlockedError, _VerdictStrengthenedError):
+            # _VerdictStrengthenedError is a CONTRACT violation in an
+            # extension, not an environment fault. Failing it open would
+            # turn a mis-written enterprise control into a silent
+            # 'allowed', which is the exact shape this sensor refuses.
             raise
         except Exception as exc:
             return self._emit_scan_error(
@@ -1863,7 +2118,12 @@ class DelphiSensor:
 
         # Breaker sees the TRUE verdict — before _apply_mode softens it.
         self._breaker_observe(result)
-        return self._apply_mode(result)
+        return self._apply_mode(
+            result, "tool_call",
+            lambda: {"tool_name": tool_name if isinstance(tool_name, str) else None,
+                     "mcp_server": mcp_server or server_name,
+                     "arguments_hash": safe_content_hash(_canonical_args)},
+        )
 
     def block_tools(self, tool_names: list) -> None:
         """Add tool names to the blocked-tools list.
@@ -2797,7 +3057,11 @@ class ProtectedHttpClient:
                             result,
                             message=f"Destination '{dest_id}' blocked by policy",
                         )
-        except DelphiBlockedError:
+        except (DelphiBlockedError, _VerdictStrengthenedError):
+            # _VerdictStrengthenedError is a CONTRACT violation in an
+            # extension, not an environment fault. Failing it open would
+            # turn a mis-written enterprise control into a silent
+            # 'allowed', which is the exact shape this sensor refuses.
             raise
         except Exception as exc:
             # Fail open: the destination check must never crash the host request.

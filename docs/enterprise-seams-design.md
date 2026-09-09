@@ -1,12 +1,12 @@
 # Enterprise seams for open `xaidr` — design against `864243e`
 
-**Status:** design, nothing built. Base: `delphisecurity/xaidr` main at `864243e` (release 1.11.0). PR #3 (ASI/LPCI rules) shifts `local.py` by +34 lines and touches no seam site.
+**Status:** S7 built (PR 1 of the sequencing below); S1 + S5 + S6 built (PR 2). S2, S3, S4, S8–S13 still design. Base: `delphisecurity/xaidr` main at `864243e` (release 1.11.0); the seam line numbers in §2 are on that commit and have since shifted — read them as "which function", not "which line". PR #3 (ASI/LPCI rules) shifts `local.py` by +34 lines and touches no seam site.
 **Companion:** `docs/enterprise-overlay-spec.md` (the bucket classification, currently sitting in `~/delphi-sentinel/docs/`, to be moved to the SDK repo). This document replaces its §5 hook table.
 **Goal:** paid = pinned open `xaidr` + an enterprise package. Every behaviour paid has today that open lacks must plug into open through a public, tested, validated-at-construction seam, so that the next open release cannot silently break the enterprise package and the next enterprise feature cannot fork a shared file.
 
 ## 0. Non-negotiables
 
-1. **No behaviour change with no extension registered.** Every seam, unregistered, must leave the 545-row corpus oracle byte-identical (verdict, score, rule set) and the full suite count unchanged except for the seam's own new tests.
+1. **No behaviour change with no extension registered.** Every seam, unregistered, must leave the **456-row** corpus oracle byte-identical (verdict, score, rule set) and the full suite count unchanged except for the seam's own new tests. (`tests/fixtures/shell_corpus.json`: 277 attacks + 78 benign + 89 benign prose + 12 benign templates. An earlier draft of this line said 545, which was never true at any commit — it is 456 at `864243e` and at `2e29182`. A denominator asserted from memory is the same failure class as a coverage claim asserted from memory, so the gate now asserts its own row count: `test_seam_zero_movement.py::test_the_corpus_is_the_size_the_design_doc_claims`.)
 2. **Validate at construction, loudly.** A seam handed something it does not understand raises `ValueError` naming the received type, matching `circuit_breaker=` (`sensor.py:377`) and `enforcement_mode` (`:265`). A silently ignored bad extension is the ADV-2 failure class.
 3. **Fail-safe at call time, but not silently.** A fault inside an extension hook is caught, the scan proceeds on the open verdict, and the fault is logged at ERROR **once per extension per hook per sensor** with a message that says the control is inert, following `_breaker_counter_failed` (`sensor.py:542`), not the older swallow-and-forget in `_fire_on_trip`.
 4. **`Optional[X]` return means proceed.** The convention already in `autopatch/core.py:113` and the CrewAI hooks. A hook that returns `None` has declined; a value short-circuits.
@@ -48,7 +48,7 @@ class SensorExtension:
 
 Site line numbers are on `864243e`. `local.py` sites are +34 after PR #3.
 
-### S1 · attach — `DelphiSensor.__init__` (`sensor.py:242`, insert near `:386`)
+### S1 · attach — `DelphiSensor.__init__`, BUILT
 
 Validate every item is a `SensorExtension` (raise otherwise), store the tuple, call `on_attach(self)` in order. `on_attach` is where the enterprise package registers its `BrainReporter` if `reporter=` was not given, reads the deployment key, and performs the loud config check (missing/malformed key with enterprise mode requested → raise; see backlog "Enterprise package key handling"). A fault in `on_attach` is a construction failure, not a runtime one: it raises.
 
@@ -84,17 +84,26 @@ Note for the ledger thread: with `ext_authz` on a gateway egress route, escalati
 
 Called once per entry point (`scan`, `scan_output`, `scan_a2a`, `scan_tool_call`) with the built `ScanRequest`, before the gate (S5). Returns `Optional[ScanResult]`; a value short-circuits everything including telemetry, so it is reserved for "this request is not ours" cases. The enterprise use is context enrichment: the extension mutates a `context` mapping on the request (principal, agent, trace from its contextvars). `provider` and `parent_context` are already open kwargs (`:779`, `:781`) and need no hook.
 
-### S5 · gate chain — `sensor.py:792`, `:963`, `:1164` (was H5)
+### S5 · gate chain — three scan entry points (was H5), BUILT
 
 Open already short-circuits at these three sites via `_circuit_is_blocking()`. Generalise: `self._gates = [self._circuit_gate] + [ext.gate for ext in extensions]`, walked in order; the first non-`None` result is emitted through the existing `_emit_circuit_open_verdict` path generalised to `_emit_gate_verdict(result, gate_name)`. Position is unchanged: **before** telemetry enqueue, before `_breaker_observe`, before `_apply_mode`. That is the invariant "quarantine gates before the mode transform", and it holds by construction because a gated verdict never reaches `_apply_mode`.
 
 `tests/test_inert_stubs_audit.py:280-294` asserts no quarantine exists in open. It stays true: open has no quarantine gate; the enterprise package's gate is the quarantine. The test is reworded to assert "no gate other than the circuit gate is registered on a bare sensor."
 
-### S6 · verdict transform — `DelphiSensor._apply_mode` (`sensor.py:636`)
+### S6 · verdict transform — `DelphiSensor._apply_mode` (was H6), BUILT
 
 After the open downgrade logic, `for ext: result = ext.transform_verdict(req, result)`. This is the seam for paid's fleet-driven mode (Brain says this deployment is `watch`), and it runs **after** enqueue (`:911`) and `_breaker_observe` (`:918`), so telemetry and the breaker keep the true verdict. A transform may only move a verdict toward `allowed`/`flagged`; a transform that returns a stricter action than it received raises at call time (that is what the gate is for, and it would bypass the breaker).
 
 New test: an extension that downgrades every verdict; assert telemetry still carries the original action and `circuit_state` still opens (the same shape as `test_circuit_breaker.py:201`).
+
+Built in `xaidr/extensions.py` (`SensorExtension` plus the four frozen views) and wired at the three scan entry points. Notes from building it, each of which cost a test:
+
+* **The gate chain runs before `_breaker_observe`, so a gate suppresses breaker counting entirely.** That is correct — a quarantined call never reached detection, so there is no verdict to count — but it means a test cannot both install a blanket gate and trip the breaker. The circuit-precedence test arms its gate only after the breaker has tripped.
+* **A blocked→flagged transform is INVISIBLE to the breaker**, because `_breaker_observe` already counts a high-scoring `flagged` as a true block (that is what lets the breaker trip in monitor mode). The ordering test therefore has to downgrade to `allowed` to discriminate. Written the obvious way it passed against S6 deliberately mis-ordered — a decorative test, caught only by running the sabotage.
+* **The strengthening check must bypass the fail-open handler.** First cut raised `_VerdictStrengthenedError` inside the scan body, where the outer `except Exception` turned it into `allowed` + `SCAN_FAILED_OPEN` — a mis-written enterprise control silently becoming "allowed". It is now re-raised alongside `DelphiBlockedError` at all four sites.
+* **The `ScanRequest` is built lazily.** The tool boundary hashes its arguments to fill `arguments_hash`, so passing the fields eagerly would have made every no-extension tool call pay for a view nobody reads. The three call sites pass a thunk.
+
+Measured, no extensions vs one no-op extension: median 0.320 ms → 0.324 ms, p95 0.348 ms → 0.347 ms (budget 3 ms).
 
 ### S7 · enforcement policy object (was H7) — seven sites, BUILT (commit 29b3430)
 
@@ -166,7 +175,7 @@ Per extension per hook per sensor: first fault logs ERROR with extension name, h
 ## 6. Sequencing — seven PRs, each independently mergeable
 
 1. **S7** enforcement policy object (four sites + grep tripwire). Everything else reads it.
-2. **S1 + S5 + S6** extension object, attach, gate chain, verdict transform, ordering tests.
+2. **S1 + S5 + S6** extension object, attach, gate chain, verdict transform, ordering tests. BUILT.
 3. **S2** policy conditions through `parse_action_policy`.
 4. **S3** escalation chain in `LocalScanner`, flag-band cap, degraded signal, manifest health.
 5. **S9 + S10 + S11** trust, destination policy, blocked-URL provider.

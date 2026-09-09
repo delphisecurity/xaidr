@@ -13,6 +13,9 @@ from .provenance_chain import (
     propagate_context,
 )
 from .types import DelphiBlockedError, ScanResult
+from .extensions import (
+    SensorExtension, ScanRequest, ResponseView, DestinationView, ToolView,
+)
 # Auto-instrumentation. Importing this binds names and NOTHING else — no
 # framework is imported, no boundary is patched, nothing runs. Instrumentation
 # happens only when someone calls xaidr.protect(), which is the whole point:
@@ -33,6 +36,11 @@ __all__ = [
     "ScanResult",
     "DelphiBlockedError",
     "CircuitBreaker",
+    "SensorExtension",
+    "ScanRequest",
+    "ResponseView",
+    "DestinationView",
+    "ToolView",
     "set_origin",
     "origin_scope",
     "clear_origin",
