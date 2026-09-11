@@ -42,7 +42,7 @@ from .circuit_breaker import (
 )
 from .enforcement import MONITOR as _MONITOR, resolve as _resolve_enforcement
 from .escalation import Escalator
-from .extensions import ScanRequest, SensorExtension
+from .extensions import DestinationView, ScanRequest, SensorExtension
 from .reporters import Reporter
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
 from .scanner.command_parse import reconstruct as _reconstruct_command
@@ -121,13 +121,40 @@ _ACTION_SEVERITY = {
 }
 
 
-class _VerdictStrengthenedError(RuntimeError):
+class _ExtensionContractError(RuntimeError):
+    """An extension violated a seam contract. NEVER failed open.
+
+    The distinction this base class draws is the one the whole extension system
+    rests on: an ENVIRONMENT fault inside an extension (the network is down, a
+    backend raised) is caught, logged once, and the scan proceeds on the open
+    verdict. A CONTRACT violation — the extension did something the seam
+    forbids — is not recoverable by proceeding, because proceeding means acting
+    on a control the author believes is enforcing and which is not.
+
+    Every scan entry point re-raises this alongside DelphiBlockedError rather
+    than letting the fail-open handler turn it into `allowed`.
+    """
+
+
+class _VerdictStrengthenedError(_ExtensionContractError):
     """An extension's transform_verdict() returned a STRICTER verdict.
 
     Deliberately not caught by the fail-safe wrapper around the other hooks:
     this is a contract violation in the extension, not a fault in its
     environment, and swallowing it would silently drop a control the extension
     author believes is enforcing. See ``_run_verdict_transforms``.
+    """
+
+
+class _DestinationPolicyContractError(_ExtensionContractError):
+    """An extension's destination_policy() returned a NON-BLOCKING result.
+
+    The hook may return a block or None. Returning anything else would read as
+    "this destination is fine" and, because it short-circuits the checks below,
+    would let a destination past the operator blocklist that the blocklist would
+    have stopped. An extension must not be able to WIDEN open's destination
+    policy — only tighten it, exactly as S6 may only soften a verdict and never
+    strengthen one.
     """
 
 # Marker emitted when a scan entry point receives a non-scannable input. A
@@ -655,6 +682,30 @@ class DelphiSensor:
     def escalators(self) -> tuple:
         """S3 · the escalation chain, in the order it will be consulted."""
         return self._escalators
+
+    def _subject_trust(self, agent_id: str) -> Optional[float]:
+        """S9 · the subject's trust score, or None when nobody computes one.
+
+        Asks each extension in order and returns the FIRST non-None answer —
+        the same Optional-means-proceed convention every other seam uses.
+
+        Returns None on a bare sensor, which is the whole point: open computes
+        no per-agent trust, which is exactly why `trust_below` is rejected at
+        policy-parse time (A-11). This method is what an enterprise package
+        replaces to make that condition meaningful, and S2 is what lets it
+        register the condition NAME alongside.
+        """
+        if not self._extensions:
+            return None
+        for extension in self._extensions:
+            try:
+                trust = extension.subject_trust(agent_id)
+            except Exception as exc:
+                self._extension_failed(extension, "subject_trust", exc)
+                continue
+            if trust is not None:
+                return trust
+        return None
 
     def _collect_escalators(self) -> tuple:
         """Flatten every extension's `escalators()` into one chain, in order.
@@ -1317,7 +1368,7 @@ class DelphiSensor:
             return self._scan_impl(
                 prompt, direction, destination, provider, origin_context, parent_context
             )
-        except (DelphiBlockedError, _VerdictStrengthenedError):
+        except (DelphiBlockedError, _ExtensionContractError):
             # _VerdictStrengthenedError is a CONTRACT violation in an
             # extension, not an environment fault. Failing it open would
             # turn a mis-written enterprise control into a silent
@@ -1499,7 +1550,7 @@ class DelphiSensor:
             return self._scan_a2a_impl(
                 message, destination, origin_context, parent_context, received
             )
-        except (DelphiBlockedError, _VerdictStrengthenedError):
+        except (DelphiBlockedError, _ExtensionContractError):
             # _VerdictStrengthenedError is a CONTRACT violation in an
             # extension, not an environment fault. Failing it open would
             # turn a mis-written enterprise control into a silent
@@ -1713,7 +1764,7 @@ class DelphiSensor:
             return self._scan_tool_call_impl(
                 tool_name, arguments, mcp_server, origin_context, server_name
             )
-        except (DelphiBlockedError, _VerdictStrengthenedError):
+        except (DelphiBlockedError, _ExtensionContractError):
             # _VerdictStrengthenedError is a CONTRACT violation in an
             # extension, not an environment fault. Failing it open would
             # turn a mis-written enterprise control into a silent
@@ -2150,7 +2201,10 @@ class DelphiSensor:
             pol = _policy.evaluate_policy(
                 self._policy,
                 agent_id=self.agent_id,
-                trust=None,                       # standalone sensor has no trust score
+                # S9: None on a bare sensor (open computes no per-agent trust,
+                # which is why A-11 rejects `trust_below` at parse time). An
+                # extension that supplies one is what makes that condition real.
+                trust=self._subject_trust(self.agent_id),
                 tool_name=tool_name,
                 impact_class=impact_class,        # from the existing classifier
                 impact_tier=impact_tier,          # from the existing classifier
@@ -2312,9 +2366,43 @@ class DelphiSensor:
         self._blocked_urls.extend(str(u) for u in urls if u)
 
     def unblock_urls(self, urls: list) -> None:
-        """Remove URL substrings from the blocked-destinations list."""
+        """Remove URL substrings from the blocked-destinations list.
+
+        NOTE this REBINDS `_blocked_urls` rather than mutating it in place,
+        which is exactly why S11's provider is computed at READ time: anything
+        that captured the old list object would keep consulting a list this
+        method has already replaced.
+        """
         drop = {str(u) for u in urls}
         self._blocked_urls = [u for u in self._blocked_urls if u not in drop]
+
+    def effective_blocked_urls(self) -> list:
+        """S11 · the operator's list plus every extension's, computed FRESH.
+
+        Never cached, and never handed out as a reference. Two reasons, and the
+        first is a live bug this shape prevents:
+
+        * `unblock_urls` above REBINDS `self._blocked_urls`, so a provider that
+          captured the list object would keep reading a stale one.
+        * A provider may legitimately change its answer between calls — a
+          feed that refreshes, a tenant list that is edited. It returns a fresh
+          sequence each call and rate-limits itself; there is deliberately no
+          refresh hook for it to forget to call.
+        """
+        return list(self._effective_blocked_urls())
+
+    def _effective_blocked_urls(self) -> list:
+        urls = list(self._blocked_urls)
+        for extension in self._extensions:
+            try:
+                extra = extension.blocked_urls()
+            except Exception as exc:
+                self._extension_failed(extension, "blocked_urls", exc)
+                continue
+            for u in (extra or ()):
+                if u:
+                    urls.append(str(u))
+        return urls
 
     def protect_tools(self, tools: list) -> list:
         """Wrap tools so every invocation is scanned and enforced before it runs.
@@ -3136,8 +3224,59 @@ class ProtectedHttpClient:
         """
         try:
             url_str = str(url).lower()
+
+            # 0. S10 · extension destination policy, BEFORE the operator
+            #    blocklist. Ordering is the point: an extension that wants a
+            #    destination stopped must be able to stop it whether or not the
+            #    operator also listed it, and running after the blocklist would
+            #    make the two orders observably different only in the case where
+            #    both fire — which is the case nobody tests.
+            #
+            #    The view is HOST-ONLY. dest_id is computed lazily, here, only
+            #    when an extension is attached: on the merged tree it is
+            #    computed inside the blocklist branch and only once a block has
+            #    already fired, so a bare sensor must not start paying for a
+            #    parse it never needed.
+            if self._sensor._extensions:
+                view = DestinationView(
+                    host=self._extract_host(url),
+                    dest_id=(self._extract_host(url)
+                             or self._extract_destination(url, json_body)),
+                )
+                for extension in self._sensor._extensions:
+                    name = getattr(extension, "name",
+                                   type(extension).__name__)
+                    try:
+                        decision = extension.destination_policy(view)
+                    except _ExtensionContractError:
+                        raise
+                    except Exception as exc:
+                        self._sensor._extension_failed(
+                            extension, "destination_policy", exc)
+                        continue
+                    if decision is None:
+                        continue
+                    if getattr(decision, "action", None) not in (
+                        "blocked", "approval_required"
+                    ):
+                        raise _DestinationPolicyContractError(
+                            f"extension {name!r} returned "
+                            f"{getattr(decision, 'action', decision)!r} from "
+                            "destination_policy(); the hook may return a "
+                            "blocking result or None. A non-blocking return "
+                            "short-circuits the operator blocklist below and "
+                            "would let a destination past that open would have "
+                            "stopped."
+                        )
+                    self._emit_destination_block(decision, view.dest_id)
+                    raise DelphiBlockedError(
+                        decision,
+                        message=(f"Destination '{view.dest_id}' blocked by "
+                                 f"extension '{name}'"),
+                    )
+
             # 1. Explicit blocked-URL substrings (operator destination blocklist)
-            for blocked_url in self._sensor._blocked_urls:
+            for blocked_url in self._sensor._effective_blocked_urls():
                 if blocked_url and blocked_url.lower() in url_str:
                     result = ScanResult(
                         action="blocked",
@@ -3185,7 +3324,7 @@ class ProtectedHttpClient:
                     pol = _policy.evaluate_policy(
                         policy,
                         agent_id=self._sensor.agent_id,
-                        trust=None,
+                        trust=self._sensor._subject_trust(self._sensor.agent_id),
                         tool_name="http_request",
                         impact_class="network",
                         impact_tier="external",
@@ -3218,7 +3357,7 @@ class ProtectedHttpClient:
                             result,
                             message=f"Destination '{dest_id}' blocked by policy",
                         )
-        except (DelphiBlockedError, _VerdictStrengthenedError):
+        except (DelphiBlockedError, _ExtensionContractError):
             # _VerdictStrengthenedError is a CONTRACT violation in an
             # extension, not an environment fault. Failing it open would
             # turn a mis-written enterprise control into a silent

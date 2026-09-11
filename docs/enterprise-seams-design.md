@@ -1,6 +1,6 @@
 # Enterprise seams for open `xaidr` — design against `864243e`
 
-**Status:** S7 built (PR 1 of the sequencing below); S1 + S5 + S6 built (PR 2); S2 built (PR 3); S3 built (PR 4). S4, S8–S13 still design. Base: `delphisecurity/xaidr` main at `864243e` (release 1.11.0); the seam line numbers in §2 are on that commit and have since shifted — read them as "which function", not "which line". PR #3 (ASI/LPCI rules) shifts `local.py` by +34 lines and touches no seam site.
+**Status:** S7 built (PR 1); S1 + S5 + S6 built (PR 2); S2 built (PR 3, completed in PR 5); S3 built (PR 4); S9 + S10 + S11 built (PR 5). S4, S8, S12, S13 still design. Base: `delphisecurity/xaidr` main at `864243e` (release 1.11.0); the seam line numbers in §2 are on that commit and have since shifted — read them as "which function", not "which line". PR #3 (ASI/LPCI rules) shifts `local.py` by +34 lines and touches no seam site.
 **Companion:** `docs/enterprise-overlay-spec.md` (the bucket classification, currently sitting in `~/delphi-sentinel/docs/`, to be moved to the SDK repo). This document replaces its §5 hook table.
 **Goal:** paid = pinned open `xaidr` + an enterprise package. Every behaviour paid has today that open lacks must plug into open through a public, tested, validated-at-construction seam, so that the next open release cannot silently break the enterprise package and the next enterprise feature cannot fork a shared file.
 
@@ -59,6 +59,8 @@ Inherits fresh code: `self._breaker_faults` (`:372-375`) is in the same function
 The spec's two sites are one seam. Today `_CONDITION_FIELDS` is a module-level frozenset consulted inside `parse_action_policy`, `trust_below` is rejected at `:161` in both placements, and `_reject_unknown_keys` (`:82`, applied `:175/:177`) would reject it a second time with a misleading did-you-mean.
 
 Design: `parse_action_policy(doc, *, extra_conditions: Mapping[str, ConditionEvaluator] = {})`. `load_policy` gains the same kwarg and forwards it. `DelphiSensor.__init__` collects `policy_conditions()` from every extension, merges (duplicate key across extensions → construction error), and passes the merged map. Inside the parser, the valid-key set for the unknown-key validator is `_CONDITION_FIELDS | extra.keys()`, and the `:161` rejection is skipped for any key in `extra`. The evaluator is called at evaluation time with the request context and the extension owns its semantics (`trust_below` reads `subject_trust`, S9).
+
+**S2 was INCOMPLETE as first merged, and the gap was found building S9.** `extra_conditions` reached `parse_action_policy` and stopped there — `evaluate()` never received it and `_rule_matches` handled only the two built-in names, so a registered condition parsed cleanly and was DROPPED at evaluation. That does not merely fail to fire, it **widens** the rule: a condition is written to NARROW a `match:` block, so dropping it makes the rule fire on everything the match alone selects. Reproduced on the merged tree: `geo_outside` never evaluated, every `wire_transfer` blocked instead of the non-EU ones. The evaluators now ride WITH the parsed policy (`condition_evaluators`), and both failure directions fail CLOSED — an unregistered evaluator at eval time, and an evaluator that raises. Built-in names keep built-in semantics: registering `trust_below` means "I supply the score" (S9), not "I replace the comparison".
 
 Open's stricter behaviour is unchanged when `extra` is empty: `trust_below` stays rejected, pinned by the existing test. The paid control test (`test_trust_below_still_supported_here`) moves to the enterprise package unchanged.
 
@@ -147,17 +149,21 @@ Two tripwires: (1) `git grep` for `enforcement_mode ==` / `!=` in `xaidr/` must 
 
 After the open output scan, every extension receives a `ResponseView`: provider (from the existing host table), status, URL host, content-type, and a lazily parsed JSON body accessor. No streaming (the egress patch already skips `stream=True`; the SSE-with-no-stream-kwarg case is a separate bug, filed). This is where the token-usage extractor for the ledger lands later, as an extension in open, emitting `llm_usage` events through the reporter.
 
-### S9 · subject trust — `build_request` callers (`sensor.py:1554`, `:2483`, was H11)
+### S9 · subject trust — `evaluate_policy` callers (was H11), BUILT
 
-`build_request(..., trust=...)` already takes a trust parameter and both callers hardcode `None`. Replace with `self._subject_trust(agent_id)`, which asks each extension in order and returns the first non-`None`. `tests/test_inert_stubs_audit.py:304` asserts `not hasattr(s, "_trust_score")`; reworded to assert a bare sensor's `_subject_trust()` returns `None` and no attribute stores a score.
+**Census correction:** `build_request` has exactly ONE caller and it is `local_policy.py`, inside `evaluate_policy` — the sensor never calls `build_request`. The two hardcoded `trust=None` sites are calls to `evaluate_policy` (`sensor.py`, tool path and HTTP destination path). The count of two was right; the function and the file were both wrong. The inert-stubs assertion is at `:349`, not `:304`.
 
-### S10 · destination policy — `ProtectedHttpClient._check_destination` (`sensor.py:2420`, was H12)
+`evaluate_policy(..., trust=...)` already takes a trust parameter and both callers hardcode `None`. Replace with `self._subject_trust(agent_id)`, which asks each extension in order and returns the first non-`None`. `tests/test_inert_stubs_audit.py:304` asserts `not hasattr(s, "_trust_score")`; reworded to assert a bare sensor's `_subject_trust()` returns `None` and no attribute stores a score.
 
-Before the operator blocklist check (`:2434`), each extension's `destination_policy(DestinationView)` may return a block result. The `DestinationView` carries the host-only `dest_id` computed once (spec §9 confirmed done at `:2459-2462`, `:2505-2508`), never the URL or query. The enterprise AGT URL policy plugs here. The three paid `print`s that leaked full URLs do not come across; the open host-only emission is the only path.
+### S10 · destination policy — `ProtectedHttpClient._check_destination` (was H12), BUILT
 
-### S11 · blocked URLs provider — `sensor.py:339`, reader `:2435`, mutators `:1687`/`:1692` (was H13)
+Before the operator blocklist check (`:2434`), each extension's `destination_policy(DestinationView)` may return a block result. **Census correction:** `dest_id` is NOT computed once up front — on the merged tree it is computed INSIDE the blocklist branch, only after a block has already fired. The view therefore computes it lazily and only when an extension is attached, so a bare sensor does not start paying for a parse it never needed. It carries the host only, never the URL or query.
 
-The reader at `:2435` holds `self._sensor._blocked_urls`, and `unblock_urls` rebinds the list at `:1692`, so any provider that caches a reference goes stale. Design: `_effective_blocked_urls()` computed at read time as `self._blocked_urls + [u for ext in extensions for u in (ext.blocked_urls() or ())]`, called at `:2435` on every check. No refresh hook is needed; a provider that wants freshness returns a fresh sequence each call and rate-limits itself. Test: register a provider whose list changes between two calls and assert the second call sees the change.
+**This seam makes #5's forward-looking sabotage live.** PR 2 added `except (DelphiBlockedError, _VerdictStrengthenedError)` to `_check_destination` and reported honestly that the clause was UNREACHABLE, because nothing on that path could raise it. S10 puts extension code inside that function for the first time; the contract errors now share an `_ExtensionContractError` base (see §4) and the clause is what stops a mis-written `destination_policy` becoming a silently permitted destination. The enterprise AGT URL policy plugs here. The three paid `print`s that leaked full URLs do not come across; the open host-only emission is the only path.
+
+### S11 · blocked URLs provider — one reader, two mutators (was H13), BUILT
+
+The reader at `:2435` holds `self._sensor._blocked_urls`, and `unblock_urls` rebinds the list at `:1692`, so any provider that caches a reference goes stale. Design: `_effective_blocked_urls()` computed at read time as `self._blocked_urls + [u for ext in extensions for u in (ext.blocked_urls() or ())]`, called at `:2435` on every check. No refresh hook is needed; a provider that wants freshness returns a fresh sequence each call and rate-limits itself. Test: register a provider whose list changes between two calls and assert the second call sees the change. Also tested: `unblock_urls` composed with a provider — the operator's removal takes effect while the extension's contribution survives the rebind, which is exactly the staleness a cached reference produces. An operator cannot `unblock_urls` an extension's entry; that list is the extension's, and letting the operator delete from it would make the enterprise control removable by the thing it constrains.
 
 ### S12 · outbound headers — five egress verbs (`sensor.py:2579`, `:2588`, `:2597`; none on `:2603`, `:2612`; was H14)
 
@@ -194,6 +200,10 @@ Invariants pinned by tests: (a) a gated verdict never reaches enqueue; (b) enque
 
 Per extension per hook per sensor: first fault logs ERROR with extension name, hook name, our own module:lineno, and the sentence "this control is inert until the sensor is rebuilt"; subsequent faults are counted, not logged. `manifest.faults` exposes the set. Exception: `on_attach` raises (construction), and S6 strengthening raises (contract violation, not environment).
 
+Contract violations share a base, `_ExtensionContractError`, and every scan entry point re-raises it alongside `DelphiBlockedError` rather than letting the fail-open handler turn it into `allowed`. The distinction the base draws is the one the whole extension system rests on: an ENVIRONMENT fault (a backend is down) is caught, logged once, and the scan proceeds on the open verdict; a CONTRACT violation is not recoverable by proceeding, because proceeding means acting on a control the author believes is enforcing and which is not.
+
+**A new `Action` value with no producer is a landmine.** `Action.ESCALATED` sat in the enum from before S3, emitted by nothing and referenced only in one test's tolerance list — so `_ACTION_SEVERITY`, added by S6, simply had no key for it, and `_ACTION_SEVERITY[before.action]` is an unguarded lookup. S3 was the first code that could emit it, and without the entry that lookup raises `KeyError` into the fail-open handler and turns an escalated verdict into a silent `allowed`. **Every new `Action` value a seam adds must be cross-checked against every severity, ordering or lookup table keyed by action, in the same PR that adds it.** An enum member with no producer is not inert; it is a dormant `KeyError` waiting for the first seam that produces it.
+
 ## 5. Tests each seam must ship with
 
 - **Non-vacuity, both directions:** with the extension registered the behaviour changes as claimed; with it removed the identical input yields the open verdict. Stash/confirm-fail/restore on every commit.
@@ -201,6 +211,8 @@ Per extension per hook per sensor: first fault logs ERROR with extension name, h
 - **Inert-stubs audit:** every seam adds a line to `test_inert_stubs_audit.py` proving a bare sensor has no extension attached and no seam changes a verdict.
 - **Grep tripwires:** S7's literal-comparison grep; S11's "no cached `_blocked_urls` reference"; S12's "all five verbs call `_egress_headers`".
 - **Performance:** with no extensions, median scan latency unchanged within noise on the README benchmark (the last two audits measured ~1.3 ms; the budget is 3 ms).
+- **No silently-empty coverage:** a sabotage or fixture that silently produces zero coverage — skip-on-no-match, an empty fixture set, a sabotage whose anchor no longer matches — is the same failure class as a decorative test. **Assert non-empty; never skip silently.** S3's first draft hardcoded candidate flag-band strings, found none, and skipped nine of its own core tests on a green run; its fixtures are now derived from the committed corpus and assert. The same applies to sabotage harnesses: one S11 sabotage here "passed" only because the caching it introduced never engaged, which proves nothing about the test.
+- **Break each boundary independently:** when a value crosses more than one boundary — parsed here and evaluated there, validated here and enforced there — the non-vacuity sabotage must break **each boundary separately**. A fix proven at the parse boundary alone does not prove the evaluate boundary. **S2 is the precedent:** `extra_conditions` was threaded into `parse_action_policy` and the parse-time tests went green, while `evaluate()` never received it and silently dropped every registered condition — which does not merely fail to fire, it WIDENS the rule the condition was written to narrow. Sabotaging only "the parser rejects unknown keys" could never have caught it; the revert has to be "parsed yes, evaluated no" specifically. Note also which DIRECTION discriminates: under that bug a *matching* condition still let the rule fire, so only the *declining* case goes red. Pair this with the both-directions rule above — the direction that agrees with the broken behaviour proves nothing.
 
 ## 6. Sequencing — seven PRs, each independently mergeable
 
@@ -208,7 +220,7 @@ Per extension per hook per sensor: first fault logs ERROR with extension name, h
 2. **S1 + S5 + S6** extension object, attach, gate chain, verdict transform, ordering tests. BUILT.
 3. **S2** policy conditions through `parse_action_policy`. BUILT.
 4. **S3** escalation chain in `LocalScanner`, flag-band cap, degraded signal, manifest health. BUILT.
-5. **S9 + S10 + S11** trust, destination policy, blocked-URL provider.
+5. **S9 + S10 + S11** trust, destination policy, blocked-URL provider. BUILT.
 6. **S12** egress header consolidation, with `inject_context` wiring as its own commit.
 7. **S4 + S8 + S13** before_scan, on_response, tools declared.
 
