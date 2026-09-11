@@ -22,7 +22,9 @@ alone. This corpus is the production-shaped benign set they have to clear.
 |---|---|
 | `corpus.jsonl` | 190 benign tool calls, full argument dicts — **authored blind** |
 | `discriminator.jsonl` | 50 benign tool calls, **detector-informed**, one `axis` each |
+| `sql_dml.jsonl` | 50 benign DELETE/UPDATE statements, one `shape` each |
 | `../scripts/benign_toolcall_report.py` | regenerates the numbers below |
+| `../scripts/benign_sql_dml_report.py` | regenerates the `sql_dml.jsonl` table |
 | `last_run.json` | machine-readable summary of the last local run (git-ignored) |
 
 Each entry records `persona`, `tool`, a full `args` dict with realistic names
@@ -78,6 +80,41 @@ read. They flag; this is written down instead. The residual note lives with the
 detector, in `xaidr/scanner/resource_bound.py`, and
 `tests/test_resource_bound.py::test_discriminator_pool_flags_only_the_named_residual`
 pins the pair by id so a third cannot be gained quietly.
+
+### A third pool, for the one field the other two cannot reach
+
+`sql_dml.jsonl`, 50 benign `DELETE`/`UPDATE` statements, added with the F2
+predicate rewrite. It is separate for the same reason `discriminator.jsonl` is,
+and the blindness it answers is sharper than either of the two above.
+
+`sql.unbounded_mutation` and `sql.tautological_mutation` match only
+`statement ∈ {delete, update}`. **Neither of the other two pools contains a
+single DML statement** — every SQL value in all 240 of them is a `SELECT` — so
+`predicate`, the load-bearing field of the entire SQL reader, was measured
+against zero benign statements for its whole life. 0 / 240 on a rule the pool
+cannot reach is not a clean bill; it is exactly the "the corpus could not see
+this class" that the 1.14.1 note recorded for the privilege detector, on a
+different surface.
+
+The 50 entries are ORM, driver, migration and operator shapes: placeholder
+styles (`$1`, `?`, `:name`), soft deletes, retention sweeps, optimistic locks,
+`RETURNING`, CTE-then-delete, `UPDATE … FROM`, `DELETE … USING`, correlated
+`EXISTS`, quoted identifiers, comments, explicit transactions. Several were
+picked *because* they looked hard — a pool that avoids the shapes a detector
+might fire on measures nothing.
+
+| measured at | `sql_dml.jsonl` given a destructive impact class |
+|---|---:|
+| 1.15.0 as published | **5 / 50 (10.0%)** |
+| this change | **0 / 50 (0.0%)** |
+
+The five were not a cost of failing closed on unknown predicates — that cost was
+**zero**, no entry moved from `bounded` to `unknown`. They were a pre-existing
+tokenizer defect the pool surfaced on its first run: a statement containing two
+Postgres placeholders (`… = $2 WHERE lower(email) = lower($1)`) had everything
+between the two `$` read as one dollar-quoted string, so the `WHERE` clause sat
+inside a literal and the write reported `predicate=none` — an unbounded
+mutation. The same swallow hid a following `;` and every statement after it.
 
 ## How it was written
 

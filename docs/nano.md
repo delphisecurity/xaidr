@@ -205,6 +205,19 @@ no `WHERE` at all, and an ORM writes a real predicate, so a predicate that is
 always true is what you get when something wanted the effect of no predicate
 while looking like it had one.
 
+A predicate the reader **cannot settle** is treated exactly as an unbounded one:
+it classifies at critical and blocks nothing. "Bounded" is a positive claim that
+the rows a statement touches depend on what is in them, so it is made only when
+the predicate REFERENCES A COLUMN. A predicate built entirely from literals and
+functions of literals — `WHERE 2>1`, `WHERE NOT FALSE`, `WHERE coalesce(1,0)=1`,
+`WHERE 1 BETWEEN 0 AND 2` — restricts nothing whatever it evaluates to, and
+answering `unknown` rather than enumerating tautology forms is what makes the
+answer closed: "is this always true" is an open question with unlimited
+spellings, "does this name a column" is a lexical one. What remains open, and is
+stated rather than papered over: a predicate that does name a column and is
+still true of every row (`WHERE id > -1`, `WHERE name LIKE '%'`) reads bounded,
+because separating those needs evaluation against the data.
+
 Which statements fire is reported by family here and not enumerated, the same
 discipline the shell families follow. These cases are not part of the shell
 corpus and are not counted in the table above; they are asserted in

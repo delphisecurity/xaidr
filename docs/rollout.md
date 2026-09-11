@@ -63,6 +63,40 @@ than you intended, on the first request, in monitor.
 while it stays observe-only (with the same destination-block exception), so you
 can validate the change before it can affect anyone.
 
+## Two sensors over one tool list
+
+Step 4 above, and the shadow-sensor pattern, both end up with two `Sensor`
+objects able to reach the same tools. That is a supported configuration, and how
+you wire it decides what enforces:
+
+```python
+protected = monitor_sensor.protect_tools([query_db, send_email])
+...
+staged = block_sensor.protect_tools(protected)    # layers over the first
+```
+
+`protect_tools` is idempotent **per sensor**: the same sensor asked twice returns
+its own wrapper unchanged, so `xaidr.protect()` reaching a tool you also wrapped
+by hand costs nothing and emits one event. A *different* sensor wraps it again.
+Both sensors then scan every call, `block_sensor` runs and halts first,
+`monitor_sensor` runs if the first allows, and the strictest verdict wins. Each
+emits its own telemetry under its own `agent_id`, and an INFO line names both at
+wiring time so an accidental layering is visible.
+
+Passing the **original** tools to each sensor gives you two independent sensors
+instead of two layers:
+
+```python
+watched = monitor_sensor.protect_tools([query_db, send_email])
+enforced = block_sensor.protect_tools([query_db, send_email])   # not `watched`
+```
+
+Up to and including 1.15.0 the second call returned the first sensor's wrapper
+unchanged, so
+`block_sensor`'s enforcement mode, blocked-tool list and policy applied to
+nothing and every call stayed in monitor mode under the first sensor's
+`agent_id`. If you staged a cutover that way, re-check it.
+
 If a genuinely benign input lands in the `blocked` band, that's a bug worth
 reporting.
 

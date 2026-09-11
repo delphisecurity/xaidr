@@ -12,6 +12,7 @@ import logging
 import time
 from dataclasses import replace
 from typing import Mapping, Optional, Sequence
+from urllib.parse import urlsplit as _urlsplit
 from uuid import uuid4
 
 # NOTE: httpx is an OPTIONAL dependency, imported lazily only when the HTTP-
@@ -2404,6 +2405,37 @@ class DelphiSensor:
                     urls.append(str(u))
         return urls
 
+    #: Bound on the wrapper chain `_wrapped_by_self` walks. Far above any real
+    #: layering; it exists so a corrupted `_xaidr_protect_original` cannot spin.
+    _PROTECT_CHAIN_MAX = 32
+
+    def _wrapped_by_self(self, fn) -> bool:
+        """True when THIS sensor is anywhere in ``fn``'s wrapper chain.
+
+        Identity, not a boolean flag: the marker has to answer "did *I* wrap
+        this", and `_xaidr_protect_tools = True` answered "did anyone". The
+        wrapper already closes over the sensor, so holding the sensor on the
+        wrapper adds no lifetime that was not already there.
+
+        THE WALK IS WHY `_xaidr_protect_original` IS RECORDED. Checking only the
+        outermost mark makes idempotency depend on layering order: with two
+        sensors, `a.protect_tools(b.protect_tools(a.protect_tools([f])))` sees
+        b's mark on top, concludes a has not wrapped this, and gives a two
+        layers — two scans and two telemetry events from one sensor for one
+        action, which is the exact miscount the marker was introduced to
+        prevent. Following the chain asks the question that actually matters:
+        is my verdict already in this call's path.
+        """
+        seen = 0
+        while fn is not None and seen < self._PROTECT_CHAIN_MAX:
+            if getattr(fn, "_xaidr_protect_owner", None) is self:
+                return True
+            if not hasattr(fn, "_xaidr_protect_original"):
+                return False
+            fn = fn._xaidr_protect_original
+            seen += 1
+        return False
+
     def protect_tools(self, tools: list) -> list:
         """Wrap tools so every invocation is scanned and enforced before it runs.
 
@@ -2432,15 +2464,27 @@ class DelphiSensor:
             protected = sensor.protect_tools([query_db, send_email])
             agent = create_agent(model=llm, tools=protected)
 
-        IDEMPOTENT: a tool this method has already wrapped is returned
-        unchanged rather than wrapped again. Double-wrapping was never a
-        correctness bug — the inner wrapper's verdict is identical and the outer
-        one halts first — but it scanned the same call twice and emitted two
-        telemetry events for one action, which makes event counts lie. Since
+        IDEMPOTENT PER SENSOR: a tool **this sensor** has already wrapped is
+        returned unchanged rather than wrapped again. Double-wrapping was never
+        a correctness bug — the inner wrapper's verdict is identical and the
+        outer one halts first — but it scanned the same call twice and emitted
+        two telemetry events for one action, which makes event counts lie. Since
         ``xaidr.protect()`` can reach the same tool as a manual
-        ``protect_tools`` call, "wrapped twice" is now an ordinary situation
-        rather than a mistake, so it is handled here rather than left to the
-        caller to avoid.
+        ``protect_tools`` call, "wrapped twice" is an ordinary situation rather
+        than a mistake, so it is handled here rather than left to the caller to
+        avoid.
+
+        A TOOL ANOTHER SENSOR WRAPPED IS WRAPPED AGAIN, and an INFO line says
+        so. It is not the same situation and used to be treated as if it were:
+        the marker recorded only "some sensor wrapped this", so
+        ``block_sensor.protect_tools(already_monitored_tools)`` handed back the
+        monitor-mode wrapper and the second sensor enforced nothing. Two sensors
+        on one tool is a real configuration — a shadow sensor beside a live one,
+        or the staged monitor-then-block cutover in docs/rollout.md — so the
+        answer is to layer them: this sensor's verdict runs and halts first, the
+        other sensor's runs if this one allows, and the strictest wins. Each
+        sensor emits its own telemetry under its own ``agent_id``. Pass the
+        ORIGINAL tool to each sensor if you did not intend two layers.
 
         Args:
             tools: LangChain ``@tool`` objects, CrewAI ``BaseTool`` objects, or
@@ -2498,18 +2542,70 @@ class DelphiSensor:
                     if callable(async_candidate):
                         crewai_arun = async_candidate
 
-            # Idempotency reads whichever attribute this shape actually carries.
-            # An async-only LangChain tool has func=None, so testing only
-            # `original_func` would look unwrapped forever and re-wrap on every
-            # pass.
-            already = (
-                getattr(original_func, "_xaidr_protect_tools", False)
-                or getattr(lc_coroutine, "_xaidr_protect_tools", False)
-                or getattr(crewai_arun, "_xaidr_protect_tools", False)
-            )
-            if already:
+            # IDEMPOTENCY IS PER (SENSOR, HALF), NOT PER WRAPPER.
+            #
+            # `_xaidr_protect_tools = True` said only "some sensor wrapped this",
+            # and two different things read it as "I wrapped this":
+            #
+            #   * A SECOND SENSOR got back the FIRST sensor's wrapper unchanged.
+            #     In the staged rollout docs/rollout.md recommends — run in
+            #     monitor, add a block-mode sensor when the stream is clean —
+            #     `block_sensor.protect_tools(monitored_tools)` returned the
+            #     monitor-mode wrapper, and every call stayed in monitor mode
+            #     under the first sensor's agent_id. The tool the operator had
+            #     just told the second sensor to BLOCK ran.
+            #   * The three halves of one tool shared one answer, because the
+            #     test was an `or`. A LangChain tool whose `func` this sensor had
+            #     wrapped and whose `coroutine` it had not was reported "already
+            #     protected", and `ainvoke` went straight to the unwrapped
+            #     coroutine.
+            #
+            # So the mark now carries WHO wrapped it and WHAT it wrapped, and
+            # each half is asked separately. `_xaidr_protect_tools` is kept as a
+            # plain boolean beside it: it is what the async-seam tests read to
+            # tell a wrapper from an implementation, and that question is still
+            # a yes/no.
+            halves = [h for h in (original_func, lc_coroutine, crewai_arun)
+                      if h is not None]
+            if halves and all(self._wrapped_by_self(h) for h in halves):
                 wrapped.append(t)
                 continue
+            for h in halves:
+                foreign = getattr(h, "_xaidr_protect_owner", None)
+                if foreign is not None and foreign is not self:
+                    # REBIND, LOUDLY — not refuse, and never a silent return.
+                    #
+                    # The three options were: return it unchanged (what happened,
+                    # and the defect), raise, or wrap it again. Raising is wrong
+                    # because two sensors over one tool is a CONFIGURATION, not a
+                    # mistake: a shadow sensor beside a live one, or the staged
+                    # monitor -> block cutover, both put two sensors on the same
+                    # list, and refusing would make the rollout the docs
+                    # recommend impossible without tearing the first one down.
+                    #
+                    # Wrapping again gives the only semantics that is safe under
+                    # either intent: this sensor's verdict runs FIRST and halts
+                    # first, the inner sensor's runs if this one allows, and the
+                    # strictest of the two wins. The double-telemetry argument in
+                    # this method's docstring is about ONE sensor wrapping twice,
+                    # where two events for one action is a miscount. Two sensors
+                    # each emitting one event under their own agent_id is not a
+                    # miscount — it is what an operator running two sensors asked
+                    # for.
+                    #
+                    # It is logged because an accidental double-wrap and a
+                    # deliberate one look identical from in here, and the
+                    # operator is the one who can tell them apart.
+                    logger.info(
+                        "xaidr: protect_tools(%r): wrapping a tool already "
+                        "protected by sensor %r. Both sensors will scan this "
+                        "call and the strictest verdict wins; %r enforces "
+                        "first. Pass the ORIGINAL tool to each sensor if you "
+                        "did not intend two layers.",
+                        tool_name, getattr(foreign, "agent_id", "?"),
+                        self.agent_id,
+                    )
+                    break
 
             def bind_arguments(orig_func, tname, args, kwargs):
                 """The call's arguments UNDER THEIR REAL PARAMETER NAMES.
@@ -2660,9 +2756,23 @@ class DelphiSensor:
                         return None
                 return wrapper
 
-            def mark(fn):
+            def mark(fn, orig):
+                """Stamp a wrapper with WHO wrapped it and WHAT it wraps."""
                 fn._xaidr_protect_tools = True
+                fn._xaidr_protect_owner = self
+                fn._xaidr_protect_original = orig
                 return fn
+
+            def protect_half(fn):
+                """Wrap one implementation half, unless THIS sensor already did.
+
+                Returns the half unchanged only for its own wrapper. A foreign
+                wrapper is an ordinary callable from here and gets wrapped like
+                any other — that is the rebind decided above.
+                """
+                if self._wrapped_by_self(fn):
+                    return fn
+                return mark(make_wrapper(fn, tool_name), fn)
 
             # `make_wrapper(None, ...)` is deliberate for the shape with no
             # implementation at all (not callable, no func/coroutine/_run): it
@@ -2670,7 +2780,7 @@ class DelphiSensor:
             # what this branch did before the async split. Building it
             # unconditionally keeps that, and keeps the `else` branch below able
             # to set __name__ on it.
-            new_func = mark(make_wrapper(original_func, tool_name))
+            new_func = protect_half(original_func)
 
             # CrewAI first: it also has model_copy, but its implementation hangs
             # off `_run`, not `func`, so the LangChain branch below would build a
@@ -2684,7 +2794,7 @@ class DelphiSensor:
                 # sync half left every async CrewAI tool call unscanned.
                 targets = [("_run", new_func)]
                 if crewai_arun is not None:
-                    targets.append(("_arun", mark(make_wrapper(crewai_arun, tool_name))))
+                    targets.append(("_arun", protect_half(crewai_arun)))
                 for attr, fn in targets:
                     try:
                         setattr(new_tool, attr, fn)
@@ -2719,7 +2829,7 @@ class DelphiSensor:
                 if lc_func is not None:
                     update["func"] = new_func
                 if lc_coroutine is not None:
-                    update["coroutine"] = mark(make_wrapper(lc_coroutine, tool_name))
+                    update["coroutine"] = protect_half(lc_coroutine)
                 new_tool = t.model_copy(update=update)
             elif hasattr(t, "model_copy") and original_func is not None:
                 new_tool = t.model_copy(update={"func": new_func})
@@ -2859,11 +2969,16 @@ class ProtectedHttpClient:
                 if val and isinstance(val, str):
                     return val
 
-        match = _re.search(r'://([^:./]+)', str(url))
-        if match:
-            host = match.group(1)
-            if host not in ('localhost', '127', '0'):
-                return host
+        # The first label of the REAL host. Derived from the parsed host rather
+        # than from `://([^:./]+)` for the same reason `_extract_host` is: that
+        # pattern reads the authority, so `https://user@billing:3002/` labelled
+        # the edge `user` — userinfo an attacker chooses, printed and emitted as
+        # the destination agent.
+        host = self._parsed_host(url)
+        if host:
+            label = host.split('.')[0]
+            if label and label not in ('localhost', '127', '0'):
+                return label
 
         return 'unknown'
 
@@ -2883,9 +2998,13 @@ class ProtectedHttpClient:
     )
 
     def _extract_provider(self, url: str) -> Optional[str]:
-        """Map a request URL host to a known LLM provider, or None."""
-        match = _re.search(r'://([^/:]+)', str(url))
-        host = match.group(1).lower() if match else str(url).lower()
+        """Map a request URL host to a known LLM provider, or None.
+
+        Reads the PARSED host, not the authority: these are substring tests, so
+        `https://openai@evil.tld/v1` attributed the edge to `openai` when the
+        userinfo said so and the request went to `evil.tld`.
+        """
+        host = self._parsed_host(url) or str(url).lower()
         for needle, provider in self._PROVIDER_HOSTS:
             if needle in host:
                 return provider
@@ -3148,15 +3267,104 @@ class ProtectedHttpClient:
             return ''
 
     def _extract_host(self, url: str) -> Optional[str]:
-        """Return the full host (netloc without scheme/port/path) of ``url``.
+        """Return the host the TRANSPORT will actually send ``url`` to.
 
         Unlike ``_extract_destination`` (which truncates to the first hostname
         label for topology labelling), this keeps the whole host — e.g.
         ``evil.com``, ``api.evil.com`` — so a deny-destination policy glob can
         match against it. Returns None when no host is parseable.
+
+        THE PARSER HAS TO BE THE TRANSPORT'S PARSER. This used to be
+        ``re.search(r'://([^/:?#]+)')``, which reads the whole AUTHORITY and
+        calls it the host. An authority is ``[userinfo@]host[:port]``, so
+
+            https://user@blocked.invalid/path   ->  'user@blocked.invalid'
+            https://user:pw@evil.com:443/       ->  'user'
+            https://[::1]:8080/x                ->  '['
+
+        while httpx resolves ``blocked.invalid``, ``evil.com`` and ``::1`` and
+        sends the request. A deny-destination rule naming ``blocked.invalid``
+        matched none of those strings: one ``@`` anywhere in a URL turned the
+        destination block off, and the sensor's own audit record named a host
+        nothing was sent to. The host now comes from
+        ``urllib.parse.urlsplit(...).hostname`` — the same RFC 3986 authority
+        split httpx performs — which drops userinfo and the port, removes the
+        IPv6 brackets, and ASCII-lowercases.
+
+        THREE CASES GET AN EXPLICIT ANSWER, because the transport and a policy
+        glob can otherwise disagree about them:
+
+          trailing dot  ``https://evil.com./p`` -> ``evil.com``. ``evil.com.``
+              is the fully-qualified spelling of the SAME DNS name and resolves
+              to the same address; httpx keeps the dot on the wire. Keeping it
+              here would make the root anchor a one-character bypass of a policy
+              that names ``evil.com``, so both spellings collapse to one policy
+              key. This is the one place the sensor deliberately goes a step
+              further than the transport, and the reason is that a policy key is
+              a NAME, not a byte string.
+          IPv6  ``https://[::1]:8080/x`` -> ``::1``: brackets and port gone, the
+              address itself. Identical to ``httpx.URL(...).host``. A malformed
+              literal (``https://[::1``) is rejected by ``urlsplit`` and by
+              httpx alike, and reports None rather than a fragment.
+          IDNA  ``https://exämple.com/p`` -> ``xn--exmple-cua.com``, the A-label,
+              because that is the name that goes on the wire
+              (``httpx.URL(...).raw_host``) and the name DNS resolves. The
+              U-label is NOT discarded: ``_host_candidates`` offers both
+              spellings to the policy loop, because choosing one would be a
+              fail-open in whichever form the operator happened to write. A host
+              that will not encode (an over-long or malformed label) keeps its
+              lowercased U-label — naming a destination in the wrong alphabet is
+              better than not naming it.
         """
-        match = _re.search(r'://([^/:?#]+)', str(url))
-        return match.group(1).lower() if match else None
+        host = self._parsed_host(url)
+        if host is None:
+            return None
+        return self._idna(host)
+
+    @staticmethod
+    def _parsed_host(url) -> Optional[str]:
+        """``urlsplit(...).hostname``, lowercased, trailing root dot removed.
+
+        The U-label half of ``_extract_host``: no IDNA encoding, so a caller can
+        offer the operator's own spelling alongside the wire form.
+        """
+        try:
+            host = _urlsplit(str(url)).hostname
+        except ValueError:
+            # urlsplit raises "Invalid IPv6 URL" on an unterminated bracket.
+            # httpx raises InvalidURL on the same input, so there is no host the
+            # request would reach and no host to name.
+            return None
+        if not host:
+            return None
+        host = host.strip().rstrip(".").lower()
+        return host or None
+
+    @staticmethod
+    def _idna(host: str) -> str:
+        """The A-label form of ``host`` when it is not already ASCII."""
+        if host.isascii():
+            return host
+        try:
+            return host.encode("idna").decode("ascii")
+        except Exception:
+            return host
+
+    def _host_candidates(self, url) -> list:
+        """Every spelling of ``url``'s host a policy may legitimately name.
+
+        One host, up to two keys: the A-label the transport resolves and the
+        U-label the operator typed. They differ only for an internationalised
+        name, and there is no principled way to pick the winner — a rule written
+        against ``exämple.com`` and one written against ``xn--exmple-cua.com``
+        both mean the same destination, and matching only one of them is a
+        fail-open for whoever wrote the other.
+        """
+        host = self._parsed_host(url)
+        if host is None:
+            return []
+        ascii_host = self._idna(host)
+        return [ascii_host] if ascii_host == host else [ascii_host, host]
 
     def _emit_destination_block(self, result: ScanResult, dest_id: Optional[str]) -> None:
         """Emit ONE telemetry event for a destination-level block.
@@ -3238,9 +3446,18 @@ class ProtectedHttpClient:
             #    already fired, so a bare sensor must not start paying for a
             #    parse it never needed.
             if self._sensor._extensions:
+                #    `_extract_host` is the PARSED host (urlsplit().hostname),
+                #    not the authority: the view an extension's policy sees must
+                #    be the host the transport will dial, or a destination_policy
+                #    naming `blocked.invalid` misses
+                #    `https://user@blocked.invalid/` exactly as the operator
+                #    blocklist used to. Parsed ONCE and shared by both fields —
+                #    the laziness the comment above claims is undone by parsing
+                #    the same URL twice.
+                ext_host = self._extract_host(url)
                 view = DestinationView(
-                    host=self._extract_host(url),
-                    dest_id=(self._extract_host(url)
+                    host=ext_host,
+                    dest_id=(ext_host
                              or self._extract_destination(url, json_body)),
                 )
                 for extension in self._sensor._extensions:
@@ -3314,10 +3531,9 @@ class ProtectedHttpClient:
             #    denies the destination regardless of body content.
             policy = self._sensor._policy
             if policy is not None:
-                host = self._extract_host(url)
                 dest = self._extract_destination(url, json_body)
                 seen: set[str] = set()
-                for dest_id in (host, dest):
+                for dest_id in self._host_candidates(url) + [dest]:
                     if not dest_id or dest_id in seen:
                         continue
                     seen.add(dest_id)

@@ -205,8 +205,17 @@ def parse_url(text: str) -> Optional[UrlShape]:
             scheme = m.group(1).lower()
             # `file:///etc/passwd` has an empty authority and a meaningful path;
             # every other scheme needs a host to be a fetchable destination.
-            parts = urlsplit(capped)
-            host = (parts.hostname or "").lower()
+            try:
+                parts = urlsplit(capped)
+            except ValueError:
+                # "Invalid IPv6 URL" — an unterminated bracket. No host.
+                return None
+            # The trailing root dot is stripped for the same reason the sensor's
+            # `_extract_host` strips it: `metadata.google.internal.` is the
+            # fully-qualified spelling of a name this ruleset enumerates, it
+            # resolves to the same endpoint, and leaving the dot on would make
+            # the root anchor a one-character bypass of every hostname rule.
+            host = (parts.hostname or "").lower().rstrip(".")
             if not host and scheme not in NON_HTTP_LOCAL_SCHEMES:
                 return None
             return UrlShape(

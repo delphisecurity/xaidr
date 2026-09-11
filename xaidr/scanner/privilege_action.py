@@ -32,6 +32,19 @@ no enumeration: an argument that carries none of these shapes produces nothing,
 whether or not it is a privileged action, so an approved scoped grant, a
 scheduled credential rotation and a payroll run are silent by construction.
 
+WHERE A FACT IS ALLOWED TO BE READ FROM, because every carve-out here is a
+relation between two keys and the scope of that relation IS the control:
+
+    a fact that turns detection ON     may be read anywhere in the call
+    a fact that turns detection OFF    must be a SIBLING of what it excuses
+
+Both directions are the fail-closed one. Widening an enabling fact costs a false
+positive; widening a SUPPRESSING fact costs the detection outright, and it hands
+the caller a switch they can flip from any nesting depth — `{"role": "admin",
+"metadata": {"type": "grant"}}` was silent because `type` is a filter key
+somewhere in the tree. 1.14.1 made three predicates relational and applied the
+sibling requirement to two of them; this is the third.
+
 WHAT THIS DELIBERATELY DOES NOT CATCH. Crypto-mining as a workload
 (``schedule_job(image="xmrig/...")``) is a privilege/resource abuse, but the only
 way to detect it is a denylist of miner image names, which IS secretly a list.
@@ -109,6 +122,11 @@ _READ_ONLY = re.compile(r"read[-_.]?only|\breadonly\b|\bviewer\b|\breader\b", re
 # of these is a filter ("repos where I am an admin"), which is a read, not a
 # grant. This is a relation between keys, not a list of tools: the same
 # `role=admin` with no filter key present still fires.
+#
+# "NEXT TO" MEANS IN THE SAME RECORD, and it did not. Read from the flattened
+# argument tree, any of these fourteen names — `state`, `type`, `query`, `page`,
+# `sort` — anywhere in the call at any depth turned the predicate off. See the
+# per-record loop in `scan_privileged_action`, which is where that is enforced.
 _FILTER_KEYS = {"visibility", "filter", "filters", "query", "q", "search",
                 "sort", "order", "order_by", "page", "per_page", "page_size",
                 "cursor", "offset", "state", "since", "until", "type"}
@@ -142,12 +160,27 @@ def _norm(v) -> str:
     return str(v).strip().lower()
 
 
+# Key components: split on `_ - . space` AND camelCase, then rejoin with `_`.
+# `accessLevel` and `access_level` are the SAME key and were not the same key
+# here: `_ROLE_KEYS` lists `access_level`, `str(k).lower()` produced
+# `accesslevel`, and `grant_role(accessLevel="admin")` — the spelling every
+# JavaScript and Java SDK emits — reached no predicate at all. The identical
+# split already exists in scanner.resource_bound (`_KEY_PARTS`); it simply never
+# reached this module.
+_KEY_SPLIT = re.compile(r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])")
+
+
+def _key(k) -> str:
+    """Canonical snake_case form of a key. ``accessLevel`` -> ``access_level``."""
+    return "_".join(p.lower() for p in _KEY_SPLIT.split(str(k)) if p)
+
+
 def _pairs(obj, key: str = "") -> Iterable[Tuple[str, object]]:
-    """Every (lowercased key, value) pair, recursively. A list inherits its
+    """Every (canonical key, value) pair, recursively. A list inherits its
     parent key so ``scopes: [..., "admin"]`` is seen under ``scopes``."""
     if isinstance(obj, dict):
         for k, v in obj.items():
-            yield from _pairs(v, str(k).lower())
+            yield from _pairs(v, _key(k))
     elif isinstance(obj, list):
         for v in obj:
             yield from _pairs(v, key)
@@ -167,19 +200,63 @@ def _dicts(obj) -> Iterable[dict]:
             yield from _dicts(v)
 
 
+def _own_pairs(d: dict) -> Iterable[Tuple[str, object]]:
+    """The (canonical key, leaf value) pairs of ONE record.
+
+    Lists are flattened — ``{"scopes": ["read", "admin"]}`` is one record with
+    two values under ``scopes`` — and nested dicts are NOT, because a nested
+    dict is its own record and ``_dicts`` will visit it in turn. That is the
+    whole difference between this and ``_pairs``, and it is what makes
+    "sibling" mean something.
+    """
+    for k, v in d.items():
+        ck = _key(k)
+        if isinstance(v, dict):
+            continue
+        if isinstance(v, (list, tuple)):
+            stack = list(v)
+            while stack:
+                item = stack.pop()
+                if isinstance(item, (list, tuple)):
+                    stack.extend(item)
+                elif not isinstance(item, dict):
+                    yield ck, item
+        else:
+            yield ck, v
+
+
+def _scopes(value: str) -> list:
+    """A role/scope value split into the scopes it actually grants.
+
+    ``"admin,readonly"`` is TWO scopes and one of them is admin. Reading the
+    read-only carve-out against the whole string let a comma excuse the
+    escalation sitting next to it: `role="admin,readonly"`, `scopes="read-only,
+    root"` and `permissions="viewer, superuser"` were all silent. Split on the
+    separators every SDK uses for a scope list — comma, semicolon, whitespace —
+    and judge each scope on its own. A single scope with an internal dot
+    (`admin.directory.user.readonly`) is untouched by the split, which is why
+    that carve-out keeps working.
+    """
+    return [s for s in re.split(r"[,;\s]+", value) if s]
+
+
 def _setting_disable(obj) -> bool:
     """True for the ``{name-slot: <control name>, value-slot: <disabling>}``
     record, with both halves in ONE dict. ``{"flag": "enforce_approvals",
     "value": "false"}`` yes; ``{"panel": "monitoring", "offset": 0}`` no,
     because ``offset`` is not a value slot for the thing ``panel`` names."""
     for d in _dicts(obj):
+        # The control NAME is a value here, and it is a key-shaped value, so it
+        # gets the same camelCase/separator normalisation a key does:
+        # `{"flag": "requireApproval", "value": false}` names the same control
+        # as `require_approval`.
         named = any(
-            str(k).lower() in _FLAG_NAME_KEYS and _norm(v) in _CONTROL_NAMES
+            _key(k) in _FLAG_NAME_KEYS and _key(v) in _CONTROL_NAMES
             for k, v in d.items()
         )
         if not named:
             continue
-        if any(str(k).lower() in _FLAG_VALUE_KEYS and _is_disabling(v)
+        if any(_key(k) in _FLAG_VALUE_KEYS and _is_disabling(v)
                for k, v in d.items()):
             return True
     return False
@@ -214,11 +291,6 @@ def scan_privileged_action(tool_name: str, arguments) -> list:
         if not any(f["rule"] == rule for f in findings):
             findings.append({"rule": rule, "category": CATEGORY, "score": _SCORE})
 
-    governance = any(
-        k in _GOVERNANCE_KEYS and v not in (None, "", False)
-        and _norm(v) not in ("none", "skip", "false", "no")
-        for k, v in pairs
-    )
     values = [v for _, v in pairs]
     str_values = [str(v) for v in values if v is not None]
     blob = " ".join(str_values)
@@ -234,9 +306,6 @@ def scan_privileged_action(tool_name: str, arguments) -> list:
     # That is a value-movement shape, not a privilege shape, and it belongs to
     # the policy engine's impact classes rather than here.
     granting = any(k in _ROLE_KEYS for k, _ in pairs)
-
-    # `role=admin` beside a filter key is a LISTING, not an escalation.
-    querying = any(k in _FILTER_KEYS for k, _ in pairs)
 
     for k, v in pairs:
         # 1. self-directed grant / action
@@ -257,16 +326,60 @@ def scan_privileged_action(tool_name: str, arguments) -> list:
             fire("ASI03_waive_approval")
         if k in _CONFIRM_KEYS and _norm(v) in ("skip", "none", "false", "no", "off"):
             fire("ASI03_waive_approval")
-        # 4. escalation to admin/root in a role/scope, with no governance marker,
-        #    that is neither a read-only grant nor a filter on an existing one
-        if (k in _ROLE_KEYS and isinstance(v, str) and _ADMIN.search(v)
-                and not _READ_ONLY.search(v) and not governance and not querying):
-            fire("ASI03_admin_escalation")
+        # 4. escalation to admin/root in a role/scope -> handled per RECORD
+        #    below, because its two carve-outs are SUPPRESSORS and a suppressor
+        #    read from the whole tree is a switch anyone can flip.
         # 5. concealed privileged object
         if k in ("visible", "listed") and _is_disabling(v):
             fire("ASI03_concealed_grant")
         if k in ("hidden", "invisible", "stealth") and _truthy(v):
             fire("ASI03_concealed_grant")
+
+    # 4. ESCALATION TO ADMIN/ROOT IN A ROLE OR SCOPE, read one RECORD at a time.
+    #
+    # THE RULE THIS PREDICATE NOW FOLLOWS, and the one the cross-product fix in
+    # 1.14.1 reached for two of its three predicates: a fact that turns
+    # detection ON may be read anywhere in the call, because missing it is the
+    # fail-open direction. A fact that turns detection OFF must be a SIBLING of
+    # the thing it excuses, because a suppressor read from the flattened tree is
+    # a switch the caller can flip from anywhere.
+    #
+    # Both carve-outs here suppress:
+    #
+    #   the FILTER marker.  `list_repos(visibility="all", role="admin")` is a
+    #       query, and that reading depends on `visibility` and `role` being
+    #       arguments of the same call. Read from the flattened tree it was not
+    #       a relation at all: a `sort` key three levels down in an unrelated
+    #       `context` object, or a `type` key inside a `metadata` blob, silenced
+    #       the admin grant beside it. `_FILTER_KEYS` holds fourteen of the
+    #       commonest key names in any API — `state`, `type`, `query`, `page` —
+    #       so an attacker needing one of them somewhere in a nested argument is
+    #       not being asked for anything.
+    #   the GOVERNANCE marker.  Same shape, same fix: an `approval` or
+    #       `change_ref` in a sibling record excuses the grant in this one.
+    #       Named in the module docstring as app-supplied and forgeable, which
+    #       is an argument for keeping its reach SHORT, not long.
+    #
+    # `granting` (predicate 1) is deliberately still read call-wide. It ENABLES,
+    # and narrowing it would lose catches rather than add them.
+    for record in _dicts(arguments):
+        own = list(_own_pairs(record))
+        querying = any(k in _FILTER_KEYS for k, _ in own)
+        governed = any(
+            k in _GOVERNANCE_KEYS and v not in (None, "", False)
+            and _norm(v) not in ("none", "skip", "false", "no")
+            for k, v in own
+        )
+        if querying or governed:
+            continue
+        for k, v in own:
+            if k not in _ROLE_KEYS or not isinstance(v, str):
+                continue
+            # Judge each SCOPE, not the string that carries them: a read-only
+            # word in one scope does not excuse an admin scope beside it.
+            if any(_ADMIN.search(s) and not _READ_ONLY.search(s)
+                   for s in _scopes(v)):
+                fire("ASI03_admin_escalation")
 
     # 2d. value-embedded "health_check=disabled" (config-blob and file-content shapes)
     if _EMBED_DISABLE.search(blob):

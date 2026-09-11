@@ -18,7 +18,7 @@ into one. It answers four questions a classification rule needs:
     object_kind what the verb acts on when the grammar names it: table,
                 database, schema, index, column, ...
     object      the identifier, when there is an obvious one
-    predicate   "none" | "bounded" | "tautology"  -- see below
+    predicate   "none" | "bounded" | "tautology" | "unknown" -- see below
 
 PREDICATE IS THE LOAD-BEARING FIELD. For DDL there is no WHERE clause and the
 statement type is the whole signal. For DML the statement type is nearly
@@ -28,12 +28,22 @@ BOUNDING PREDICATE is what separates routine work from a table-wipe:
     DELETE FROM sessions WHERE expires_at < now()   bounded    routine
     DELETE FROM users                               none       unbounded
     DELETE FROM users WHERE 1=1                     tautology  unbounded, disguised
+    DELETE FROM users WHERE coalesce(1,0)=1         unknown    we could not tell
 
-The third is its own state rather than a flavour of the first because it is a
+`tautology` is its own state rather than a flavour of `none` because it is a
 STRONGER signal than a missing WHERE, not a weaker one. Someone clearing a table
 on purpose writes no WHERE clause; an ORM writes `WHERE id = ?`. A predicate that
 is always true is what you get when something wanted the effect of no predicate
 while looking like it had one.
+
+`bounded` IS A POSITIVE CLAIM and is only made when the predicate references a
+COLUMN — i.e. when the rows it touches depend on what is in them. Everything
+else is `unknown`, which callers must treat as unrestricted and which
+`sql.unbounded_mutation` matches. The fourth state exists because the third is
+an OPEN class: `2>1`, `NOT FALSE`, `1<>0`, `1 BETWEEN 0 AND 2` and every other
+constant expression a dialect can evaluate are tautologies nobody wrote down,
+and a recogniser that ends `return "bounded"` turns each of them into a claim
+that the statement restricts the rows. It does not.
 
 SAFETY. Every pattern here is bounded and has no nested quantifier, because this
 runs on attacker-controlled argument values (see the ReDoS invariants in the test
@@ -178,21 +188,11 @@ _ALTER_DROP_RE = re.compile(
     r"\bdrop\s+(column|constraint|index|partition|default)\b", re.IGNORECASE
 )
 
-_WHERE_RE = re.compile(r"\bwhere\b", re.IGNORECASE)
-
-# Tautology forms. All bounded, no nested quantifiers.
-_TAUTOLOGIES = (
-    # 1=1, 0=0, 42 = 42
-    re.compile(r"\b(\d{1,9})\s*=\s*\1\b"),
-    # WHERE true  /  WHERE 1  (a bare truthy predicate)
-    re.compile(r"\bwhere\s+(?:true|1)\s*(?:;|$|\)|--)", re.IGNORECASE),
-    # 'a' = 'a'  (backreference, so only genuinely equal literals match)
-    re.compile(r"'([^'\n]{0,64})'\s*=\s*'\1'"),
-    # id = id  (a column compared with itself)
-    re.compile(r"\b([a-zA-Z_][\w$]{0,62})\s*=\s*\1\b"),
-    # ... OR 1=1 style, already covered by the first form, plus the word variant
-    re.compile(r"\bor\s+true\b", re.IGNORECASE),
-)
+# NOTE: the regex tautology table that used to live here is gone rather than
+# kept "in case". It was already unreachable — `_predicate_state_tokens` reads
+# the token stream — and an unreachable second recogniser for the load-bearing
+# field is the shape this module has twice been bitten by (see the three
+# enforcement points for MAX_STATEMENTS in `_split_token_statements`).
 
 # Comments and string literals, removed before any structural question is asked
 # so that a literal containing the word WHERE, or a commented-out DROP, cannot
@@ -209,7 +209,7 @@ class SqlShape(NamedTuple):
     statement: str            # lowercased leading verb
     object_kind: Optional[str]  # lowercased, when the grammar names one
     object: Optional[str]     # the identifier, when there is an obvious one
-    predicate: str            # "none" | "bounded" | "tautology"
+    predicate: str            # "none"|"bounded"|"tautology"|"unknown"
     raw: str                  # the statement text, comments stripped
 
 
@@ -271,6 +271,15 @@ class SqlToken(NamedTuple):
     kind: str
     text: str          # verbatim source slice
     lower: str         # lowercased, for word comparisons; "" for str/comment
+
+
+def _is_dollar_tag(tag: str) -> bool:
+    """PostgreSQL dollar-quote tag: empty (``$$``) or a bare identifier."""
+    if not tag:
+        return True
+    if tag[0] not in _IDENT_START:
+        return False
+    return all(c in _IDENT_CHARS and c != "$" for c in tag)
 
 
 def tokenize(text: str) -> list:
@@ -345,8 +354,23 @@ def tokenize(text: str) -> list:
             i = j
             continue
         if ch == "$":
+            # A DOLLAR QUOTE OPENS WITH $$ OR $tag$, AND `tag` IS AN IDENTIFIER.
+            # Taking "the next $ within 64 chars" as the closing delimiter is
+            # what turned every two-placeholder Postgres query into one opaque
+            # string: in `UPDATE p SET n = $2 WHERE lower(email) = lower($1)`
+            # the tag became `$2 WHERE lower(email) = lower($`, that tag never
+            # recurs, and the scan ran to end-of-input — so the WHERE clause was
+            # INSIDE a string literal and the statement read `predicate=none`,
+            # an unbounded mutation. Measured at 5 of 50 realistic benign DML
+            # statements. The same swallow hides a following `;` and everything
+            # after it, which is the statement-splitting bypass this module
+            # already fixed once for `--` inside a literal.
+            #
+            # `$1`, `$2` are PARAMETER PLACEHOLDERS, not quotes, and they fall
+            # through to punctuation + number below, which is what leaves the
+            # rest of the statement readable.
             close = text.find("$", i + 1)
-            if close != -1 and close - i <= 64:
+            if close != -1 and close - i <= 64 and _is_dollar_tag(text[i + 1:close]):
                 tag = text[i:close + 1]
                 end = text.find(tag, close + 1)
                 end = n if end == -1 else end + len(tag)
@@ -480,23 +504,253 @@ _PREDICATE_TERMINATORS = frozenset({
 })
 
 
+#: Words that appear inside a predicate and are NOT column references: SQL
+#: keywords, literals, and the niladic constants whose value does not depend on
+#: the row. Everything else that lexes as an identifier and is not immediately
+#: applied to an argument list is read as a column reference. The direction
+#: matters: this list being incomplete makes a predicate look MORE row-dependent
+#: than it is, which is the fail-open direction, so it is kept generous.
+_NON_COLUMN_WORDS = frozenset({
+    "and", "or", "not", "in", "is", "null", "true", "false", "unknown",
+    "like", "ilike", "rlike", "regexp", "similar", "between", "escape",
+    "exists", "any", "all", "some", "distinct", "from", "select", "where",
+    "case", "when", "then", "else", "end", "as", "asc", "desc", "collate",
+    "cast", "convert", "interval", "array", "row", "values", "on", "using",
+    "current_date", "current_time", "current_timestamp", "current_user",
+    "session_user", "system_user", "user", "localtime", "localtimestamp",
+    "sysdate", "default", "binary", "nulls", "first", "last",
+})
+
+#: The three answers a predicate can carry, as the classifier sees them.
+_TAUTOLOGY, _BOUNDED, _UNKNOWN = "tautology", "bounded", "unknown"
+
+
+def _split_top(toks, word):
+    """Split on a top-level keyword, skipping the AND that belongs to BETWEEN.
+
+    `x BETWEEN 1 AND 5` is ONE comparison. Splitting it on AND produced the
+    conjuncts `x BETWEEN 1` and `5`, which is not wrong for the bounded case
+    (the first conjunct still names a column) and is wrong for the constant
+    case, where both halves become unreadable fragments of a predicate that was
+    in fact decidable. The BETWEEN is consumed here so the term reaches
+    `_term_state` whole.
+    """
+    parts, cur, d, pending_between = [], [], 0, 0
+    for t in toks:
+        if t.kind == _TOK_PUNCT:
+            if t.text == "(":
+                d += 1
+            elif t.text == ")":
+                d = max(0, d - 1)
+        elif t.kind == _TOK_WORD and d == 0:
+            if t.lower == "between":
+                pending_between += 1
+            elif t.lower == word:
+                if word == "and" and pending_between:
+                    pending_between -= 1
+                else:
+                    parts.append(cur)
+                    cur = []
+                    continue
+        cur.append(t)
+    parts.append(cur)
+    return parts
+
+
+def _strip_group(toks):
+    """Drop parentheses that enclose the WHOLE term, repeatedly.
+
+    `WHERE (1=1)` is `WHERE 1=1` with a redundant group around it, and reading
+    the group as an opaque blob is how `(1=1)` came out `bounded` — the
+    three-token comparison test never saw a three-token term. Only a group that
+    spans the entire term is removed: `(a) = (b)` keeps both.
+    """
+    while len(toks) >= 2 and toks[0].kind == _TOK_PUNCT and toks[0].text == "(":
+        d = 0
+        closes_at = None
+        for i, t in enumerate(toks):
+            if t.kind == _TOK_PUNCT:
+                if t.text == "(":
+                    d += 1
+                elif t.text == ")":
+                    d -= 1
+                    if d == 0:
+                        closes_at = i
+                        break
+        if closes_at != len(toks) - 1:
+            return toks
+        toks = toks[1:-1]
+    return toks
+
+
+def _qualified(toks, i):
+    """(text, next_index) for a possibly dotted identifier starting at `i`.
+
+    `a.id` lexes as three tokens. Comparing the first token of each side made
+    `WHERE a.id = a.id` a seven-token term that no reflexivity test could see,
+    so an aliased self-comparison read as bounded while deleting every row.
+    """
+    parts = [toks[i].lower]
+    j = i + 1
+    while (j + 1 < len(toks) and toks[j].kind == _TOK_PUNCT and toks[j].text == "."
+           and toks[j + 1].kind == _TOK_WORD):
+        parts.append(toks[j + 1].lower)
+        j += 2
+    return ".".join(parts), j
+
+
+def _has_column_ref(toks) -> bool:
+    """Does this term's truth depend on the ROW?
+
+    THIS IS THE QUESTION THAT REPLACED "IS THIS A TAUTOLOGY", and the swap is
+    the whole fix. "Is this always true" is an OPEN question — `2>1`,
+    `NOT FALSE`, `coalesce(1,0)=1`, `1 BETWEEN 0 AND 2`, `1<>0` and every other
+    constant expression a dialect can evaluate are members, and no table of
+    forms is ever complete. "Does this reference a column" is CLOSED and
+    lexical: an identifier that is not a keyword and is not applied to an
+    argument list is a column reference, and a predicate built only from
+    literals and functions of literals restricts nothing, whatever it evaluates
+    to.
+
+    A word immediately followed by `(` is a function NAME, not a column, so
+    `coalesce(1,0)` contributes nothing while `lower(email)` contributes
+    `email`.
+    """
+    for i, t in enumerate(toks):
+        if t.kind != _TOK_WORD:
+            continue
+        w = t.lower
+        if not w or w in _NON_COLUMN_WORDS:
+            continue
+        if w[0].isdigit():                 # numeric literal
+            continue
+        nxt = toks[i + 1] if i + 1 < len(toks) else None
+        if nxt is not None and nxt.kind == _TOK_PUNCT and nxt.text == "(":
+            continue                       # function application
+        return True
+    return False
+
+
+def _term_state(toks) -> str:
+    """One comparison -> tautology | bounded | unknown."""
+    toks = _strip_group([t for t in toks if t.kind != _TOK_COMMENT])
+    if not toks:
+        return _UNKNOWN
+
+    # NOT inverts what we can say, not what the predicate does. `NOT deleted`
+    # still reads a column, so it still restricts; `NOT FALSE` restricts
+    # nothing and is not a form this recogniser can evaluate, so it is
+    # unsettled rather than bounded.
+    if toks[0].kind == _TOK_WORD and toks[0].lower == "not":
+        inner = _clause_state(toks[1:])
+        return _BOUNDED if inner == _BOUNDED else _UNKNOWN
+
+    # bare truthy: `WHERE 1` / `WHERE true`
+    if len(toks) == 1 and toks[0].lower in ("1", "true"):
+        return _TAUTOLOGY
+
+    # `X = X` with both sides identical — identical constants ('a'='a', 1=1),
+    # or a column compared with itself, including an aliased `a.id = a.id`.
+    # A string literal is compared as a LITERAL, never by its contents against
+    # anything else.
+    def side(toks_, i):
+        t = toks_[i]
+        if t.kind == _TOK_STR:
+            return t.text, i + 1
+        if t.kind == _TOK_WORD:
+            return _qualified(toks_, i)
+        return None, i
+
+    left, j = side(toks, 0)
+    if (left is not None and j + 1 < len(toks)
+            and toks[j].kind == _TOK_PUNCT and toks[j].text == "="):
+        right, k = side(toks, j + 1)
+        if (right is not None and k == len(toks)
+                and toks[0].kind == toks[j + 1].kind and left == right):
+            return _TAUTOLOGY
+
+    return _BOUNDED if _has_column_ref(toks) else _UNKNOWN
+
+
+def _clause_state(toks) -> str:
+    """A boolean expression over terms -> tautology | bounded | unknown.
+
+    AND narrows and OR widens, so the two combine differently and three-valued:
+
+        AND   any conjunct bounded  -> bounded   (`id=7 AND 1=1` deletes 1 row)
+              all conjuncts always-true -> tautology
+              otherwise             -> unknown
+        OR    any disjunct always-true -> tautology  (`id=7 OR 1=1` deletes all)
+              all disjuncts bounded -> bounded
+              otherwise             -> unknown
+
+    The `otherwise -> unknown` rows are the fix. They used to be `bounded`,
+    which is a claim — "this predicate restricts the rows" — made about a
+    predicate the recogniser had failed to read.
+    """
+    toks = _strip_group(toks)
+    if not toks:
+        return _UNKNOWN
+    parts = _split_top(toks, "or")
+    if len(parts) > 1:
+        states = [_clause_state(p) for p in parts]
+        if _TAUTOLOGY in states:
+            return _TAUTOLOGY
+        if all(s == _BOUNDED for s in states):
+            return _BOUNDED
+        return _UNKNOWN
+    parts = _split_top(toks, "and")
+    if len(parts) > 1:
+        states = [_clause_state(p) for p in parts]
+        if _BOUNDED in states:
+            return _BOUNDED
+        if all(s == _TAUTOLOGY for s in states):
+            return _TAUTOLOGY
+        return _UNKNOWN
+    return _term_state(toks)
+
+
 def _predicate_state_tokens(tokens: list) -> str:
     """"none" | "bounded" | "tautology" | "unknown", from TOKENS.
 
-    Two things the regex version could not do, both of which the audit measured:
+    Three things the regex version could not do, all three measured:
 
       * a WHERE inside a string literal is not a WHERE, and `1=1` inside a
         string literal is not a tautology. String tokens are opaque here, so
         neither can be seen.
       * a tautology as ONE CONJUNCT of a predicate does not make the predicate
         unrestricted. `WHERE id=7 AND 1=1` deletes one row; calling it
-        tautological was a false positive. The clause is split on top-level OR
-        into disjuncts, and each disjunct on AND into conjuncts: a disjunct is
-        unrestricted only when EVERY one of its conjuncts is a tautology, and
-        the predicate is unrestricted only when ANY disjunct is. That is the
-        auditor's criterion — never treat a substring tautology as evidence the
-        whole predicate is unrestricted — expressed as boolean structure rather
-        than as a longer regex.
+        tautological was a false positive.
+      * A PREDICATE THIS RECOGNISER CANNOT READ IS NOT "BOUNDED". The function
+        used to end `return "bounded"`, which turned every unread predicate into
+        a claim that it restricted the rows. Against a real SQLite oracle, six
+        one-line predicates deleted every row while the shape said bounded and
+        the call scored 0.00:
+
+            WHERE (1=1)                  the group was opaque
+            WHERE 2>1                    a constant comparison, not `=`
+            WHERE NOT FALSE              negation of a constant
+            WHERE coalesce(1,0)=1        constant folded through a function
+            WHERE 1 BETWEEN 0 AND 2      constant range membership
+            WHERE 1<>0                   a constant inequality
+
+        That set is not a list of six bugs, it is one bug with six spellings:
+        the recogniser enumerated TAUTOLOGY FORMS, an open class, and treated
+        "not one of my forms" as "restricts the rows". It now decides the
+        opposite way round — a term is bounded when it REFERENCES A COLUMN, a
+        closed lexical property (`_has_column_ref`) — and anything it cannot
+        settle returns "unknown", which `sql.unbounded_mutation` matches.
+
+    WHAT THIS STILL CANNOT EXPRESS, stated because the point of the rewrite is
+    that the residual is now a NAMED class rather than an open one. A predicate
+    that does reference a column and is nonetheless unrestricted reads bounded:
+    `WHERE id IS NOT NULL OR id IS NULL`, `WHERE id > -1`, `WHERE name LIKE
+    '%'`, `WHERE id IN (SELECT id FROM users)`. Deciding those needs EVALUATION
+    against the data, which is a database's job and not a scanner's — the
+    scanner's job ends at "the rows this touches depend on what is in them".
+    Column-referencing always-true predicates are the residual; constant ones
+    are not, and constant ones are what an injected or synthesised statement
+    actually looks like.
     """
     where_at = None
     depth = 0
@@ -523,44 +777,8 @@ def _predicate_state_tokens(tokens: list) -> str:
             break
         clause.append(tok)
     if not clause:
-        return "unknown"                   # `WHERE` with nothing after it
-
-    def split_top(toks, word):
-        parts, cur, d = [], [], 0
-        for t in toks:
-            if t.kind == _TOK_PUNCT:
-                if t.text == "(":
-                    d += 1
-                elif t.text == ")":
-                    d = max(0, d - 1)
-            elif t.kind == _TOK_WORD and d == 0 and t.lower == word:
-                parts.append(cur)
-                cur = []
-                continue
-            cur.append(t)
-        parts.append(cur)
-        return parts
-
-    def is_tautology(term):
-        """A three-token comparison whose two sides are identical constants."""
-        real = [t for t in term if t.kind != _TOK_COMMENT]
-        # bare truthy: `WHERE 1` / `WHERE true`
-        if len(real) == 1 and real[0].lower in ("1", "true"):
-            return True
-        if len(real) == 3 and real[1].kind == _TOK_PUNCT and real[1].text == "=":
-            left, right = real[0], real[2]
-            if left.kind == _TOK_STR or right.kind == _TOK_STR:
-                # 'a'='a' is a tautology; 'a'='b' is not. Compare the literals
-                # themselves, never their contents against anything else.
-                return left.kind == right.kind and left.text == right.text
-            return left.lower == right.lower
-        return False
-
-    for disjunct in split_top(clause, "or"):
-        conjuncts = split_top(disjunct, "and")
-        if conjuncts and all(is_tautology(c) for c in conjuncts):
-            return "tautology"
-    return "bounded"
+        return _UNKNOWN                    # `WHERE` with nothing after it
+    return _clause_state(clause)
 
 def _strip_comments(text: str) -> str:
     text = _BLOCK_COMMENT_RE.sub(" ", text)
