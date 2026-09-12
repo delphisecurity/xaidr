@@ -147,10 +147,15 @@ def test_destination_check_fails_open(monkeypatch):
     })
     import xaidr.sensor as sm
 
-    def boom(self, url):
+    def boom(*_a, **_k):
         raise RuntimeError("injected")
 
-    monkeypatch.setattr(sm.ProtectedHttpClient, "_extract_host", boom)
+    # Injected at `_parsed_host`, the ONE place the destination check now parses
+    # a URL. It used to be injected at `_extract_host`, which the policy branch
+    # no longer calls directly (it asks `_host_candidates` for every spelling of
+    # the host), so sabotaging it would have left this path intact and the test
+    # would have proved nothing about the fail-open it is named for.
+    monkeypatch.setattr(sm.ProtectedHttpClient, "_parsed_host", boom)
     # Fault in the destination check -> fail open: request proceeds, no crash.
     resp = c.get("http://evil.com/x")
     assert resp.status_code == 200 and sent == ["http://evil.com/x"]
