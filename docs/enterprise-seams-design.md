@@ -1,6 +1,6 @@
 # Enterprise seams for open `xaidr` — design against `864243e`
 
-**Status:** S7 built (PR 1); S1 + S5 + S6 built (PR 2); S2 built (PR 3, completed in PR 5); S3 built (PR 4); S9 + S10 + S11 built (PR 5); S12 built flag-gated (PR 6, extension header merging still design). S4, S8, S13 still design. Base: `delphisecurity/xaidr` main at `864243e` (release 1.11.0); the seam line numbers in §2 are on that commit and have since shifted — read them as "which function", not "which line". PR #3 (ASI/LPCI rules) shifts `local.py` by +34 lines and touches no seam site.
+**Status:** ALL THIRTEEN SEAMS BUILT. S7 (PR 1); S1 + S5 + S6 (PR 2); S2 (PR 3, completed in PR 5); S3 (PR 4); S9 + S10 + S11 (PR 5); S12 flag-gated (PR 6); S4 + S8 + S13 (PR 7). One piece still owed: S12's `ext.outbound_headers(dest)` collision-rule merge. Base: `delphisecurity/xaidr` main at `864243e` (release 1.11.0); the seam line numbers in §2 are on that commit and have since shifted — read them as "which function", not "which line". PR #3 (ASI/LPCI rules) shifts `local.py` by +34 lines and touches no seam site.
 **Companion:** `docs/enterprise-overlay-spec.md` (the bucket classification, currently sitting in `~/delphi-sentinel/docs/`, to be moved to the SDK repo). This document replaces its §5 hook table.
 **Goal:** paid = pinned open `xaidr` + an enterprise package. Every behaviour paid has today that open lacks must plug into open through a public, tested, validated-at-construction seam, so that the next open release cannot silently break the enterprise package and the next enterprise feature cannot fork a shared file.
 
@@ -112,9 +112,13 @@ Note for the ledger thread: with `ext_authz` on a gateway egress route, escalati
 
 Measured: corpus oracle byte-identical with no escalators (456 rows, `80f31ff0…`); full suite 7997 → 8020, exactly the 23 new tests; skips 137 and xfails 3 unchanged.
 
-### S4 · before_scan — `DelphiSensor.scan` (`sensor.py:774`)
+### S4 · before_scan — inside `_run_gates` (was H4), BUILT
 
-Called once per entry point (`scan`, `scan_output`, `scan_a2a`, `scan_tool_call`) with the built `ScanRequest`, before the gate (S5). Returns `Optional[ScanResult]`; a value short-circuits everything including telemetry, so it is reserved for "this request is not ours" cases. The enterprise use is context enrichment: the extension mutates a `context` mapping on the request (principal, agent, trace from its contextvars). `provider` and `parent_context` are already open kwargs (`:779`, `:781`) and need no hook.
+Called with the built `ScanRequest`, returning `Optional[ScanResult]`; a value short-circuits everything **including telemetry**, so it is reserved for "this request is not ours" cases. That is a stronger short-circuit than S5's gate, which still emits an event — the asymmetry is deliberate and is pinned by a pair of tests, because a control that halts traffic while leaving no audit record is not a control.
+
+**ORDERING CORRECTION — the doc was wrong and section 3's table is corrected with it.** This section and the table both said "before the gate (S5)". S5's chain BEGINS with the circuit breaker, so taken literally an extension hook would outrank an operator-configured halt: with the breaker open, `before_scan` would answer a call the breaker exists to stop. Nothing else in this seam set may widen an open control (S6 may only soften, S10 may only tighten, an escalator cannot un-block), and this is the same rule. **Actual order: circuit gate → before_scan → extension gates.** `test_an_open_circuit_still_wins` pins it, and a sabotage that hoists before_scan above the circuit fails it.
+
+**THREE hook sites, not four.** The doc named four entry points; `scan_output` DELEGATES to `scan(direction="output")` in this tree and is not independent. Hooking both would fire `before_scan` twice for one call — double traffic to any extension counting requests. `test_scan_output_does_not_fire_the_hook_twice` is the guard.
 
 ### S5 · gate chain — three scan entry points (was H5), BUILT
 
@@ -145,9 +149,15 @@ Built: `xaidr/enforcement.py` with `EnforcementPolicy` (`name`, `enforces()`, `d
 
 Two tripwires: (1) `git grep` for `enforcement_mode ==` / `!=` in `xaidr/` must be empty, both operand orders; (2) the literal two-mode tuple must not reappear. **Tripwire lesson: `git grep -E` is POSIX ERE, so `\s` is a literal `s`; use `[[:space:]]`, and pair every grep tripwire with a harness test that greps for a construct known to exist, so a dialect change fails loudly.** Non-vacuity: reverting the sources fails 8 tests (both tripwires plus six wiring tests).
 
-### S8 · on_response — `ProtectedHttpClient._scan_response` (`sensor.py:2551`, was H9)
+### S8 · on_response — `ProtectedHttpClient._scan_response` (`sensor.py:3631`, was H9), BUILT
 
-After the open output scan, every extension receives a `ResponseView`: provider (from the existing host table), status, URL host, content-type, and a lazily parsed JSON body accessor. No streaming (the egress patch already skips `stream=True`; the SSE-with-no-stream-kwarg case is a separate bug, filed). This is where the token-usage extractor for the ledger lands later, as an extension in open, emitting `llm_usage` events through the reporter.
+After the open output scan — **after the block raise**, so a response the sensor has already decided to block never reaches a hook. Every extension receives a `ResponseView` carrying provider, host, status, content-type and the parsed JSON body.
+
+**Everything is REUSED, not recomputed.** `rbody` is already parsed at the top of `_scan_response` for the A2A id tracker, and `_extract_provider` / `_extract_host` are the same helpers the output scan and S10 already use. A second provider-detection path here would be free to disagree with the first about what host this is — exactly the drift S12 removed from the egress headers.
+
+**CENSUS CORRECTION: there is no `stream=` skip in this tree.** The claim that "the egress patch already skips `stream=True`" is false — grepping `xaidr/sensor.py` for stream handling returns only the word "downstream". No streaming path exists to skip, and the "SSE-with-no-stream-kwarg case is a separate bug, filed" note describes machinery that was never built. S8 therefore inherits whatever the egress patch does today, which is nothing special for streams; if streaming support lands, S8's position must be re-checked rather than assumed.
+
+Observation only: the hook returns None and cannot change the response. This is where the token-usage extractor for the ledger lands later.
 
 ### S9 · subject trust — `evaluate_policy` callers (was H11), BUILT
 
@@ -182,9 +192,15 @@ The `inject_context` claim in the earlier draft was verified rather than assumed
 
 **Still design, NOT built here:** merging `ext.outbound_headers(dest)` from each extension, with the collision rule (extensions may add headers, never remove or overwrite an open one). The helper is the seam that will host it; this PR wired the consolidation and the flag only.
 
-### S13 · tools declared — `Sensor.protect_tools` (`sensor.py:1956`, was H15)
+### S13 · tools declared — `Sensor.protect_tools` (`sensor.py:2455`, return at `:2860`; was H15), BUILT
 
-After wrapping, call `ext.on_tools_declared(tools)` once with `ToolView`s (name, description hash, `args_schema` hash). This is the seam the tool-definition-drift work will use; the enterprise package uses it to register the tool inventory with the Brain.
+After the wrapping loop, `ext.on_tools_declared(tools)` is called ONCE with the accumulated `ToolView`s — not once per tool. An extension registering an inventory wants the set; per-tool callbacks arrive as fragments it has to reassemble. An EMPTY tool list still reports an empty inventory, because "this agent exposes nothing" is a fact a consumer needs and is different from never having been told.
+
+Views are built from what the loop already holds: `tools` are the caller's original objects, and `description` / `args_schema` are read off them with `getattr`. No new introspection machinery — inventing a second way to read a tool here is what would later disagree with the first.
+
+**Hashed, per non-negotiable #7.** A description is author-written prose and a schema can carry field names from a private domain model; drift detection needs to know THAT they changed, not what they say. `None` means ABSENT rather than empty: if a deleted description hashed like an empty string, a removal would read as a no-op. `_hash_tool_attr` never raises, so a tool whose attribute access has side effects cannot break `protect_tools`.
+
+The doc previously cited `:1956`; the real def is `:2455` and the return `:2860`.
 
 ### Eliminated: telemetry hook
 
@@ -196,8 +212,9 @@ Per entry point, after S7's policy object is in place:
 
 ```
 build ScanRequest
-S4  before_scan            (may short-circuit; no telemetry)
-S5  gate chain             (circuit, then extensions; a gated verdict skips everything below)
+S5a circuit gate           (an operator halt; NOTHING below may override it)
+S4  before_scan            (may short-circuit; NO telemetry, unlike a gate)
+S5b extension gate chain   (a gated verdict skips everything below, but DOES emit)
 local scan → S3 escalators (flag band only)
 telemetry enqueue          (true verdict)              ← unchanged, :911/:1125/:1654
 _breaker_observe           (true verdict)              ← unchanged, :918/:1131/:1661
@@ -205,11 +222,11 @@ _apply_mode                (open downgrade, then S6)   ← :919/:1132/:1662
 return
 ```
 
-Invariants pinned by tests: (a) a gated verdict never reaches enqueue; (b) enqueue and observe see the pre-S6 verdict; (c) S6 cannot strengthen; (d) S3 runs before enqueue so the escalated verdict is what telemetry records.
+Corrected for S4: the circuit gate is split out and runs FIRST. The earlier table put S4 ahead of the whole chain, which would have let an extension answer a call an open breaker had halted. Invariants pinned by tests: (a) a gated verdict never reaches enqueue; (b) enqueue and observe see the pre-S6 verdict; (c) S6 cannot strengthen; (d) S3 runs before enqueue so the escalated verdict is what telemetry records.
 
 ## 4. Fault handling contract
 
-Per extension per hook per sensor: first fault logs ERROR with extension name, hook name, our own module:lineno, and the sentence "this control is inert until the sensor is rebuilt"; subsequent faults are counted, not logged. `manifest.faults` exposes the set. Exception: `on_attach` raises (construction), and S6 strengthening raises (contract violation, not environment).
+Per extension per hook per sensor: first fault logs ERROR with extension name, hook name, our own module:lineno, and the sentence "this control is inert until the sensor is rebuilt"; subsequent faults are counted, not logged. The set is `sensor._extension_faults` (keyed by extension name + hook), reported through `_extension_failed`. **There is no `manifest.faults`** — `ProtectionManifest` is built only by `xaidr.protect()`, never for a plain `Sensor(...)`, so an earlier draft's claim that it exposes the set was never true of this tree. Exception: `on_attach` raises (construction), and S6 strengthening raises (contract violation, not environment).
 
 Contract violations share a base, `_ExtensionContractError`, and every scan entry point re-raises it alongside `DelphiBlockedError` rather than letting the fail-open handler turn it into `allowed`. The distinction the base draws is the one the whole extension system rests on: an ENVIRONMENT fault (a backend is down) is caught, logged once, and the scan proceeds on the open verdict; a CONTRACT violation is not recoverable by proceeding, because proceeding means acting on a control the author believes is enforcing and which is not.
 
@@ -235,7 +252,7 @@ Contract violations share a base, `_ExtensionContractError`, and every scan entr
 4. **S3** escalation chain in `LocalScanner`, flag-band cap, degraded signal, manifest health. BUILT.
 5. **S9 + S10 + S11** trust, destination policy, blocked-URL provider. BUILT.
 6. **S12** egress header consolidation, with `inject_context` wiring behind a default-off flag. BUILT (extension `outbound_headers` merging still design).
-7. **S4 + S8 + S13** before_scan, on_response, tools declared.
+7. **S4 + S8 + S13** before_scan, on_response, tools declared. BUILT — closes the seam sequence.
 
 Then release open (1.12.0), pin it, and build the enterprise package: `BrainReporter`, the quarantine gate, `watch` policy, `trust_below` condition, AGT destination policy, the Brain escalator, identity/context modules. The parity guard flips to "enterprise ⊇ open" and stays green by construction.
 
