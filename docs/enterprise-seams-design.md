@@ -1,6 +1,15 @@
 # Enterprise seams for open `xaidr` — design against `864243e`
 
-**Status:** ALL THIRTEEN SEAMS BUILT. S7 (PR 1); S1 + S5 + S6 (PR 2); S2 (PR 3, completed in PR 5); S3 (PR 4); S9 + S10 + S11 (PR 5); S12 flag-gated (PR 6); S4 + S8 + S13 (PR 7). One piece still owed: S12's `ext.outbound_headers(dest)` collision-rule merge. Base: `delphisecurity/xaidr` main at `864243e` (release 1.11.0); the seam line numbers in §2 are on that commit and have since shifted — read them as "which function", not "which line". PR #3 (ASI/LPCI rules) shifts `local.py` by +34 lines and touches no seam site.
+**Status:** ALL THIRTEEN SEAMS BUILT. S7 (PR 1); S1 + S5 + S6 (PR 2); S2 (PR 3, completed in PR 5); S3 (PR 4); S9 + S10 + S11 (PR 5); S12 flag-gated (PR 6); S4 + S8 + S13 (PR 7).
+
+**Two hooks on `SensorExtension` are DECLARED BUT NEVER CALLED**, found by grepping every hook name against the tree at the close of PR 7:
+
+| hook | status |
+|---|---|
+| `outbound_headers(dest)` | S12 shipped the consolidation and the flag; the extension merge with the collision rule is still owed. Known and recorded when S12 landed. |
+| `enforcement_policy()` | **Not previously flagged.** S7 shipped mode registration through `resolve()` / `_POLICIES`, which takes a name or an already-resolved policy object. The hook was declared with the rest of the surface in S1 and no call site was ever added. |
+
+This is the `Action.ESCALATED` failure class from S3 restated for hooks: a declared surface with no consumer is not inert, it is a promise the object's docstring makes and the code does not keep. An enterprise package subclassing `SensorExtension` and overriding `enforcement_policy` today gets silence, with nothing raising and nothing logged. Either wire it or delete it; leaving it declared is the one option that misleads. Base: `delphisecurity/xaidr` main at `864243e` (release 1.11.0); the seam line numbers in §2 are on that commit and have since shifted — read them as "which function", not "which line". PR #3 (ASI/LPCI rules) shifts `local.py` by +34 lines and touches no seam site.
 **Companion:** `docs/enterprise-overlay-spec.md` (the bucket classification, currently sitting in `~/delphi-sentinel/docs/`, to be moved to the SDK repo). This document replaces its §5 hook table.
 **Goal:** paid = pinned open `xaidr` + an enterprise package. Every behaviour paid has today that open lacks must plug into open through a public, tested, validated-at-construction seam, so that the next open release cannot silently break the enterprise package and the next enterprise feature cannot fork a shared file.
 
