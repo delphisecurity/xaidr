@@ -1,6 +1,6 @@
 # Enterprise seams for open `xaidr` — design against `864243e`
 
-**Status:** S7 built (PR 1); S1 + S5 + S6 built (PR 2); S2 built (PR 3, completed in PR 5); S3 built (PR 4); S9 + S10 + S11 built (PR 5). S4, S8, S12, S13 still design. Base: `delphisecurity/xaidr` main at `864243e` (release 1.11.0); the seam line numbers in §2 are on that commit and have since shifted — read them as "which function", not "which line". PR #3 (ASI/LPCI rules) shifts `local.py` by +34 lines and touches no seam site.
+**Status:** S7 built (PR 1); S1 + S5 + S6 built (PR 2); S2 built (PR 3, completed in PR 5); S3 built (PR 4); S9 + S10 + S11 built (PR 5); S12 built flag-gated (PR 6, extension header merging still design). S4, S8, S13 still design. Base: `delphisecurity/xaidr` main at `864243e` (release 1.11.0); the seam line numbers in §2 are on that commit and have since shifted — read them as "which function", not "which line". PR #3 (ASI/LPCI rules) shifts `local.py` by +34 lines and touches no seam site.
 **Companion:** `docs/enterprise-overlay-spec.md` (the bucket classification, currently sitting in `~/delphi-sentinel/docs/`, to be moved to the SDK repo). This document replaces its §5 hook table.
 **Goal:** paid = pinned open `xaidr` + an enterprise package. Every behaviour paid has today that open lacks must plug into open through a public, tested, validated-at-construction seam, so that the next open release cannot silently break the enterprise package and the next enterprise feature cannot fork a shared file.
 
@@ -165,11 +165,22 @@ Before the operator blocklist check (`:2434`), each extension's `destination_pol
 
 The reader at `:2435` holds `self._sensor._blocked_urls`, and `unblock_urls` rebinds the list at `:1692`, so any provider that caches a reference goes stale. Design: `_effective_blocked_urls()` computed at read time as `self._blocked_urls + [u for ext in extensions for u in (ext.blocked_urls() or ())]`, called at `:2435` on every check. No refresh hook is needed; a provider that wants freshness returns a fresh sequence each call and rate-limits itself. Test: register a provider whose list changes between two calls and assert the second call sees the change. Also tested: `unblock_urls` composed with a provider — the operator's removal takes effect while the extension's contribution survives the rebind, which is exactly the staleness a cached reference produces. An operator cannot `unblock_urls` an extension's entry; that list is the extension's, and letting the operator delete from it would make the enterprise control removable by the thing it constrains.
 
-### S12 · outbound headers — five egress verbs (`sensor.py:2579`, `:2588`, `:2597`; none on `:2603`, `:2612`; was H14)
+### S12 · outbound headers — five egress verbs (was H14), BUILT (flag-gated)
 
-Consolidate: one `_egress_headers(dest) -> dict` used by all five verbs (GET and DELETE currently write no headers at all). It writes `X-Delphi-Source-Agent`, then **calls `provenance_chain.inject_context`** (`provenance_chain.py:355`, exported, and never called from the sensor's own egress today), then merges `ext.outbound_headers(dest)` from each extension. Extensions may add headers, never remove or overwrite an open one (collision raises at call time, once, then the extension's header is dropped).
+One `_egress_headers(dest, headers, *, source_agent) -> dict` used by all five verbs: `post` (`sensor.py:3424`), `put` (`:3433`), `patch` (`:3442`), `get` (`:3451`), `delete` (`:3460`). Before this seam the three body verbs wrote `X-Delphi-Source-Agent` and GET/DELETE wrote no header at all.
 
-Wiring `inject_context` is an open behaviour change in its own right and gets its own commit and test (a GET through `protect_http` carries `x-openA2A-chain`). It closes the "writer exists, unwired" gap on the open side; the paid "reader with no writer" gap then closes by inheritance.
+**Gated by `Sensor(emit_provenance_headers=False)`, default OFF.** The flag is what makes this seam SATISFY non-negotiable #1 rather than override it. An earlier draft of this section framed the `inject_context` wiring as "an open behaviour change in its own right" — that framing is withdrawn, because with a default-off flag the default behaviour does not change at all.
+
+* **Flag off:** byte-identical to the tree before this seam. Body verbs send exactly `X-Delphi-Source-Agent`; GET and DELETE send nothing. The asymmetry is preserved deliberately — GET/DELETE starting to announce the agent id to hosts that never received it is a DISCLOSURE change, and consolidating call sites is not a licence to make one.
+* **Flag on:** every verb carries `X-Delphi-Source-Agent` plus the four headers `provenance_chain.inject_context` (`provenance_chain.py:387`) writes — `traceparent`, `x-openA2A-correlation`, `x-openA2A-chain`, `x-openA2A-tiers`. GET and DELETE are included on purpose: a deployer who asked for the chain to be visible should not find a GET-shaped hole in it.
+
+**The disclosure is the reason for the default.** With the flag on, every destination a protected client talks to receives this agent's id, a correlation id and the delegation chain. That is not the SDK's call to make on a deployer's behalf, so it is opt-in — the same reasoning as `enable_nano` refusing to fetch a 130 MB artifact as a side effect of construction.
+
+**The corpus oracle is blind to this seam**, and that is the interesting part. It hashes `scan()` verdicts over the committed corpus; it makes no HTTP request and inspects no header, so S12 could change what every outbound call discloses and the oracle would stay byte-identical. `tests/test_egress_headers.py` is the real zero-movement gate here, and it says so in its own docstring. A seam whose gate cannot see it needs a new gate, not a green run from the old one.
+
+The `inject_context` claim in the earlier draft was verified rather than assumed: nothing in `xaidr/` called it. Only `__init__.py` (the export), four tests, and the user-facing docs did. The "writer exists, unwired" gap is now closed on the open side whenever the flag is on.
+
+**Still design, NOT built here:** merging `ext.outbound_headers(dest)` from each extension, with the collision rule (extensions may add headers, never remove or overwrite an open one). The helper is the seam that will host it; this PR wired the consolidation and the flag only.
 
 ### S13 · tools declared — `Sensor.protect_tools` (`sensor.py:1956`, was H15)
 
@@ -223,7 +234,7 @@ Contract violations share a base, `_ExtensionContractError`, and every scan entr
 3. **S2** policy conditions through `parse_action_policy`. BUILT.
 4. **S3** escalation chain in `LocalScanner`, flag-band cap, degraded signal, manifest health. BUILT.
 5. **S9 + S10 + S11** trust, destination policy, blocked-URL provider. BUILT.
-6. **S12** egress header consolidation, with `inject_context` wiring as its own commit.
+6. **S12** egress header consolidation, with `inject_context` wiring behind a default-off flag. BUILT (extension `outbound_headers` merging still design).
 7. **S4 + S8 + S13** before_scan, on_response, tools declared.
 
 Then release open (1.12.0), pin it, and build the enterprise package: `BrainReporter`, the quarantine gate, `watch` policy, `trust_below` condition, AGT destination policy, the Brain escalator, identity/context modules. The parity guard flips to "enterprise ⊇ open" and stays green by construction.
