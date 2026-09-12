@@ -461,6 +461,7 @@ class DelphiSensor:
         circuit_breaker: Optional[CircuitBreaker] = None,
         privilege_tier: int | None = None,
         extensions: Sequence[SensorExtension] = (),
+        emit_provenance_headers: bool = False,
     ):
         if not agent_id:
             raise ValueError("agent_id is required")
@@ -495,6 +496,21 @@ class DelphiSensor:
         self._declared_tier = self.privilege_tier if privilege_tier is not None else None
 
         self.agent_id = agent_id
+        # S12 · emit delegation provenance on outbound `protect_http` calls.
+        #
+        # DEFAULT OFF, and the default is the point. Turning this on sends this
+        # agent's id, a correlation id and the whole delegation chain to every
+        # destination a protected client talks to — hosts that receive none of
+        # it today. That is a DISCLOSURE change, not merely an internal one, and
+        # it is not ours to make on a deployer's behalf. Opting in is a
+        # deliberate act, exactly like `enable_nano` above reaching for a 130 MB
+        # artifact rather than fetching it as a side effect of construction.
+        #
+        # With it off, every egress verb emits byte-identical headers to what it
+        # emitted before this seam existed — which is what keeps non-negotiable
+        # #1 satisfied here rather than overridden. `tests/test_egress_headers.py`
+        # is the gate for that, because the corpus oracle cannot see headers.
+        self.emit_provenance_headers = emit_provenance_headers
         self.shadow_mode = shadow_mode
         # shadow_mode forces observe-only — it IS monitor mode.
         self.enforcement = _MONITOR if shadow_mode else enforcement
@@ -3421,29 +3437,54 @@ class ProtectedHttpClient:
                 raise DelphiBlockedError(result)
         return response
 
+    def _egress_headers(self, dest, headers=None, *, source_agent: bool) -> dict:
+        """S12 · the ONE place an outbound header is written. All five verbs
+        call it, so "what does xaidr add to an outbound request" has a single
+        answer rather than five that can drift.
+
+        ``source_agent`` records which verbs wrote ``X-Delphi-Source-Agent``
+        BEFORE this seam existed: the body verbs always did, GET and DELETE
+        never wrote any header at all. Consolidating the call sites must not
+        silently change what leaves the process, so with the provenance flag OFF
+        that asymmetry is preserved exactly. It is a DISCLOSURE, and GET/DELETE
+        starting to announce the agent id to hosts that never received it would
+        be the same unrequested change the flag exists to gate.
+
+        With the flag ON every verb writes the source agent and the four
+        provenance headers, because at that point the deployer has asked for the
+        chain to be visible and a GET that omitted it would be a hole in it.
+
+        Caller-supplied headers are preserved; ``inject_context`` merges into
+        the dict it is given rather than replacing it.
+        """
+        out = dict(headers or {})
+        emit = self._sensor.emit_provenance_headers
+        if source_agent or emit:
+            out['X-Delphi-Source-Agent'] = self._sensor.agent_id
+        if emit:
+            # The writer has existed and been exported since provenance landed;
+            # nothing in the sensor's own egress ever called it. This is that
+            # wiring, behind the flag.
+            out = _chain.inject_context(out)
+        return out
+
     def post(self, url, *, json=None, content=None, headers=None, **kwargs):
         """POST with A2A scanning."""
-        headers = dict(headers or {})
-        headers['X-Delphi-Source-Agent'] = self._sensor.agent_id
-
+        headers = self._egress_headers(url, headers, source_agent=True)
         self._scan_request(str(url), json, content)
         response = self._client.post(url, json=json, content=content, headers=headers, **kwargs)
         return self._scan_response(response)
 
     def put(self, url, *, json=None, content=None, headers=None, **kwargs):
         """PUT with A2A scanning."""
-        headers = dict(headers or {})
-        headers['X-Delphi-Source-Agent'] = self._sensor.agent_id
-
+        headers = self._egress_headers(url, headers, source_agent=True)
         self._scan_request(str(url), json, content)
         response = self._client.put(url, json=json, content=content, headers=headers, **kwargs)
         return self._scan_response(response)
 
     def patch(self, url, *, json=None, content=None, headers=None, **kwargs):
         """PATCH with A2A scanning."""
-        headers = dict(headers or {})
-        headers['X-Delphi-Source-Agent'] = self._sensor.agent_id
-
+        headers = self._egress_headers(url, headers, source_agent=True)
         self._scan_request(str(url), json, content)
         response = self._client.patch(url, json=json, content=content, headers=headers, **kwargs)
         return self._scan_response(response)
@@ -3455,6 +3496,10 @@ class ProtectedHttpClient:
         to a denied destination is blocked before the request leaves the host.
         """
         self._check_destination(str(url), None)
+        headers = self._egress_headers(url, kwargs.pop("headers", None),
+                                       source_agent=False)
+        if headers:
+            kwargs["headers"] = headers
         return self._client.get(url, **kwargs)
 
     def delete(self, url, **kwargs):
@@ -3464,6 +3509,10 @@ class ProtectedHttpClient:
         is blocked before it is sent.
         """
         self._check_destination(str(url), None)
+        headers = self._egress_headers(url, kwargs.pop("headers", None),
+                                       source_agent=False)
+        if headers:
+            kwargs["headers"] = headers
         return self._client.delete(url, **kwargs)
 
     def close(self):
