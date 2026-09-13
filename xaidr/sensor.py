@@ -43,7 +43,9 @@ from .circuit_breaker import (
 )
 from .enforcement import MONITOR as _MONITOR, resolve as _resolve_enforcement
 from .escalation import Escalator
-from .extensions import DestinationView, ScanRequest, SensorExtension
+from .extensions import (
+    DestinationView, ResponseView, ScanRequest, SensorExtension, ToolView,
+)
 from .reporters import Reporter
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
 from .scanner.command_parse import reconstruct as _reconstruct_command
@@ -382,6 +384,30 @@ def _resolve_provenance(
     # ever labels the hop this sensor is adding; it can never touch another
     # hop's claim.
     return _chain.build_provenance(agent_id, on_behalf_of=obo, tier=tier)
+
+
+def _hash_tool_attr(tool, *attrs) -> Optional[str]:
+    """Hash the first present attribute of ``tool``, or None if none is.
+
+    None means ABSENT, not empty: a tool with no description and a tool whose
+    description was deleted must not hash to the same value as one whose
+    description is the empty string, or drift detection would read a removal as
+    a no-op. Never raises — a tool whose attribute access has side effects must
+    not be able to break `protect_tools`.
+    """
+    for attr in attrs:
+        try:
+            value = getattr(tool, attr, None)
+        except Exception:
+            continue
+        if value is None:
+            continue
+        try:
+            return safe_content_hash(_canonical_arguments(value)
+                                     if not isinstance(value, str) else value)
+        except Exception:
+            continue
+    return None
 
 
 def _canonical_arguments(arguments) -> str:
@@ -1011,6 +1037,32 @@ class DelphiSensor:
             # a sensor with no extensions must not pay for a view nobody reads.
             return None
         req = self._build_scan_request(direction, **req_fields())
+
+        # ── S4 · before_scan ─────────────────────────────────────────────
+        # AFTER the circuit check above, BEFORE the extension gates below.
+        #
+        # The design doc's ordering table put S4 ahead of the whole gate
+        # chain. Taken literally that places an extension hook ahead of the
+        # CIRCUIT BREAKER, so an extension could answer a call the breaker
+        # exists to halt — an operator-configured stop overridden by a
+        # third-party hook. Nothing else in this seam set is allowed to widen
+        # an open control (S6 may only soften, S10 may only tighten, an
+        # escalator cannot un-block), and this is the same rule. The circuit
+        # stays first; the doc is corrected rather than followed.
+        #
+        # A before_scan value short-circuits MORE than a gate does: no
+        # telemetry is emitted at all. That is why it is reserved for "this
+        # request is not ours" and not for policy — a control that halts
+        # traffic while leaving no audit record is not a control.
+        for extension in self._extensions:
+            try:
+                early = extension.before_scan(req)
+            except Exception as exc:
+                self._extension_failed(extension, "before_scan", exc)
+                continue
+            if early is not None:
+                return early
+
         for extension in self._extensions:
             try:
                 result = extension.gate(req)
@@ -2857,6 +2909,38 @@ class DelphiSensor:
 
             wrapped.append(new_tool)
 
+        # ── S13 · on_tools_declared ──────────────────────────────────────
+        # ONCE, after the whole loop, with the accumulated inventory — not
+        # once per tool. An extension registering a tool inventory with a
+        # backend wants the set, and a per-tool callback would make "what does
+        # this agent expose" arrive in fragments it has to reassemble.
+        #
+        # Built from what the loop already had in hand: `tools` are the
+        # caller's original objects, and `description` / `args_schema` are read
+        # off them with getattr. No new introspection machinery — S13 is the
+        # seam the tool-definition-drift work will use, and inventing a second
+        # way to read a tool here would be the thing that later disagrees with
+        # the first.
+        #
+        # HASHED, per non-negotiable #7: a description is author-written text
+        # and a schema can carry field names from a private domain model.
+        # Drift detection needs to know THAT they changed, not what they say.
+        if self._extensions:
+            views = []
+            for t in tools:
+                name = (getattr(t, "name", None)
+                        or getattr(t, "__name__", None) or "unknown")
+                views.append(ToolView(
+                    name=str(name),
+                    description_hash=_hash_tool_attr(t, "description", "__doc__"),
+                    args_schema_hash=_hash_tool_attr(t, "args_schema"),
+                ))
+            for extension in self._extensions:
+                try:
+                    extension.on_tools_declared(tuple(views))
+                except Exception as exc:
+                    self._extension_failed(extension, "on_tools_declared", exc)
+
         return wrapped
 
     @staticmethod
@@ -3651,6 +3735,36 @@ class ProtectedHttpClient:
             result = self._sensor.scan(text, direction='output', provider=provider)
             if result.action == 'blocked':
                 raise DelphiBlockedError(result)
+
+        # ── S8 · on_response ─────────────────────────────────────────────
+        # AFTER the open output scan, so an extension sees the response the
+        # sensor has already judged and cannot pre-empt a block: the raise
+        # above happens first, and a blocked response never reaches a hook.
+        #
+        # Everything here is REUSED, not recomputed. `rbody` was parsed at the
+        # top of this method for the A2A id tracker, and `_extract_provider` /
+        # `_extract_host` are the same helpers S10 and the output scan already
+        # use — a second provider-detection path would be free to disagree with
+        # the first about what host this is, which is the drift S12 removed
+        # from the egress headers.
+        #
+        # Observation only: the hook returns None and cannot change the
+        # response. This is the ledger's future home (token usage out through
+        # the reporter), not a second enforcement point.
+        if self._sensor._extensions:
+            view = ResponseView(
+                provider=self._extract_provider(str(response.url)),
+                host=self._extract_host(str(response.url)),
+                status=getattr(response, "status_code", None),
+                content_type=(response.headers or {}).get("content-type"),
+                json=rbody,
+            )
+            for extension in self._sensor._extensions:
+                try:
+                    extension.on_response(view)
+                except Exception as exc:
+                    self._sensor._extension_failed(
+                        extension, "on_response", exc)
         return response
 
     def _egress_headers(self, dest, headers=None, *, source_agent: bool) -> dict:
