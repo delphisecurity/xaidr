@@ -398,5 +398,71 @@ naming the key, the rule, and the nearest valid field, so a typo like
 unrecognized key matches nothing, which would load cleanly and enforce nothing;
 the policy is refused instead and the sensor falls through to detection-only.
 
+### The property: a rule that cannot match anything never loads quietly
+
+Getting the key right is only half of it. A **wrong-typed value** disarms a rule
+just as completely:
+
+```yaml
+match:
+  tools: deploy        # ✗ a string, not a list — matches NOTHING
+  tools: ["deploy"]    # ✓
+```
+
+Match values are lists of glob patterns, and the evaluator returns "no match"
+for anything that is not a list. Before this was validated, the rule above
+loaded, the sensor logged `loaded local policy (1 rules)`, and `deploy` was
+never blocked. The operator believed a control was active.
+
+Every shape with that consequence is now refused at load, with an error naming
+the field and showing the correction:
+
+| Where | Expected | Rejected shapes |
+|---|---|---|
+| `match:` field values (all eight) | non-empty list of string patterns | scalar, number, `null`, `[]`, mapping, unquoted `yes`/`no`, nested list |
+| `match:` / `conditions:` block | mapping | string (one missed indent), list, number |
+| `conditions: min_chain_tier_above` | number | non-numeric string, `null`, list, mapping, bool |
+| `defaults:` block | mapping | string, list, number |
+| `defaults:` keys/values | `effect`, `unclassified` ∈ the four effects | unknown key, wrong case, non-effect value |
+| `rules:` | list | mapping, string, `null`, number |
+| a rule | at least one match field or condition | no `match:` and no `conditions:` |
+
+Two of these are worse than an inert rule, because the rule still fires:
+
+- **`null` skips a narrower.** `match: {tools: , agents: ["billing"]}` drops the
+  `tools` restriction and blocks *everything* the billing agent does.
+- **A non-mapping `defaults:` is discarded.** `defaults: block` — a plausible
+  shorthand — reverted the whole deployment to the shipped `effect: allow`,
+  turning deny-by-default into allow-by-default with nothing logged.
+
+A policy with no rules and the shipped defaults still loads (a `defaults:`-only
+posture is legitimate) but **warns**, because it is indistinguishable from a
+policy whose `rules:` was lost to an indent.
+
+#### Why a wrong type is rejected, not coerced
+
+Coercing `tools: deploy` to `tools: ["deploy"]` is friendlier, and it was
+considered. It loses on three counts:
+
+1. **It only answers one shape of seven.** There is no defensible coercion for
+   `tools: []`, for a mapping, for `null`, or for a `match:` block that is
+   itself a string. Coercion would fix the tidiest case and leave the rest of
+   the class silently broken — while making the file look validated.
+2. **It guesses at intent, in the arming direction.** Is `tools: "a,b"` one tool
+   or two? Coercion silently starts *enforcing* a rule that no one reviewed in
+   the form the engine actually runs. An inert rule is at least inert.
+3. **Rejection costs no enforcement.** This is the argument that settles it. A
+   rule in one of these states was already matching nothing, and the rejection
+   path lands on exactly the same detection-only fallback that the inert rule
+   was already delivering. Nothing that was being enforced stops being enforced.
+   The whole delta is that the operator is now told.
+
+The cost is real but narrower than it looks: rejection refuses the **whole**
+policy, so one malformed rule takes its healthy siblings with it. That follows
+the existing contract for `trust_below` and unknown keys, and for the same
+reason — half a policy is a state nobody authored, and the surviving half can
+be the `allow` exceptions to the `block` rules that were dropped. Detection-only
+is a known floor; a partially applied deny-list is not.
+
 ---
 

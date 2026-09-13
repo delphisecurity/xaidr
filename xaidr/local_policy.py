@@ -45,6 +45,14 @@ Supported match fields: ``tools``, ``agents``, ``impact_class``,
 is NOT supported in this open distribution — it needs a per-agent trust score
 that only the platform tier computes, so a policy using it is REJECTED at load
 (with a clear error) rather than silently never firing.
+
+Every match value is a LIST of glob patterns. ``tools: deploy`` (a scalar) is a
+type error, not a shorthand, and is rejected at load with the correction in the
+message — it would otherwise load cleanly and match nothing, which is the one
+outcome a policy loader must never produce. The same applies to a non-mapping
+``match:``/``conditions:``/``defaults:`` block and to a rule with nothing to
+match on. See ``docs/policies.md`` for the full table and for why these are
+rejected rather than coerced.
 """
 
 from __future__ import annotations

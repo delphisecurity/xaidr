@@ -78,6 +78,35 @@ _MATCH_FIELDS = {
 # the rule in silence.
 _CONDITION_FIELDS = frozenset({"trust_below", "min_chain_tier_above"})
 
+# The only two keys `defaults:` accepts. Same single-source discipline as above:
+# `_reject_unknown_keys` is pointed at this, so `defaults: {efect: block}` is
+# rejected rather than silently reverting the deployment to allow-by-default.
+_DEFAULTS_FIELDS = frozenset({"effect", "unclassified"})
+
+# A match-field pattern is a string glob. ints/floats are accepted and stringified
+# by `_glob_any` (`impact_tier: [4]`), but bool is NOT: unquoted YAML `yes`/`no`/
+# `on`/`off` parse to True/False and would stringify to "true"/"false", matching
+# nothing real. That is the same silent-inert failure this module rejects.
+_PATTERN_TYPES = (str, int, float)
+
+
+def _typename(value: Any) -> str:
+    """How the operator's mistake reads back to them, in YAML terms."""
+    if value is None:
+        return "an empty value (`null` — a YAML key with nothing after it)"
+    if isinstance(value, bool):
+        return f"a boolean ({str(value).lower()} — unquoted YAML yes/no/on/off)"
+    if isinstance(value, list) and not value:
+        return "an empty list ([])"
+    return f"a {type(value).__name__} ({value!r})"
+
+
+def _as_yaml_list(value: Any) -> str:
+    """The corrected one-liner to put in the error message."""
+    if isinstance(value, _PATTERN_TYPES) and not isinstance(value, bool):
+        return f'["{value}"]'
+    return '["<pattern>", ...]'
+
 
 def _reject_unknown_keys(rule_id: Any, block_name: str, block: dict, known) -> bool:
     """Log and reject the first unrecognized key in a rule's match/conditions.
@@ -88,6 +117,10 @@ def _reject_unknown_keys(rule_id: Any, block_name: str, block: dict, known) -> b
     same failure class as `trust_below`, so it gets the same loud treatment
     rather than being quietly ignored.
 
+    Also used for the top-level `defaults:` block, where the consequence is
+    worse than a dead rule: `defaults: {efect: block}` drops back to the shipped
+    `allow`, turning a deny-by-default deployment into an allow-by-default one.
+
     Returns True when an unknown key was found (caller must reject the policy).
     """
     for key in sorted(block, key=str):
@@ -96,15 +129,124 @@ def _reject_unknown_keys(rule_id: Any, block_name: str, block: dict, known) -> b
         near = difflib.get_close_matches(str(key), sorted(known), n=1, cutoff=0.6)
         did_you_mean = f" Did you mean {near[0]!r}?" if near else ""
         logger.error(
-            "[xaidr] action_policy rule %r has an unknown key %r under '%s:'."
-            "%s A rule with an unrecognized key matches NOTHING — it would load "
-            "cleanly and silently never fire. Policy REJECTED (detection-only). "
+            "[xaidr] action_policy %s has an unknown key %r under '%s:'."
+            "%s An unrecognized key is DROPPED — the block silently loses what "
+            "it was written to do. Policy REJECTED (detection-only). "
             "Valid '%s:' keys: %s.",
-            rule_id, key, block_name, did_you_mean, block_name,
+            "top level" if block_name == "defaults" else f"rule {rule_id!r}",
+            key, block_name, did_you_mean, block_name,
             ", ".join(sorted(known)),
         )
         return True
     return False
+
+
+# ── F5 · type validation ─────────────────────────────────────────────────────
+#
+# A-11 (above) closed the case where a match/conditions KEY is wrong. F5 is the
+# same failure with the key right and the VALUE the wrong shape:
+#
+#     match:
+#       tools: deploy        # not ["deploy"]
+#
+# `_glob_any` returns False for anything that is not a list, so this loads with
+# an INFO line reporting success and then never matches. Every one of the eight
+# match fields behaves this way, as do the `match:`/`conditions:` blocks
+# themselves when they are not mappings, and `defaults:` when it is not one.
+#
+# All of it is rejected at load rather than coerced. The reasoning is in
+# docs/policies.md ("Why a wrong type is rejected, not coerced"); the short form
+# is that coercion can only guess for ONE of these shapes (`scalar -> [scalar]`)
+# and has no defensible guess for the rest — `[]`, a mapping, `null`, a `match:`
+# block that is itself a string — so it would fix the tidiest case and leave the
+# class silently broken, while making the engine's behaviour unpredictable from
+# the file. Rejection costs no enforcement: a rule in this state was already
+# matching nothing, and the reject path lands on the same detection-only
+# fallback the inert rule was already delivering.
+
+
+def _reject_match_value(rule_id: Any, field: str, value: Any) -> bool:
+    """Reject a `match:` value that is not a non-empty list of glob patterns.
+
+    Returns True when the caller must reject the whole policy.
+    """
+    if isinstance(value, list) and value and all(
+        isinstance(p, _PATTERN_TYPES) and not isinstance(p, bool) for p in value
+    ):
+        return False
+
+    common = (
+        "Policy REJECTED (detection-only). '%s:' takes a LIST of glob patterns; "
+        "write it as `%s: %s`."
+    )
+    if value is None:
+        # The one shape that does not merely go inert: `_rule_matches` skips a
+        # None field entirely, so the rule keeps firing WITHOUT this narrower.
+        # `match: {tools: , agents: [a]}` blocks every tool agent `a` calls.
+        logger.error(
+            "[xaidr] action_policy rule %r has 'match: %s:' with %s. A match "
+            "field with no value is SKIPPED at evaluation time, which WIDENS "
+            "the rule — it fires on everything this field was written to "
+            "exclude. " + common,
+            rule_id, field, _typename(value), field, field, _as_yaml_list(value),
+        )
+    elif isinstance(value, list):
+        bad = next((p for p in value
+                    if not isinstance(p, _PATTERN_TYPES) or isinstance(p, bool)), None)
+        detail = (
+            "an empty list — it can never match anything"
+            if not value else
+            f"a non-pattern element ({_typename(bad)}); patterns are strings"
+        )
+        logger.error(
+            "[xaidr] action_policy rule %r has 'match: %s:' set to %s. The rule "
+            "would load cleanly and silently never fire. " + common,
+            rule_id, field, detail, field, field, _as_yaml_list(value),
+        )
+    else:
+        logger.error(
+            "[xaidr] action_policy rule %r has 'match: %s:' set to %s, not a "
+            "list. A non-list match value matches NOTHING — the rule would load "
+            "cleanly and silently never fire, so the operator believes a control "
+            "is active when it is not. " + common,
+            rule_id, field, _typename(value), field, field, _as_yaml_list(value),
+        )
+    return True
+
+
+def _reject_numeric_condition(rule_id: Any, field: str, value: Any, kind: type) -> bool:
+    """Reject a numeric `conditions:` value that cannot be compared.
+
+    `_rule_matches` wraps both numeric comparisons in try/except and returns
+    False on failure, so `min_chain_tier_above: high` is another load-clean,
+    never-fires rule. bool is excluded for the same reason as in match patterns.
+    """
+    ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+    if not ok and isinstance(value, str):
+        try:
+            kind(value)
+            ok = True  # "1" / "0.5" are compared correctly today; keep accepting
+        except (TypeError, ValueError):
+            ok = False
+    if ok:
+        return False
+    consequence = (
+        # None is the widening direction, as with a None match field: the
+        # condition is skipped entirely and the rule fires without it.
+        "The condition is SKIPPED at evaluation time, which WIDENS the rule — "
+        "it fires in exactly the cases this condition was written to exclude."
+        if value is None else
+        "The comparison fails at evaluation time and the rule does NOT match — "
+        "it would load cleanly and silently never fire."
+    )
+    logger.error(
+        "[xaidr] action_policy rule %r has 'conditions: %s:' set to %s, which "
+        "is not a number. %s Policy REJECTED (detection-only). Give '%s:' %s "
+        "value.",
+        rule_id, field, _typename(value), consequence, field,
+        "an int" if kind is int else "a float",
+    )
+    return True
 
 
 @dataclass
@@ -129,9 +271,20 @@ def parse_action_policy(
 
     Unknown keys INSIDE a rule's ``match:`` or ``conditions:`` block are
     REJECTED, not ignored: such a rule loads cleanly and then matches nothing,
-    which is a security control that silently does not run. Unknown fields
-    elsewhere (top level, rule level) remain ignored — those do not disarm
-    anything.
+    which is a security control that silently does not run. Unknown fields at
+    the rule level remain ignored — those do not disarm anything. Unknown keys
+    under ``defaults:`` ARE rejected, because dropping one reverts the
+    deployment to allow-by-default.
+
+    Wrong-TYPED values are rejected on the same grounds (F5): a scalar where a
+    list belongs, a non-mapping ``match:``/``conditions:``/``defaults:`` block,
+    an empty pattern list, or a non-numeric numeric condition all load cleanly
+    and then never fire. The invariant this function enforces is:
+
+        a rule that cannot match anything never loads quietly.
+
+    Either the policy is rejected with an error naming the field and the
+    correction, or every rule in it is capable of firing.
     """
     # S2 · extension-supplied condition names. Resolved ONCE, here, so the two
     # places below that consult it cannot drift apart. Empty for every caller
@@ -142,6 +295,10 @@ def parse_action_policy(
     _condition_fields = _CONDITION_FIELDS | set(_extra)
     try:
         if not isinstance(raw, dict):
+            logger.error(
+                "[xaidr] action_policy must be a mapping, got %s. Policy "
+                "REJECTED (detection-only).", _typename(raw),
+            )
             return None
         if raw.get("version") not in SUPPORTED_VERSIONS:
             logger.warning(f"[xaidr] action_policy version {raw.get('version')!r} unsupported")
@@ -149,13 +306,52 @@ def parse_action_policy(
 
         raw_rules = raw.get("rules", [])
         if not isinstance(raw_rules, list):
+            logger.error(
+                "[xaidr] action_policy 'rules:' must be a list of rules, got "
+                "%s. Policy REJECTED (detection-only).", _typename(raw_rules),
+            )
             return None
 
         rules = []
         for r in raw_rules:
-            if not isinstance(r, dict) or r.get("effect") not in EFFECTS:
-                logger.warning(f"[xaidr] action_policy has a malformed rule: {r!r}")
+            # Same unhashable-value care as in the defaults check below:
+            # `effect: [block]` must be reported as a bad effect, not swallowed
+            # by the catch-all as an unattributed "parse failed".
+            if not isinstance(r, dict):
+                logger.error(
+                    "[xaidr] action_policy 'rules:' contains %s, not a rule "
+                    "mapping. Policy REJECTED (detection-only).", _typename(r),
+                )
                 return None
+            if not isinstance(r.get("effect"), str) or r["effect"] not in EFFECTS:
+                logger.error(
+                    "[xaidr] action_policy rule %r has effect %s, which is not "
+                    "a valid effect. Policy REJECTED (detection-only). Valid "
+                    "effects: %s.",
+                    r.get("id"), _typename(r.get("effect")),
+                    ", ".join(sorted(EFFECTS)),
+                )
+                return None
+            # A non-mapping match:/conditions: block was silently replaced with
+            # {} here, which is how `conditions: "trust_below: 0.5"` (a YAML
+            # string, from one missed indent) slipped past the trust_below
+            # rejection below AND dropped the condition — arming the rule on
+            # traffic the operator had excluded. Both blocks are now validated
+            # before anything reads them.
+            for block_name in ("match", "conditions"):
+                block = r.get(block_name)
+                if block is not None and not isinstance(block, dict):
+                    logger.error(
+                        "[xaidr] action_policy rule %r has a '%s:' block that is "
+                        "%s, not a mapping of field -> value. The block is "
+                        "unreadable, so the rule loads with NO %s at all — it "
+                        "either never fires or fires on everything the dropped "
+                        "%s was written to exclude. Policy REJECTED "
+                        "(detection-only).",
+                        r.get("id"), block_name, _typename(block),
+                        block_name, block_name,
+                    )
+                    return None
             match = r.get("match") if isinstance(r.get("match"), dict) else {}
             conditions = r.get("conditions") if isinstance(r.get("conditions"), dict) else {}
             # trust_below requires a per-agent trust score, which is a platform-
@@ -196,6 +392,45 @@ def parse_action_policy(
                 r.get("id"), "conditions", conditions, _condition_fields
             ):
                 return None
+            # F5 · the keys are right; check the VALUES can actually be matched
+            # against. Ordered after the key checks so a typo'd key keeps its
+            # did-you-mean message instead of being reported as a bad type.
+            for field, value in sorted(match.items(), key=lambda kv: str(kv[0])):
+                if _reject_match_value(r.get("id"), field, value):
+                    return None
+            if _reject_numeric_condition(
+                r.get("id"), "min_chain_tier_above",
+                conditions.get("min_chain_tier_above", 0), int,
+            ):
+                return None
+            # Only reachable when an extension registered `trust_below` (the
+            # guard above rejects it otherwise), but the comparison is still
+            # `float(trust) < float(trust_below)` in this module, so the type is
+            # still this module's to check.
+            if "trust_below" in conditions and _reject_numeric_condition(
+                r.get("id"), "trust_below", conditions["trust_below"], float,
+            ):
+                return None
+            # Extension-registered condition VALUES are deliberately not typed
+            # here: the extension owns their semantics and this module cannot
+            # know what shape `geo_outside:` takes. An evaluator that cannot
+            # answer already fails closed in `_rule_matches`.
+
+            # (d) THE PROPERTY. Everything above rejects a specific mistake;
+            # this catches the general case, including ones nobody enumerated.
+            # `_rule_matches` returns False for a rule with no matchers and no
+            # conditions — at EVALUATION time, invisibly, forever. Same verdict,
+            # moved to load, where an operator is present to read it.
+            if not match and not conditions:
+                logger.error(
+                    "[xaidr] action_policy rule %r has no 'match:' and no "
+                    "'conditions:', so there is nothing for it to match on — it "
+                    "can NEVER fire, whatever its effect says. Policy REJECTED "
+                    "(detection-only). Give the rule at least one match field "
+                    "(%s) or condition.",
+                    r.get("id"), ", ".join(sorted(_MATCH_FIELDS)),
+                )
+                return None
             rules.append({
                 "id": str(r.get("id")) if r.get("id") is not None else None,
                 "effect": r["effect"],
@@ -204,13 +439,59 @@ def parse_action_policy(
                 "message": r.get("message"),
             })
 
-        raw_defaults = raw.get("defaults") if isinstance(raw.get("defaults"), dict) else {}
+        # `defaults:` is the highest-consequence block in the file and had the
+        # quietest failure: a non-mapping was replaced with {} and the policy
+        # loaded with the SHIPPED defaults. `defaults: block` — a plausible
+        # shorthand — parsed as a string, was discarded, and silently turned a
+        # deny-by-default deployment into an allow-by-default one. No rule is
+        # involved, so none of the rule-level guards above could see it.
+        raw_defaults = raw.get("defaults")
+        if raw_defaults is not None and not isinstance(raw_defaults, dict):
+            logger.error(
+                "[xaidr] action_policy 'defaults:' is %s, not a mapping. It "
+                "would be discarded and the policy would fall back to the "
+                "shipped defaults (effect: allow, unclassified: monitor) — a "
+                "deny-by-default policy silently becomes allow-by-default. "
+                "Policy REJECTED (detection-only). Write it as "
+                "`defaults: {effect: ..., unclassified: ...}`.",
+                _typename(raw_defaults),
+            )
+            return None
+        raw_defaults = raw_defaults or {}
+        # Same reasoning for an unknown key: `defaults: {efect: block}` drops
+        # the block effect back to allow with nothing logged.
+        if _reject_unknown_keys(None, "defaults", raw_defaults, _DEFAULTS_FIELDS):
+            return None
         defaults = {
             "effect": raw_defaults.get("effect", "allow"),
             "unclassified": raw_defaults.get("unclassified", "monitor"),
         }
-        if defaults["effect"] not in EFFECTS or defaults["unclassified"] not in EFFECTS:
-            return None
+        for key in ("effect", "unclassified"):
+            # `not in EFFECTS` alone raises TypeError for an unhashable value
+            # (`effect: [block]`), which the catch-all at the bottom turns into
+            # a generic "parse failed" that names neither the key nor the file.
+            if not isinstance(defaults[key], str) or defaults[key] not in EFFECTS:
+                logger.error(
+                    "[xaidr] action_policy 'defaults: %s:' is %s, which is not a "
+                    "valid effect. Policy REJECTED (detection-only). Valid "
+                    "effects: %s.",
+                    key, _typename(defaults[key]), ", ".join(sorted(EFFECTS)),
+                )
+                return None
+
+        # Not a rejection: a `defaults:`-only policy is a legitimate posture
+        # ("block everything, no exceptions"). But a policy with no rules AND
+        # the shipped defaults enforces nothing the operator wrote, and is
+        # indistinguishable from one whose `rules:` was lost to an indent. The
+        # property in (d) is about being LOUD, not about refusing — so this is
+        # loud and still loads.
+        if not rules and defaults == {"effect": "allow", "unclassified": "monitor"}:
+            logger.warning(
+                "[xaidr] action_policy loaded with NO rules and the shipped "
+                "defaults (effect: allow, unclassified: monitor) — it cannot "
+                "change any decision. Check that 'rules:' is present and "
+                "indented as a top-level key.",
+            )
 
         # The registered evaluators ride WITH the parsed policy. `evaluate()`
         # takes (policy, request) and is called from one place; threading a
