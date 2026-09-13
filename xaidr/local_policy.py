@@ -109,7 +109,7 @@ def load_policy(
     except Exception:
         logger.warning(
             "[xaidr] a policy file was given but PyYAML is not installed; "
-            "policy not loaded (detection-only). Install with: pip install xaidr[policy]"
+            "policy not loaded (detection-only). Install with: pip install 'xaidr[policy]'"
         )
         return None
 
