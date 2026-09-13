@@ -177,9 +177,72 @@ def redact_text(value: Any) -> str:
 
 
 def safe_exc(exc: BaseException) -> str:
-    """What to log for an exception: its type and its redacted message."""
+    """What to log for an exception: its type and its redacted message.
+
+    The right tool when the exception comes from a library WE called on a
+    destination WE handed it, and the destination is the diagnostic: a webhook
+    that 500s, an OTel exporter that cannot connect, a file that will not open.
+    The message is kept because it is the useful part, and `redact_text` can
+    strip the one secret-bearing shape (a URL) that such a message carries.
+
+    It is the WRONG tool for an exception raised by third-party code that has
+    been handed scanned content — see `safe_fault`.
+    """
     try:
         return f"{type(exc).__name__}: {redact_text(exc)}"
+    except Exception:
+        return "<unloggable-exception>"
+
+
+#: Cap on the rendered origin. A module name comes from a code object and is
+#: not attacker-steerable, but a log field with no bound is a log field with no
+#: bound.
+_ORIGIN_CAP = 120
+
+
+def exc_origin(exc: BaseException) -> str:
+    """Where an exception was raised, as ``module:lineno``. Never its message.
+
+    The DEEPEST frame in the traceback, which for a fault inside third-party
+    code is that code's own module and line — the thing its author needs.
+
+    Both halves come from code objects: `__name__` off the frame globals and
+    `tb_lineno` off the traceback. Neither is derived from input, which is
+    exactly what makes this safe to log at a sink where the message is not.
+    Returns ``"unknown"`` for an exception raised without a traceback.
+    """
+    try:
+        origin = "unknown"
+        tb = getattr(exc, "__traceback__", None)
+        while tb is not None:
+            frame = tb.tb_frame
+            origin = f"{frame.f_globals.get('__name__', '?')}:{tb.tb_lineno}"
+            tb = tb.tb_next
+        return origin[:_ORIGIN_CAP]
+    except Exception:
+        return "unknown"
+
+
+def safe_fault(exc: BaseException) -> str:
+    """What to log for an exception raised by code we do not control, on a path
+    that has been handed scanned content: ``TypeName at module:line``.
+
+    THE MESSAGE IS DROPPED ENTIRELY, not redacted. That is the difference from
+    `safe_exc` and it is not a matter of degree. A reporter's failure carries a
+    URL — a shape with a grammar, which `redact_url` can take apart. An
+    extension's `gate()` is handed `ScanRequest.text` and may raise with any
+    part of it embedded in any wording; a caller's exception text has no
+    grammar, so there is no pattern that separates the prompt from the
+    diagnostic. Sanitising arbitrary text is not a thing that can be done, and
+    the only honest treatment is to not log it.
+
+    What survives is what an operator can act on and an attacker cannot steer:
+    the exception TYPE and the CODE LOCATION inside the failing extension. The
+    caller of the hook still has the exception object and may log its message at
+    their own boundary, where they own the disclosure decision.
+    """
+    try:
+        return f"{type(exc).__name__} at {exc_origin(exc)}"
     except Exception:
         return "<unloggable-exception>"
 

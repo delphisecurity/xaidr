@@ -40,6 +40,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from .reporters import safe_fault
+
 logger = logging.getLogger("xaidr.circuit_breaker")
 
 # Verdict surfaced by every scan while the circuit is open in block mode.
@@ -363,9 +365,14 @@ class _CircuitRuntime:
         try:
             cb(payload)
         except Exception as exc:
+            # `on_trip` is arbitrary HOST code and it fires from inside a scan,
+            # so whatever it raises is both outside our control and within
+            # reach of the content being scanned. Type and location only —
+            # `safe_fault`, the same treatment the extension hooks get.
             logger.warning(
-                "xaidr: circuit_breaker on_trip callback raised (%s: %s)",
-                type(exc).__name__, exc,
+                "xaidr: circuit_breaker on_trip callback raised (%s) "
+                "[message suppressed: may contain scanned content]",
+                safe_fault(exc),
             )
 
     # Set by the sensor so trip/close events reach telemetry. Left as a no-op

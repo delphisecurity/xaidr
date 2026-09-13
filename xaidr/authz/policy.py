@@ -346,11 +346,18 @@ def _rule_matches(rule: dict, request: dict, evaluators: Optional[Mapping[str, A
                 if not evaluator(request, rule["conditions"][key]):
                     return False
             except Exception as exc:
+                # S2 evaluators are EXTENSION code and are handed the whole
+                # request, which carries the tool name and the destination
+                # identifier. Same rule as every other extension hook: the
+                # message is dropped, the type and the evaluator's own code
+                # location are kept. See `xaidr.reporters.safe_fault`.
+                from ..reporters import safe_fault
                 logger.error(
-                    "[xaidr] condition evaluator %r raised (%s: %s) — rule %r "
-                    "does NOT match. A condition that cannot answer must not "
-                    "widen the rule it was written to narrow.",
-                    key, type(exc).__name__, exc, rule.get("id"),
+                    "[xaidr] condition evaluator %r raised (%s) [message "
+                    "suppressed: may contain request content] — rule %r does "
+                    "NOT match. A condition that cannot answer must not widen "
+                    "the rule it was written to narrow.",
+                    key, safe_fault(exc), rule.get("id"),
                 )
                 return False
 

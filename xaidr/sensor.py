@@ -44,7 +44,7 @@ from .circuit_breaker import (
 from .enforcement import MONITOR as _MONITOR, resolve as _resolve_enforcement
 from .escalation import Escalator
 from .extensions import DestinationView, ScanRequest, SensorExtension
-from .reporters import Reporter
+from .reporters import Reporter, safe_fault
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
 from .scanner.command_parse import reconstruct as _reconstruct_command
 from .scanner.privilege_action import scan_privileged_action as _privilege_findings
@@ -672,9 +672,30 @@ class DelphiSensor:
         # conditions are known before the policy loads, and on_attach still
         # sees a finished object.
         for extension in self._extensions:
-            # NOT wrapped: a fault here is a construction failure and raises.
-            # See SensorExtension.on_attach for why this one hook is different.
-            extension.on_attach(self)
+            # NOT wrapped into a degradation: a fault here is a construction
+            # failure and RAISES, unchanged. See SensorExtension.on_attach for
+            # why this one hook is different.
+            #
+            # It is LOGGED on the way out, under the same content rule as every
+            # other extension fault, for two reasons. A host that catches the
+            # constructor exception and falls back to an unprotected path
+            # otherwise leaves no record that an enterprise control failed to
+            # install. And the re-raise is what keeps the message available to
+            # exactly one party: the caller, at their own logging boundary,
+            # where they own the disclosure decision. The sensor's own sink gets
+            # the type and the location and nothing else.
+            try:
+                extension.on_attach(self)
+            except Exception as exc:
+                name = getattr(extension, "name", type(extension).__name__)
+                logger.error(
+                    "xaidr: extension %r raised in on_attach() (%s) [message "
+                    "suppressed: may contain caller-supplied content]. "
+                    "CONSTRUCTION FAILED — this sensor was NOT built and the "
+                    "exception is re-raised to the caller.",
+                    name, safe_fault(exc),
+                )
+                raise
 
     # ── extensions (S1/S5/S6) ────────────────────────────────────────────
     # Every hook below except on_attach is fail-SAFE: a fault degrades to "this
@@ -806,6 +827,21 @@ class DelphiSensor:
         enterprise gate that is throwing is not protecting anything, and the
         sensor will keep returning healthy-looking verdicts without it. That is
         the ``_breaker_counter_failed`` lesson applied to extension code.
+
+        THE EXCEPTION MESSAGE IS NEVER LOGGED, for the reason ``_emit_scan_error``
+        already gives about the scan path: an exception message is routinely
+        built by interpolating the value that caused the fault, and every hook
+        reached through here has been handed scanned content — ``gate`` and
+        ``transform_verdict`` receive ``ScanRequest.text`` directly. An
+        extension is ENTITLED to that content; this log line is not, and it
+        ships to the host's pipeline like any other.
+
+        `safe_fault`, not `safe_exc`: `safe_exc` redacts URLs out of a message
+        it otherwise keeps, which is right for a reporter failing against a
+        destination and useless here, where the leaked value is a prompt and has
+        no shape to match. What is logged instead is the exception TYPE and the
+        code location INSIDE the extension — neither derived from input, and
+        together the thing an operator hands to the extension's author.
         """
         name = getattr(extension, "name", type(extension).__name__)
         key = (name, hook)
@@ -813,10 +849,11 @@ class DelphiSensor:
             return
         self._extension_faults.add(key)
         logger.error(
-            "xaidr: extension %r raised in %s() (%s: %s). THIS CONTROL IS INERT "
-            "until the sensor is rebuilt — the scan continued on the open "
-            "verdict. This message is logged once per extension per hook.",
-            name, hook, type(exc).__name__, exc,
+            "xaidr: extension %r raised in %s() (%s) [message suppressed: may "
+            "contain scanned content]. THIS CONTROL IS INERT until the sensor "
+            "is rebuilt — the scan continued on the open verdict. This message "
+            "is logged once per extension per hook.",
+            name, hook, safe_fault(exc),
         )
 
     def _build_scan_request(self, direction: str, **fields) -> ScanRequest:
