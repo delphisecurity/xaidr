@@ -135,12 +135,53 @@ body — not retyped, not summarised:
 ```
 git push origin "v$VERSION"
 
-git show -s --format=%b "v$VERSION" \
-  | sed '/^\(Co-Authored-By\|Claude-Session\|Signed-off-by\):/d' > /tmp/notes.md
+git show -s --format=%b "v$VERSION^{commit}" \
+  | sed -E '/^(Co-Authored-By|Claude-Session|Signed-off-by):/d' > /tmp/notes.md
+
+# The extraction must yield ONE trailer-free body. Both halves have failed
+# silently; check before the body becomes public, not after.
+first=$(git show -s --format=%b "v$VERSION^{commit}" | grep -m1 .)
+trailers=$(grep -cE '^(Co-Authored-By|Claude-Session|Signed-off-by):' /tmp/notes.md || true)
+copies=$(grep -cFx "$first" /tmp/notes.md || true)
+[ "$trailers" = 0 ] && [ "$copies" = 1 ] || {
+  echo "EXTRACTION BROKEN: trailers=$trailers copies=$copies (want 0 and 1)"; exit 1; }
 
 gh release create "v$VERSION" --verify-tag \
   --title "v$VERSION — <one line>" --notes-file /tmp/notes.md
 ```
+
+**`sed -E` and `^{commit}` are both the fix for a defect, not style.** This step
+was written with `sed '/^\(A\|B\):/d'` and a bare `"v$VERSION"`, and each half
+was wrong in the direction that produces a plausible-looking file rather than an
+error. Measured against `v1.16.0`:
+
+```
+$ git show -s --format=%b v1.16.0 | grep -cE '^(Co-Authored-By|Claude-Session|Signed-off-by):'
+6
+$ git show -s --format=%b v1.16.0 \
+    | sed '/^\(Co-Authored-By\|Claude-Session\|Signed-off-by\):/d' \
+    | grep -cE '^(Co-Authored-By|Claude-Session|Signed-off-by):'
+6          <- the deletion deleted nothing
+$ git show -s --format=%b v1.16.0 | grep -cF 'MINOR: enforcement fixes, no new detector.'
+2          <- the body twice
+$ git show -s --format=%b 'v1.16.0^{commit}' | wc -l
+664        <- against 1332 for the bare tag name
+```
+
+- **BSD `sed` has no `\|` alternation in a BRE.** On macOS — where these releases
+  are cut — `\|` is a literal `|`, so the address matches no line and `sed`
+  exits 0 having done nothing. GNU `sed` accepts `\|` as a GNU extension, which
+  is why the line reads as correct and why nobody running it on Linux would see
+  it fail. `sed -E` uses an ERE, where `|` is alternation on both platforms.
+- **`%b` on an annotated tag emits both bodies.** `v$VERSION` resolves to the
+  tag object, so `git show` prints the tag message *and* the commit it points
+  at — and this procedure creates the tag with `-F notes.md` from the same
+  notes, so the two are the same text. `^{commit}` peels the tag and takes the
+  commit body only.
+
+Together they would have published the 1.16.0 body twice over, with six trailer
+lines still in it — including a `Claude-Session:` URL — and no step in the
+procedure would have said a word.
 
 Three things about the body:
 
