@@ -249,20 +249,34 @@ def test_all_documented_match_fields_together_still_load_and_fire():
                             mcp_server="srv-a").action == "blocked"
 
 
-def test_rule_with_no_match_block_still_loads():
-    """(f) control: a rule with no match: at all is still a valid load."""
-    assert _sensor().set_policy({
-        "version": "1", "defaults": {"effect": "allow"},
-        "rules": [{"id": "bare", "effect": "allow"}],
-    }) is True
+@pytest.mark.parametrize("rule,label", [
+    ({"id": "bare", "effect": "allow"}, "no match: block at all"),
+    ({"id": "empty", "effect": "block", "match": {}, "conditions": {}}, "empty blocks"),
+])
+def test_rule_with_nothing_to_match_on_is_rejected(rule, label, caplog):
+    """CONTRACT CHANGE (F5 (d)): these two used to assert `is True`.
 
+    They were written as A-11 scope guards — "an empty block is not an unknown
+    key" — and the assertion they reached for was "still loads". That is the
+    wrong half of the statement. `_rule_matches` returns False for a rule with
+    no matchers and no conditions, so both of these ARE the accepted-and-inert
+    shape A-11 exists to eliminate; the guards were pinning the bug in place.
 
-def test_empty_match_and_empty_conditions_still_load():
-    """(f) control: empty blocks are not 'unknown keys'."""
-    assert _sensor().set_policy({
-        "version": "1", "defaults": {"effect": "allow"},
-        "rules": [{"id": "empty", "effect": "block", "match": {}, "conditions": {}}],
-    }) is True
+    What the scope guard actually needed to say is preserved below: an empty
+    block must not be reported as an UNKNOWN KEY. It is rejected for being
+    unable to fire, which is a different error with a different message.
+    """
+    with caplog.at_level(logging.ERROR, logger="xaidr.authz"):
+        accepted = _sensor().set_policy({
+            "version": "1", "defaults": {"effect": "allow"}, "rules": [rule],
+        })
+    assert accepted is False, f"{label}: rule loaded and can never fire"
+    assert rule["id"] in caplog.text
+    assert "NEVER fire" in caplog.text
+    assert "unknown key" not in caplog.text, (
+        "an empty block is not an unknown key — the A-11 scope guard this test "
+        f"replaced was protecting exactly this: {caplog.text!r}"
+    )
 
 
 def test_unknown_keys_outside_match_are_still_ignored():
