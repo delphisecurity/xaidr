@@ -31,6 +31,15 @@ THE FOUR RULES THIS MODULE ENCODES:
    runtime degradation), and a ``transform_verdict`` that STRENGTHENS a verdict
    raises (that is a contract violation, not an environment fault).
 
+   THE FAULT LINE NEVER CARRIES THE EXCEPTION MESSAGE. Every hook here has been
+   handed content the sensor is scanning — ``gate`` and ``transform_verdict``
+   receive ``ScanRequest.text`` outright — and an exception message is routinely
+   built by interpolating the value that caused the fault. The extension is
+   entitled to that content; the sensor's log is not, and it ships to the host's
+   pipeline like any other. What is logged is the extension name, the hook, the
+   exception TYPE and the code location inside the extension
+   (``xaidr.reporters.safe_fault``).
+
 WHAT THE VIEWS DO NOT CARRY. Nothing here hands an extension the raw prompt
 beyond what the hook already receives as the scan input (``ScanRequest.text``,
 which the scan already has). Destinations are host-only; tool arguments and
@@ -147,6 +156,14 @@ class SensorExtension:
         attach has not degraded, it has failed to install, and a deployment that
         believes it installed an enterprise control it did not have is the
         failure this whole module exists to prevent.
+
+        The sensor also logs the failure at ERROR on the way out, so a host that
+        catches this exception and falls back still leaves a record. That line
+        carries the extension name, the exception TYPE and the code location —
+        never the exception MESSAGE, which is the same content rule every other
+        hook's fault line follows (see ``Sensor._extension_failed``). The
+        message reaches the CALLER, on the raised exception, where they own the
+        disclosure decision.
         """
 
     # ── S5 ───────────────────────────────────────────────────────────────────

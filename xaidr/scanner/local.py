@@ -390,11 +390,21 @@ class LocalScanner:
             try:
                 report = esc.health()
             except Exception as exc:
+                # `safe_exc` here, NOT `safe_fault`, and the difference is the
+                # audited one. `health()` takes no arguments and runs at
+                # CONSTRUCTION, before any scan — there is no scanned content in
+                # the process for its message to echo. What such a message DOES
+                # carry is the backend URL the link could not reach, which is
+                # both the useful half of the diagnostic and exactly the shape
+                # `redact_text` strips the credential out of. Dropping the
+                # message here would cost an operator the reason their link is
+                # down and protect nothing.
+                from ..reporters import safe_exc
                 logger.error(
                     "xaidr: escalator %r raised from health() at construction "
-                    "(%s: %s). The link is REGISTERED but has not confirmed it "
+                    "(%s). The link is REGISTERED but has not confirmed it "
                     "is answering; scans will record 'skipped' if it keeps "
-                    "failing.", name, type(exc).__name__, exc,
+                    "failing.", name, safe_exc(exc),
                 )
                 continue
             if report is None or not getattr(report, "healthy", False):

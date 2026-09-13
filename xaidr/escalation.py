@@ -41,6 +41,8 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from .reporters import safe_fault
+
 logger = logging.getLogger("xaidr.escalation")
 
 __all__ = ["Escalator", "HealthReport", "run_escalators"]
@@ -150,10 +152,16 @@ def run_escalators(escalators, req, local_result):
             continue
         if status == "error":
             skipped_reason = skipped_reason or f"{name}_unreachable"
+            # Message suppressed for the same reason `_extension_failed` does
+            # it: `scan(req, local_result)` is handed `ScanRequest.text`, so a
+            # link that raises while looking at the prompt can put the prompt in
+            # its own message, and this line ships to the host's pipeline.
+            # Type plus the code location inside the link — see `safe_fault`.
             logger.error(
-                "xaidr: escalator %r raised (%s: %s) — SKIPPED. The local "
-                "verdict stands and this scan was NOT given a second opinion.",
-                name, type(value).__name__, value,
+                "xaidr: escalator %r raised (%s) [message suppressed: may "
+                "contain scanned content] — SKIPPED. The local verdict stands "
+                "and this scan was NOT given a second opinion.",
+                name, safe_fault(value),
             )
             continue
         if value is not None:
