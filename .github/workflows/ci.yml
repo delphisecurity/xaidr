@@ -164,6 +164,16 @@ jobs:
       - name: Corpus report (fails on a benign-gate violation)
         run: python scripts/corpus_report.py
 
+      # GATED, not reported. The A2A structural validator now walks nested task
+      # containers, and the pools corpus_report.py covers reach it ZERO times —
+      # their 42 scan_a2a items are plain text, so the body never parses to a
+      # dict and the structural layer never runs. A zero delta there measures
+      # nothing about this code. benign_a2a/nested.jsonl is the population that
+      # does reach it, and a benign body has no structural anomaly by
+      # construction, so the bar is 0 signals, not "few".
+      - name: Benign nested A2A corpus (structural false-positive gate)
+        run: python scripts/benign_a2a_report.py
+
       # The published figure. Reported, not gated — it asserts nothing, exactly
       # like the attack half of corpus_report.py. It is in CI so the denominator
       # and every entry excluded from it are printed into the log of every pull
