@@ -21,7 +21,28 @@ macOS 26.6 / arm64:
 | `full` + CrewAI | &nbsp;&nbsp;+ `".[crewai]"` | **7677 passed, 124 skipped** |
 | `full` + Haystack | &nbsp;&nbsp;+ `".[haystack]"` | **7695 passed, 106 skipped** |
 | `corpus` (CI job) | `pip install .` && `python scripts/corpus_report.py` | benign gates **PASS**, exit 0 |
+| `corpus` (CI job) | &nbsp;&nbsp;&nbsp;&nbsp;then `python scripts/benign_a2a_report.py` | nested-A2A structural FP gate **PASS** (0/60), exit 0 |
 | `corpus` (CI job) | &nbsp;&nbsp;&nbsp;&nbsp;then `python scripts/intent_metrics.py` | catch rate + denominator printed into the log; reported, not gated |
+
+**The `base`/`full` rows above are stale and are not a baseline.** Measured on
+this commit, CPython 3.12.2 / macOS arm64, `full` config (httpx + otel + yaml,
+no framework extras, no nano), split across eight pytest processes because a
+one-process full run has crashed the measuring machine:
+
+| commit | result |
+|---|---|
+| `origin/main` @ `67b3cd9` | **8334 passed, 137 skipped, 8 xfailed** |
+| this branch (F6 nested A2A containers) | **8432 passed, 137 skipped, 8 xfailed** |
+
+The `+98` is exactly `tests/test_f6_a2a_nested_containers.py`; no skip and no
+xfail moved, so nothing was disabled to get there. The published `full` row of
+7664 is ~670 passes behind reality, which is why it must be measured rather than
+cited. To reproduce:
+
+```sh
+ls tests/test_*.py | split -l 14 - /tmp/chunk_
+for c in /tmp/chunk_*; do python -m pytest $(cat $c | tr '\n' ' ') -q --no-header | tail -1; done
+```
 
 The LangChain-stack row is the one that exercises the real LangGraph `ToolNode`
 return contract and the real Deep Agents import-order check; the CrewAI row is
