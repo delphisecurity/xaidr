@@ -5,6 +5,13 @@ Measure, group, propose. **Nothing is built here.** The battery
 criteria for whatever gets built; every candidate below is measured against them
 first, and none is tuned to them.
 
+> **Pre-F9 snapshot.** This document was written against the battery as it was
+> labelled at 85a2f98, before finding F9 moved 28 cases onto the official OWASP
+> categories. Its per-category groupings and its `21/120 (18%)` baseline are
+> that snapshot and are **not** regenerated here; `RESULTS.md` carries the
+> current numbers. Case ids are given in current form with the pre-F9 id in
+> brackets where they differ — see `README.md` for the full map.
+
 Branch: `feat/asi-boundary-coverage`, off `main` (85a2f98). The baseline and
 every number below are **identical on `main` and on `feat/asi-lpci-rules-gated`**
 (0 per-case detection differences across all 240 cases), so the analysis does not
@@ -113,7 +120,7 @@ to estimate separation; the point is the false-positive column, measured on all
 |---|---:|---:|---|
 | `priv_action` (G2) | 15 | 1 | biggest single lever; FP is `ASI08-B10`, a fleet-wide *enable* of approvals |
 | `resource_unbounded` (G4) | 9 | 0 | clean on this set |
-| `egress_external` (G1) | 7 | 1 | FP is `ASI09-B10`, a protective warning *about* an external vendor |
+| `egress_external` (G1) | 7 | 1 | FP is `ASI06-B22` (then `ASI09-B10`), a protective warning *about* an external vendor |
 | `poison_write` (G3) | 6 | 1 | FP is `ASI06-B08`, a KB entry that *forbids* asking for card numbers (negation) |
 | `output_conceal` (G5) | 4 | 0 | clean on this set |
 | **union** | **40** | **3** | rules+nano 41/120 -> **81/120 (68%)**, FP 18 -> 21 |
@@ -124,7 +131,8 @@ what surfaced it:**
 - `ASI08-B10` (enable approvals fleet-wide) trips `priv_action` because the crude
   rule keys on `scope=all-agents`. The fix the benign case points at: require the
   destructive *direction* (disable / grant-to-self / open), not the scope alone.
-- `ASI09-B10` (warn that `payouts.ext` is external, verify transfers) trips
+- `ASI06-B22`, then `ASI09-B10` (warn that `payouts.ext` is external, verify
+  transfers) trips
   `egress_external` on the vendor name plus "records". The fix: the egress signal
   must key on an actual send/write *action* to the destination, not a mention of
   it. This is the same protective-vs-active distinction the descriptive-frame

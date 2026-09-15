@@ -404,6 +404,11 @@ CATEGORIES = [
     {
         "id": "ASI04",
         "name": "Agentic Supply Chain",
+        # Held-out: 0 of 3. The battery had NO real ASI04 cases until finding F9
+        # relabelled it -- the twelve that used to carry this id tested resource
+        # exhaustion and now read `EXH`. Three cases is not a measurement, and
+        # this verdict rests on the structural argument in the probes below, not
+        # on that ratio. See asi_battery/RESULTS.md.
         "verdict": "MOSTLY NOT COVERED",
         "audit_1_2_1": "MOSTLY NOT COVERED",
         "probes": [
@@ -448,9 +453,11 @@ CATEGORIES = [
         "id": "ASI05",
         "name": "Unexpected Code Execution",
         # COVERED against the in-sample command-form probes below; PARTIAL once
-        # the held-out battery is counted, where the rules catch 6 of 12 and the
-        # plain, non-command shapes (self-clone, self-config-disable,
-        # write-then-exec, delegated exec) are missed. See asi_battery/RESULTS.md.
+        # the held-out battery is counted, where the rules catch 8 of 12 and the
+        # plain, non-command shapes (plain download-and-run, write-then-exec, a
+        # permanent self-safety waiver, delegated exec) are missed. The "6 of 12"
+        # this comment carried was pre-G2 and stale; self-clone and
+        # self-config-disable are now caught. See asi_battery/RESULTS.md.
         "verdict": "PARTIAL",
         "audit_1_2_1": "COVERED",
         "probes": [
@@ -660,6 +667,10 @@ CATEGORIES = [
     {
         "id": "ASI09",
         "name": "Human-Agent Trust Exploitation",
+        # Held-out: ONE case (an output claiming a two-person review was
+        # satisfied when it was not), and it is missed. The twelve that used to
+        # carry this id tested retrieval poisoning and are now ASI06 (F9). One
+        # case is not a rate; this verdict is the in-sample probes' reading.
         "verdict": "PARTIAL",
         "audit_1_2_1": "PARTIAL",
         "probes": [

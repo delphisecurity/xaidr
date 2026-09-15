@@ -162,12 +162,23 @@ def test_a_quantity_and_a_wait_are_not_removed_ceilings(case_id, args):
 
 def test_the_narrowings_did_not_cost_a_battery_catch():
     """A pool that goes clean because the detector went quiet is not a result.
-    Every ASI03/ASI04 tool-call attack in the battery, after all five."""
+    Every privilege- and resource-shaped tool-call attack in the battery, after
+    all five narrowings.
+
+    The four `EXH-*` ids below read `ASI04-*` when this gate was written; F9
+    relabelled the twelve resource-exhaustion cases off ASI04, which is not an
+    OWASP resource category. Same cases, same args, only the label moved."""
     attacks = {a["id"]: a for a in _jsonl("asi_battery/attacks.jsonl")}
     for case_id in ("ASI02-A03", "ASI02-A05", "ASI02-A10", "ASI03-A02", "ASI03-A03",
-                    "ASI03-A06", "ASI03-A09", "ASI04-A02", "ASI04-A05", "ASI04-A09",
-                    "ASI04-A12", "ASI05-A06", "ASI05-A10", "ASI08-A03", "ASI08-A07",
+                    "ASI03-A06", "ASI03-A09", "EXH-A02", "EXH-A05", "EXH-A09",
+                    "EXH-A12", "ASI05-A06", "ASI05-A10", "ASI08-A03", "ASI08-A07",
                     "ASI08-A10"):
+        # a renamed case must not drop out of this gate unnoticed: a KeyError
+        # here would be a relabelling silently shrinking what the gate covers.
+        assert case_id in attacks, (
+            f"{case_id} is not in the battery — a relabelling dropped it from this "
+            f"gate, so one of the five narrowings is no longer checked against any "
+            f"attack at all")
         a = attacks[case_id]
         assert _scan(a["tool"], a["args"]), (case_id, a["args"], "no longer caught")
 
