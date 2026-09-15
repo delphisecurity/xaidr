@@ -39,9 +39,22 @@ _HINT = re.compile(r"""pip install\s+(['"]?)xaidr\[([a-z,]+)\]\1""")
 def _parsed_extras():
     """Extras via a real TOML parser, or (None, None) when none is importable.
 
-    `tomllib` is stdlib only from 3.11, and pyproject.toml claims 3.10. On 3.10
-    with no extras installed there is no TOML parser at all, which is why this
-    returns a sentinel rather than raising — see `_scanned_extras`.
+    `tomllib` is stdlib only from 3.11 and pyproject.toml claims 3.10, which is
+    what broke both py3.10 jobs in 1.17.0.
+
+    `tomli` covers 3.10 in practice, and for a reason worth writing down: pytest
+    itself declares `tomli>=1; python_version<"3.11"`, so any environment that
+    can RUN this test already has it. Measured on the py3.10 base job, whose
+    install is `pip install .` plus `pip install pytest` and nothing else:
+
+        Collecting tomli>=1 (from pytest)
+        Installing collected packages: ... tomli, ... pytest
+
+    So this returns a parser on all six CI jobs and `_scanned_extras` is not the
+    path any of them take. It is kept anyway — the guarantee above is a
+    transitive dependency of a test runner, which is not ours to rely on — and
+    it is executed directly on every job by the agreement test below, so it
+    cannot rot unnoticed while unused.
     """
     for name in ("tomllib", "tomli"):
         try:
@@ -59,13 +72,16 @@ _EXTRA_KEY = re.compile(r"^([A-Za-z0-9_][A-Za-z0-9_.-]*)\s*=", re.M)
 
 
 def _scanned_extras():
-    """Extras read WITHOUT a TOML parser, for Python 3.10.
+    """Extras read WITHOUT a TOML parser — the last resort, per `_parsed_extras`.
 
     Deliberately dumb, and its failure direction is the safe one: a declaration
     shape this misses drops an extra from the set, which makes a hint naming
     that extra look UNDECLARED and fails the test loudly. It cannot invent an
-    extra and turn a real defect green. `test_the_parserless_scan_agrees_with_a
-    _real_toml_parse` pins it against tomllib on every job that has one.
+    extra and turn a real defect green.
+
+    No CI job reaches it as the fallback (pytest supplies tomli on 3.10), so the
+    thing keeping it honest is `test_the_parserless_scan_agrees_with_a_real_toml
+    _parse`, which calls it DIRECTLY on all six and diffs it against the parser.
     """
     text = (REPO / "pyproject.toml").read_text(encoding="utf-8")
     header = "[project.optional-dependencies]"
@@ -186,17 +202,17 @@ def test_at_least_one_shell_actually_ran():
 
 
 def test_the_parserless_scan_agrees_with_a_real_toml_parse():
-    """Pin the 3.10 fallback to tomllib wherever tomllib exists.
+    """Pin the parserless scan to a real parser wherever one exists.
 
-    On 3.11+/full this runs and the two must agree. On 3.10-with-no-parser it
-    skips, which is the one configuration relying on the scan unpinned — its
-    failure direction is the loud one, per `_scanned_extras`.
+    This runs on all six CI jobs — tomllib on 3.11/3.12, tomli (via pytest) on
+    3.10 — so the scan is diffed against a real parse everywhere, and the skip
+    below is for environments outside CI rather than a hole in it.
     """
     parsed, module = _parsed_extras()
     if parsed is None:
         pytest.skip(
-            "no TOML parser importable (Python 3.10 with no extras installed); "
-            "nothing to compare the parserless scan against"
+            "neither tomllib nor tomli is importable; nothing to compare the "
+            "parserless scan against"
         )
     assert _scanned_extras() == parsed, (
         f"the parserless extra scan disagrees with {module}: scan found "
