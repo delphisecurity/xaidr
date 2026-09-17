@@ -23,9 +23,11 @@ alone. This corpus is the production-shaped benign set they have to clear.
 | `corpus.jsonl` | 190 benign tool calls, full argument dicts — **authored blind** |
 | `discriminator.jsonl` | 50 benign tool calls, **detector-informed**, one `axis` each |
 | `sql_dml.jsonl` | 50 benign DELETE/UPDATE statements, one `shape` each |
+| `domains.jsonl` | 120 benign tool calls from **six domains outside the five personas**, one `domain` each |
 | `../scripts/benign_toolcall_report.py` | regenerates the numbers below |
 | `../scripts/benign_sql_dml_report.py` | regenerates the `sql_dml.jsonl` table |
-| `last_run.json` | machine-readable summary of the last local run (git-ignored) |
+| `../scripts/benign_domain_report.py` | regenerates the `domains.jsonl` table |
+| `last_run.json`, `domains_last_run.json` | machine-readable summaries of the last local run (git-ignored) |
 
 Each entry records `persona`, `tool`, a full `args` dict with realistic names
 and values, and two prose fields, `represents` and `why_benign`, so a reader can
@@ -115,6 +117,65 @@ Postgres placeholders (`… = $2 WHERE lower(email) = lower($1)`) had everything
 between the two `$` read as one dollar-quoted string, so the `WHERE` clause sat
 inside a literal and the write reported `predicate=none` — an unbounded
 mutation. The same swallow hid a following `;` and every statement after it.
+
+### A fourth pool, for the axis the other three share: the DOMAIN (audit F7)
+
+`domains.jsonl`, 120 benign tool calls from six domains no detector here was
+built against — legal document management, game state, scientific computing and
+mathematics, media production, healthcare scheduling, education. 20 each.
+
+The blindness it answers is the one the other three pools have in common rather
+than one that distinguishes them. `corpus.jsonl` is five personas.
+`discriminator.jsonl` is 50 more calls on detector AXES, and every one of them is
+still tagged with one of the same five personas. `sql_dml.jsonl` is a SQL
+surface, not an industry. `../asi_battery/benign.jsonl` is a register-matched
+mirror, narrower again. **Every benign tool call committed to this repo before
+this pool was support, devops, data, research or finance**, so "0 / 190" was
+never evidence about a sixth domain — and the words the structural detectors key
+on are exactly the words that change meaning when the industry does. `audit` is a
+control in devops and an enrolment mode in a university. `monitoring` is an
+observability agent in devops and cardiac telemetry in a hospital. `limit` is a
+ceiling in finance and the object being computed in a CAS. `administrator` is a
+role in IAM and a credit on a film.
+
+| measured at | `domains.jsonl` |
+|---|---:|
+| 1.17.0 as published | **40 / 120 (33.3%)** |
+| this change, five predicates narrowed | **24 / 120 (20.0%)** |
+
+The sixteen that were fixed were all one defect in different clothes — a
+predicate reading ONE fact with no relation to the claim in its own rule name:
+`ASI03_concealed_grant` on a `visible: false` with no grant in the call (a
+compositing layer, a staged game entity, an unreleased assignment, an embargoed
+lab result); `ASI03_self_privileged_action` on `assignee="self"` beside a `role`
+naming a job rather than a power; `ASI03_admin_escalation` on `scope: "root"`,
+which is the top of a folder tree, a mounted filesystem, a scene graph and an LMS
+account tree; `ASI03_disable_control` on a `disabled: true` that names nothing it
+disables; `ASI04_bound_removed` on a bare `rate`, which is a price and a pulse
+before it is ever a ceiling, and on a `max_wait` that `max_timeout` was already
+carved out for. **All five stayed green on `corpus.jsonl` (0/190),
+`discriminator.jsonl` (2/50) and every other committed pool the whole time** —
+which is the same "the corpus could not see this class" recorded above for the
+key-vocabulary and value-polarity errors, now on a third axis.
+
+The remaining **24 are listed by id with a verdict each** in
+`../scripts/benign_domain_report.py::DOMAIN_RESIDUAL`, and
+`../tests/test_f7_domain_generality.py::test_the_domain_pool_flags_only_the_recorded_residual`
+pins the set exactly so a 25th cannot be gained quietly. They are a limit of a
+per-message, domain-blind detector, not a defect, and they are written down in
+`../docs/privilege-tiers.md` rather than carved out with a list of domain words.
+
+**How it was written, and honestly.** From the workflows of each domain — what a
+paralegal, a live-ops engineer, an astronomer, a colourist, a clinic scheduler
+and a registrar actually call — NOT from the detector regexes. But unlike
+`corpus.jsonl` it is **not blind**: it was authored after the detectors existed,
+by someone who had read them, so it belongs with `discriminator.jsonl` as an
+ACCEPTANCE set and is reported apart for the same reason. What it does not do is
+select FOR the regexes: the four calls carrying `visible: false` are there
+because hiding a layer, staging an actor, holding a result and scheduling a
+release are what those six jobs consist of, and a pool that avoided them would
+measure nothing — the same discipline the "It exercises the detectors on purpose"
+section below states for the blind pool.
 
 ## How it was written
 

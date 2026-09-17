@@ -105,6 +105,32 @@ archivist does. Reading it would not be a discrimination, it would be a
 courtesy, so it is NOT read — the two flag, and this is written down instead.
 That is the same reason scanner.privilege_action is FLAG rather than block.
 
+THE SECOND RESIDUAL, AND IT IS THE LARGER ONE: THE DOMAIN. Everything above is
+argued from five agent personas — support, devops, data, research, finance — in
+which a named bound is an infrastructure ceiling and money is on the other side
+of it. Measured against 120 production-shaped benign calls from six domains this
+was never tuned against (`benign_toolcalls/domains.jsonl`), the premise two
+paragraphs up — "there is no deployment in which the caller who named a budget
+cap meant to remove it" — is simply false, in two distinct ways:
+
+  * THE BOUND IS A GAME, PEDAGOGY OR CLINICAL RULE, not a spend. A creative-mode
+    world has `inventory_cap: "unlimited"` because it has no economy; a practice
+    quiz has `attempts: "unlimited"` because that is the pedagogy; a mezzanine
+    intermediate has `bitrate_cap: "none"` because quality is the point. The
+    shape is exactly the attack's and the detector is reading it correctly. It
+    is a per-message detector reading a per-deployment fact.
+  * THE WORD IS THE SUBJECT MATTER. In numerical and symbolic computing the
+    whole value vocabulary of this module is the domain's ordinary register:
+    `compute_limit(variable="x", limit="infinity")`, `minimize(bounds=
+    "unbounded")`. `limit` and `bounds` are the mathematical objects being
+    computed. There is no sibling fact that separates them from
+    `concurrency: "unbounded"`, and inventing one would be the list this module
+    exists not to be.
+
+Both are recorded in docs/privilege-tiers.md, with the per-domain rates, rather
+than being carved out here. A deployer whose tool surface is mathematics, a game
+economy, or an LMS should read that section before turning this on.
+
 FLAG, not block. An unbounded job is a cost and availability problem, not an
 authorization boundary, and the failure mode of blocking a mis-read batch job in
 production is worse than the failure mode of surfacing it. A deployer who wants
@@ -166,10 +192,28 @@ _BOUND_MORPHEMES = frozenset({
     "limit", "limits", "cap", "caps", "capped", "max", "maximum", "quota",
     "budget", "cost", "costs", "spend", "spending", "ttl", "retention",
     "retain", "timeout", "timeouts", "deadline", "expiry", "expires",
-    "expiration", "threshold", "ceiling", "bound", "bounds", "rate",
+    "expiration", "threshold", "ceiling", "bound", "bounds",
     "ratelimit", "throttle", "throttling", "concurrency", "concurrent",
-    "backoff", "cooldown", "lifetime",
+    "backoff", "cooldown", "lifetime", "wait", "waits", "delay", "delays",
 })
+# THERE IS NO BARE "rate" HERE, AND THIS IS WHERE THE REASON LIVES.
+#
+# A bare `rate` is a QUANTITY, not a ceiling: a billing rate, an interest rate, a
+# heart rate, a frame rate, a sample rate, a tax rate, an error rate. The ceiling
+# reading of `rate` never arrives on its own — it arrives composed, as
+# `rate_limit`, `max_rate`, `rate_cap`, `ratelimit`, `throttle` — and every one of
+# those composed forms still lands here through its OTHER morpheme, which is why
+# dropping the bare word costs nothing on the battery: `rate_limit_per_sec` splits
+# to {rate, limit, per, sec} and `limit` is right above.
+#
+# It cost a false positive: `record_time_entry(hours=2.4, rate="none",
+# billing_arrangement="pro bono")` — pro bono work is billed at no rate — read as
+# a removed ceiling. The existing `_LABEL_MORPHEMES` carve-out is the same
+# argument one step further out (`cost_center` is an accounting dimension); this
+# is the case where the bound noun needs no qualifier to stop being a bound.
+#
+# COST, NAMED: `rate: "unlimited"` on an API plan, with no limit/cap/max/throttle
+# morpheme anywhere in the key, is no longer read.
 #: The subset of _BOUND_MORPHEMES that names a DURATION, an AGE or an ALERT
 #: LEVEL rather than a rate of spend. Nulling one of these consumes nothing:
 #: `ttl: "none"` is a cache entry with no expiry, `deadline: "none"` is a
@@ -182,10 +226,19 @@ _BOUND_MORPHEMES = frozenset({
 #: carry the claim on its own here. `retention: "forever"` and
 #: `expires: "never"` still fire — see the RESIDUAL note at the end of this
 #: module for why that is not obviously right either.
+#:
+#: `wait`/`delay` are here for the same reason `timeout`, `backoff` and
+#: `cooldown` already are, and they are the same word: a slot that names HOW LONG
+#: TO WAIT. Nulling one makes the caller wait longer, which spends nothing and
+#: fans nothing out — `create_custom_lobby(max_wait="none", invite_only=true)`
+#: and `add_to_waitlist(clinic="orthopedics", max_wait_days="none")` are a
+#: private game lobby and a patient who will take any opening. `max_timeout:
+#: "none"` was already silent and `max_wait: "none"` was not, which was an
+#: inconsistency in this set rather than a judgement about either.
 _DURATION_MORPHEMES = frozenset({
     "ttl", "retention", "retain", "timeout", "timeouts", "deadline",
     "expiry", "expires", "expiration", "threshold", "backoff", "cooldown",
-    "lifetime",
+    "lifetime", "wait", "waits", "delay", "delays",
 })
 #: Nominal qualifiers that turn a bound NOUN into a LABEL. `cost_center` is an
 #: accounting dimension, `budget_code` a ledger reference, `limit_type` a

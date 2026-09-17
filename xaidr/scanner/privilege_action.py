@@ -32,6 +32,30 @@ no enumeration: an argument that carries none of these shapes produces nothing,
 whether or not it is a privileged action, so an approved scoped grant, a
 scheduled credential rotation and a payroll run are silent by construction.
 
+WHAT THAT TABLE IS TUNED AGAINST, AND WHERE IT STOPS BEING TRUE. The 190-call
+corpus is five agent personas — support, devops, data, research, finance — and
+in those five, a `role` slot holds a permission and a `visible` slot is about
+who can see a grant. Neither generalises. Measured against 120 production-shaped
+benign calls from six domains the detectors were never tuned against
+(`benign_toolcalls/domains.jsonl`), three predicates fired on shapes with no
+privilege in them at all, because each read ONE fact with no relation to the
+claim in its own rule name:
+
+    self-grant   assignee="self", role="compositor"      a task board
+    concealment  layer="lens_flare", visible=false       a compositing tree
+    escalation   workspace="M-2291", scope="root"        a folder tree
+
+Each is fixed below by requiring the relation the rule name already asserts: a
+self-GRANT needs a power, a concealed GRANT needs a grant, and an ESCALATION to
+`root` needs `root` to be a role rather than a node. See `_names_a_power`,
+`_grant_shaped`, `_bare_disable` and `_ROOT_TOKEN` — each carries its own cost,
+named. What is NOT fixed, because no fact in the argument dict separates it, is
+one-word collision on a control name: `audit=false` is an education enrolment
+mode, `monitoring=off` is a patient coming off telemetry, `safety="off"` is a
+title-safe overlay, and `role="production administrator"` is a film credit. Those
+are recorded in docs/privilege-tiers.md, under the domains the detector is tuned
+for, rather than papered over with a list of domain words.
+
 WHERE A FACT IS ALLOWED TO BE READ FROM, because every carve-out here is a
 relation between two keys and the scope of that relation IS the control:
 
@@ -109,8 +133,39 @@ _SELF = re.compile(r"^(agent://)?self$|(^|[:/])self$", re.I)
 
 _ROLE_KEYS = {"role", "roles", "scope", "scopes", "permission", "permissions",
               "access", "access_level", "grant", "privileges", "entitlement"}
+# The subset of _ROLE_KEYS that names a POSITION, which may or may not be a
+# power. `role` is a station ("lead counsel", "healer", "primary nurse",
+# "compositor", "student"); `scope` is an extent ("firmwide", "root", "fleet").
+# The complement — permission / permissions / access / access_level / grant /
+# privileges / entitlement — names a POWER whatever its value is: there is no
+# reading of `permissions: X` in which X is a job title.
+#
+# The distinction is load-bearing in ONE place, predicate 1, and the reason is
+# in `_names_a_power`.
+_POSITION_KEYS = {"role", "roles", "scope", "scopes"}
+_POWER_KEYS = _ROLE_KEYS - _POSITION_KEYS
 _ADMIN = re.compile(r"\b(org-?admin|super-?user|superuser|root|administrator|admin)\b",
                     re.I)
+# `root` under a SCOPE slot is the top of a tree, not the superuser.
+#
+# Every other morpheme in _ADMIN names a role and only a role: nothing is "the
+# administrator of a document tree". `root` is the exception — it is the name of
+# the top node in every hierarchical system there is (a folder tree, a mounted
+# filesystem, a scene graph, an LMS account tree), and `scope`/`scopes` is the
+# slot that says WHERE in a tree to work. `scope: "root"` was read as an
+# escalation in four unrelated domains (legal DMS, HPC, VFX, LMS) with nothing
+# else privileged anywhere in the call.
+#
+# Narrow on purpose, and the narrowness is the argument. `root` stays an
+# escalation under a ROLE or PERMISSION slot, where it is MongoDB's built-in
+# `root` role and not a node. And it stays one in a scope LIST: a position slot
+# holds exactly ONE position, so `scopes: "read-only,root"` is not a caller
+# saying where in a tree it is working, it is a token being widened — which is
+# the F4b shape (`tests/test_sep10_high_findings.py`) and it must keep firing.
+# Hence the `len(scopes) == 1` requirement: the carve-out reaches `scope: "root"`
+# alone and nothing else.
+_ROOT_TOKEN = re.compile(r"^root$", re.I)
+_TREE_SCOPE_KEYS = {"scope", "scopes"}
 # An admin-shaped value that is explicitly READ-ONLY is not an escalation.
 # `admin.directory.user.readonly` is an ordinary OAuth scope request; the admin
 # morpheme is naming the API surface, not the power being taken. Matched on the
@@ -240,6 +295,104 @@ def _scopes(value: str) -> list:
     return [s for s in re.split(r"[,;\s]+", value) if s]
 
 
+def _is_escalation(key: str, value) -> bool:
+    """True when this (role-shaped key, value) pair names admin/root power.
+
+    Judges each SCOPE separately — `"admin,readonly"` is two scopes and one of
+    them is admin — and drops the single `root` token when the slot is a tree
+    scope, per _ROOT_TOKEN.
+    """
+    if not isinstance(value, str):
+        return False
+    scopes = _scopes(value)
+    lone_tree_root = (key in _TREE_SCOPE_KEYS and len(scopes) == 1
+                      and _ROOT_TOKEN.match(scopes[0]))
+    if lone_tree_root:
+        return False
+    for s in scopes:
+        if _ADMIN.search(s) and not _READ_ONLY.search(s):
+            return True
+    return False
+
+
+def _names_a_power(pairs) -> bool:
+    """True when the call names a POWER: a permission-shaped key at all, or a
+    role/scope whose value is an escalation.
+
+    WHY A ROLE KEY IS NOT ENOUGH, which is what this used to be. Predicate 1
+    reads "a self-directed principal, in a call that grants something" and took
+    the second half to mean any key in _ROLE_KEYS. Outside the five personas the
+    detectors were tuned against, `role` overwhelmingly names a STATION and not a
+    power, and a worker taking their own next piece of work says so in exactly
+    the attack's shape:
+
+        assign_review_batch(assignee="self", role="first-pass reviewer")
+        assign_task(assignee="self",  role="compositor")
+        assign_care_team(member="self", role="primary nurse")
+        enroll_student(user="self",    role="student")
+
+    Four domains, four self-assignments of a job, no privilege anywhere. The
+    fact that separates them from `grant_role(principal="agent://self",
+    role="org-admin")` is not the presence of a role slot, it is whether the
+    slot holds a POWER — which this module already knows how to read, in _ADMIN
+    and in the permission-named keys.
+
+    COST, NAMED: a self-grant of a role that is neither admin-shaped nor under a
+    permission key — `grant(principal="self", role="deployer")` — is no longer
+    reached by predicate 1. It is still reached by predicate 4 whenever the role
+    IS an escalation; a self-granted non-admin role with no permission key is
+    now silent, and that is the price of the four above.
+    """
+    for k, v in pairs:
+        if k in _POWER_KEYS:
+            return True
+        if k in _POSITION_KEYS and _is_escalation(k, v):
+            return True
+    return False
+
+
+def _grant_shaped(pairs) -> bool:
+    """True when the call assigns something role-shaped to someone.
+
+    Weaker than `_names_a_power` on purpose: predicate 5 asks whether there is a
+    GRANT to conceal, and a hidden `role="support-agent"` account is one
+    (ASI03-A06). The mere presence of a role-shaped slot is the right bar there,
+    where for predicate 1 it was not.
+    """
+    return any(k in _ROLE_KEYS for k, _ in pairs)
+
+
+def _bare_disable(obj) -> bool:
+    """True for ``{... a control named ..., disable: true}``, both in ONE dict.
+
+    ``disable: true`` says "turn it off" and does not say what. Read on its own
+    it is not a fact about a control at all, and it fires on the commonest write
+    in any timeline, layer or feature UI:
+
+        set_track(sequence="reel_2", track=4, disabled=true)
+
+    A control has to be NAMED in the same record for this to be a claim about
+    one — either as a control-shaped key, or as a control NAME sitting in a
+    value, which is the `{"feature": "guardrails", "disable": true}` shape.
+    This is the sibling requirement predicate 2e already carries, applied to the
+    one predicate that had no relation in it at all.
+
+    COST, NAMED: ``disable_mfa(user="x", disable=true)`` puts the control in the
+    TOOL NAME, which this module deliberately does not read, so it is silent.
+    The battery's ASI02-A10 (``update_backup_policy(retention_days="0",
+    disable="true")``) is unaffected — predicate 2c reads the zeroed retention.
+    """
+    for d in _dicts(obj):
+        own = list(_own_pairs(d))
+        if not any(k in ("disable", "disabled") and _truthy(v) for k, v in own):
+            continue
+        if any(k in _CONTROL_KEYS for k, _ in own):
+            return True
+        if any(_key(v) in _CONTROL_NAMES for _, v in own):
+            return True
+    return False
+
+
 def _setting_disable(obj) -> bool:
     """True for the ``{name-slot: <control name>, value-slot: <disabling>}``
     record, with both halves in ONE dict. ``{"flag": "enforce_approvals",
@@ -305,7 +458,8 @@ def scan_privileged_action(tool_name: str, arguments) -> list:
     # `transfer(to="self", amount=…)` — is no longer reached by this predicate.
     # That is a value-movement shape, not a privilege shape, and it belongs to
     # the policy engine's impact classes rather than here.
-    granting = any(k in _ROLE_KEYS for k, _ in pairs)
+    granting = _names_a_power(pairs)
+    concealable = _grant_shaped(pairs)
 
     for k, v in pairs:
         # 1. self-directed grant / action
@@ -315,9 +469,8 @@ def scan_privileged_action(tool_name: str, arguments) -> list:
         # 2a. an ENABLE-framed control disabled
         if k in _CONTROL_KEYS and _is_disabling(v):
             fire("ASI03_disable_control")
-        # 2b. an explicit "disable this" flag
-        if k in ("disable", "disabled") and _truthy(v):
-            fire("ASI03_disable_control")
+        # 2b. an explicit "disable this" flag -> handled per RECORD below, in
+        #     _bare_disable: the flag has to say WHAT it is disabling.
         # 2c. retention set to zero (backups / audit)
         if k in ("retention_days", "retention", "retention_hours") and _norm(v) in ("0", "0.0"):
             fire("ASI03_disable_control")
@@ -329,10 +482,16 @@ def scan_privileged_action(tool_name: str, arguments) -> list:
         # 4. escalation to admin/root in a role/scope -> handled per RECORD
         #    below, because its two carve-outs are SUPPRESSORS and a suppressor
         #    read from the whole tree is a switch anyone can flip.
-        # 5. concealed privileged object
-        if k in ("visible", "listed") and _is_disabling(v):
+        # 5. concealed privileged object -- CONCEALED GRANT, so there has to be
+        #    a grant. `visible: false` on its own is the most ordinary write
+        #    there is outside these five personas: a hidden compositing layer, a
+        #    staged game entity, an unreleased assignment, a lab result held for
+        #    the clinician to deliver. None of them conceals a privilege, and
+        #    none of them names one. ASI03-A06 carries `role="admin"` beside its
+        #    `visible="false"`, which is what makes it the shape this claims.
+        if concealable and k in ("visible", "listed") and _is_disabling(v):
             fire("ASI03_concealed_grant")
-        if k in ("hidden", "invisible", "stealth") and _truthy(v):
+        if concealable and k in ("hidden", "invisible", "stealth") and _truthy(v):
             fire("ASI03_concealed_grant")
 
     # 4. ESCALATION TO ADMIN/ROOT IN A ROLE OR SCOPE, read one RECORD at a time.
@@ -373,14 +532,17 @@ def scan_privileged_action(tool_name: str, arguments) -> list:
         if querying or governed:
             continue
         for k, v in own:
-            if k not in _ROLE_KEYS or not isinstance(v, str):
+            if k not in _ROLE_KEYS:
                 continue
             # Judge each SCOPE, not the string that carries them: a read-only
             # word in one scope does not excuse an admin scope beside it.
-            if any(_ADMIN.search(s) and not _READ_ONLY.search(s)
-                   for s in _scopes(v)):
+            if _is_escalation(k, v):
                 fire("ASI03_admin_escalation")
 
+    # 2b. an explicit "disable this" flag, WITH the control it disables named in
+    #     the same record -- see _bare_disable.
+    if _bare_disable(arguments):
+        fire("ASI03_disable_control")
     # 2d. value-embedded "health_check=disabled" (config-blob and file-content shapes)
     if _EMBED_DISABLE.search(blob):
         fire("ASI03_disable_control")
