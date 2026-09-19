@@ -1,9 +1,9 @@
 """A test must not assume a binary that the machine it runs on happens to have.
 
 This is a gate on the SUITE, not on the package. It exists because the failure
-it catches has now shipped twice, both times the same shape: a test written on
-macOS asserting something true, through a tool that only the author's machine
-had, merged green locally and red on the runner.
+it catches has now shipped three times, every time the same shape: a test
+written on macOS asserting something true, through a tool that only the author's
+machine had, merged green locally and red on the runner.
 
   1.17.0  `tests/test_install_hints.py` shelled out to `zsh` to prove an install
           hint is not a shell glob. The property was right. zsh is the default
@@ -12,9 +12,15 @@ had, merged green locally and red on the runner.
   same    the same file did `import tomllib` to read pyproject.toml. tomllib is
           stdlib from 3.11; pyproject declares `requires-python = ">=3.10"`, so
           the two py3.10 jobs failed on `No module named 'tomllib'` as well.
+  ee7f901 `tests/test_case_insensitivity_property.py` did
+          `import re._parser as sre_parse` to read a regex parse tree. The
+          parser is private and it MOVED: `re._parser` is 3.11+, and on 3.10 it
+          is the top-level `sre_parse`. Both py3.10 jobs died at collection on
+          `No module named 're._parser'; 're' is not a package`. See the
+          private-stdlib section below for why neither check above saw it.
 
-Neither was a wrong assertion. Both were a right assertion asked through the
-wrong instrument, and in both cases the instrument was invisible in review
+None was a wrong assertion. All three were a right assertion asked through the
+wrong instrument, and in every case the instrument was invisible in review
 because it worked for the person typing it.
 
 The rule below is deliberately narrow: `sys.executable` is free, anything else
@@ -27,6 +33,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import sys
 
 import pytest
 
@@ -278,3 +285,199 @@ def _requires_python_floor():
     m = re.search(r'requires-python\s*=\s*["\'][^0-9]*(\d+)\.(\d+)', text)
     assert m, "pyproject.toml has no parseable requires-python floor"
     return int(m.group(1)), int(m.group(2))
+
+
+# ── private stdlib paths, which MOVE ─────────────────────────────────────────
+#
+# The third 3.10-specific break in two weeks, and the first that neither check
+# above could see. `tests/test_case_insensitivity_property.py` did
+# `import re._parser as sre_parse`, which is 3.11+. On 3.10 the parser is the
+# top-level `sre_parse`, so both py3.10 jobs died at COLLECTION with
+# `ModuleNotFoundError: No module named 're._parser'; 're' is not a package` —
+# the file's 68 tests vanished rather than failed.
+#
+# Why the existing gates missed it, which is the part worth writing down:
+#
+#   test_no_test_silently_shells_out_to_an_unlisted_binary  is about BINARIES.
+#       An import is not a subprocess call; it was never in scope.
+#   test_no_test_imports_a_module_newer_than_the_python_we_claim  is keyed on
+#       _STDLIB_INTRODUCED_IN, a hand-maintained list of modules that were ADDED.
+#       `re._parser` was not added, it was RENAMED — `sre_parse` had been there
+#       since 1.6. Nobody adding the import would have thought to list it,
+#       because from 3.11's point of view nothing is new.
+#
+# So the rule here is not another enumeration. It keys on a STRUCTURAL property
+# the offending import has and a portable one does not: it reaches into a
+# stdlib module's private namespace, and nothing nearby tests the version. That
+# is what generalises — a private path carries no compatibility promise, so it
+# is exactly the category that moves between the versions our matrix spans, and
+# a hand-kept list of which ones moved is always written after the fact.
+#
+# Scope is tests/ + scripts/ + xaidr/, wider than the binary rule above, because
+# a private stdlib import inside the shipped package is strictly worse than one
+# in a test: it breaks a 3.10 USER at import time, where no CI job is watching.
+# Swept at the time of writing — xaidr/ and scripts/ are clean, and the only
+# site in the tree is the one below.
+
+# Stdlib modules that are private by documentation but not by spelling: no
+# leading underscore to key on. The sre_* trio are the ones our matrix spans —
+# they became re._parser / re._compiler / re._constants in 3.11.
+_PRIVATE_BY_DOCUMENTATION = {"sre_parse", "sre_compile", "sre_constants"}
+
+# (file, imported path) -> why this site is allowed to reach a private module.
+#
+# An entry does NOT exempt the import from being guarded; the guard is verified
+# separately from the AST below. It records why a private path is the only way
+# to ask the question at all, which is the judgement a reviewer needs and the
+# AST cannot make.
+_ALLOWED_PRIVATE_STDLIB = {
+    ("test_case_insensitivity_property.py", "re._parser"): (
+        "the regex PARSE TREE. The census there counts ASCII letters in literal "
+        "positions, which is a fact about the parse tree and not about the "
+        "pattern text; `re` exposes the compiled Pattern and never the "
+        "SubPattern tree, so there is no public spelling. Guarded, with "
+        "`sre_parse` on 3.10. Verified to produce the identical census on 3.10, "
+        "3.11, 3.12 and 3.14."
+    ),
+    ("test_case_insensitivity_property.py", "sre_parse"): (
+        "the 3.10 half of the same guarded import."
+    ),
+}
+
+
+def _is_dunder(part):
+    return part.startswith("__") and part.endswith("__")
+
+
+def _version_guarded_imports(tree):
+    """Import nodes sitting under a `sys.version_info` test or an ImportError try.
+
+    Both are real fallbacks. The point of the check is to catch the import that
+    has NEITHER — the one that assumes the author's interpreter.
+    """
+    guarded = set()
+
+    def mark(node):
+        for child in ast.walk(node):
+            if isinstance(child, (ast.Import, ast.ImportFrom)):
+                guarded.add(child)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If):
+            if "version_info" in ast.unparse(node.test):
+                mark(node)
+        elif isinstance(node, ast.Try):
+            caught = " ".join(
+                ast.unparse(h.type) for h in node.handlers if h.type is not None
+            )
+            if "ImportError" in caught or "ModuleNotFoundError" in caught:
+                mark(node)
+    return guarded
+
+
+def _private_stdlib_imports():
+    """Every import of a private stdlib path, with whether it is version-guarded.
+
+    Yields (relpath, dotted_path, lineno, guarded). "Private" means the top
+    module is stdlib AND either some component of the path starts with an
+    underscore, or the module is one of the documented-private names above.
+    """
+    found = []
+    for tree_dir in ("tests", "scripts", "xaidr"):
+        root = REPO / tree_dir
+        if not root.is_dir():
+            continue
+        for path in sorted(root.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            guarded_nodes = _version_guarded_imports(tree)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    names = [a.name for a in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    # A relative import is first-party by construction.
+                    names = [node.module] if node.module and not node.level else []
+                else:
+                    continue
+                for name in names:
+                    parts = name.split(".")
+                    if parts[0] not in sys.stdlib_module_names:
+                        continue  # first-party or third-party; not our rule
+                    # `__future__` and `__main__` are dunders: language
+                    # constructs with a stronger stability promise than the
+                    # public API, not private implementation. Underscore alone
+                    # would flag every `from __future__ import annotations`.
+                    private = (
+                        any(
+                            p.startswith("_") and not _is_dunder(p)
+                            for p in parts
+                        )
+                        or name in _PRIVATE_BY_DOCUMENTATION
+                    )
+                    if not private:
+                        continue
+                    found.append((
+                        str(path.relative_to(REPO)),
+                        name,
+                        node.lineno,
+                        node in guarded_nodes,
+                    ))
+    return found
+
+
+def test_no_module_imports_a_private_stdlib_path_undeclared():
+    """A private stdlib path is a promise nobody made. Say why you need it."""
+    undeclared = []
+    for relpath, name, lineno, _guarded in _private_stdlib_imports():
+        key = (pathlib.Path(relpath).name, name)
+        if key not in _ALLOWED_PRIVATE_STDLIB:
+            undeclared.append(f"  {relpath}:{lineno} imports {name}")
+
+    assert not undeclared, (
+        "these modules reach into a private stdlib namespace, which carries no "
+        "compatibility promise across the Python versions this project "
+        "claims:\n" + "\n".join(undeclared) + "\n\n"
+        "`re._parser` is 3.11+; on 3.10 the same parser is the top-level "
+        "`sre_parse`, and that one import turned both py3.10 jobs red at "
+        "COLLECTION — the tests did not fail, they ceased to exist. Either use "
+        "a public API, or add the site to _ALLOWED_PRIVATE_STDLIB in "
+        "tests/test_suite_portability.py saying why no public spelling can ask "
+        "the question."
+    )
+
+
+def test_every_private_stdlib_import_has_a_version_fallback():
+    """Declaring it is not enough — the import has to survive the floor.
+
+    This is the clause that catches the actual defect rather than its paperwork.
+    A reviewer approving the entry above is approving the REASON; whether the
+    import runs on 3.10 is a fact about the code, and it is read from the AST
+    here for the same purpose test_a_which_guarded_claim_is_actually_which_guarded
+    serves for binaries. Without it the allowlist would have accepted
+    `import re._parser` with a paragraph attached and left py3.10 exactly as red.
+    """
+    unguarded = []
+    for relpath, name, lineno, guarded in _private_stdlib_imports():
+        if not guarded:
+            unguarded.append(f"  {relpath}:{lineno} imports {name}")
+
+    assert not unguarded, (
+        "these private stdlib imports have no version fallback — no enclosing "
+        "`sys.version_info` branch and no try/except ImportError:\n"
+        + "\n".join(unguarded) + "\n\n"
+        "Private stdlib paths move between versions: `sre_parse` became "
+        "`re._parser` in 3.11, and the unguarded form raises at collection on "
+        f"the {_requires_python_floor()[0]}.{_requires_python_floor()[1]} job "
+        "rather than failing a test. Branch on sys.version_info and import the "
+        "spelling each version actually has."
+    )
+
+
+def test_the_private_stdlib_allowlist_has_no_stale_entries():
+    """An entry whose import is gone would silently permit the next one."""
+    live = {(pathlib.Path(r).name, n) for r, n, _, _ in _private_stdlib_imports()}
+    stale = sorted(set(_ALLOWED_PRIVATE_STDLIB) - live)
+    assert not stale, (
+        "_ALLOWED_PRIVATE_STDLIB entries with no matching import — the site was "
+        "renamed or removed and the exemption outlived it: "
+        + ", ".join(f"{f}::{n}" for f, n in stale)
+    )

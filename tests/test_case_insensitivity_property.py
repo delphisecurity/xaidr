@@ -55,8 +55,49 @@ import contextlib
 import io
 import json
 import re
-import re._parser as sre_parse
+import sys
 from pathlib import Path
+
+# WHY A PRIVATE STDLIB MODULE, AND WHAT BREAKS WHEN IT MOVES AGAIN
+#
+# test_case_insensitivity_is_load_bearing counts ASCII letters in LITERAL
+# positions, and "literal position" is a fact about the PARSE TREE, not about
+# the pattern text. The `d` in `\d`, a group name, and the `a` in `[A-Za-z]` all
+# look like letters in the source, and none of them is a position re.IGNORECASE
+# decides. Only the regex parser draws that distinction, and the stdlib has
+# never exposed it publicly -- `re` re-exports the compiled Pattern and never
+# the SubPattern tree. There is no public spelling to prefer here.
+#
+# It has already moved once. Through 3.10 the parser is the top-level
+# `sre_parse`; from 3.11 it is `re._parser`. Measured, one container per version:
+#
+#     3.10.21   sre_parse OK     re._parser ModuleNotFoundError
+#     3.11.16   sre_parse Deprec re._parser OK
+#     3.12.14   sre_parse Deprec re._parser OK
+#     3.14.5    sre_parse Deprec re._parser OK
+#
+# so neither spelling alone spans the 3.10-3.12 matrix pyproject declares. The
+# 3.11+ spelling does not merely warn on 3.10: `re` is a module and not a
+# package, so `import re._parser` raises at COLLECTION and all 68 tests in this
+# file vanish rather than fail. That is what turned both py3.10 jobs red.
+#
+# IF IT MOVES AGAIN: collection dies on the new version and this file's gate
+# disappears WHOLESALE -- including the four tests that are the actual
+# case-insensitivity property and have nothing to do with the parser. The repair
+# is another branch here, never deleting the census. If instead the tree SHAPE
+# changes while the name holds, _literal_ascii_letters silently recognises fewer
+# nodes and the census drifts DOWN toward the 0.85 floor; it cannot drift up, so
+# that failure direction is the safe one and it surfaces as
+# test_case_insensitivity_is_load_bearing going red rather than as a false green.
+#
+# Verified equal across the move, not assumed: 239/255 dependent on 3.10
+# (sre_parse), 3.11, 3.12 and 3.14 (re._parser), with a byte-identical per-rule
+# letter multiset on all four. The census does not depend on which module
+# answered. tests/test_suite_portability.py now gates this pattern suite-wide.
+if sys.version_info >= (3, 11):
+    import re._parser as sre_parse
+else:
+    import sre_parse
 
 import pytest
 
@@ -368,6 +409,12 @@ def test_case_insensitivity_is_load_bearing():
     measured value -- the point is not to pin a number that churns whenever a
     rule is added, it is to fail if the rule set ever drifts to a shape where
     case-insensitivity stops mattering and this whole file could be deleted.
+
+    The number does not depend on which parser module answered the import above.
+    Re-measured 2026-09-18, one container per version: 239/255 on 3.10
+    (sre_parse), 3.11, 3.12 and 3.14 (re._parser), and not merely the same TOTAL
+    -- the per-rule letter multiset is byte-identical across all four, so the
+    3.11 rename moved the module without changing the parse tree this reads.
     """
     dependent, total = _census()
     fraction = dependent / total
