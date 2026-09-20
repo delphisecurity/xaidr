@@ -794,7 +794,8 @@ fault emits `degraded=true` and returns `allowed` rather than propagating. That
 trade is explicit — during a fault, traffic passes unscanned, and `degraded` is
 the signal you alert on.
 
-**Latency runs, resilience properties, suite counts and the skip breakdown:
+**Latency runs, resilience properties, suite configurations and the skip
+breakdown (pass counts are printed by CI, not published in the docs):
 [docs/performance.md](https://github.com/delphisecurity/xaidr/blob/main/docs/performance.md) and
 [BENCHMARKS.md](https://github.com/delphisecurity/xaidr/blob/main/BENCHMARKS.md).**
 
@@ -848,7 +849,7 @@ designed to be long-lived — construct one per agent, not per request.
 | [Circuit breaker](https://github.com/delphisecurity/xaidr/blob/main/docs/circuit-breaker.md) | violation, rate and delegation-rate thresholds; the kill-switch form |
 | [The `nano` ML signal](https://github.com/delphisecurity/xaidr/blob/main/docs/nano.md) | the optional local classifier, off by default |
 | [Rolling out safely](https://github.com/delphisecurity/xaidr/blob/main/docs/rollout.md) | the staged adoption path |
-| [Testing and suite counts](https://github.com/delphisecurity/xaidr/blob/main/docs/testing.md) | configurations, pass counts, skip breakdown |
+| [Testing and suite configurations](https://github.com/delphisecurity/xaidr/blob/main/docs/testing.md) | configurations, where CI prints the counts, skip breakdown |
 | [BENCHMARKS.md](https://github.com/delphisecurity/xaidr/blob/main/BENCHMARKS.md) | latency runs on named hardware |
 | [THREAT_MODEL.md](https://github.com/delphisecurity/xaidr/blob/main/THREAT_MODEL.md) | what these controls defend against, and what they do not |
 | [CONTRIBUTING.md](https://github.com/delphisecurity/xaidr/blob/main/CONTRIBUTING.md) | how to propose a rule, and the benign-lookalike requirement |

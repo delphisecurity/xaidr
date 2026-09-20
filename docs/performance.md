@@ -45,16 +45,24 @@ nothing.
 - **Malformed content is safe.** Badly formed input cannot turn the sensor into
   a denial-of-service risk.
 
-Verified with `python -m pytest -q`. The headline figure is the `base`
-configuration — `pip install .` plus `pytest`, no extras and no framework
-installed: **7603 passed, 163 skipped, 0 failed**, identical across three
-consecutive serial runs. That is the configuration quoted because it is the one
-that proves the zero-dependency claim.
+Verified with `python -m pytest -q` in the `base` configuration — `pip install .`
+plus `pytest`, no extras and no framework installed. That is the configuration
+quoted because it is the one that proves the zero-dependency claim, and it runs
+on every pull request as CI's `pytest (py<ver>, base)` job.
 
-**The other configurations, their pass counts and the skip breakdown are in
-[docs/testing.md](https://github.com/delphisecurity/xaidr/blob/main/docs/testing.md).**
-A pass count means nothing without the configuration that produced it, because
-whole test classes only exist when a framework is importable, so all of them are
-given there rather than the flattering one. It is a **source-tree** claim: the
-wheel and the sdist ship the `xaidr` package only, with no `tests/` directory, so
-verifying it means cloning the repository.
+**No pass count is published here.** This paragraph carried `7603 passed, 163 skipped` <!-- suite-count-ok: retracted figure, quoted so a reader who met it sees it marked false -->
+until it was roughly 670 passes stale, the same drift that removed the table
+from
+[docs/testing.md](https://github.com/delphisecurity/xaidr/blob/main/docs/testing.md).
+The current count is printed in the log of every CI run by the job that measured
+it; the argument for reading it there rather than here is in that document. What
+matters for this page is the pass/fail, not the total: a red `base` job means
+the zero-dependency claim is broken, and no literal in a markdown file can tell
+you that.
+
+Configurations, what CI does and does not build, and the `base` skip breakdown
+are also in
+[docs/testing.md](https://github.com/delphisecurity/xaidr/blob/main/docs/testing.md).
+It is a **source-tree** claim either way: the wheel and the sdist ship the
+`xaidr` package only, with no `tests/` directory, so verifying it means cloning
+the repository.
