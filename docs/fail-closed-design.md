@@ -818,3 +818,70 @@ identical:
   shell.template n=12 blocked=0    shell.prose.tool n=89 blocked=0
   TOTAL n=814
 ```
+
+---
+
+## Milestone verification — from outside the process
+
+A test that imports the module under test is not verification. This is the
+package **installed as a wheel into a clean venv**, driven by a host script
+with no `PYTHONPATH` and no test harness.
+
+```
+$ python -m venv extvenv && ./extvenv/bin/pip install /path/to/xaidr
+$ ./extvenv/bin/python consumer.py
+xaidr from: .../extvenv/lib/python3.12/site-packages/xaidr/__init__.py
+
+1. default          -> allowed  cat=None rules=[]
+2. controls closed  -> blocked  cat=fail_closed rules=['FAIL_CLOSED_CONTROL_FAULT'] halt=True
+3. monitor+closed   -> flagged  cat=fail_closed  (must NOT be blocked)
+4. approval_required-> approval_required requires_approval=True
+5. artifact healthy -> constructed; degradations=[]
+6. typo rejected    -> fail_closed: unknown group 'bonuds'. Did you mean 'bounds'?
+7. tool refusal     -> str: [BLOCKED] Tool 'send_email' was NOT executed: the security sensor could not produce a reliable ...
+
+ALL EXTERNAL CHECKS PASSED
+```
+
+Then the `artifact` group against a genuinely corrupt install — the installed
+`all-l1-rules.json` overwritten with invalid JSON:
+
+```
+$ printf '{ this is not valid json' > extvenv/.../xaidr/rules/all-l1-rules.json
+$ ./extvenv/bin/python - <<'PY'
+A. import xaidr succeeded on a corrupt asset (contract preserved)
+B. default constructs; degradations =
+      {'kind': 'asset', 'detail': 'all-l1-rules.json: failed to load (JSONDecodeError); using empty ruleset'}
+   and scans DEGRADED: flagged 0.65 ['direct_override_safety', 'exfiltrate_secret']
+C. artifact closed REFUSED TO CONSTRUCT:
+      fail_closed=('artifact',): the sensor was NOT built because 1 rule asset(s) did not load as authored:
+        - all-l1-rules.json: failed to load (JSONDecodeError); using empty ruleset
+D. no verdict was produced; the failure is at construction, not on traffic
+```
+
+Three things that check establishes and no in-tree test could:
+
+* **`import xaidr` still succeeds on a corrupt asset.** The contract
+  `l1._load_and_compile` has always kept is preserved. §f1's split between the
+  fault point and the fail-closed point is real, not a comment.
+* **The degradation is now visible without opting in.** `Sensor.degradations`
+  names the asset on a default sensor. Before this change the only trace was a
+  `print` to stdout.
+* **It costs a verdict, measurably.** The same obvious injection scores
+  `blocked 0.88` on a healthy install and `flagged 0.65` on the corrupt one.
+  That is what `artifact` exists to stop a deployment from running into
+  unknowingly — and it stops it at construction, with the file named, not by
+  refusing traffic.
+
+`/milestone-verify` is referenced by the operating notes but is not installed
+in this environment (`~/.claude/commands/` has no such command), so the checks
+above were run directly.
+
+### Still unverified, and what would settle it
+
+* **The A2A walk bounds at depth 6–8.** `benign_a2a/` tops out at depth 4
+  against a bound of 8. The group is shippable because nothing honest in that
+  pool comes near the bound, but the FP cost of *moving* the bound is
+  unmeasured. Settled by extending that pool, not by anything here.
+* **Four of nine `bounds` sites remain blind** (C9, C11, C12, C13) — see the
+  §e table. Each needs an input class no committed pool contains.
