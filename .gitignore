@@ -21,3 +21,8 @@ benign_toolcalls/last_run.json
 # Local symlinks some worktrees carry; never intended to be tracked.
 .claude
 .venv
+
+# Long-form benign corpus: 10M characters, regenerated from the committed
+# seed + generator and pinned by benign_longform/manifest.json.
+benign_longform/corpus.jsonl
+benign_longform/last_run.json

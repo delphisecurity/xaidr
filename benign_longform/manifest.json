@@ -1,0 +1,155 @@
+{
+ "items": [
+  {
+   "chars": 91378,
+   "id": "LF-policy_document-90k",
+   "sha256": "3acf582da085fcae324d60a1fa39542d01bc21b846d03e73088276a725816a69",
+   "shape": "policy_document"
+  },
+  {
+   "chars": 152091,
+   "id": "LF-policy_document-150k",
+   "sha256": "ebf1bafa248b7d302627166fd48170c885df938f696249b3c7d14db9870b0422",
+   "shape": "policy_document"
+  },
+  {
+   "chars": 400034,
+   "id": "LF-policy_document-400k",
+   "sha256": "e7bf5e2e80f5531b0e2959ff483ad3309b119b5c1e2c0dccb2d1a8fce389e25a",
+   "shape": "policy_document"
+  },
+  {
+   "chars": 900602,
+   "id": "LF-policy_document-900k",
+   "sha256": "c46f34a789d6a0323808b2822686e84fc873b31bdb34d076c06219fbb9b753f8",
+   "shape": "policy_document"
+  },
+  {
+   "chars": 140024,
+   "id": "LF-kubectl_dump-90k",
+   "sha256": "24f76ac6ea196dca151f33527dd2164eddb4d013d72780041cb852b37b2e585e",
+   "shape": "kubectl_dump"
+  },
+  {
+   "chars": 233055,
+   "id": "LF-kubectl_dump-150k",
+   "sha256": "e1663557e6dbe63edafa4fc61ba73207d0452690449b586a9c5f009438f451c2",
+   "shape": "kubectl_dump"
+  },
+  {
+   "chars": 621326,
+   "id": "LF-kubectl_dump-400k",
+   "sha256": "b11be8c76ea34995e50b940a0105f6221ee74af51f2f0469714f813e8b76b65f",
+   "shape": "kubectl_dump"
+  },
+  {
+   "chars": 1397574,
+   "id": "LF-kubectl_dump-900k",
+   "sha256": "a940c5081094858715a7e660c600f634afe04bf1f67bd2813eefdebd59e1abbf",
+   "shape": "kubectl_dump"
+  },
+  {
+   "chars": 90181,
+   "id": "LF-thread_dump-90k",
+   "sha256": "ee0314607cdf7f6315afe17d3ef6d7cb26584f7e1ab98d70b4cafeb297cb44e9",
+   "shape": "thread_dump"
+  },
+  {
+   "chars": 150251,
+   "id": "LF-thread_dump-150k",
+   "sha256": "6265b8f1178e9a4110e33645002637d1937ffaa6c54ab2cb2134ee5ad21879cc",
+   "shape": "thread_dump"
+  },
+  {
+   "chars": 401698,
+   "id": "LF-thread_dump-400k",
+   "sha256": "16c6eca8a1c3da5bcadcbec6d912d44103704ab1e145462b6a48baff9c356acd",
+   "shape": "thread_dump"
+  },
+  {
+   "chars": 900886,
+   "id": "LF-thread_dump-900k",
+   "sha256": "ea3722132a794c75f4ab869ba44568779a3f94b230b9ca191ddc1c77c1ad2f39",
+   "shape": "thread_dump"
+  },
+  {
+   "chars": 90178,
+   "id": "LF-support_transcript-90k",
+   "sha256": "04231fa7cbacd923416720e9fe0550b4a5814811c580bd52bfb2f5149ed86e98",
+   "shape": "support_transcript"
+  },
+  {
+   "chars": 150091,
+   "id": "LF-support_transcript-150k",
+   "sha256": "ae97aeb7daa2d81afe1f13473139b2a2fe4309cf00ee68fea91b26da0f0ca1f9",
+   "shape": "support_transcript"
+  },
+  {
+   "chars": 400066,
+   "id": "LF-support_transcript-400k",
+   "sha256": "f8c29c63cd471703ea827ec1e7a053515ecd19f68bfbc483716534013c9e317b",
+   "shape": "support_transcript"
+  },
+  {
+   "chars": 900030,
+   "id": "LF-support_transcript-900k",
+   "sha256": "f3cf9e0c8a925fc772cd17ba904902029b49fabc4045f388eb729ca5dafc63ab",
+   "shape": "support_transcript"
+  },
+  {
+   "chars": 90085,
+   "id": "LF-csv_export-90k",
+   "sha256": "8933f1fab7fd49e3e575a7b64128f761fc08f8b574ee432b3db152f74b07a4c1",
+   "shape": "csv_export"
+  },
+  {
+   "chars": 150013,
+   "id": "LF-csv_export-150k",
+   "sha256": "45582cbbcf6676360c2acacab7b7db71783781856bcfced20f64298f655238b2",
+   "shape": "csv_export"
+  },
+  {
+   "chars": 400099,
+   "id": "LF-csv_export-400k",
+   "sha256": "0cfcab708f31d89fefd4f1bf8c4d2695ab462193d11fe66e9e803571f890a4c1",
+   "shape": "csv_export"
+  },
+  {
+   "chars": 900028,
+   "id": "LF-csv_export-900k",
+   "sha256": "34a2cd4ebecd8aee176bca8cfc448bbe3d35aeddd1ae56b79564ab1730ba33cb",
+   "shape": "csv_export"
+  },
+  {
+   "chars": 90060,
+   "id": "LF-log_tail-90k",
+   "sha256": "528a631db6f9ffd437bc58b8717a05b6c7fd3690d80aeb424b5cfe87f4f96f17",
+   "shape": "log_tail"
+  },
+  {
+   "chars": 150127,
+   "id": "LF-log_tail-150k",
+   "sha256": "38935cd55d98c0871a1be32bbb04e3258f9cd02ed46bff199c5e16a6dd2dd73c",
+   "shape": "log_tail"
+  },
+  {
+   "chars": 400118,
+   "id": "LF-log_tail-400k",
+   "sha256": "21b1c34e40066fcd2fa449bc71145694ffa42191755de2e3b74bb305a037a783",
+   "shape": "log_tail"
+  },
+  {
+   "chars": 900013,
+   "id": "LF-log_tail-900k",
+   "sha256": "f12e7f4ab274e346fbc03425e6b27424f4e7935a63b115751fd36f7cf322144a",
+   "shape": "log_tail"
+  }
+ ],
+ "seed": 20260920,
+ "targets": [
+  90000,
+  150000,
+  400000,
+  900000
+ ]
+}

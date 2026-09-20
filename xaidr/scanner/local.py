@@ -40,6 +40,8 @@ from .l1 import (
     L1_MAX_SCAN_CHARS,
     OVERSIZED_INPUT_CATEGORY,
     OVERSIZED_INPUT_RULE,
+    SCAN_INCOMPLETE_RULE,
+    SCAN_INCOMPLETE_SCORE,
     iter_scan_windows,
 )
 from .l2 import scan_l2
@@ -385,6 +387,18 @@ class LocalScanner:
         # condition, whereas a remote link's health is neither permanent nor
         # ours to fix.
         self._escalators: tuple = tuple(escalators)
+        #: Links that did not confirm they are answering, as (name, reason).
+        #: RECORDED as well as logged, for the same reason the rule-asset
+        #: loaders now record: an ERROR line is not a signal a caller can act
+        #: on. `Sensor.degradations` reads this, and `fail_closed=("artifact",)`
+        #: refuses to construct on it. The link stays registered either way —
+        #: the fail-closed decision is the operator's, not this constructor's.
+        self.unhealthy_escalators: list = []
+        #: Set by DelphiSensor to its `_control_fault`. None on a bare scanner,
+        #: which is what keeps this module free of any fail-closed policy: the
+        #: scanner REPORTS that a control did not run and the sensor owns what
+        #: that means.
+        self.on_control_fault = None
         for esc in self._escalators:
             name = getattr(esc, "name", type(esc).__name__)
             try:
@@ -406,6 +420,8 @@ class LocalScanner:
                     "is answering; scans will record 'skipped' if it keeps "
                     "failing.", name, safe_exc(exc),
                 )
+                self.unhealthy_escalators.append(
+                    (name, f"health() raised {type(exc).__name__}"))
                 continue
             if report is None or not getattr(report, "healthy", False):
                 detail = getattr(report, "detail", "") or "no detail given"
@@ -415,6 +431,7 @@ class LocalScanner:
                     "up by the first scan — but until it answers, flag-band "
                     "scans get the LOCAL verdict only.", name, detail,
                 )
+                self.unhealthy_escalators.append((name, f"unhealthy: {detail}"))
 
         # --- Nano: opt-in ML signal for the rules-silent band (see nano.py) ---
         # OFF unless explicitly enabled AND the optional extra is installed.
@@ -1034,7 +1051,9 @@ class LocalScanner:
         max_score = 0.0
         rules: list = []
         category = None
-        for idx, window in iter_scan_windows(prompt, scan_start):
+        covered = 0
+        for idx, window, end in iter_scan_windows(prompt, scan_start):
+            covered = max(covered, end)
             if idx == 0:
                 continue  # head already scanned by the main pipeline
             norm = self._normalizer.normalize(window)
@@ -1066,6 +1085,16 @@ class LocalScanner:
                     + [t.rule for t in dlp_threats]
                     + [d.get("rule") for d in comp.get("details", []) if d.get("rule")]
                 )
+        # THE WINDOWS RAN OUT BEFORE THE TEXT DID. Distinct from
+        # OVERSIZED_INPUT_RULE above, which says only that the input was long:
+        # this says there is a region of attacker-controlled text that no rule
+        # was ever run against, which is the fact the `bounds` fail-closed group
+        # is about. Flag band, same as the other degradation signals — it is a
+        # "we could not finish looking" report, not an assertion of attack.
+        if covered < len(prompt):
+            rules.append(SCAN_INCOMPLETE_RULE)
+            max_score = max(max_score, SCAN_INCOMPLETE_SCORE)
+
         return max_score, rules, category
 
     def _run_nano(self, scan_text: str):
@@ -1089,6 +1118,15 @@ class LocalScanner:
         try:
             result = self._nano.classify(scan_text)
         except Exception:
+            # `controls`: nano is OPT-IN, so a nano that loads and then throws
+            # is a control the operator switched on and that is not running.
+            # The hook is set by the sensor and is None on a bare scanner, so
+            # this stays a plain degradation unless the operator asked
+            # otherwise. `DelphiNano.classify` already swallows its own faults
+            # (nano.py: "fail-OPEN, always"), so reaching here means the call
+            # itself could not be made at all.
+            if self.on_control_fault is not None:
+                self.on_control_fault("nano inference raised")
             return 0.0, 0.0, NANO_FAMILY_SILENT
         capped = min(
             remap(result.p_raw, self.flag_threshold, self.block_threshold),

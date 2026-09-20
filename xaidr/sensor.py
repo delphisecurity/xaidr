@@ -35,6 +35,7 @@ from .authz.classifier import (
     extract_url as _extract_url,
     extract_url_all as _extract_url_all,
 )
+from .authz.classifier import bound_faults as _bound_faults
 from .circuit_breaker import (
     CIRCUIT_OPEN_CATEGORY,
     CIRCUIT_OPEN_RULE,
@@ -42,7 +43,14 @@ from .circuit_breaker import (
     _CircuitRuntime,
 )
 from .enforcement import MONITOR as _MONITOR, resolve as _resolve_enforcement
-from .escalation import Escalator
+from .escalation import ESCALATION_SKIPPED, Escalator
+from .failclosed import (
+    FAIL_CLOSED_CATEGORY,
+    FAIL_CLOSED_RULES,
+    FailClosedError as _FailClosedError,
+    asset_faults as _asset_faults,
+    resolve as _resolve_fail_closed,
+)
 from .extensions import DestinationView, ScanRequest, SensorExtension
 from .reporters import Reporter, safe_fault
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
@@ -58,6 +66,7 @@ from .scanner.l1 import (
     L1_MAX_SCAN_CHARS as _L1_MAX_SCAN_CHARS,
     OVERSIZED_INPUT_CATEGORY as _OVERSIZED_INPUT_CATEGORY,
     OVERSIZED_INPUT_RULE as _OVERSIZED_INPUT_RULE,
+    SCAN_INCOMPLETE_RULE as _SCAN_INCOMPLETE_RULE,
     iter_scan_windows as _iter_scan_windows,
 )
 from .scanner.directive_context import (
@@ -174,6 +183,31 @@ NOT_SCANNABLE_RULE = "INPUT_NOT_SCANNABLE"
 # normal scans are untouched; this triggers only on a would-be host crash).
 SCAN_ERROR_CATEGORY = "scan_error"
 SCAN_ERROR_RULE = "SCAN_FAILED_OPEN"
+
+# ── the `bounds` group's scanner-side signals ────────────────────────────────
+# Rules that mean "a bound stopped us reading part of this input", as opposed to
+# "this input scored". Every one of them ALREADY fires today and is already in
+# the verdict's `rules` list — this frozenset only names which of them the
+# `bounds` group refuses on, so the group adds no new detection and changes
+# nothing for a sensor that has not opted in.
+#
+# LLM04_pathological_pattern is deliberately included even though it already
+# scores 0.65 and therefore already blocks at the default 0.60 threshold: an
+# operator who has RAISED block_threshold above 0.65 has silently un-closed it,
+# and a group that means "refuse on a bound" must not depend on a threshold the
+# deployer is free to move.
+_BOUND_SIGNAL_RULES = frozenset({
+    "a2a_nested_depth_exceeded",
+    "a2a_nested_breadth_exceeded",
+    # NOT _OVERSIZED_INPUT_RULE. That rule fires on length alone, so refusing
+    # on it blocks 100% of realistic long benign input (measured:
+    # benign_longform/, 18 of 18). "This input is long" is not a bound fault;
+    # "there is text in it nothing was run against" is, and that is
+    # SCAN_INCOMPLETE_RULE.
+    _SCAN_INCOMPLETE_RULE,
+    "LLM04_scan_budget_exceeded",
+    "LLM04_pathological_pattern",
+})
 
 # ── Tool-argument L1 category filter (single source of truth) ────────────────
 # scan_tool_call runs the SAME L1 ruleset over tool-argument text, but a tool
@@ -463,6 +497,7 @@ class DelphiSensor:
         privilege_tier: int | None = None,
         extensions: Sequence[SensorExtension] = (),
         emit_provenance_headers: bool = False,
+        fail_closed=(),
     ):
         if not agent_id:
             raise ValueError("agent_id is required")
@@ -470,6 +505,29 @@ class DelphiSensor:
         # constructor given several bad arguments is what it has always been.
         # resolve() owns the message and the accepted set (see enforcement.py).
         enforcement = _resolve_enforcement(enforcement_mode)
+
+        # ── fail-closed posture ──────────────────────────────────────────
+        # DEFAULT IS (), EVERY GROUP OPEN, AND THAT IS NOT NEGOTIABLE HERE.
+        # Changing the default is a breaking change for every existing
+        # deployment and is its own release with its own notes; see
+        # docs/fail-closed-design.md §d. With `()` the resolved config is a
+        # shared empty object, every `group in self._fail_closed` is a lookup
+        # in an empty dict, and no code below this line runs that did not run
+        # before the option existed.
+        #
+        # Validated LOUDLY and immediately after `enforcement_mode`, for the
+        # same ADV-2 reason: a misspelled group that quietly did nothing would
+        # leave a deployment believing it has a posture it does not have, which
+        # is the exact failure this option exists to remove.
+        self._fail_closed = _resolve_fail_closed(fail_closed)
+
+        # `artifact` closed: refuse to CONSTRUCT when an asset did not load as
+        # authored. This runs before anything else is built, so the operator
+        # gets the asset name and nothing half-initialised. See
+        # `_check_artifact_faults` for why the check is here and not at the
+        # loader.
+        if "artifact" in self._fail_closed:
+            self._check_artifact_faults()
 
         # PRIVILEGE TIER (OWASP ASI03) — CONFIG-SOURCED, and only here.
         #
@@ -581,6 +639,10 @@ class DelphiSensor:
             # the scanner short-circuits on that before building anything.
             escalators=self._escalators,
         )
+        # The scanner reports a control that did not run; the sensor decides
+        # what that means. Set unconditionally — `_control_fault` is a no-op
+        # unless `controls` is closed.
+        self._scanner.on_control_fault = self._control_fault
         # Derived, not a literal: an operator reading the manifest must be able
         # to tell a purely local scanner from one that consults a link.
         self._scanner_mode = "local+escalation" if self._escalators else "local"
@@ -619,6 +681,26 @@ class DelphiSensor:
         self._policy = _policy.load_policy(
             policy_file, extra_conditions=self._policy_conditions
         )
+        # `artifact` closed: a policy file the deployer NAMED and that did not
+        # load is the same defect as a rule asset that did not load — the
+        # sensor is enforcing something other than what was written.
+        #
+        # THE CONDITION IS `policy_file`, NOT `self._policy is None`. A sensor
+        # with no policy at all is detection-only and entirely valid; that is
+        # the default and most deployments run it. The AUTO-LOADED
+        # ./xaidr-policy.yaml is deliberately excluded too — its absence is the
+        # normal case and cannot be an error. Only a path the deployer typed
+        # carries the claim "this policy is in force".
+        if "artifact" in self._fail_closed and policy_file and self._policy is None:
+            raise ValueError(
+                f"fail_closed=('artifact',): the policy file you named "
+                f"({policy_file!r}) did not load — it is missing, unreadable, "
+                "or malformed, and local_policy.load_policy fell through to "
+                "detection-only. The sensor was NOT built. The preceding "
+                "xaidr.local_policy WARNING says which of those it was. Fix "
+                "the file, or drop 'artifact' from fail_closed to run "
+                "detection-only deliberately."
+            )
 
         # A2A structural validation (Tier A, content-blind) + local id tracking
         # (Tier B, LOCAL ONLY — catches references to ids this sensor never
@@ -696,6 +778,264 @@ class DelphiSensor:
                     name, safe_fault(exc),
                 )
                 raise
+
+    # ── fail-closed ──────────────────────────────────────────────────────
+
+    def _check_artifact_faults(self) -> None:
+        """Refuse to construct when an asset did not load as authored.
+
+        THE FAULT POINT AND THE FAIL-CLOSED POINT ARE DELIBERATELY DIFFERENT
+        PLACES, and this is the first entry in §f of the design doc. The rule
+        assets load at MODULE IMPORT — ``l1.INPUT_RULES`` is assigned at import
+        time — so by the time any sensor exists the degradation has already
+        happened. Making the LOADER raise would mean ``import xaidr`` crashing a
+        host over a corrupt JSON file, which is the posture
+        ``l1._load_and_compile`` has always refused and which no operator can
+        opt out of, because there is no operator object yet at import time. So
+        the loader records and import succeeds; THIS is where the operator's
+        choice is applied. The consequence is honest and worth stating: with
+        ``artifact`` closed, a corrupt asset is caught at the FIRST sensor
+        construction, not at import.
+
+        Raises ValueError naming every faulted asset, so one redeploy fixes all
+        of them rather than one per attempt.
+        """
+        faults = _asset_faults()
+        if not faults:
+            return
+        lines = "\n".join(f"  - {f.asset}: {f.reason}" for f in faults)
+        raise ValueError(
+            "fail_closed=('artifact',): the sensor was NOT built because "
+            f"{len(faults)} rule asset(s) did not load as authored:\n{lines}\n"
+            "These are assets shipped INSIDE the wheel, so this is a packaging "
+            "or installation fault, not a request: the sensor would have run "
+            "with a ruleset it does not have and answered every scan as though "
+            "it did. Reinstall the package. Note that this group refuses to "
+            "CONSTRUCT and never blocks traffic — a corrupt rule file says "
+            "nothing about the content of any request. Drop 'artifact' from "
+            "fail_closed to run degraded deliberately; Sensor.degradations "
+            "reports the same list without raising."
+        )
+
+    @property
+    def fail_closed(self) -> dict:
+        """The closed groups and the verdict each produces. ``{}`` by default."""
+        return self._fail_closed.as_dict()
+
+    @property
+    def degradations(self) -> list:
+        """Everything about THIS sensor that is not what was authored.
+
+        Readable whether or not any group is closed — that is the point. An
+        operator running the default fail-open posture still needs to be able
+        to ask "is this sensor whole?", and before this property the answer
+        lived in four ``print`` calls to stdout and two ERROR log lines.
+
+        Each entry is ``{"kind", "detail"}``. Empty on a healthy sensor.
+        """
+        out: list = []
+        for fault in _asset_faults():
+            out.append({"kind": "asset", "detail": f"{fault.asset}: {fault.reason}"})
+        for name, reason in getattr(self._scanner, "unhealthy_escalators", ()):
+            out.append({"kind": "escalator", "detail": f"{name}: {reason}"})
+        for name, hook in sorted(self._extension_faults):
+            out.append({"kind": "extension", "detail": f"{name}: {hook}() raised"})
+        for counter in sorted(self._breaker_faults):
+            out.append(
+                {"kind": "circuit_breaker", "detail": f"{counter} counter is inert"}
+            )
+        return out
+
+    def _control_fault(self, detail: str) -> None:
+        """A control the operator installed did not run.
+
+        No-op unless ``controls`` is closed, which is what keeps the fault
+        handlers on the open path byte-identical to what they were.
+
+        Raises rather than returning a flag because the fault sites are three
+        and four frames below the entry point — inside a hook loop, inside a
+        breaker counter, inside the destination walk — and every intermediate
+        frame would otherwise have to thread a status back up. Same reasoning
+        as ``_ExtensionContractError``, which this is deliberately NOT a
+        subclass of: that one is re-raised to the caller unconverted because
+        proceeding would mean acting on a control that is not enforcing, while
+        this one is a VERDICT the operator asked for and must travel the
+        verdict path.
+        """
+        if "controls" in self._fail_closed:
+            raise _FailClosedError("controls", detail)
+
+    def _emit_fail_closed(
+        self, direction: str, group: str, detail: str, prompt=None, **extra
+    ) -> ScanResult:
+        """The verdict a closed group produces. NEVER raises.
+
+        Returns an ORDINARY ScanResult. There is no new return type and no new
+        return path anywhere in this package — see docs/fail-closed-design.md
+        §c. A LangGraph host was crashed in 1.9.0 by a correct verdict sent down
+        a path whose type contract it did not satisfy, and the lesson taken from
+        that is not "be careful with the new type" but "do not add one". This
+        result flows through exactly the refusal machinery every content block
+        already flows through: ``refusal_text``/``_langchain_refusal`` at tool
+        seams, ``DelphiBlockedError`` at entrypoint and transport seams.
+
+        The category is shared (``fail_closed``) so a SIEM keys on one string;
+        the GROUP is in the rule id and in the telemetry, which is where the
+        distinction an operator acts on belongs.
+
+        The caller applies ``_apply_mode`` to what this returns, so a monitor
+        mode sensor still softens it to ``flagged``. ``fail_closed`` must never
+        be a back door that turns monitor into block.
+        """
+        action = self._fail_closed.verdict(group)
+        rule = FAIL_CLOSED_RULES.get(group, "FAIL_CLOSED")
+        result = ScanResult(
+            action=action,
+            score=1.0,
+            category=FAIL_CLOSED_CATEGORY,
+            rules=[rule],
+            latency_ms=0,
+            input_status="fail_closed",
+        )
+        logger.error(
+            "xaidr: FAIL-CLOSED [%s] on %s -> %s (%s). The operator configured "
+            "fail_closed=%r; this call was refused because a fault made the "
+            "verdict unreliable, NOT because the content scored.",
+            group, direction, action, detail, self._fail_closed.groups,
+        )
+        try:
+            phash = safe_content_hash(prompt) if isinstance(prompt, str) else None
+            data = {
+                "timestamp": utc_now_rfc3339(),
+                "scanId": uuid4().hex[:12],
+                "agentId": self.agent_id,
+                "action": action,
+                "score": 1.0,
+                "category": FAIL_CLOSED_CATEGORY,
+                "rules": [rule],
+                "direction": direction,
+                "enforcementMode": self.enforcement_mode,
+                "scanTimeMs": 0,
+                "promptLength": len(prompt) if isinstance(prompt, str) else 0,
+                "promptHash": phash,
+                # `degraded` is the SAME flag SCAN_FAILED_OPEN sets, because an
+                # operator alerting on "this sensor is not working" wants both
+                # in one query. `failClosedGroup` is what separates them.
+                "degraded": True,
+                "failClosedGroup": group,
+                "failClosedDetail": detail,
+            }
+            data.update(extra)
+            self._telemetry.enqueue(
+                {"type": "scan", "agentId": self.agent_id, "data": data}
+            )
+        except Exception:
+            # The refusal signal cannot itself become a new failure point. This
+            # is §f: there is no fail-closed available HERE, because failing
+            # closed on a failure to report a fail-closed is unbounded regress.
+            pass
+        return result
+
+    @staticmethod
+    def _fault_origin(exc: BaseException) -> str:
+        """``module:line`` of the deepest frame in OUR traceback. Never raises.
+
+        Diagnostic and never attacker-controlled — the same value
+        ``_emit_scan_error`` logs, and for the same reason: the exception
+        MESSAGE is routinely built by interpolating the value that caused the
+        fault, so a scanner fault on a prompt containing a key can put that key
+        in the message. The origin is derived from our own code object and
+        cannot echo scanned content.
+        """
+        try:
+            origin = "unknown"
+            tb = getattr(exc, "__traceback__", None)
+            while tb is not None:
+                frame = tb.tb_frame
+                origin = f"{frame.f_globals.get('__name__', '?')}:{tb.tb_lineno}"
+                tb = tb.tb_next
+            return origin
+        except Exception:     # pragma: no cover - defensive
+            return "unknown"
+
+    def _fail_closed_result(
+        self, direction: str, group: str, detail: str, prompt=None, **extra
+    ) -> ScanResult:
+        """``_emit_fail_closed`` plus the enforcement-mode downgrade.
+
+        MODE IS APPLIED; THE EXTENSION TRANSFORM CHAIN IS NOT, and the
+        asymmetry is deliberate.
+
+        Mode must apply, or ``fail_closed`` would be a back door that turns a
+        monitor-mode sensor into an enforcing one. Monitor's contract is that
+        nothing is interrupted, and a refusal is an interruption whatever
+        produced it. So a closed group in monitor mode emits the full
+        ``fail_closed`` telemetry and returns ``flagged`` — the operator sees
+        every refusal the posture WOULD have made before they switch modes,
+        which is also how you measure the cost of enabling it on your own
+        traffic rather than on ours.
+
+        S6 transforms must NOT apply. ``_apply_mode`` hands the verdict to every
+        extension's ``transform_verdict`` for softening, and this verdict exists
+        precisely because a subsystem faulted — in the ``controls`` case, often
+        an extension. Routing it back through the extension chain would let the
+        broken component erase its own refusal.
+        """
+        result = self._emit_fail_closed(direction, group, detail, prompt, **extra)
+        downgraded = self.enforcement.downgrade(result.action)
+        if downgraded != result.action:
+            result = replace(result, action=downgraded)
+        return result
+
+    def _post_scan_gate(
+        self, result: ScanResult, direction: str, prompt=None, arguments=None, **extra
+    ) -> ScanResult:
+        """The two groups that are decided AFTER the scan, from the verdict.
+
+        Returns ``result`` unchanged when the group is open — which is the only
+        path a default sensor takes, and it costs one ``in`` on an empty dict.
+
+        A verdict that ALREADY halts is returned untouched. A content block is
+        more specific than "a bound stopped us reading part of this", and
+        relabelling it ``fail_closed`` would cost an operator the category their
+        SIEM rule keys on while changing nothing about what happened.
+        """
+        # `controls` — an escalator was consulted and did not answer. Read off
+        # the verdict rather than raised at the fault site because
+        # `run_escalators` is contractually non-raising ("an escalation layer
+        # that can take down a scan is worse than no escalation layer") and
+        # already records exactly what is needed: which link, and how it failed.
+        if "controls" in self._fail_closed and result.escalation == ESCALATION_SKIPPED:
+            return self._fail_closed_result(
+                direction, "controls",
+                f"escalator did not answer ({result.escalation_reason})",
+                prompt, **extra)
+        if "bounds" not in self._fail_closed or result.must_halt:
+            return result
+        verdict = self._bounds_verdict(result, arguments)
+        if verdict is None:
+            return result
+        return self._fail_closed_result(
+            direction, verdict[0], verdict[1], prompt, **extra)
+
+    def _bounds_verdict(self, result: ScanResult, arguments=None):
+        """The ``bounds`` group: did an input defeat a parser bound?
+
+        Returns a ``(group, detail)`` pair to refuse on, or None.
+
+        Two sources, because the bounds report themselves in two ways. The
+        scanner-side bounds already emit a RULE (the A2A walk, the L1 window and
+        rule-loop budgets), so they are read off the verdict. The classifier-side
+        bounds do not — they escalate an impact TIER, which cannot be told apart
+        from a genuine critical — so ``bound_faults`` asks them by name. Both
+        run only when the group is closed.
+        """
+        hit = [r for r in (result.rules or []) if r in _BOUND_SIGNAL_RULES]
+        if arguments is not None:
+            hit.extend(_bound_faults(arguments))
+        if not hit:
+            return None
+        return ("bounds", ", ".join(dict.fromkeys(hit)))
 
     # ── extensions (S1/S5/S6) ────────────────────────────────────────────
     # Every hook below except on_attach is fail-SAFE: a fault degrades to "this
@@ -845,16 +1185,21 @@ class DelphiSensor:
         """
         name = getattr(extension, "name", type(extension).__name__)
         key = (name, hook)
-        if key in self._extension_faults:
-            return
-        self._extension_faults.add(key)
-        logger.error(
-            "xaidr: extension %r raised in %s() (%s) [message suppressed: may "
-            "contain scanned content]. THIS CONTROL IS INERT until the sensor "
-            "is rebuilt — the scan continued on the open verdict. This message "
-            "is logged once per extension per hook.",
-            name, hook, safe_fault(exc),
-        )
+        if key not in self._extension_faults:
+            self._extension_faults.add(key)
+            logger.error(
+                "xaidr: extension %r raised in %s() (%s) [message suppressed: may "
+                "contain scanned content]. THIS CONTROL IS INERT until the sensor "
+                "is rebuilt — the scan continued on the open verdict. This message "
+                "is logged once per extension per hook.",
+                name, hook, safe_fault(exc),
+            )
+        # THE LOG IS ONCE PER HOOK; THE REFUSAL IS EVERY TIME. Those are
+        # different questions. Logging is deduplicated so a broken hook reads as
+        # one dead control rather than fifty lines of noise — but a verdict is
+        # per CALL, and a deployment that refuses the first call and then
+        # silently allows the next forty-nine has the worst of both postures.
+        self._control_fault(f"extension {name!r} raised in {hook}()")
 
     def _build_scan_request(self, direction: str, **fields) -> ScanRequest:
         """The view handed to every extension hook on the scan paths."""
@@ -945,6 +1290,12 @@ class DelphiSensor:
                 "xaidr: circuit_breaker check failed (%s: %s) — treating as closed",
                 type(exc).__name__, exc,
             )
+            # The breaker read on the SCAN path is a control decision, so it is
+            # a `controls` site. The `circuit_state` property above is NOT: it
+            # is an accessor a host polls, it decides nothing, and raising out
+            # of a property read would be a worse surprise than the stale
+            # answer. See §f.
+            self._control_fault("circuit_breaker state read failed")
             return False
 
     def _emit_circuit_open_verdict(self, direction: str, **extra) -> ScanResult:
@@ -1162,16 +1513,18 @@ class DelphiSensor:
         ``tests/test_delegation_rate_breaker.py`` asserts every attribute this
         module calls on the runtime actually exists on it.
         """
-        if counter in self._breaker_faults:
-            return
-        self._breaker_faults.add(counter)
-        logger.error(
-            "xaidr: circuit_breaker %s counter is NOT COUNTING and will not "
-            "trip (%s: %s). The breaker's other triggers are unaffected; "
-            "circuit_state will keep reporting 'closed' for this one. "
-            "This message is logged once per sensor.",
-            counter, type(exc).__name__, exc,
-        )
+        if counter not in self._breaker_faults:
+            self._breaker_faults.add(counter)
+            logger.error(
+                "xaidr: circuit_breaker %s counter is NOT COUNTING and will not "
+                "trip (%s: %s). The breaker's other triggers are unaffected; "
+                "circuit_state will keep reporting 'closed' for this one. "
+                "This message is logged once per sensor.",
+                counter, type(exc).__name__, exc,
+            )
+        # Logged once, refused every time — see `_extension_failed` for why
+        # those are different questions.
+        self._control_fault(f"circuit_breaker {counter} counter is inert")
 
     def _breaker_tool_tick(self) -> None:
         """Count one ``scan_tool_call`` invocation toward the rate trigger.
@@ -1408,18 +1761,26 @@ class DelphiSensor:
 
         With an OPEN circuit breaker in block mode this returns the
         ``CIRCUIT_BREAKER_OPEN`` verdict without running detection.
+
+        With ``fail_closed`` groups enabled, a fault in one of those groups
+        returns a ``fail_closed`` verdict instead of failing open. The default
+        posture is unchanged: with ``fail_closed=()`` not one line below
+        behaves differently from before the option existed.
         """
-        gated = self._run_gates(
-            direction,
-            lambda: {"text": prompt if isinstance(prompt, str) else None,
-                     "destination": destination, "provider": provider},
-            destinationType="external_api",
-            destinationIdentifier=destination or provider or "llm",
-        )
-        if gated is not None:
-            return gated
+        extra = {
+            "destinationType": "external_api",
+            "destinationIdentifier": destination or provider or "llm",
+        }
         try:
-            return self._scan_impl(
+            gated = self._run_gates(
+                direction,
+                lambda: {"text": prompt if isinstance(prompt, str) else None,
+                         "destination": destination, "provider": provider},
+                **extra,
+            )
+            if gated is not None:
+                return gated
+            result = self._scan_impl(
                 prompt, direction, destination, provider, origin_context, parent_context
             )
         except (DelphiBlockedError, _ExtensionContractError):
@@ -1428,12 +1789,17 @@ class DelphiSensor:
             # turn a mis-written enterprise control into a silent
             # 'allowed', which is the exact shape this sensor refuses.
             raise
+        except _FailClosedError as fc:
+            return self._fail_closed_result(
+                direction, fc.group, fc.detail, prompt, **extra)
         except Exception as exc:
-            return self._emit_scan_error(
-                direction, exc, prompt,
-                destinationType="external_api",
-                destinationIdentifier=destination or provider or "llm",
-            )
+            if "internal" in self._fail_closed:
+                return self._fail_closed_result(
+                    direction, "internal",
+                    f"{type(exc).__name__} in {self._fault_origin(exc)}",
+                    prompt, **extra)
+            return self._emit_scan_error(direction, exc, prompt, **extra)
+        return self._post_scan_gate(result, direction, prompt, **extra)
 
     def _scan_impl(
         self,
@@ -1591,17 +1957,17 @@ class DelphiSensor:
         already rejected by an open circuit do not keep re-counting.
         """
         emit_direction = "a2a_inbound" if received else "a2a"
-        gated = self._run_gates(
-            emit_direction,
-            lambda: {"destination": destination},
-            destinationAgent=destination,
-        )
-        if gated is not None:
-            return gated
-        if not received:
-            self._breaker_delegation_tick()
+        extra = {"destinationAgent": destination}
+        text = message if isinstance(message, str) else None
         try:
-            return self._scan_a2a_impl(
+            gated = self._run_gates(
+                emit_direction, lambda: {"destination": destination}, **extra,
+            )
+            if gated is not None:
+                return gated
+            if not received:
+                self._breaker_delegation_tick()
+            result = self._scan_a2a_impl(
                 message, destination, origin_context, parent_context, received
             )
         except (DelphiBlockedError, _ExtensionContractError):
@@ -1610,12 +1976,18 @@ class DelphiSensor:
             # turn a mis-written enterprise control into a silent
             # 'allowed', which is the exact shape this sensor refuses.
             raise
+        except _FailClosedError as fc:
+            return self._fail_closed_result(
+                emit_direction, fc.group, fc.detail, text, **extra)
         except Exception as exc:
+            if "internal" in self._fail_closed:
+                return self._fail_closed_result(
+                    emit_direction, "internal",
+                    f"{type(exc).__name__} in {self._fault_origin(exc)}",
+                    text, **extra)
             return self._emit_scan_error(
-                emit_direction, exc,
-                prompt=message if isinstance(message, str) else None,
-                destinationAgent=destination,
-            )
+                emit_direction, exc, prompt=text, **extra)
+        return self._post_scan_gate(result, emit_direction, text, **extra)
 
     def _scan_a2a_impl(
         self,
@@ -1801,21 +2173,27 @@ class DelphiSensor:
         tick happens after the open-circuit check, so calls rejected by an open
         circuit do not keep re-counting.
         """
-        gated = self._run_gates(
-            "tool_call",
-            lambda: {"tool_name": tool_name if isinstance(tool_name, str) else None,
-                     "mcp_server": mcp_server or server_name,
-                     "arguments_hash": safe_content_hash(
-                         _canonical_arguments(arguments))},
-            toolName=tool_name if isinstance(tool_name, str) else None,
-            destinationType="mcp_server" if (mcp_server or server_name) else "tool_call",
-            destinationIdentifier=mcp_server or server_name,
-        )
-        if gated is not None:
-            return gated
-        self._breaker_tool_tick()
+        name = tool_name if isinstance(tool_name, str) else None
+        extra = {
+            "toolName": name,
+            "destinationIdentifier": mcp_server or server_name,
+        }
         try:
-            return self._scan_tool_call_impl(
+            gated = self._run_gates(
+                "tool_call",
+                lambda: {"tool_name": name,
+                         "mcp_server": mcp_server or server_name,
+                         "arguments_hash": safe_content_hash(
+                             _canonical_arguments(arguments))},
+                toolName=name,
+                destinationType=(
+                    "mcp_server" if (mcp_server or server_name) else "tool_call"),
+                destinationIdentifier=mcp_server or server_name,
+            )
+            if gated is not None:
+                return gated
+            self._breaker_tool_tick()
+            result = self._scan_tool_call_impl(
                 tool_name, arguments, mcp_server, origin_context, server_name
             )
         except (DelphiBlockedError, _ExtensionContractError):
@@ -1824,13 +2202,21 @@ class DelphiSensor:
             # turn a mis-written enterprise control into a silent
             # 'allowed', which is the exact shape this sensor refuses.
             raise
+        except _FailClosedError as fc:
+            return self._fail_closed_result(
+                "tool_call", fc.group, fc.detail, name, **extra)
         except Exception as exc:
-            return self._emit_scan_error(
-                "tool_call", exc,
-                prompt=tool_name if isinstance(tool_name, str) else None,
-                toolName=tool_name if isinstance(tool_name, str) else None,
-                destinationIdentifier=mcp_server or server_name,
-            )
+            if "internal" in self._fail_closed:
+                return self._fail_closed_result(
+                    "tool_call", "internal",
+                    f"{type(exc).__name__} in {self._fault_origin(exc)}",
+                    name, **extra)
+            return self._emit_scan_error("tool_call", exc, prompt=name, **extra)
+        # `arguments` is passed ONLY here: the tool boundary is the one surface
+        # whose bounds live in the CLASSIFIER rather than in the verdict's rule
+        # list, so it is the one that has to be asked directly.
+        return self._post_scan_gate(
+            result, "tool_call", name, arguments=arguments, **extra)
 
     def _least_privileged_tier(self) -> int:
         """The privilege ceiling for the action about to be taken.
@@ -1987,7 +2373,7 @@ class DelphiSensor:
             # reached; and flag over-length so it is never a silent pass.
             _arg_scan_start = time.perf_counter()
             danger = []
-            for _idx, _win in _iter_scan_windows(normalized_args, _arg_scan_start):
+            for _idx, _win, _end in _iter_scan_windows(normalized_args, _arg_scan_start):
                 danger.extend(
                     t for t in _scan_l1(_win).threats
                     if t.category in _TOOL_ARG_KEEP_CATEGORIES
@@ -2001,7 +2387,7 @@ class DelphiSensor:
             # only ADD a finding and never change one that already fired.
             if normalized_args != raw_args:
                 _seen_rules = {t.rule for t in danger}
-                for _idx, _win in _iter_scan_windows(raw_args, _arg_scan_start):
+                for _idx, _win, _end in _iter_scan_windows(raw_args, _arg_scan_start):
                     for _t in _scan_l1(_win).threats:
                         if (_t.category in _TOOL_ARG_KEEP_CATEGORIES
                                 and _t.rule not in _seen_rules):
@@ -3632,7 +4018,31 @@ class ProtectedHttpClient:
             # turn a mis-written enterprise control into a silent
             # 'allowed', which is the exact shape this sensor refuses.
             raise
+        except _FailClosedError as fc:
+            # `controls`: an extension's destination_policy() raised. This
+            # boundary has no in-band way to return a refusal — there is no
+            # ToolMessage on an HTTP send — so it raises, exactly as a
+            # destination block already does. Same signal, same exception type,
+            # nothing new for a caller to learn. See design doc §c.
+            raise DelphiBlockedError(
+                self._sensor._fail_closed_result(
+                    "http_request", fc.group, fc.detail),
+                message=f"Request refused: {fc}",
+            )
         except Exception as exc:
+            if "internal" in self._sensor._fail_closed:
+                # `internal`: the destination check itself raised, so the
+                # operator blocklist and the deny-destination policy did NOT
+                # run for this request. That is the one D-site whose fail-open
+                # skips a check that had already DECIDED something.
+                raise DelphiBlockedError(
+                    self._sensor._fail_closed_result(
+                        "http_request", "internal",
+                        f"{type(exc).__name__} in "
+                        f"{self._sensor._fault_origin(exc)}"),
+                    message="Request refused: the destination check faulted "
+                            "and fail_closed includes 'internal'",
+                )
             # Fail open: the destination check must never crash the host request.
             # The exception MESSAGE is suppressed for the same reason it is on the
             # scan path: a fault raised while handling a URL can interpolate that

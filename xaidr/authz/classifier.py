@@ -13,6 +13,7 @@ import json
 import os
 import re
 from typing import Optional
+from ..failclosed import record_asset_fault as _record_asset_fault
 
 _RULES_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "rules", "impact-classes.json"
@@ -55,7 +56,13 @@ def _load_ruleset() -> dict:
         with open(_RULES_PATH) as f:
             raw = json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
+        # RECORDED as well as printed: see the note in scanner/l1.py. This is
+        # the costliest of the four assets to lose — emptying it takes the
+        # committed shell-attack block count from 165/277 to 90/277.
         print(f"[xaidr] Warning: impact-classes.json failed to load ({exc}), using defaults only")
+        _record_asset_fault(
+            "impact-classes.json",
+            f"failed to load ({type(exc).__name__}); using defaults only")
         return {"version": 0, "default": dict(_FALLBACK_DEFAULT), "rules": [], "argument_escalations": []}
 
     # Pre-compile value patterns; drop escalation entries with bad regexes.
@@ -67,6 +74,10 @@ def _load_ruleset() -> dict:
                 esc = {**esc, "value_pattern": re.compile(pattern)}
             except re.error as exc:
                 print(f"[xaidr] Warning: escalation {esc.get('id')} regex failed: {exc}")
+                _record_asset_fault(
+                    "impact-classes.json",
+                    f"escalation {esc.get('id')!r} regex failed to compile "
+                    f"({type(exc).__name__}); escalation DROPPED")
                 continue
         escalations.append(esc)
     raw["argument_escalations"] = escalations
@@ -81,6 +92,10 @@ def _load_ruleset() -> dict:
                 compiled.append(_compile_command_entry(entry))
             except re.error as exc:
                 print(f"[xaidr] Warning: command classifier {entry.get('id')} regex failed: {exc}")
+                _record_asset_fault(
+                    "impact-classes.json",
+                    f"command classifier {entry.get('id')!r} regex failed to "
+                    f"compile ({type(exc).__name__}); rule DROPPED")
         cc[bucket] = compiled
     raw["command_classifiers"] = cc
 
@@ -93,6 +108,10 @@ def _load_ruleset() -> dict:
             compiled.append(_compile_command_entry(entry))
         except re.error as exc:
             print(f"[xaidr] Warning: sql classifier {entry.get('id')} regex failed: {exc}")
+            _record_asset_fault(
+                "impact-classes.json",
+                f"sql classifier {entry.get('id')!r} regex failed to compile "
+                f"({type(exc).__name__}); rule DROPPED")
     sc["rules"] = compiled
     raw["sql_classifiers"] = sc
 
@@ -105,6 +124,10 @@ def _load_ruleset() -> dict:
             compiled.append(_compile_command_entry(entry))
         except re.error as exc:
             print(f"[xaidr] Warning: url classifier {entry.get('id')} regex failed: {exc}")
+            _record_asset_fault(
+                "impact-classes.json",
+                f"url classifier {entry.get('id')!r} regex failed to compile "
+                f"({type(exc).__name__}); rule DROPPED")
     uc["rules"] = compiled
     raw["url_classifiers"] = uc
     return raw
@@ -733,6 +756,84 @@ def classify_url_findings(text: str) -> list:
         return findings
     except Exception:
         return []
+
+
+# ── bound faults (the `bounds` fail-closed group) ────────────────────────────
+# WHICH BOUNDS THIS READER HIT ON THESE ARGUMENTS, BY NAME.
+#
+# Three of the bounds below ALREADY fail closed at the CLASSIFICATION layer and
+# have since before this function existed: an unparsed SQL statement classifies
+# as `sql.unparsed_input` at critical, an unsettled predicate as
+# `sql.unbounded_mutation` at critical, and a truncated candidate walk raises
+# the tier to critical outright (see the block above `_apply_escalations`). All
+# three carry `detect: None`, so they name a class for a policy to act on and
+# never produce a detection of their own. That is the correct default — a
+# deployer who wants them enforced writes `match: {impact_tier: [critical]}` —
+# and it is also why `fail_closed=("bounds",)` cannot be implemented by reading
+# `classify()`: its return value cannot distinguish "critical because a bound
+# stopped us" from "critical because this really is a DROP TABLE".
+#
+# So the bounds are asked about DIRECTLY, by name, and only when the group is
+# enabled. `classify()` is untouched, the default scan path does not call this
+# at all, and a bare sensor computes byte-identically to one built before this
+# function existed.
+
+#: Bound identifiers. Stable strings: they appear in telemetry and in the
+#: `detail` of the fail-closed verdict an operator reads.
+BOUND_SQL_UNPARSED = "sql.unparsed"
+BOUND_SQL_PREDICATE_UNKNOWN = "sql.predicate_unknown"
+BOUND_ARGS_TRUNCATED = "arguments.walk_truncated"
+BOUND_COMMAND_DEGRADED = "command.parse_degraded"
+BOUND_URL_OVER_CAP = "url.over_cap"
+
+
+def bound_faults(arguments) -> list:
+    """Bounds this reader hit while reading ``arguments``. Never raises.
+
+    Returns a list of ``BOUND_*`` identifiers, empty when every reader finished.
+    Called ONLY when ``fail_closed`` includes ``"bounds"``.
+    """
+    faults: list = []
+    try:
+        if not isinstance(arguments, dict) or not arguments:
+            return faults
+
+        if _walk_was_truncated(arguments):
+            faults.append(BOUND_ARGS_TRUNCATED)
+
+        from ..scanner.sql_parse import MAX_SQL_CHARS, UNPARSED_STATEMENT, parse_sql
+        from ..scanner.url_parse import MAX_URL_CHARS
+
+        for _path, statement in extract_sql_all(arguments):
+            for shape in parse_sql(statement):
+                if shape.statement == UNPARSED_STATEMENT:
+                    if BOUND_SQL_UNPARSED not in faults:
+                        faults.append(BOUND_SQL_UNPARSED)
+                elif shape.predicate == "unknown":
+                    if BOUND_SQL_PREDICATE_UNKNOWN not in faults:
+                        faults.append(BOUND_SQL_PREDICATE_UNKNOWN)
+
+        # `parse_url` CAPS rather than declining: it reads `text[:MAX_URL_CHARS]`
+        # and returns a shape for the prefix, so a longer value is classified on
+        # a destination that is not the one the transport will dial. The cap is
+        # invisible in the shape, so it is asked about here.
+        for _path, url_value in extract_url_all(arguments):
+            if isinstance(url_value, str) and len(url_value) > MAX_URL_CHARS:
+                if BOUND_URL_OVER_CAP not in faults:
+                    faults.append(BOUND_URL_OVER_CAP)
+
+        command = extract_shell_command(arguments)
+        if command:
+            from ..scanner.command_parse import parse_command
+
+            if any(seg.parse_degraded for seg in parse_command(command)):
+                faults.append(BOUND_COMMAND_DEGRADED)
+    except Exception:
+        # Same contract as every other function in this module. A fault HERE is
+        # an `internal` matter, not a `bounds` one, and the entry point's own
+        # handler owns it; returning [] leaves the caller exactly where it was.
+        return faults
+    return faults
 
 
 def extract_url(arguments: dict) -> Optional[str]:

@@ -420,6 +420,26 @@ def refusal_text(tool_name: str, result: ScanResult) -> str:
     the same verdict — and because a denial (final) and a pending approval
     (routable to a human) must never collapse into one message.
     """
+    # FAIL-CLOSED FIRST, because it is the one refusal that is NOT a statement
+    # about the content. Everything else here tells the agent its action was
+    # judged; this tells it the judgement could not be made. An agent handed
+    # "[BLOCKED] blocked by security policy (fail_closed)" will reasonably try
+    # to rephrase the call, which cannot help and wastes a turn — so the text
+    # says the sensor is degraded and that retrying will not change it.
+    if getattr(result, "input_status", None) == "fail_closed":
+        pending = getattr(result, "action", None) == "approval_required"
+        head = "[APPROVAL REQUIRED]" if pending else "[BLOCKED]"
+        tail = (
+            "Route this action to a human approver."
+            if pending else
+            "Retrying will not help; this is an operator-configured refusal."
+        )
+        rule = (getattr(result, "rules", None) or ["FAIL_CLOSED"])[0]
+        return (
+            f"{head} Tool '{tool_name}' was NOT executed: the security sensor "
+            f"could not produce a reliable verdict ({rule}) and this deployment "
+            f"is configured to refuse rather than allow in that case. {tail}"
+        )
     if getattr(result, "action", None) == "approval_required":
         return (
             f"[APPROVAL REQUIRED] Tool '{tool_name}' requires human approval "

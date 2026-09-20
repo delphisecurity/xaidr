@@ -285,64 +285,176 @@ DEGRADATION RULES ALREADY IN BENIGN VERDICTS
    none
 ```
 
-### The headline
+### The headline, at design time
 
-**Of the four groups, the committed benign pools can measure exactly one, and
-within that one they can measure three of its thirteen sites.**
+**Of the four groups, the committed benign pools could measure exactly one, and
+within that one, three of its thirteen sites.**
 
 | Group | benign items that would block | status of that number |
 |---|---:|---|
-| G1 `artifact` | **0** | true *by construction* — G1 is not a traffic verdict |
-| G2 `controls` | **0** | **BLIND** — every site is unreachable in the harness |
+| G1 `artifact` | **0** | true by construction — G1 is not a traffic verdict |
+| G2 `controls` | **0** | **BLIND** — every site unreachable in the harness |
 | G3 `bounds` | **1 / 814** | partially measured; 5 of 13 sites blind |
 | G4 `internal` | **0** | **BLIND** — needs fault injection, not a corpus |
 
-### Why G2's zero is not a number
+`corpus_diff.py` builds `Sensor(agent_id=..., enforcement_mode="block",
+reporter=_NullReporter())`. Measured: `circuit_breaker=None`, `extensions=()`,
+`escalators=()`, `enable_nano=False`, no policy file, autopatch never called.
+Every G2 and G4 site is off before the first item is scanned. Reporting "G2
+costs 0 false positives" from that harness would have been the eighth instance
+of the shape `benign_a2a/README.md` documents.
 
-`corpus_diff.py:92` builds `Sensor(agent_id=..., enforcement_mode="block",
-reporter=_NullReporter())`. Measured:
+That is what the two shipping conditions were for. Both are now closed.
+
+---
+
+### Condition 1 — `controls` and `internal`, measured by sabotage
+
+`tests/test_fail_closed_sabotage.py`. 52 tests, one per site, **each asserted
+twice**: open still fails open exactly as before, closed hands back a usable
+refusal of the right TYPE.
 
 ```
-circuit_breaker = None   -> breaker counter faults unreachable   (B7)
-extensions      = ()     -> every extension hook unreachable     (B1-B5)
-escalators      = ()     -> escalation timeout unreachable       (B6)
-enable_nano     = False  -> nano load + inference unreachable    (A8)
-policy_file     = None   -> ./xaidr-policy.yaml present? False
-                            the detection-only fallback is the ONLY
-                            state the pools ever observe          (A6)
-autopatch       = never called by any pool                        (B8/B9)
+$ PYTHONPATH=. python -m pytest tests/test_fail_closed_sabotage.py -q
+52 passed in 0.17s
 ```
 
-Every G2 site is off before the first item is scanned. This is the same shape
-`benign_a2a/README.md` already documents for the structural validator — "a gate
-that passes on a population the change cannot touch reads as coverage while
-performing none." **Reporting "G2 costs 0 false positives" from this harness
-would be the eighth instance.**
+Sites covered — `test_every_control_fault_site_in_the_source_is_sabotaged_here`
+counts the `_control_fault(` call sites in the source and fails if one is added
+without a test here:
 
-### Why G4's zero is not a number
-
-D-sites fire only when the sensor's own code raises. A corpus of well-formed
-inputs cannot contain "a scanner bug". Measuring G4 needs per-site sabotage —
-which the repo already has an instrument for
-(`tests/test_operational_resilience.py:265` `_capture_fail_open`, and the
-per-site fail-open sabotage `docs/releasing.md:37` names) — and that instrument
-is not a benign pool. G4's real cost is `P(internal fault on honest traffic)`,
-which no corpus can estimate.
-
-### G3, site by site — what is measured and what is not
-
-| Site | Pool that could reach it | Measured | Verdict on the number |
+| | Site | Open | Closed |
 |---|---|---|---|
-| C7/C8 SQL bounds & predicate | `benign_dml` (50), `benign_tc` (3) | max **134** chars vs `MAX_SQL_CHARS=20_000`; max **3** statements vs `MAX_STATEMENTS=32`; **0 / 50** produce `unknown` or `unparsed` | **REAL.** The pool was built for this class. Matches the figure already recorded in `impact-classes.json` for `sql.unbounded_mutation`. |
-| C1/C2/C3 A2A walk | `benign_a2a` (60) — the only pool with dict A2A bodies | max depth **4** vs `_MAX_NEST_DEPTH=8`; max nodes **27** vs `_MAX_NEST_NODES=64`; depth histogram `{0:1, 1:1, 2:37, 3:19, 4:2}` | **REAL but weak.** 0 benign items would block. The pool sits at half the bound and has nothing in the 5–8 band, so it shows the bound is clear of honest A2A — it cannot price *lowering* the bound. |
-| C10 command parse degraded | `shell.benign` (78), `asi.benign` | **1 / 814** — `ASI05-B03`, `print(sum(range(10)))`, a Python payload shell-tokenized. All 78 `shell.benign` commands parse clean; `shlex` never fell back. | **REAL.** This is G3's entire measured cost: **1 benign item**. |
-| C4/C5 L1 over-length & budget | none | longest benign item **anywhere** is 3 241 chars vs `L1_MAX_SCAN_CHARS = 100_000` — **31× short** | **BLIND.** No committed pool contains a document-sized input. "0 benign items block on the over-length path" is not a measurement, it is absent test data — and C4 is the site with the largest plausible FP cost in the whole design. |
-| C9 argument-tree walk | `benign_toolcalls` | max **10** string values in any benign arg tree vs `_MAX_CANDIDATE_VALUES = 64` | **BLIND.** 6× short of the bound; the `RecursionError` arm needs a ~1000-deep tree no pool contains. |
-| C11 URL parse | `benign_tc` (48), `benign_disc` (5) | 0 faults; no item near `MAX_URL_CHARS = 4_000` | **BLIND for the cap**, real for the fault arm. |
-| C12 deep-JSON `RecursionError` | `benign_a2a` | 0; max body 3 241 chars, depth 4 | **BLIND.** |
-| C13 unrenderable arguments | `benign_toolcalls` | 0; every arg tree is JSON by construction (the pools are `.jsonl`) | **BLIND** — the file format forbids the input class. |
-| C6 pathological pattern | none | 0 | **BLIND**, and moot: already closed at 0.65. |
-| E2 `not_scannable` | none | every scanned pool value is `str` (665) or `dict` (60); `_coerce_scannable` returns `None` only for neither | **BLIND** — the pool schemas forbid the input class. |
+| B1 | extension `gate()` raises | `allowed` | refusal |
+| B2 | `transform_verdict()` raises | `allowed` | refusal |
+| B3 | `subject_trust()` raises | `None` | refusal |
+| B4 | `blocked_urls()` raises | list without it | refusal |
+| B5 | `destination_policy()` raises | request proceeds | `DelphiBlockedError` |
+| B6 | escalator raises / times out | local verdict | refusal |
+| B7 | breaker state read + all 3 counters | `"closed"` / inert | refusal ×4 |
+| B8 | nano inference raises | signal silently absent | refusal |
+| B8′ | autopatch tool seam | call runs | refusal string |
+| D1–D3 | scan / scan_output / scan_a2a / scan_tool_call | `SCAN_FAILED_OPEN` | refusal ×4 |
+| D4 | `_check_destination` raises | blocklist skipped | `DelphiBlockedError` |
+| D5 | wrong-typed input | `not_scannable` | **stays open** (§f7) |
+
+**Three things the sabotage found that a corpus could not have.**
+
+1. **`_extension_failed` deduplicated its fault handling, not just its log.**
+   The ERROR line is once per (extension, hook) — correct, a broken hook should
+   not produce fifty lines. But the dedup `return`ed EARLY, so a refusal placed
+   after it would have fired on call 1 and silently allowed calls 2..N. Logging
+   and refusing are different questions and now have different lifetimes;
+   `test_B1_gate_closed_refuses_EVERY_call_not_just_the_first` is the gate.
+2. **The first draft of the harness sabotaged the wrong thing.** It set
+   `sensor._scanner.scan = _boom` for all four entry points — but the tool path
+   does not go through the content scanner, it calls `classify()` directly. So
+   `scan_tool_call`'s OPEN half passed by returning a clean allow **with no
+   fault injected at all**. That is the vacuous-gate shape one layer down from
+   the corpus blindness, and it is why each site now carries its own sabotage
+   function and the open half asserts `SCAN_FAILED_OPEN` is actually present.
+3. **Three tests were passing as `skip`.** The escalator and nano sabotages
+   skipped when the input did not reach the band — green, and proving nothing.
+   Both now have an explicit precondition test
+   (`test_B6_precondition_escalatable_input_reaches_the_link`,
+   `test_B8_precondition_nano_is_actually_consulted`) that fails loudly if the
+   input stops reaching the site. 0 skips.
+
+---
+
+### Condition 2 — the over-length path, measured on a corpus that reaches the cap
+
+`benign_longform/` — 24 items, six realistic shapes, 90 KB to 900 KB. It could
+be written convincingly, so C4 ships **supported**, not unsupported. But only
+after the corpus rejected the first design.
+
+**The corpus found a defect before ship.** `LLM01_oversized_input` fires on
+`len(prompt) > L1_MAX_SCAN_CHARS` and nothing else, so it is on every input past
+the cap — including the ones the windowed scan then covers completely. Refusing
+on it means refusing a 150 KB contract that was read end to end.
+
+```
+NAIVE   (refuse on LLM01_oversized_input)        refused-and-unread 7   refused-but-FULLY-READ 2   allowed 3
+SHIPPED (refuse on LLM01_input_tail_unscanned)   refused-and-unread 7   refused-but-FULLY-READ 0   allowed 5
+```
+
+(over the 12 of 24 items that are clean at the default posture)
+
+So `scanner/l1.py` gained `LLM01_input_tail_unscanned`, fired by
+`LocalScanner._scan_tail` when the windows run out before the text does, and
+`_BOUND_SIGNAL_RULES` names that rule and **not** `LLM01_oversized_input`.
+"This input is long" is not a bound fault. "There is text in it that nothing
+was run against" is.
+
+```
+  items                                    24
+  over the 100,000-char cap              19
+    ...FULLY covered by the windowed scan  4
+    ...tail never read                     15
+  clean at the DEFAULT posture             12
+  THE BOUNDS COST, over default-clean items only
+    refused, tail genuinely unread          7   (the group working as designed)
+    refused, FULLY READ                     0   <- false positives
+    not refused                             5
+```
+
+**Two caveats that ship with that zero.**
+
+* **The boundary is a wall-clock budget, not a length.** Between roughly 150 KB
+  and 800 KB it is the 1.0s `TOTAL_SCAN_BUDGET_SEC` that decides, not the
+  8-window cap. Two 150 KB items in this pool land on opposite sides of it. The
+  same document can be refused on a loaded host and allowed on an idle one.
+  Under the cap is deterministic; past ~800 KB is deterministic; the band
+  between is not.
+* **12 of 24 items score on CONTENT at the default posture**, with no group
+  closed and nothing to do with `bounds` — `INTENT_exfiltrate_data` on every log
+  tail and transcript (an L2 co-occurrence rule: in 90 KB of honest text, *some*
+  action word and *some* target word co-occur with near certainty), and DLP
+  digit-run patterns matching across newlines. Excluded from the cost above,
+  because counting them would blame `bounds` for refusals it did not cause.
+  Recorded in `benign_longform/README.md` as their own finding; neither is fixed
+  here.
+
+---
+
+### The committed pools, re-measured with each group closed
+
+814 benign rows, after the implementation:
+
+```
+fail_closed=()                                  n=814  refused=0
+fail_closed=('bounds',)                         n=814  refused=1  ['asi.benign/ASI05-B03#0']
+fail_closed=('controls',)                       n=814  refused=0
+fail_closed=('internal',)                       n=814  refused=0
+fail_closed=('bounds','controls','internal')    n=814  refused=1  ['asi.benign/ASI05-B03#0']
+```
+
+The single refusal is `ASI05-B03`, `print(sum(range(10)))` — a Python payload
+shell-tokenized into pseudo-names, so `command.parse_degraded`. It is the same
+item the design-phase census predicted, and it is a correct refusal: the parser
+genuinely could not read it.
+
+The `controls` and `internal` zeros here are **still blind and still not
+numbers** — the harness has no extensions, no breaker, no escalators. The
+sabotage suite is where those groups are measured. This table is the
+zero-movement gate on the DEFAULT, not a cost measurement for those two groups.
+
+### G3, site by site
+
+| Site | Measured | Verdict on the number |
+|---|---|---|
+| C7/C8 SQL bounds & predicate | max 134 chars vs `MAX_SQL_CHARS=20 000`; max 3 statements vs 32; **0 / 50** produce `unknown`/`unparsed` | **REAL** — the pool was built for this class |
+| C10 command parse degraded | **1 / 814** (`ASI05-B03`) | **REAL** — G3's entire measured cost on the committed pools |
+| C4 over-length | **0 / 12** default-clean fully-read items refused, 7 / 12 truncated refused | **REAL**, via `benign_longform/`, with the wall-clock caveat above |
+| C1/C2/C3 A2A walk | max depth 4 vs bound 8; max nodes 27 vs 64 | **REAL but weak** — proves the bound is clear of honest A2A, cannot price moving it |
+| C9 argument-tree walk | max 10 string values vs bound 64 | **BLIND** — 6× short of the bound |
+| C11 URL cap | 0 faults; nothing near `MAX_URL_CHARS = 4 000` | **BLIND for the cap** |
+| C12 deep-JSON `RecursionError` | 0; max body 3 241 chars, depth 4 | **BLIND** |
+| C13 unrenderable arguments | 0; every arg tree is JSON by construction | **BLIND** — the `.jsonl` format forbids the input class |
+| C6 pathological pattern | 0 | **BLIND**, and moot: already closed at 0.65 |
+
+Four of nine G3 sites remain blind. They are named here rather than folded into
+a headline number, and the group ships with that stated.
 
 ### What fail-open costs today, for contrast
 
@@ -365,25 +477,344 @@ degrade to empty behind a `print` on stdout.
 
 ---
 
-## What would end the blindness
+## What would end the blindness — and what did
 
-Per group, the corpus work the measurement needs. None of it is the feature.
+Per group, the measurement work each one needed. **Both conditions are now
+closed;** what follows records what they produced.
 
-* **G2** — not a corpus of inputs but a corpus of *faults*: one benign item run
-  through a sensor carrying an extension that raises in each hook, an escalator
-  that times out, a breaker whose counter throws. The variable is the fault,
-  not the input, so it is small.
-* **G3/C4** — a benign large-document pool. Nothing committed exceeds 3 241
-  characters against a 100 000 cap. This is the single largest gap in the
-  measurement and the site most likely to produce a real false positive.
-* **G3/C1-C3** — `benign_a2a` items at depth 6–8, not 2–4. The present pool
-  proves the bound is clear; it cannot price the bound.
-* **G4** — per-site sabotage, extending `_capture_fail_open`. Not a corpus.
+* **G2 / G4 — a corpus of FAULTS, not of inputs.**
+  `tests/test_fail_closed_sabotage.py`, 52 tests, one per site, each asserted
+  twice: open still fails open, closed hands back a usable refusal. See §e.
+* **G3/C4 — a benign large-document pool.** `benign_longform/`, 24 items from
+  90 KB to 900 KB. It found a design defect before ship; see §e and
+  `benign_longform/README.md`.
+* **G3/C1-C3 — `benign_a2a` items at depth 6–8, not 2–4.** NOT done. The
+  present pool proves the bound is clear of honest A2A; it still cannot price
+  moving the bound. Recorded as remaining work rather than closed.
 
-## Still open — deliberately not answered here
+---
 
-§c (what a refusal returns, per framework return contract — the LangGraph
-`ToolMessage` lesson at `autopatch/frameworks.py:246-320`, and whether an
-approval-gated deployment wants `approval_required` rather than `blocked`),
-§d (the release note for keeping the default open), and §f (sites where
-fail-closed is not implementable) follow once the grouping above is agreed.
+## c. What a refusal returns
+
+### The answer is: nothing new. That is the whole design.
+
+A fail-closed decision produces an ordinary `ScanResult` — `action="blocked"`,
+`category="fail_closed"`, `rules=["FAIL_CLOSED_<GROUP>_..."]`,
+`input_status="fail_closed"` — and travels the refusal path each boundary
+**already has**. Not one new return path is added anywhere in the package.
+
+That is not minimalism, it is the lesson from 1.9.0 read correctly. A LangGraph
+`ToolNode` calls `tool.invoke(tool_call)`, requires a `ToolMessage` back, and
+raises `TypeError: Tool <name> returned unexpected type: <class 'str'>` on
+anything else; its default `handle_tool_errors` re-raises, so a **correctly
+blocked call took the whole graph down**. The bug was not the verdict. The bug
+was a verdict travelling a return path whose type contract it did not satisfy.
+
+The lesson people usually take from that is "be careful with the new type". The
+lesson that actually prevents it is **do not add one**. Every boundary in this
+package already knows how to refuse, and every one of those refusal paths has
+been type-audited against its framework:
+
+| Boundary | How it refuses today | Where |
+|---|---|---|
+| langchain tool (`BaseTool.run`/`arun`) | `ToolMessage` when `tool_call_id` is set, refusal string otherwise | `frameworks.py:240-290` `_langchain_refusal` |
+| any tool seam | refusal string via `Halt` | `core.py:463` `scan_tool_boundary` |
+| CrewAI | `_PENDING_REFUSAL` contextvar → `before_tool_call` | `crewai.py:99` |
+| Haystack | `must_halt` check at the component boundary | `haystack.py:222,317` |
+| entrypoint / transport / `protect_http` | `DelphiBlockedError` | `core.py:471` `scan_text_boundary` |
+
+All five gate on `result.must_halt` or `result.action`, neither of which cares
+what produced the verdict. A `fail_closed` result with `action="blocked"`
+satisfies every one of them **unchanged**, which is why implementing (c)
+required exactly one edit to the refusal machinery — a branch in
+`refusal_text()` so the transcript says something useful.
+
+`tests/test_fail_closed_sabotage.py::assert_usable_refusal` asserts
+`isinstance(result, ScanResult)` on every site with the 1.9.0 shape named in
+the failure message, so a future change that reaches for a new type fails on 30
+tests at once.
+
+### The one thing the refusal text must say differently
+
+Every other refusal in this package is a statement about the CONTENT: your call
+was judged and denied. A fail-closed refusal is a statement about the SENSOR:
+the judgement could not be made. An agent handed `[BLOCKED] blocked by security
+policy (fail_closed)` will reasonably rephrase and retry, which cannot help and
+burns a turn. So `refusal_text()` branches on `input_status == "fail_closed"`:
+
+```
+[BLOCKED] Tool 'send_email' was NOT executed: the security sensor could not
+produce a reliable verdict (FAIL_CLOSED_CONTROL_FAULT) and this deployment is
+configured to refuse rather than allow in that case. Retrying will not help;
+this is an operator-configured refusal.
+```
+
+### Mode applies; the extension transform chain does not
+
+A fail-closed verdict goes through `enforcement.downgrade()`, so **a
+monitor-mode sensor still returns `flagged`**. An option that silently turned
+monitor into an enforcing mode would be a worse defect than the one it fixes.
+It also gives an operator the measurement path: run `fail_closed` in monitor,
+watch the `failClosedGroup` telemetry, and see every refusal the posture would
+have made on *their* traffic before switching.
+
+It does **not** go through `_run_verdict_transforms` (S6). That chain lets each
+extension soften a verdict, and this verdict exists precisely because a
+subsystem faulted — in the `controls` case, usually an extension. Routing it
+back through the extension chain would let the broken component erase its own
+refusal.
+
+### `approval_required`: yes, as an option, for three of the four groups
+
+```python
+Sensor(fail_closed=("controls", "bounds"))                    # both -> blocked
+Sensor(fail_closed={"controls": "approval_required",          # per-group
+                    "bounds": "blocked"})
+```
+
+**For.** A deployment that already gates on `approval_required` has a human in
+the loop and a route for pending actions — it has *paid* for that
+infrastructure. For them a fail-closed that routes to a human is strictly
+better than a denial: the action is preserved and recoverable rather than
+dropped, and `refusal_text` already emits a distinct, routable message. The
+plumbing is all there (`_HALTING_ACTIONS`, `must_halt`, `requires_approval`,
+`_ACTION_SEVERITY["approval_required"] = 2`), so refusing to offer it would be
+withholding a better answer from the deployments best equipped to use it.
+
+**Against, and why it is not the default.** A deployment with no approval route
+that sets it gets a halt with a message nobody reads — indistinguishable from a
+block, harder to debug. Worse: `_breaker_observe` deliberately does not count
+`approval_required` as a violation (`sensor.py`, "an approval gate is a pending
+human decision, not a denial"), so **a persistently broken extension under
+`approval_required` produces an unbounded queue of pending approvals and never
+trips the circuit breaker.** `blocked` trips it and the agent stops. That is a
+real operational difference and it is why `blocked` is the default and this
+paragraph is in the release notes.
+
+**`artifact` accepts neither, and `resolve()` raises if you try.** The fault
+predates every request, so there is no action for an approver to approve and
+no per-action approver to route to. Accepting the value would publish a posture
+that cannot exist.
+
+---
+
+## d. The default stays fail-open
+
+`fail_closed=()`. Every group off. Not one line of the scan path behaves
+differently from before the option existed, and that is asserted rather than
+claimed:
+
+* `test_open_posture_is_the_default_and_unchanged` — the whole option, off.
+* `test_default_posture_is_byte_identical_on_this_pool` — over `benign_longform/`,
+  the population that can see the code this work touched (`iter_scan_windows`
+  now yields a third element; `_scan_tail` counts coverage).
+* The committed pools: **814 benign rows, 0 refused at the default**, and the
+  per-pool block counts are identical to the pre-change run (§e).
+
+Mechanically, `fail_closed=()` resolves to a shared empty `FailClosedConfig`,
+every `group in self._fail_closed` is a lookup in an empty dict, and every new
+computation — `bound_faults()`, the `_post_scan_gate` checks — is behind that
+lookup. Unregistered means unchanged, the same contract `extensions.py` rule 1
+already states for the seams.
+
+**Changing the default would be a breaking change for every existing
+deployment** — an availability change, arriving without anyone editing
+anything, in a release whose notes are about something else. That is precisely
+the argument `circuit_breaker.py` already makes for `delegation_rate_threshold`
+defaulting to `None`. If it ever changes it is its own major release with its
+own notes, and the notes lead with the `approval_required`/breaker interaction
+above.
+
+### Release note content (1.18.0)
+
+* **New, opt-in, default off:** `Sensor(fail_closed=...)`, four independent
+  groups. Nothing changes unless you pass it.
+* **New signal, on by default:** `LLM01_input_tail_unscanned` — fires when the
+  windowed scan ran out of budget before the end of an over-length input.
+  Additive: it appears alongside `LLM01_oversized_input` in `rules`, in the
+  flag band, and changes no verdict at the default thresholds. It exists
+  because "this input is long" and "there is text in it nothing was run
+  against" were the same rule, and only the second is a security fact.
+* **New, on by default:** `Sensor.degradations` — asset load failures,
+  unhealthy escalators, faulted extension hooks and inert breaker counters, as
+  a list. Previously four `print` calls to stdout and two ERROR log lines.
+* **Behaviour change, small:** a fault inside the gate chain
+  (`_run_gates`) now fails open with `SCAN_FAILED_OPEN` instead of propagating
+  to the host. This closes a hole in the "no scan entry point can crash the
+  host" contract that `test_operational_resilience.py` already asserted for
+  every other part of the entry point.
+* **Not changed:** the default posture, every threshold, every rule asset, and
+  every verdict on all 814 committed benign rows.
+
+---
+
+## f. Where fail-closed is NOT implementable
+
+A site that cannot fail closed is a finding for the docs, not a gap to paper
+over. This is the same contract `ProtectionManifest` already keeps for
+unpatchable seams: the absence is stated loudly, by name, in the artifact the
+operator reads. `Sensor.degradations` and this section are that artifact.
+
+### f1. The rule-asset loaders — the fault point cannot be the fail-closed point
+
+`l1.INPUT_RULES` is assigned **at module import**. By the time any sensor
+exists, a corrupt `all-l1-rules.json` has already degraded to an empty ruleset.
+Making the loader raise means `import xaidr` crashing a host over a JSON file —
+and no operator can opt out of that, because at import time there is no
+operator object to hold the choice.
+
+So the loader records (`failclosed.record_asset_fault`) and import succeeds;
+`DelphiSensor.__init__` applies the choice. **Consequence, stated rather than
+hidden: with `artifact` closed, a corrupt asset is caught at the first sensor
+construction, not at import.** A host that imports `xaidr` and never constructs
+a sensor is not protected by this group.
+
+### f2. A pathological regex — closed can observe, never prevent
+
+In CPython a running `re.search` is a single C call: no signal handler and no
+thread can interrupt it (`l1.py`, "A budget can therefore only ever observe
+that a pattern WAS pathological"). `LLM04_pathological_pattern` fires *after*
+the time has been spent. Fail-closed refuses the call, which is worth doing —
+but it cannot prevent the latency, and an attacker who wants to burn 60 seconds
+of CPU still burns it. The real fix for a backtracker is a linear pattern, and
+that is unchanged by this work.
+
+### f3. The autopatch `_after` hook — the action has already happened
+
+`make_wrapper`'s post-call hook runs after the underlying tool or HTTP call has
+executed. Refusing there cannot un-send the request or un-run the tool; it can
+only suppress the RESULT. That is meaningful for output DLP and worthless as
+prevention, so `internal` closed on an `_after` fault suppresses the response
+rather than claiming to have stopped anything. The same is true of
+`_extract_response_text` (D9): the bytes already arrived.
+
+### f4. An unpatchable seam — you cannot refuse at a site you do not occupy
+
+When `ctx.try_install` fails, there is no code of ours running at that boundary.
+There is nothing to return a refusal *from*. The only closed posture available
+is `artifact` refusing to construct — and even that is escapable by a host that
+catches the error and carries on. This is exactly what `ProtectionManifest`'s
+`unpatchable` list already records, and `fail_closed` does not improve on it:
+it makes the absence fatal at construction instead of advisory.
+
+### f5. The telemetry emit inside `_emit_fail_closed` — regress has no floor
+
+`_emit_fail_closed` wraps its own telemetry enqueue in `except: pass`. There is
+no fail-closed available here, because failing closed on a failure to *report* a
+fail-closed is unbounded regress. The verdict is still returned; only the
+record of it can be lost. This is the same reasoning `_emit_scan_error` already
+documents for its own emit.
+
+### f6. `circuit_state` — an accessor, not a control decision
+
+Excluded from `controls` deliberately. A host polls this property; raising out
+of a property read is a worse surprise than a stale `"closed"`. The read that
+*decides* something — `_circuit_is_blocking`, on the scan path — is closed
+instead. `test_B7_circuit_state_property_never_raises_even_closed` pins the
+exclusion so it stays a decision rather than becoming an oversight.
+
+### f7. A wrong-typed input — the sensor CAN say what happened
+
+`_coerce_scannable` returning `None` stays open in every group. A host passing
+an `int` has a bug, not an attacker, and `input_status="not_scannable"` already
+makes that bug visible. Refusing would convert every such host bug into a
+production outage while telling the operator nothing new. It is also the one
+case where fail-closed would be actively misleading: the `internal` group's
+premise is that no reliable verdict could be produced, and here the sensor
+knows exactly what happened.
+
+### f8. Observability (class N) — implementable, and refused
+
+Telemetry queues, reporters, log sinks, the trace-context resolver. These never
+touch a verdict. A `fail_closed` that blocks production traffic because a
+webhook is down is an availability bug with a security-sounding name. The
+reviewers' phrase "the sensor fails open" covers these sites too; conceding
+them would be wrong. They are not offered and `resolve()` has no group name
+that reaches them.
+
+---
+
+## Failing-first proof
+
+Both defects below were found DURING this work, by the two instruments the
+shipping conditions required. Each is proved red against the pre-fix state with
+its message, then green.
+
+### 1. The `bounds` signal refused on SIZE, not on coverage
+
+Sabotage: `_BOUND_SIGNAL_RULES` reverted to name `_OVERSIZED_INPUT_RULE`
+instead of `_SCAN_INCOMPLETE_RULE` — the design as originally written.
+
+```
+$ PYTHONPATH=. python -m pytest tests/test_benign_longform.py::test_a_fully_read_long_document_is_NOT_refused -q
+E   AssertionError: fail_closed=('bounds',) refused a document that was read COMPLETELY and scored nothing:
+E       LF-thread_dump-150k (150,251 chars) rules=['LLM01_oversized_input']
+E       LF-csv_export-150k (150,013 chars) rules=['LLM01_oversized_input']
+E     That is a refusal on SIZE, which is not a bound fault. The signal in
+E     _BOUND_SIGNAL_RULES has regressed to LLM01_oversized_input.
+1 failed in 54.48s
+```
+
+Restored:
+
+```
+$ PYTHONPATH=. python -m pytest tests/test_benign_longform.py -q
+7 passed in 85.08s
+```
+
+**Both directions, per the third proof obligation.** The new gate going red is
+half of it; the other half is that the OLD gate stayed green on the same input.
+`test_a_truncated_document_IS_refused` passes under both signals — refusing on
+`LLM01_oversized_input` does catch every truncated document, because every
+truncated document is also oversized. Nothing that only tested the truncated
+case could have found this. The discriminating input is the one that is
+oversized and NOT truncated, and no committed pool contained one.
+
+### 2. `_extension_failed` deduplicated the refusal, not just the log
+
+Sabotage: the original early-`return` dedup restored, so the fail-closed raise
+placed after it fires on the first call only.
+
+```
+$ PYTHONPATH=. python -m pytest tests/test_fail_closed_sabotage.py::test_B1_gate_closed_refuses_EVERY_call_not_just_the_first -q
+>       assert result.action == "blocked"
+E       AssertionError: assert 'allowed' == 'blocked'
+E         - blocked
+E         + allowed
+ERROR xaidr.sensor: extension 'broken-gate' raised in gate() ... THIS CONTROL IS
+      INERT until the sensor is rebuilt — the scan continued on the open verdict.
+      This message is logged once per extension per hook.
+1 failed in 0.03s
+```
+
+Call 1 refuses; calls 2–5 return `allowed` from a sensor whose gate is dead —
+the worst of both postures, and a single-call test passes straight over it.
+Restored:
+
+```
+$ PYTHONPATH=. python -m pytest tests/test_fail_closed_sabotage.py -q
+52 passed in 0.17s
+```
+
+### Regression gate on the default
+
+```
+$ PYTHONPATH=. python -m pytest <all tests except the two new pools> -q -p no:randomly
+5895 passed, 15 skipped in 17.16s
+1446 passed, 49 skipped, 5 xfailed in 44.51s
+1221 passed, 73 skipped, 3 xfailed in 31.77s
+```
+
+Run in three chunks; a full-suite run has crashed this machine before.
+
+Committed benign pools, before and after the change, at the default posture —
+identical:
+
+```
+  asi.benign   n=146 blocked=1     benign_tc     n=190 blocked=0
+  benign_a2a   n= 60 blocked=0     heldout.benign n=50 blocked=1
+  benign_disc  n= 50 blocked=0     shell.benign  n= 78 blocked=0
+  benign_dml   n= 50 blocked=0     shell.prose   n= 89 blocked=1
+  shell.template n=12 blocked=0    shell.prose.tool n=89 blocked=0
+  TOTAL n=814
+```

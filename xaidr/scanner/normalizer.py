@@ -9,6 +9,7 @@ import os
 import re
 import unicodedata
 from typing import Dict, List, Set
+from ..failclosed import record_asset_fault as _record_asset_fault
 
 _RULES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "rules")
 
@@ -69,13 +70,23 @@ def _load_typo_config() -> dict:
         with open(path) as f:
             cfg = json.load(f)
     except FileNotFoundError:
+        _record_asset_fault("typo-keywords.json",
+                            "not found; normalization disabled")
         return {"all_keywords": [], "denylist": []}
     except Exception as e:
         # Corrupt/unreadable asset must not crash `import xaidr` — degrade to the
         # empty config (normalization becomes a no-op; detection still runs).
+        # RECORDED as well as printed: see the note in scanner/l1.py.
         print(f"[xaidr] Warning: typo-keywords.json failed to load ({e}); normalization disabled")
+        _record_asset_fault(
+            "typo-keywords.json",
+            f"failed to load ({type(e).__name__}); normalization disabled")
         return {"all_keywords": [], "denylist": []}
-    return cfg if isinstance(cfg, dict) else {"all_keywords": [], "denylist": []}
+    if not isinstance(cfg, dict):
+        _record_asset_fault("typo-keywords.json",
+                            "not an object; normalization disabled")
+        return {"all_keywords": [], "denylist": []}
+    return cfg
 
 
 def _osa_within_1(a: str, b: str) -> int:
