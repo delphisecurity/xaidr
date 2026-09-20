@@ -18,18 +18,30 @@ the A2A extractor survives it, and builds a Sensor inside the patched window)
 poisoned ``test_open_posture_is_the_default_and_unchanged`` several thousand
 tests later — reporting a ``RecursionError`` that nothing in the scanner raised.
 
-WHAT DISABLING THE NORMALISER COSTS, measured by running the suite with
-``_TYPO_CONFIG`` emptied: 36 tests fail, including 12 obfuscated-attack
-detections lost across BOTH the ``scan`` and ``scan_a2a`` surfaces — leetspeak,
-dot/underscore/dash separator evasion, and homoglyph+separator evasion. It is a
-silent, total loss of the de-obfuscation layer, so it must not be reachable by
-accident.
+WHAT DISABLING THE NORMALISER COSTS, measured by running with ``_TYPO_CONFIG``
+emptied — the exact value ``_read_typo_config`` returns when the asset fails to
+load. 35 tests fail, including 12 obfuscated-attack detections lost across BOTH
+the ``scan`` and ``scan_a2a`` surfaces — leetspeak, dot/underscore/dash
+separator evasion, and homoglyph+separator evasion. It is a silent, total loss
+of the de-obfuscation layer, so it must not be reachable by accident.
+
+AND WHAT THE CORPORA SEE OF THAT: nothing. The same measurement over all five
+shipped corpus reports (``corpus_report``, ``asi_battery_report``,
+``heldout_report``, ``benign_toolcall_report``, ``benign_a2a_report``) moves ZERO
+verdicts; one already-missed item (ASI02-A08) drops 0.15 to 0.00 and no headline
+changes. That is a fact about the corpora, not a reason to relax: the published
+pools contain no obfuscated phrasing, so they cannot see this layer fail, and
+the 35 tests above are the ONLY thing standing between a failed asset load and a
+silent detection loss. Do not move a de-obfuscation gate out of pytest and into
+a corpus report on the assumption the report would catch it.
 """
 
 from __future__ import annotations
 
 import glob
 import json
+import json.decoder
+import json.scanner
 import os
 import sys
 from contextlib import contextmanager
@@ -39,7 +51,11 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RULES_DIR = os.path.join(ROOT, "xaidr", "rules")
 
-# The headroom a rule asset must parse within, in stack frames.
+# The structural bound. Asserted directly so the failure message can say WHICH
+# asset got deep rather than only that something ran out of stack.
+MAX_ASSET_NESTING_DEPTH = 12
+
+# The headroom a rule asset must parse within, in PYTHON stack frames.
 #
 # NOT a tuning knob and NOT a limit to raise. xaidr is a library: it is called
 # from inside host frameworks, recursive document walkers and deep middleware
@@ -47,14 +63,53 @@ RULES_DIR = os.path.join(ROOT, "xaidr", "rules")
 # ours. An asset that needs a deep stack to parse is an asset that fails on
 # somebody else's call graph and nowhere in our tests.
 #
-# `typo-keywords.json` needs 3 (it nests 3 deep: object -> "keywords" object ->
-# tier array). 20 leaves ordinary room for a config-shaped asset while failing
-# loudly on one that has grown genuinely deep nesting.
-RECURSION_BUDGET_FRAMES = 20
+# DERIVED, not picked. `json.decoder`'s recursive-descent scanner costs a
+# measured `2 * depth + 2` frames for an array-rooted document and one more for
+# an object-rooted one, so the deepest asset `MAX_ASSET_NESTING_DEPTH` permits
+# needs `2 * 12 + 3 = 27`. Measured on CPython 3.12.2, the shipped assets:
+#
+#     15  impact-classes.json   (nests 6)      9  all-l1-rules.json   (nests 3)
+#     13  composite-rules.json  (nests 5)      9  typo-keywords.json  (nests 3)
+#     11  attack-chains.json    (nests 4)      7  dangerous-intents.json
+#                                              7  output-l1-rules.json
+#
+# The derivation is what keeps the two constants from contradicting each other.
+# At the previous hand-picked 20, an asset at depth 10 or more satisfied
+# MAX_ASSET_NESTING_DEPTH and could not satisfy this — a bound is not a bound if
+# obeying it fails the neighbouring test.
+RECURSION_BUDGET_FRAMES = 2 * MAX_ASSET_NESTING_DEPTH + 3
 
-# The matching structural bound, asserted directly so the failure message can
-# say WHICH asset got deep rather than only that something ran out of stack.
-MAX_ASSET_NESTING_DEPTH = 12
+
+# A decoder pinned to the PURE-PYTHON scanner. This is the whole point of the
+# budget test and it is not an implementation detail.
+#
+# `json.loads` uses the `_json` C accelerator, whose recursion is bounded by a
+# FIXED C-stack budget that `sys.setrecursionlimit` does not govern on CPython
+# 3.12+ (the C and Python recursion counters were split). Under the C scanner a
+# 500-deep document parses with 20 Python frames available, so a budget test
+# written against `json.loads` cannot fail on depth — it is the passes-vacuously
+# shape, reading as coverage while performing none. That is exactly what this
+# file shipped before: `test_the_recursion_budget_guard_actually_fires` below is
+# the guard-on-the-guard, and it goes red if this is switched back.
+#
+# The pure-Python scanner is also the STRICTER of the two and it is a path real
+# users take (any build without the C extension), so budgeting against it covers
+# both.
+_PY_DECODER = json.decoder.JSONDecoder()
+_PY_DECODER.scan_once = json.scanner.py_make_scanner(_PY_DECODER)
+
+
+def _py_loads(text: str):
+    """`json.loads`, forced onto the recursive-descent Python scanner."""
+    return _PY_DECODER.decode(text)
+
+
+def _nest(depth: int) -> str:
+    """An object-rooted JSON document nested exactly ``depth`` deep."""
+    doc = "1"
+    for _ in range(depth):
+        doc = '{"k":' + doc + "}"
+    return doc
 
 
 def _assets() -> list:
@@ -128,7 +183,7 @@ def test_asset_parses_within_a_conservative_recursion_budget(path):
         text = fh.read()
     try:
         with recursion_headroom(RECURSION_BUDGET_FRAMES):
-            json.loads(text)
+            _py_loads(text)
     except RecursionError:
         pytest.fail(
             f"{os.path.basename(path)} nests {_nesting_depth(text)} deep and "
@@ -138,6 +193,65 @@ def test_asset_parses_within_a_conservative_recursion_budget(path):
             "layer that reads it. FLATTEN THE ASSET — do not raise "
             "sys.setrecursionlimit, which moves the cliff instead of removing it."
         )
+
+
+# ── the guard on the guard ───────────────────────────────────────────────────
+
+def test_the_recursion_budget_guard_actually_fires():
+    """A document past the depth bound MUST be rejected by the budget above.
+
+    The discriminating direction, and the one the first version of this file
+    skipped. `test_asset_parses_...` going green proves the shipped assets are
+    shallow OR proves nothing at all, and it cannot tell you which — a budget
+    that no input can exhaust passes on every asset forever.
+
+    Both sides are asserted here against the same mechanism the budget test
+    uses, so the pair is: depth 12 (the bound) parses, depth 13 does not.
+    """
+    at_bound = _nest(MAX_ASSET_NESTING_DEPTH)
+    assert _nesting_depth(at_bound) == MAX_ASSET_NESTING_DEPTH
+    with recursion_headroom(RECURSION_BUDGET_FRAMES):
+        _py_loads(at_bound)          # the bound is REACHABLE, not aspirational
+
+    past_bound = _nest(MAX_ASSET_NESTING_DEPTH + 1)
+    with pytest.raises(RecursionError):
+        with recursion_headroom(RECURSION_BUDGET_FRAMES):
+            _py_loads(past_bound)
+
+
+def test_the_budget_is_measured_on_the_scanner_the_headroom_reaches():
+    """Why `_py_loads` and not `json.loads`, asserted rather than commented.
+
+    `json.loads` dispatches to the `_json` C accelerator, and on CPython 3.12+
+    the C and Python recursion counters are separate: the accelerator is bounded
+    by a FIXED C-stack budget that `sys.setrecursionlimit` does not govern. So
+    on 3.12+ the headroom this file lowers never reaches it and a 240-deep
+    document parses with 27 Python frames available — a budget test written
+    against `json.loads` is the passes-vacuously shape, green on every asset
+    forever. On 3.10/3.11 the counters were shared and the same call does raise,
+    which is why this defect was invisible: it depended on the runner's Python.
+
+    The pure-Python scanner behaves the same way on every supported version,
+    which is the property the budget needs. Without this test someone
+    "simplifies" `_py_loads` back to `json.loads`, the whole file stays green,
+    and the guard silently stops constraining anything on the newest Python we
+    ship for.
+    """
+    deep = _nest(MAX_ASSET_NESTING_DEPTH * 20)
+
+    # The scanner we DO use: bounded by the headroom, on every version.
+    with pytest.raises(RecursionError):
+        with recursion_headroom(RECURSION_BUDGET_FRAMES):
+            _py_loads(deep)
+
+    # The scanner we do NOT use, and the version split that is the reason.
+    if sys.version_info >= (3, 12):
+        with recursion_headroom(RECURSION_BUDGET_FRAMES):
+            json.loads(deep)         # no RecursionError — the C path ignores us
+    else:
+        with pytest.raises(RecursionError):
+            with recursion_headroom(RECURSION_BUDGET_FRAMES):
+                json.loads(deep)
 
 
 @pytest.mark.parametrize("path", _assets(), ids=lambda p: os.path.basename(p))
