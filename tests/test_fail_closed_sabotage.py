@@ -597,10 +597,29 @@ def test_every_control_fault_site_in_the_source_is_sabotaged_here():
 
 
 def test_open_posture_is_the_default_and_unchanged():
-    """The whole option, off. No group closed unless asked."""
+    """The whole option, off. No group closed unless asked.
+
+    THE DEGRADATION CHECK IS A DELTA, NOT A TOTAL. `Sensor.degradations` reads
+    the process-global asset-fault registry in `failclosed`, which nothing
+    clears — so the total is a statement about the whole session's history, not
+    about this sensor. `tests/test_operational_resilience.py` corrupts a tmp
+    copy of all-l1-rules.json on purpose and records two faults, and asserting
+    the total empty only passes here because `test_fail_closed_sabotage` sorts
+    before `test_operational_resilience` alphabetically. That is a gate held up
+    by a filename, and it is the same process-global trap that let a poisoned
+    typo-keywords load fail this exact test from four thousand tests away (see
+    tests/test_rule_asset_load.py). What the open posture actually promises is
+    that constructing a default sensor ADDS nothing.
+    """
+    from xaidr.failclosed import asset_faults
+
+    before = len(asset_faults())
     s = build()
     assert s.fail_closed == {}
-    assert s.degradations == []
+    assert asset_faults()[before:] == [], (
+        "building a sensor at the DEFAULT posture recorded "
+        f"{[f.reason for f in asset_faults()[before:]]}"
+    )
     s._scanner.scan = _boom
     assert s.scan(BENIGN).action == "allowed"
     s.close_sync()

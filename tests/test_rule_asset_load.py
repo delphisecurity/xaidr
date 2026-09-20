@@ -198,15 +198,19 @@ def test_building_a_sensor_under_a_broken_json_does_not_disable_normalization():
         json.loads = real
 
     try:
+        # THE DELTA, NOT THE TOTAL. `degradations` reads a process-global
+        # registry that legitimately carries entries from earlier tests —
+        # `test_operational_resilience.py::test_corrupt_rule_asset_degrades_to_
+        # empty_ruleset` corrupts a tmp copy of all-l1-rules.json on purpose and
+        # records two faults, and it sorts before this file. Asserting the total
+        # is empty asserts on the whole session's history, which is how the
+        # first version of this test failed on CI while passing locally: the
+        # same process-global-state trap as the defect it guards.
         new = asset_faults()[before:]
         assert not new, (
             "building a Sensor while json.loads was broken recorded "
             f"{[f.reason for f in new]}. The asset is read once at import; a "
             "construction must not re-enter the parser."
-        )
-        assert s.degradations == [], (
-            f"Sensor reports {s.degradations} — a transient fault in the "
-            "caller's json module disabled the typo normaliser."
         )
         # And the normaliser is genuinely live, not merely unrecorded.
         assert s._scanner._normalizer.keywords, (
