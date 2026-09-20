@@ -101,10 +101,12 @@ def measured(corpus):
 def test_manifest_pins_the_generated_corpus(corpus):
     """A generated corpus nobody pins is a corpus that drifts under the README.
 
-    The text is not committed (24 items, 10 million characters, 25 MB against
-    an 8 MB repo), so this hash check is the only thing standing between an
-    edited word list and a set of published numbers that describe inputs which
-    no longer exist.
+    The text is not committed (24 items, 10 100 008 characters, 10.5 MB of
+    JSONL against a 4.4 MB tracked tree — measured 2026-09-20; this said "25 MB
+    against an 8 MB repo" and both figures were wrong, see
+    `benign_longform/README.md`), so this hash check is the only thing standing
+    between an edited word list and a set of published numbers that describe
+    inputs which no longer exist.
     """
     with open(MANIFEST, encoding="utf-8") as fh:
         pinned = {i["id"]: i for i in json.load(fh)["items"]}

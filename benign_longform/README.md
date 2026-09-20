@@ -39,8 +39,14 @@ been the eighth instance of the blind-population failure
 | `../tests/test_benign_longform.py` | the gates |
 
 **The text is not committed, and the manifest is why that is safe.** 24 items
-totalling 10 million characters is 25 MB of JSONL against a repo that is
-otherwise 8 MB. What is committed is the generator plus a sha256 per item, and
+totalling 10 100 008 characters is 10.5 MB of JSONL against a tracked tree that
+is otherwise 4.4 MB — committing it would more than triple the repository, for
+bytes that are reproducible from a 4.1 KB manifest. (Measured 2026-09-20; this
+paragraph previously said "25 MB against 8 MB" and both figures were wrong. The
+ratio they were arguing from, 3.1x, was if anything an UNDERSTATEMENT of the
+real 3.4x, so the conclusion stands — but the numbers are now ones a reader can
+reproduce with `git ls-files -z | xargs -0 du -ch | tail -1`.)
+What is committed is the generator plus a sha256 per item, and
 `test_manifest_pins_the_generated_corpus` regenerates and checks every hash —
 so an edit to a word list fails loudly instead of quietly detaching the numbers
 below from the text that produced them. Materialise the corpus with

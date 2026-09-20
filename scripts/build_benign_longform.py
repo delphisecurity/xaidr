@@ -24,14 +24,18 @@ breaks:
    the scanner: prose vs structured, ASCII vs punctuation-dense, one document
    vs many records.
 
-SIZES STRADDLE THE BOUNDARY DELIBERATELY. Items run from just under the
-100 000-character cap to several megabytes, because the interesting question is
-not "does a long input block" but "WHERE does it start to". See the README for
-what that measured.
+SIZES STRADDLE THE BOUNDARY DELIBERATELY. Items run from 90 060 characters —
+just under the 100 000-character cap — to 1 397 574, because the interesting
+question is not "does a long input block" but "WHERE does it start to". See the
+README for what that measured.
 
 WHAT IS COMMITTED, AND WHY IT IS NOT THE TEXT. The corpus is 24 items whose
-whole point is being enormous; as JSONL it is 25 MB against a repo that is
-otherwise 8 MB. So what is committed is this GENERATOR plus `manifest.json` —
+whole point is being enormous; as JSONL it is 10.5 MB against a tracked tree
+that is otherwise 4.4 MB, so committing it would more than triple the
+repository. (Measured 2026-09-20. This said "25 MB against 8 MB" and both
+figures were wrong — see `benign_longform/README.md` for the correction and why
+the argument survives it.) So what is committed is this GENERATOR plus
+`manifest.json` —
 per item, its id, shape, length and the sha256 of its text — and the corpus is
 materialised on demand.
 
