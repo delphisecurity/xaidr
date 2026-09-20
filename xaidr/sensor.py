@@ -201,9 +201,10 @@ _BOUND_SIGNAL_RULES = frozenset({
     "a2a_nested_breadth_exceeded",
     # NOT _OVERSIZED_INPUT_RULE. That rule fires on length alone, so refusing
     # on it blocks 100% of realistic long benign input (measured:
-    # benign_longform/, 18 of 18). "This input is long" is not a bound fault;
-    # "there is text in it nothing was run against" is, and that is
-    # SCAN_INCOMPLETE_RULE.
+    # benign_longform/, all 19 of the 24 items that are over the cap — and 4 of
+    # the 9 that are clean at the default posture were read END TO END).
+    # "This input is long" is not a bound fault; "there is text in it nothing
+    # was run against" is, and that is SCAN_INCOMPLETE_RULE.
     _SCAN_INCOMPLETE_RULE,
     "LLM04_scan_budget_exceeded",
     "LLM04_pathological_pattern",

@@ -374,11 +374,11 @@ the cap — including the ones the windowed scan then covers completely. Refusin
 on it means refusing a 150 KB contract that was read end to end.
 
 ```
-NAIVE   (refuse on LLM01_oversized_input)        refused-and-unread 7   refused-but-FULLY-READ 2   allowed 3
-SHIPPED (refuse on LLM01_input_tail_unscanned)   refused-and-unread 7   refused-but-FULLY-READ 0   allowed 5
+NAIVE   (refuse on LLM01_oversized_input)        refused-and-unread 2   refused-but-FULLY-READ 4   allowed 3
+SHIPPED (refuse on LLM01_input_tail_unscanned)   refused-and-unread 2   refused-but-FULLY-READ 0   allowed 7
 ```
 
-(over the 12 of 24 items that are clean at the default posture)
+(over the 9 of 24 items that are clean at the default posture)
 
 So `scanner/l1.py` gained `LLM01_input_tail_unscanned`, fired by
 `LocalScanner._scan_tail` when the windows run out before the text does, and
@@ -388,30 +388,45 @@ was run against" is.
 
 ```
   items                                    24
+  wall-clock bounds PINNED; window coverage limit = 796,416 chars
   over the 100,000-char cap              19
-    ...FULLY covered by the windowed scan  4
-    ...tail never read                     15
-  clean at the DEFAULT posture             12
+    ...FULLY covered by the windowed scan  13
+    ...tail never read                     6
+  clean at the DEFAULT posture             9
   THE BOUNDS COST, over default-clean items only
-    refused, tail genuinely unread          7   (the group working as designed)
+    refused, tail genuinely unread          2   (the group working as designed)
     refused, FULLY READ                     0   <- false positives
-    not refused                             5
+    not refused                             7
 ```
+
+**These numbers replace an earlier set (4 covered / 15 truncated / 12 clean /
+7 refused-and-unread, and `refused-but-FULLY-READ 2` under the naive signal).**
+The earlier figures were measured with the three L1 wall-clock bounds live, so
+they described the machine that ran them rather than the corpus; see
+`benign_longform/README.md` for the full retraction. **The zero did not move** —
+refused-but-fully-read is 0 under either measurement, which is the claim this
+section exists to support.
 
 **Two caveats that ship with that zero.**
 
-* **The boundary is a wall-clock budget, not a length.** Between roughly 150 KB
-  and 800 KB it is the 1.0s `TOTAL_SCAN_BUDGET_SEC` that decides, not the
-  8-window cap. Two 150 KB items in this pool land on opposite sides of it. The
-  same document can be refused on a loaded host and allowed on an idle one.
-  Under the cap is deterministic; past ~800 KB is deterministic; the band
-  between is not.
-* **12 of 24 items score on CONTENT at the default posture**, with no group
+* **At runtime the boundary is a wall-clock budget, not a length.**
+  `_L1_SCAN_BUDGET_SEC` (0.5 s), `_L1_RULE_SLOW_SEC` (1.0 s) and
+  `TOTAL_SCAN_BUDGET_SEC` (1.0 s) can each end a scan early on a busy host, and
+  the resulting bound signal makes `bounds` refuse. The same document can be
+  refused on a loaded host and allowed on an idle one — and on a host loaded
+  enough this reaches inputs **under** the 100 000-character cap. Observed, not
+  predicted: on a GitHub `ubuntu-latest` runner a 90 000-character benign item
+  tripped `LLM04_scan_budget_exceeded` and was refused. Past 796 416 characters
+  the window cap decides on any machine; below it, the host does.
+  `scripts/longform_bounds.py` pins the clocks so the measurement above is a
+  property of the text — the gate must not be a benchmark of the CI fleet.
+* **15 of 24 items score on CONTENT at the default posture**, with no group
   closed and nothing to do with `bounds` — `INTENT_exfiltrate_data` on every log
   tail and transcript (an L2 co-occurrence rule: in 90 KB of honest text, *some*
-  action word and *some* target word co-occur with near certainty), and DLP
-  digit-run patterns matching across newlines. Excluded from the cost above,
-  because counting them would blame `bounds` for refusals it did not cause.
+  action word and *some* target word co-occur with near certainty), DLP
+  digit-run patterns matching across newlines, and six rules on the full text of
+  a pasted policy document. Excluded from the cost above, because counting them
+  would blame `bounds` for refusals it did not cause.
   Recorded in `benign_longform/README.md` as their own finding; neither is fixed
   here.
 

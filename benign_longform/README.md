@@ -32,7 +32,8 @@ been the eighth instance of the blind-population failure
 | File | What it is |
 |---|---|
 | `manifest.json` | **committed.** Per item: id, shape, length, sha256 of the text |
-| `last_run.json` | **not committed** (gitignored, like every other pool's). The wall-clock caveat below is exactly why: this pool's results are machine-dependent in the 150 KB–800 KB band |
+| `last_run.json` | **not committed** (gitignored, like every other pool's) |
+| `../scripts/longform_bounds.py` | pins the wall clock so the numbers below are a property of the text, not of the box |
 | `../scripts/build_benign_longform.py` | the generator — deterministic, seeded |
 | `../scripts/benign_longform_report.py` | regenerates, verifies hashes, measures |
 | `../tests/test_benign_longform.py` | the gates |
@@ -71,8 +72,12 @@ generator rather than the bound.
 |---|---|
 | 90k | **control.** Under the cap; must behave identically with the group open or closed |
 | 150k | Over the cap, two windows out of eight — **covered completely** |
-| 400k | Over the cap and near the WALL-CLOCK budget rather than the window count |
-| 900k | Past `8 × (100000 − 512) = 795 904`, so the **window cap** stops the scan on any machine |
+| 400k | Over the cap, still inside the eight-window coverage — **covered completely** |
+| 900k | Past `7 × (100000 − 512) + 100000 = 796 416`, so the **window cap** stops the scan on any machine |
+
+The 400k row used to read "near the WALL-CLOCK budget rather than the window
+count". That was true of the box it was measured on and of no other; see
+[the caveat](#the-caveat-that-must-ship-with-the-number) for what replaced it.
 
 ---
 
@@ -85,14 +90,14 @@ windows out of an eight-window budget — fully read — and carried the identic
 rule to a 900 000-character one whose tail was never reached.
 
 The first design of `bounds` refused on that rule. Measured on this pool, over
-the 12 items that are clean at the default posture:
+the 9 items that are clean at the default posture:
 
 ```
-NAIVE   (refuse on LLM01_oversized_input)        refused-and-unread 7   refused-but-FULLY-READ 2   allowed 3
-SHIPPED (refuse on LLM01_input_tail_unscanned)   refused-and-unread 7   refused-but-FULLY-READ 0   allowed 5
+NAIVE   (refuse on LLM01_oversized_input)        refused-and-unread 2   refused-but-FULLY-READ 4   allowed 3
+SHIPPED (refuse on LLM01_input_tail_unscanned)   refused-and-unread 2   refused-but-FULLY-READ 0   allowed 7
 ```
 
-**Two fully-read documents refused under the naive signal; zero under the
+**Four fully-read documents refused under the naive signal; zero under the
 shipped one, with no loss of coverage on the truncated items.** That is why
 `scanner/l1.py` now carries a second rule, `LLM01_input_tail_unscanned`, fired
 by `LocalScanner._scan_tail` when the windows run out before the text does, and
@@ -105,39 +110,70 @@ is the gate; it fails against the naive signal.
 
 ```
   items                                    24
+  wall-clock bounds PINNED; window coverage limit = 796,416 chars
   over the 100,000-char cap              19
-    ...FULLY covered by the windowed scan  4
-    ...tail never read                     15
+    ...FULLY covered by the windowed scan  13
+    ...tail never read                     6
 
-  clean at the DEFAULT posture             12
-  scoring on CONTENT at the default        12   (excluded from the bounds cost — see finding 2)
+  clean at the DEFAULT posture             9
+  scoring on CONTENT at the default        15   (excluded from the bounds cost — see finding 2)
 
   THE BOUNDS COST, over default-clean items only
-    refused, tail genuinely unread          7   (the group working as designed)
+    refused, tail genuinely unread          2   (the group working as designed)
     refused, FULLY READ                     0   <- false positives
-    not refused                             5
+    not refused                             7
 ```
+
+**These numbers replace an earlier set (4 covered / 15 truncated / 12 clean /
+7 refused-and-unread) that was measured with the wall clock live.** Every one of
+those figures was a property of the machine that produced it, not of the text —
+which is what the next section used to describe as a caveat and now describes as
+the reason the measurement changed. The one figure that did NOT move is the one
+the group is justified by: **refused-but-fully-read is 0 either way.**
 
 ### The caveat that must ship with the number
 
-**The boundary is a wall-clock budget, not a length.** `TOTAL_SCAN_BUDGET_SEC`
-is 1.0s and `MAX_SCAN_WINDOWS` is 8, and for anything between roughly 150 KB
-and 800 KB it is the clock that decides, not the window count. Two items of
-identical length in this pool land on opposite sides of it:
+**At runtime the boundary is a wall-clock budget, not a length**, and an
+operator enabling `bounds` needs to know it. Three wall-clock bounds sit inside
+an L1 scan — `_L1_SCAN_BUDGET_SEC` (0.5 s, the rule loop), `_L1_RULE_SLOW_SEC`
+(1.0 s, one pattern) and `TOTAL_SCAN_BUDGET_SEC` (1.0 s, the window walk) — and
+any of the three can end a scan early on a busy host. When one does, the verdict
+carries a bound signal and `bounds` refuses. So the same document really can be
+refused on a loaded host and allowed on an idle one, and on a host loaded enough
+it reaches **inputs under the 100 000-character cap**, which the table above
+calls the deterministic control case.
+
+That is not hypothetical and it is not only an operator's problem. It is what
+made the gates on this pool unreliable, and it turned six CI jobs red:
 
 ```
-LF-csv_export-150k      150,013  oversized_input                        -> flagged (covered)
-LF-support_transcript-150k 150,091  oversized_input,input_tail_unscanned -> blocked (truncated)
+GitHub ubuntu-latest runner, 2026-09-20, before this change
+  LF-*-90k (UNDER the cap)   LLM04_scan_budget_exceeded  -> bounds refused it
+  every over-cap item        LLM01_input_tail_unscanned  -> nothing was "fully read"
+  => test_oversized_and_tail_unread_are_different_signals failed its OWN vacuity
+     guard, correctly: on that machine the pool could no longer tell the two
+     signals apart.
 ```
 
-So the same document can be refused on a loaded host and allowed on an idle
-one. That is a real property of `bounds` in this range and an operator enabling
-it needs to know: under the cap is deterministic, past ~800 KB is
-deterministic, and the band between them depends on how busy the machine is.
+**What changed is the MEASUREMENT, not the behaviour.** The numbers above are
+now produced with the three clocks pinned (`scripts/longform_bounds.py`), so an
+item's bucket follows from its length and `MAX_SCAN_WINDOWS` — the two things
+`manifest.json` pins — and the same table comes out of a laptop and a loaded
+runner. `tests/test_benign_longform.py` does the same, which is what makes it a
+regression gate rather than a benchmark of the CI fleet.
+
+The earlier version of this section presented the machine-dependence purely as
+something to disclose. It is that, but it is also a measurement error, and the
+disclosure was doing the work of an excuse: the figures it qualified were
+reported as findings about the corpus when they were findings about one laptop.
+
+**Still true, still the operator's business:** under the cap is deterministic
+*only while the host keeps up*, past 796 416 characters is deterministic on any
+machine, and the band between them depends on how busy the box is.
 
 ## Finding 2 — realistic long operational text scores on content, independent of this work
 
-**12 of the 24 items score at the DEFAULT posture**, with no group closed and
+**15 of the 24 items score at the DEFAULT posture**, with no group closed and
 nothing to do with `bounds`:
 
 | Item | Rules |
@@ -145,6 +181,16 @@ nothing to do with `bounds`:
 | `LF-kubectl_dump-*` | `LLM06_outbound_exfil_suspicious_dest`, `LLM06_phone`, `DLP_phone`, `INTENT_exfiltrate_data` |
 | `LF-support_transcript-*` | `INTENT_exfiltrate_data` |
 | `LF-log_tail-*` | `INTENT_exfiltrate_data` |
+| `LF-policy_document-150k/400k/900k` | `INTENT_exfiltrate_data`, `INTENT_destroy_resources`, `INTENT_escalate_privileges`, `COMPOSITE_trust_exploit_data_access`, `COMPOSITE_cascading_failure`, `authority_override` |
+
+**The `policy_document` row is new, and it is an artefact of measuring
+honestly.** It was 12 items, not 15, while the wall clock cut those scans short
+after about two windows; with the full eight windows actually scanned, the rules
+fire on text that was always in the document and never previously reached. A
+pasted policy document discussing data handling, privilege and deletion trips
+six rules on its own content — the same finding as the rows below, at a size
+the truncated measurement had hidden. It is excluded from the bounds cost for
+the same reason as the others.
 
 Two distinct causes, both length-correlated:
 

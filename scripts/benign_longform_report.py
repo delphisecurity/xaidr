@@ -24,6 +24,9 @@ for _p in (ROOT, os.path.join(ROOT, "scripts")):
         sys.path.insert(0, _p)
 
 from build_benign_longform import MANIFEST, generate   # noqa: E402
+from longform_bounds import (                          # noqa: E402
+    deterministic_scan_bounds, windowed_coverage_limit,
+)
 
 
 class _NullReporter:
@@ -55,8 +58,7 @@ def measure(rows):
     # in it, and any refusal under `bounds` is attributable to the bound.
     LENGTH_RULES = {OVERSIZED_INPUT_RULE, SCAN_INCOMPLETE_RULE}
 
-    out = []
-    for row in rows:
+    def one(row):
         record = {"id": row["id"], "shape": row["shape"], "chars": row["chars"]}
         for label, fc in (("open", ()), ("closed", ("bounds",))):
             sensor = Sensor(agent_id="longform", enforcement_mode="block",
@@ -80,7 +82,18 @@ def measure(rows):
         # positive would blame this group for a refusal it did not cause. The
         # bounds cost is measured over `default_clean` items only.
         record["default_clean"] = not record["content_rules"]
-        out.append(record)
+        return record
+
+    # MEASURED WITH THE WALL CLOCK PINNED, for the same reason
+    # tests/test_benign_longform.py is. Without this the table below reports the
+    # machine it was run on: the three wall-clock bounds inside an L1 scan
+    # decided which items counted as truncated, so an idle laptop and a loaded
+    # CI runner produced different numbers from identical text, and the figures
+    # in benign_longform/README.md were only ever true of one box. With the
+    # clocks pinned an item's bucket follows from its length and
+    # MAX_SCAN_WINDOWS, which manifest.json pins. See scripts/longform_bounds.py.
+    with deterministic_scan_bounds():
+        out = [one(row) for row in rows]
     return out, L1_MAX_SCAN_CHARS
 
 
@@ -101,8 +114,11 @@ def main():
 
     records, cap = measure(rows)
 
+    limit = windowed_coverage_limit()
     print(f"benign_longform — {len(records)} items, "
           f"L1_MAX_SCAN_CHARS = {cap:,}")
+    print(f"  wall-clock bounds PINNED; window coverage limit = {limit:,} chars")
+    print("  (an item is truncated iff it is longer than that — on any machine)")
     print()
     hdr = (f"{'id':34s} {'chars':>9s}  {'open':<38s} {'closed':<10s}")
     print(hdr)
