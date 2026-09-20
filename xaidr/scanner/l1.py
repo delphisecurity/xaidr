@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 from typing import List
 
+from ..failclosed import record_asset_fault as _record_asset_fault
 from .dlp import _is_reserved_email
 from .repetition import find_phrase_repeat
 
@@ -201,6 +202,25 @@ TOTAL_SCAN_BUDGET_SEC = 1.0
 OVERSIZED_INPUT_RULE = "LLM01_oversized_input"
 OVERSIZED_INPUT_CATEGORY = "oversized_input"
 
+# THE INPUT WAS LONG vs THERE IS TEXT HERE WE NEVER READ. Two different facts,
+# and until this rule existed only the first had a name.
+#
+# OVERSIZED_INPUT_RULE fires on `len(prompt) > L1_MAX_SCAN_CHARS` and nothing
+# else, so it is on EVERY input past the cap — including the overwhelming
+# majority that the windowed scan then covers completely. A 150 000-character
+# contract is two windows out of an eight-window budget: fully read, and still
+# carrying the same rule as a 4 MB payload whose tail the budget never reached.
+#
+# That made the over-length path impossible to fail closed on. Measured against
+# `benign_longform/` (see the corpus README), refusing on OVERSIZED_INPUT_RULE
+# blocks 100% of realistic long benign input — a pasted policy document, a
+# kubectl dump, a JVM thread dump, a support transcript — because the rule is a
+# statement about SIZE and nothing about whether detection worked. Refusing on
+# THIS rule means what the `bounds` group means: an attacker-controlled region
+# of the input was never examined.
+SCAN_INCOMPLETE_RULE = "LLM01_input_tail_unscanned"
+SCAN_INCOMPLETE_SCORE = 0.25
+
 
 def iter_scan_windows(
     text: str,
@@ -213,13 +233,25 @@ def iter_scan_windows(
 ):
     """Yield successive overlapping windows of ``text`` under a total budget.
 
-    Yields ``(index, window_text)``. The FIRST window is always yielded (so a
-    ``<= window`` input behaves exactly as an un-windowed scan). Subsequent
-    windows are yielded only while BOTH the window count is under ``max_windows``
-    AND the cumulative wall-clock since ``start_time`` is under ``budget_sec``
-    (checked between windows — a running regex cannot be interrupted, so the true
-    ceiling is budget + one window). Consecutive windows overlap by ``overlap``
-    so a payload spanning a boundary appears whole in at least one window.
+    Yields ``(index, window_text, end_offset)`` where ``end_offset`` is the
+    index one past the last character this window covered. The FIRST window is
+    always yielded (so a ``<= window`` input behaves exactly as an un-windowed
+    scan). Subsequent windows are yielded only while BOTH the window count is
+    under ``max_windows`` AND the cumulative wall-clock since ``start_time`` is
+    under ``budget_sec`` (checked between windows — a running regex cannot be
+    interrupted, so the true ceiling is budget + one window). Consecutive
+    windows overlap by ``overlap`` so a payload spanning a boundary appears
+    whole in at least one window.
+
+    WHY ``end_offset`` IS YIELDED RATHER THAN RECOMPUTED BY THE CALLER. Whether
+    the scan REACHED THE END is a different fact from whether the input was
+    LONG, and conflating them is what made ``LLM01_oversized_input`` unusable as
+    a fail-closed signal: it fires on ``len(prompt) > L1_MAX_SCAN_CHARS`` alone,
+    so a 150 000-character document that these windows covered completely
+    carries the identical rule to a 4 MB one whose tail was never read. A
+    caller that wants to say "there is text here I did not look at" needs the
+    coverage, and deriving it from ``idx`` means every caller re-deriving the
+    step arithmetic — three copies of a bound that must not drift.
     """
     n = len(text)
     step = max(1, window - overlap)
@@ -231,7 +263,7 @@ def iter_scan_windows(
                 break
             if (time.perf_counter() - start_time) > budget_sec:
                 break
-        yield idx, text[pos:pos + window]
+        yield idx, text[pos:pos + window], min(pos + window, n)
         if pos + window >= n:
             break
         pos += step
@@ -262,15 +294,25 @@ def _load_and_compile(filename: str) -> list:
             raw = json.load(f)
     except FileNotFoundError:
         print(f"[xaidr] Warning: {filename} not found, using empty ruleset")
+        _record_asset_fault(filename, "not found; using empty ruleset")
         return []
     except Exception as e:
         # A corrupt/unreadable rule asset must NOT make `import xaidr` crash the
         # host — degrade to an empty ruleset (same posture as a missing file).
+        #
+        # The degradation is now RECORDED as well as printed. A print to stdout
+        # is not a signal: nothing reads it, no host pipeline captures it as an
+        # error, and the sensor goes on answering with a ruleset it does not
+        # have. `Sensor.degradations` reads the registry, and `fail_closed=
+        # ("artifact",)` refuses to construct on it. See xaidr/failclosed.py.
         print(f"[xaidr] Warning: {filename} failed to load ({e}); using empty ruleset")
+        _record_asset_fault(
+            filename, f"failed to load ({type(e).__name__}); using empty ruleset")
         return []
 
     if not isinstance(raw, list):
         print(f"[xaidr] Warning: {filename} is not a rule list; using empty ruleset")
+        _record_asset_fault(filename, "not a rule list; using empty ruleset")
         return []
 
     compiled = []
@@ -340,7 +382,20 @@ def _load_and_compile(filename: str) -> list:
                 "filter_reserved_email": bool(r.get("filter_reserved_email", False)),
             })
         except re.error as e:
+            # A rule that will not COMPILE is the same defect as a rule with an
+            # unknown category (see the UnknownRuleCategory raise above): it
+            # loads and never fires, and nothing downstream can tell the
+            # difference between "no rule matched" and "the rule is missing".
+            # The category case raises because it is an authoring bug in a
+            # vendored asset; this one degrades because a compile failure can
+            # also come from a runtime's own `re` (a pattern valid on the
+            # authoring interpreter and rejected here), which is not an
+            # authoring bug and must not make `import xaidr` crash a host.
+            # Recorded either way, so `fail_closed=("artifact",)` can refuse.
             print(f"[xaidr] Warning: rule {r.get('id')} regex failed: {e}")
+            _record_asset_fault(
+                filename, f"rule {r.get('id')!r} regex failed to compile "
+                          f"({type(e).__name__}); rule DROPPED")
     return compiled
 
 

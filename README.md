@@ -794,6 +794,48 @@ fault emits `degraded=true` and returns `allowed` rather than propagating. That
 trade is explicit — during a fault, traffic passes unscanned, and `degraded` is
 the signal you alert on.
 
+### Choosing to fail closed
+
+Fail-open is the right default for an in-process control — a scanner bug must
+not take down your production traffic — but it should be your choice, not ours.
+`fail_closed` lets you refuse instead of allowing, in **four independent
+groups**. Every one is **off by default**; passing nothing changes nothing.
+
+```python
+sensor = Sensor(agent_id="my-agent", fail_closed=("controls", "bounds"))
+```
+
+| Group | Fires when | Closed means |
+|---|---|---|
+| `artifact` | a rule asset, a named policy file or an escalator did not load as authored | **refuse to construct** — never a verdict on traffic |
+| `controls` | a control YOU installed did not run: an extension hook raised, an escalator timed out, a breaker counter is inert | refuse the call |
+| `bounds` | an input defeated a parser bound: nesting past the A2A walk depth, a tail the scan budget never reached, a SQL batch past the statement cap | refuse the input |
+| `internal` | the sensor's own code raised | refuse the call |
+
+Start with `controls`. On a sensor with no extensions, no escalators and no
+circuit breaker it is a **no-op by construction** — there is nothing that can
+report a control fault — so it cannot change a verdict until you install
+something.
+
+Three things worth knowing before you enable any of it:
+
+* **`artifact` never blocks traffic.** A corrupt `all-l1-rules.json` says
+  nothing about the content of any request, so it raises at construction with
+  the asset named instead of answering requests with `blocked`. `Sensor.degradations`
+  reports the same list without raising, whether or not the group is on.
+* **Monitor mode still monitors.** A fail-closed verdict goes through
+  `enforcement_mode`, so in `monitor` it returns `flagged` and emits the
+  `failClosedGroup` telemetry. Run it that way first to see what the posture
+  would refuse on *your* traffic.
+* **`approval_required` is available per group** — `fail_closed={"controls":
+  "approval_required"}` — for deployments that already route pending actions to
+  a human. `blocked` is the default because `approval_required` does not count
+  toward the circuit breaker, so a persistently broken control produces an
+  unbounded approval queue and never trips it.
+
+Measured cost, and where it could not be measured:
+**[docs/fail-closed-design.md](https://github.com/delphisecurity/xaidr/blob/main/docs/fail-closed-design.md)**.
+
 **Latency runs, resilience properties, suite counts and the skip breakdown:
 [docs/performance.md](https://github.com/delphisecurity/xaidr/blob/main/docs/performance.md) and
 [BENCHMARKS.md](https://github.com/delphisecurity/xaidr/blob/main/BENCHMARKS.md).**

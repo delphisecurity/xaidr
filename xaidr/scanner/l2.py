@@ -9,6 +9,7 @@ import re
 import time
 from dataclasses import dataclass
 from typing import List, Optional
+from ..failclosed import record_asset_fault as _record_asset_fault
 
 _RULES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "rules")
 
@@ -35,12 +36,19 @@ def _load_json(filename: str) -> list:
         with open(path) as f:
             data = json.load(f)
     except FileNotFoundError:
+        _record_asset_fault(filename, "not found; using empty ruleset")
         return []
     except Exception as e:
         # Corrupt/unreadable asset must not crash `import xaidr` — degrade empty.
+        # RECORDED as well as printed: see the note in scanner/l1.py.
         print(f"[xaidr] Warning: {filename} failed to load ({e}); using empty ruleset")
+        _record_asset_fault(
+            filename, f"failed to load ({type(e).__name__}); using empty ruleset")
         return []
-    return data if isinstance(data, list) else []
+    if not isinstance(data, list):
+        _record_asset_fault(filename, "not a list; using empty ruleset")
+        return []
+    return data
 
 
 def _compile_intents():
@@ -61,6 +69,10 @@ def _compile_intents():
             })
         except re.error as e:
             print(f"[xaidr] Warning: intent {r.get('name')} regex failed: {e}")
+            _record_asset_fault(
+                "dangerous-intents.json",
+                f"intent {r.get('name')!r} regex failed to compile "
+                f"({type(e).__name__}); intent DROPPED")
     return compiled
 
 

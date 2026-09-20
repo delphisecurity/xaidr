@@ -13,6 +13,7 @@ from .provenance_chain import (
     propagate_context,
 )
 from .types import DelphiBlockedError, ScanResult
+from .failclosed import GROUPS as FAIL_CLOSED_GROUPS
 from .escalation import Escalator, HealthReport
 from .extensions import (
     SensorExtension, ScanRequest, ResponseView, DestinationView, ToolView,
@@ -36,6 +37,7 @@ __all__ = [
     "XaidrProtectionWarning",
     "ScanResult",
     "DelphiBlockedError",
+    "FAIL_CLOSED_GROUPS",
     "CircuitBreaker",
     "SensorExtension",
     "Escalator",
