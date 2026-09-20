@@ -20,10 +20,23 @@ tests later — reporting a ``RecursionError`` that nothing in the scanner raise
 
 WHAT DISABLING THE NORMALISER COSTS, measured by running with ``_TYPO_CONFIG``
 emptied — the exact value ``_read_typo_config`` returns when the asset fails to
-load. 35 tests fail, including 12 obfuscated-attack detections lost across BOTH
-the ``scan`` and ``scan_a2a`` surfaces — leetspeak, dot/underscore/dash
-separator evasion, and homoglyph+separator evasion. It is a silent, total loss
-of the de-obfuscation layer, so it must not be reachable by accident.
+load. 37 tests fail; 36 of them are the cost, and the 37th is
+``test_building_a_sensor_under_a_broken_json_does_not_disable_normalization``
+below correctly detecting the simulated condition. The breakdown, so the next
+person does not re-derive it from a partial sweep:
+
+    12  test_unicode_normalization.py   obfuscated attacks NOT CAUGHT — six
+                                        shapes x both surfaces (scan, scan_a2a):
+                                        leetspeak, dot/underscore/dash separator
+                                        evasion, homoglyph+separator
+    19  test_normalizer_fast_path.py    the fold itself
+     2  test_bs5_normalizer_completeness.py
+     1  test_normalizer.py              leetspeak fold
+     1  test_override_paraphrase.py     real typos stop folding
+     1  test_security_invariants.py     leetspeak evasion defeats the sensor
+
+The 12 are the ones that matter: a silent, total loss of the de-obfuscation
+layer, so it must not be reachable by accident.
 
 AND WHAT THE CORPORA SEE OF THAT: nothing. The same measurement over all five
 shipped corpus reports (``corpus_report``, ``asi_battery_report``,
@@ -31,9 +44,10 @@ shipped corpus reports (``corpus_report``, ``asi_battery_report``,
 verdicts; one already-missed item (ASI02-A08) drops 0.15 to 0.00 and no headline
 changes. That is a fact about the corpora, not a reason to relax: the published
 pools contain no obfuscated phrasing, so they cannot see this layer fail, and
-the 35 tests above are the ONLY thing standing between a failed asset load and a
-silent detection loss. Do not move a de-obfuscation gate out of pytest and into
-a corpus report on the assumption the report would catch it.
+the 36 tests above — and the 12 in particular — are the ONLY thing standing
+between a failed asset load and a silent detection loss. Do not move a
+de-obfuscation gate out of pytest and into a corpus report on the assumption
+the report would catch it.
 """
 
 from __future__ import annotations
