@@ -64,7 +64,8 @@ _LEET_MAP = str.maketrans({
 _LEET_CHARS = frozenset("013456789@$")
 
 
-def _load_typo_config() -> dict:
+def _read_typo_config() -> dict:
+    """Read and parse the asset from disk. Called ONCE — see ``_TYPO_CONFIG``."""
     path = os.path.join(_RULES_DIR, "typo-keywords.json")
     try:
         with open(path) as f:
@@ -87,6 +88,38 @@ def _load_typo_config() -> dict:
                             "not an object; normalization disabled")
         return {"all_keywords": [], "denylist": []}
     return cfg
+
+
+# PARSED ONCE, AT IMPORT, AND NEVER AGAIN — and that is a correctness fix, not a
+# cache for speed.
+#
+# This used to run per ``TypoNormalizer()``, i.e. per ``LocalScanner``, i.e. per
+# ``Sensor``. Because the read went through ``json.load`` — which is a thin
+# wrapper that calls the MODULE GLOBAL ``json.loads`` — every Sensor construction
+# re-entered whatever ``json.loads`` happened to be bound at that moment. The
+# `except Exception` below then converted any fault in that window into
+# "normalization disabled", recorded in the process-global registry in
+# ``failclosed`` that is never cleared. One transient fault therefore disabled
+# the typo normaliser for the rest of the process and made every later Sensor
+# report a degradation it had nothing to do with.
+#
+# That is not hypothetical: `tests/test_cleanup_a9_a5.py` patches `json.loads` to
+# raise (to prove the A2A extractor survives it) and builds a Sensor inside the
+# patched window. On CI, where the whole suite is one process, the poisoned
+# global then failed `test_open_posture_is_the_default_and_unchanged` hundreds of
+# tests later, with a RecursionError nothing in the scanner had raised.
+#
+# Reading at import closes the window: the parse happens while the stack is
+# shallow and before any caller can patch, instrument or shadow the json module,
+# and a Sensor construction no longer touches the disk or the parser at all. A
+# GENUINELY broken asset is still recorded, once, at import — which is exactly
+# where the `artifact` fail-closed group wants it (see failclosed.__doc__).
+_TYPO_CONFIG: dict = _read_typo_config()
+
+
+def _load_typo_config() -> dict:
+    """The parsed asset. Read at import; never re-read."""
+    return _TYPO_CONFIG
 
 
 def _osa_within_1(a: str, b: str) -> int:
