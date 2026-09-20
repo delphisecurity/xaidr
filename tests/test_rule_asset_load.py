@@ -69,31 +69,6 @@ RULES_DIR = os.path.join(ROOT, "xaidr", "rules")
 # asset got deep rather than only that something ran out of stack.
 MAX_ASSET_NESTING_DEPTH = 12
 
-# The headroom a rule asset must parse within, in PYTHON stack frames.
-#
-# NOT a tuning knob and NOT a limit to raise. xaidr is a library: it is called
-# from inside host frameworks, recursive document walkers and deep middleware
-# stacks, so the frames left when our loader runs are the HOST's business, not
-# ours. An asset that needs a deep stack to parse is an asset that fails on
-# somebody else's call graph and nowhere in our tests.
-#
-# DERIVED, not picked. `json.decoder`'s recursive-descent scanner costs a
-# measured `2 * depth + 2` frames for an array-rooted document and one more for
-# an object-rooted one, so the deepest asset `MAX_ASSET_NESTING_DEPTH` permits
-# needs `2 * 12 + 3 = 27`. Measured on CPython 3.12.2, the shipped assets:
-#
-#     15  impact-classes.json   (nests 6)      9  all-l1-rules.json   (nests 3)
-#     13  composite-rules.json  (nests 5)      9  typo-keywords.json  (nests 3)
-#     11  attack-chains.json    (nests 4)      7  dangerous-intents.json
-#                                              7  output-l1-rules.json
-#
-# The derivation is what keeps the two constants from contradicting each other.
-# At the previous hand-picked 20, an asset at depth 10 or more satisfied
-# MAX_ASSET_NESTING_DEPTH and could not satisfy this — a bound is not a bound if
-# obeying it fails the neighbouring test.
-RECURSION_BUDGET_FRAMES = 2 * MAX_ASSET_NESTING_DEPTH + 3
-
-
 # A decoder pinned to the PURE-PYTHON scanner. This is the whole point of the
 # budget test and it is not an implementation detail.
 #
@@ -179,6 +154,56 @@ def _nesting_depth(text: str) -> int:
     return best
 
 
+def _frames_to_parse(text: str, ceiling: int = 400) -> int:
+    """Smallest headroom, in frames, that parses ``text`` ON THIS INTERPRETER.
+
+    Measured through ``recursion_headroom`` and ``_py_loads`` — the exact pair
+    the assertions use — so the number cannot drift from what they do.
+    """
+    for frames in range(1, ceiling):
+        try:
+            with recursion_headroom(frames):
+                _py_loads(text)
+            return frames
+        except RecursionError:
+            continue
+    raise RuntimeError(
+        f"no headroom under {ceiling} frames parses a document nested "
+        f"{_nesting_depth(text)} deep — the scanner's frame cost is not what "
+        "this file assumes and the budget below is meaningless."
+    )
+
+
+# The headroom a rule asset must parse within, in PYTHON stack frames.
+#
+# NOT a tuning knob and NOT a limit to raise. xaidr is a library: it is called
+# from inside host frameworks, recursive document walkers and deep middleware
+# stacks, so the frames left when our loader runs are the HOST's business, not
+# ours. An asset that needs a deep stack to parse is an asset that fails on
+# somebody else's call graph and nowhere in our tests.
+#
+# MEASURED, NOT ASSUMED, and that distinction cost four red CI jobs. This was
+# briefly `2 * MAX_ASSET_NESTING_DEPTH + 3 = 27`, a formula fitted to the frame
+# cost of CPython 3.12. The cost is not the same on every interpreter:
+#
+#     depth 12, object-rooted     3.10.21  28 frames     3.12.2  27 frames
+#                                 3.11.16  28 frames
+#
+# so on 3.10 and 3.11 a document at exactly the permitted depth needed 28 and
+# was given 27 — the bound was unreachable and `test_the_recursion_budget_guard_
+# actually_fires` went red on four of the six pytest jobs. Hardcoding a frame
+# cost to fix a version-dependent guard reintroduced the defect being fixed.
+#
+# So the budget is now DEFINED as what a document at exactly the permitted depth
+# costs HERE: "an asset may use no more stack than a conforming asset needs."
+# That is the property actually wanted, it needs no constant, and it is true on
+# every interpreter without anyone re-fitting it. The bound stays reachable by
+# construction, and stays non-vacuous because the scanner's cost is monotonic in
+# depth (+2 frames per level on all three versions) — so anything deeper costs
+# strictly more and fails. Both halves are asserted below rather than assumed.
+RECURSION_BUDGET_FRAMES = _frames_to_parse(_nest(MAX_ASSET_NESTING_DEPTH))
+
+
 # ── the guard the next deeply-nested asset trips ─────────────────────────────
 
 def test_the_asset_set_is_not_empty():
@@ -219,8 +244,14 @@ def test_the_recursion_budget_guard_actually_fires():
     shallow OR proves nothing at all, and it cannot tell you which — a budget
     that no input can exhaust passes on every asset forever.
 
-    Both sides are asserted here against the same mechanism the budget test
-    uses, so the pair is: depth 12 (the bound) parses, depth 13 does not.
+    `RECURSION_BUDGET_FRAMES` is now measured rather than fitted, so the
+    at-the-bound half is true by construction and is asserted only to catch a
+    measurement that silently returned something absurd. THE DEPTH-13 HALF IS
+    THE LOAD-BEARING ONE: it is what says the measured budget still separates a
+    conforming asset from a deep one, i.e. that the scanner's frame cost is
+    monotonic in depth on this interpreter. If a future runtime flattened that
+    cost, the budget would stop discriminating and this goes red — which is the
+    whole point of measuring it here instead of trusting a formula.
     """
     at_bound = _nest(MAX_ASSET_NESTING_DEPTH)
     assert _nesting_depth(at_bound) == MAX_ASSET_NESTING_DEPTH
@@ -233,6 +264,24 @@ def test_the_recursion_budget_guard_actually_fires():
             _py_loads(past_bound)
 
 
+def test_the_measured_budget_is_in_a_sane_range():
+    """The budget is measured at import; a wild measurement must not pass quietly.
+
+    A frame cost far above anything a JSON scanner plausibly needs would hand
+    out so much headroom that no asset could exhaust it — vacuity by a different
+    route than the one this file already fixed. Measured for depth 12: 28 frames
+    on CPython 3.10.21 and 3.11.16, 27 on 3.12.2. The window is deliberately
+    wide; it is a smoke alarm, not a second budget.
+    """
+    assert 10 <= RECURSION_BUDGET_FRAMES <= 80, (
+        f"a document nested {MAX_ASSET_NESTING_DEPTH} deep measured "
+        f"{RECURSION_BUDGET_FRAMES} frames to parse on "
+        f"{'.'.join(str(v) for v in sys.version_info[:3])}. That is outside "
+        "anything this scanner plausibly costs, so the budget derived from it "
+        "is not measuring what the rest of this file assumes."
+    )
+
+
 def test_the_budget_is_measured_on_the_scanner_the_headroom_reaches():
     """Why `_py_loads` and not `json.loads`, asserted rather than commented.
 
@@ -240,10 +289,11 @@ def test_the_budget_is_measured_on_the_scanner_the_headroom_reaches():
     the C and Python recursion counters are separate: the accelerator is bounded
     by a FIXED C-stack budget that `sys.setrecursionlimit` does not govern. So
     on 3.12+ the headroom this file lowers never reaches it and a 240-deep
-    document parses with 27 Python frames available — a budget test written
+    document parses within `RECURSION_BUDGET_FRAMES` — a budget test written
     against `json.loads` is the passes-vacuously shape, green on every asset
-    forever. On 3.10/3.11 the counters were shared and the same call does raise,
-    which is why this defect was invisible: it depended on the runner's Python.
+    forever. On 3.10/3.11 the counters were shared and the same call does raise
+    (measured: the C scanner costs depth+3 frames there), which is why this
+    defect was invisible — it depended on the runner's Python.
 
     The pure-Python scanner behaves the same way on every supported version,
     which is the property the budget needs. Without this test someone
