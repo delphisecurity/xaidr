@@ -64,6 +64,82 @@ non-goal: crypto-mining as a workload has no structural tell — its only signal
 a denylist of miner image names — so it is left to policy rather than folded into
 the shape detector.
 
+## The domains these detectors were tuned against
+
+**Both default-on tool-argument detectors — the privileged-action shape detector
+above and the removed-bound detector (`ASI04_bound_removed`) — were tuned against
+five agent personas: support, devops, data, research, finance.** Every benign
+tool-call pool in this repo is those five, so the published "0 false positives on
+190 production tool calls" is a statement about those five and not about your
+deployment. This section exists because that sentence was easy to read as the
+stronger claim.
+
+`benign_toolcalls/domains.jsonl` is 120 production-shaped benign calls from six
+domains neither detector ever saw, added specifically to put a number on it.
+Regenerate with `python scripts/benign_domain_report.py`:
+
+| domain | n | flagged | rate |
+|---|---:|---:|---:|
+| legal document management | 20 | 1 | 5.0% |
+| game state | 20 | 3 | 15.0% |
+| scientific computing & mathematics | 20 | 7 | 35.0% |
+| media production | 20 | 6 | 30.0% |
+| healthcare scheduling | 20 | 2 | 10.0% |
+| education / LMS | 20 | 5 | 25.0% |
+| **total** | **120** | **24** | **20.0%** |
+
+That is after five defects the pool exposed were fixed; before them it was 40 of
+120 (33.3%). The 24 that remain are **not** defects, and they fall into three
+kinds. All of them FLAG, none blocks.
+
+**1. The bound is a game, pedagogy or clinical rule, not a spend.** The caller
+really did name a ceiling and remove it, and the detector is reading that
+correctly — it just cannot know that this ceiling governs an in-game economy
+rather than a cloud bill. `set_world_rules(mode="creative",
+inventory_cap="unlimited")`, `set_quiz_settings(type="practice",
+attempts="unlimited")`, `create_intermediate(codec="dnxhr_444",
+bitrate_cap="none")`, `create_group_set(groups=8, max_members="none")`. This is
+the same shape as `spend_limit: "off"` and there is no per-message fact that
+separates them. It is a per-deployment fact, which is the policy engine's job.
+
+**2. The detector's vocabulary is the domain's subject matter.** In numerical and
+symbolic computing, `limit` and `bounds` are the mathematics:
+`compute_limit(variable="x", limit="infinity")` and `minimize(bounds="unbounded")`
+are a calculus limit and an unconstrained optimisation. Elsewhere it is a
+one-word collision on a control name — `record_enrollment(audit=false)` is a
+student taking a course *for credit*, `set_proctoring(monitoring=false)` is an
+exam invigilated in person, `export_master(safety="off")` is the title-safe
+overlay, and `add_crew_credit(role="production administrator")` is a film credit.
+Separating these needs a list of domain words, which is precisely what both
+detectors are built not to be, so they are named here instead.
+
+**3. Permanence.** A strong nullifier in a real duration bound:
+`apply_litigation_hold(retention="indefinite")`, `ban_player(expires="never")`,
+`create_standing_order(series="hemodialysis", expires="never")`,
+`archive_project(destination="lto://vault-3", retention="forever")`. This is the
+residual already documented for the removed-bound detector, now measured in four
+more domains. A hold, a permanent ban, a standing order and a delivered-show
+archive all genuinely do not end, and they say so in exactly the words an
+exhaustion attack uses.
+
+**What to do about it, concretely.** All 24 are FLAG, so the cost is review lines,
+not stopped calls, and the keys are few enough to name:
+
+| if your tool surface includes | expect flags on | and it is |
+|---|---|---|
+| a game economy, an LMS, a media pipeline | `*_cap`, `max_*`, `attempts`, `budget` set to `unlimited` / `none` | kind 1 — carry it in policy, not here |
+| mathematics, HPC, numerical solvers | `limit`, `bounds`, `max_step`, `max_iter` holding `inf` / `unbounded` | kind 2 — the highest-noise surface measured, 35% |
+| clinical, proctoring, post-production | `monitoring`, `audit`, `safety`, `verify` set false/off | kind 2 — one-word collisions |
+| records management, licensing, moderation | `retention` / `expires` holding `forever` / `never` / `indefinite` | kind 3 — the named residual |
+
+If one of these is your ordinary traffic and the flags are noise, the two
+detectors are ordinary `dos_attempt` and `privileged_action` categories: suppress
+them by category in your policy, or run in monitor mode and filter. Do not read a
+low number from the five-persona corpus as a prediction for a sixth domain — the
+pools that produce it cannot contain your traffic, which is the whole reason this
+section exists. If you measure a new domain, add it to `domains.jsonl` and send
+it: the next such question should be measurable rather than argued.
+
 **Assigning a tier.** One constructor argument, 1 to 4, where **1 is the highest
 privilege** and 4 the lowest:
 
