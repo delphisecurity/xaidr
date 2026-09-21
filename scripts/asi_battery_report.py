@@ -9,20 +9,26 @@ WHY THIS EXISTS
 ---------------
 The existing agentic probe is 107 strings we authored; it confirms what we
 already believed. This battery is authored to be held out: 120 attack cases and
-120 register-matched benign cases across ASI01-ASI10, spanning the boundaries
-each category actually crosses (input, tool call, output, A2A, and multi-step
-sequences for the categories a single message cannot express — memory poisoning
-written-then-read for ASI06, behavioural drift over calls for ASI10). Plain,
-non-injection registers are used in every category, because the held-out nano
-set showed that is where detection is blind. See asi_battery/README.md for
-provenance and the technique breakdown.
+120 register-matched benign cases across ASI01-ASI10 plus one non-OWASP bucket
+(`EXH`), spanning the boundaries each category actually crosses (input, tool
+call, output, A2A, and multi-step sequences for the categories a single message
+cannot express — memory poisoning written-then-read for ASI06, behavioural drift
+over calls for ASI10). Plain, non-injection registers are used in every
+category, because the held-out nano set showed that is where detection is blind.
+See asi_battery/README.md for provenance and the technique breakdown.
+
+THE CATEGORY COUNTS ARE NOT EQUAL, and the table says so rather than implying
+otherwise. The battery was relabelled onto the official OWASP Agentic Top 10
+(finding F9); relabelling moved cases between categories and left several with
+fewer than twelve. A denominator below twelve is printed under the table, and a
+denominator of one is called out as not a rate at all.
 
 WHAT IT REPORTS
 ---------------
-Rules-only first, then rules-plus-nano. Per ASI category: catch rate (attacks
-detected) and false-positive rate (benign detected), for each configuration,
-plus the increment and every miss named. "Detected" means the scanner did not
-return `allowed` (it flagged or blocked); enforcement mode is `monitor`, so a
+Rules-only first, then rules-plus-nano. Per category: the case count `n`, catch
+rate (attacks detected) and false-positive rate (benign detected), for each
+configuration, plus the increment and every miss named. "Detected" means the
+scanner did not return `allowed` (it flagged or blocked); mode is `monitor`, so a
 block-worthy verdict surfaces as `flagged`. A sequence is detected if ANY of its
 steps is detected; the script records which step caught it.
 
@@ -52,7 +58,34 @@ sys.path.insert(0, REPO_ROOT)
 from xaidr.sensor import DelphiSensor  # noqa: E402
 
 WIDTH = 92
-CATEGORIES = [f"ASI{n:02d}" for n in range(1, 11)]
+
+#: Display order. `EXH` is deliberately NOT an OWASP Agentic Top 10 id -- see
+#: asi_battery/README.md. It is listed last and labelled as non-OWASP in the
+#: output so no reader can take it for a category of the framework.
+_ORDER = {**{f"ASI{n:02d}": n for n in range(1, 11)}, "EXH": 99}
+NON_OWASP = ("EXH",)
+
+
+def _categories(*case_lists):
+    """Every category PRESENT IN THE DATA, in display order.
+
+    Derived rather than hardcoded. The previous hardcoded
+    ``[f"ASI{n:02d}" for n in range(1, 11)]`` meant a category the data
+    carried but the list did not would vanish from the table, the miss list
+    and `last_run.json` without the totals looking wrong -- the report would
+    have shown a full-looking table over a subset of the battery. The totals
+    assertion below is the other half of that guard.
+    """
+    seen = set()
+    for cases in case_lists:
+        seen.update(c["category"] for c in cases)
+    unknown = sorted(c for c in seen if c not in _ORDER)
+    if unknown:
+        raise SystemExit(
+            f"unknown battery category {unknown}: add it to _ORDER in this "
+            "script and declare it in asi_battery/README.md"
+        )
+    return sorted(seen, key=lambda c: _ORDER[c])
 
 
 class _NullReporter:
@@ -162,6 +195,7 @@ def _build(enable_nano):
 def main():
     attacks = _load("attacks.jsonl")
     benign = _load("benign.jsonl")
+    categories = _categories(attacks, benign)
 
     rules_sensor, _ = _build(enable_nano=False)
     ra = _measure(rules_sensor, attacks)
@@ -192,18 +226,23 @@ def main():
     print(_rule("="))
     print("PER-CATEGORY CATCH / FALSE-POSITIVE")
     print(_rule("="))
-    hdr = (f"{'cat':<7}{'rules catch':>14}{'rules FP':>12}"
+    hdr = (f"{'cat':<7}{'n':>4}{'rules catch':>14}{'rules FP':>12}"
            f"{'  |':>4}{'+nano catch':>14}{'+nano FP':>12}{'  nano adds':>12}")
     print(hdr)
     print(_rule())
     tot = defaultdict(int)
-    for cat in CATEGORIES:
+    thin = []
+    for cat in categories:
         a_ids = [c["id"] for c in attacks if c["category"] == cat]
         b_ids = [c["id"] for c in benign if c["category"] == cat]
+        if len(a_ids) < 12:
+            thin.append((cat, len(a_ids)))
         rc = sum(ra[i]["detected"] for i in a_ids)
         rf = sum(rb[i]["detected"] for i in b_ids)
         tot["rc"] += rc; tot["rf"] += rf; tot["na"] += len(a_ids); tot["nb"] += len(b_ids)
-        row = f"{cat:<7}{_rate(rc,len(a_ids)):>14}{_rate(rf,len(b_ids)):>12}{'  |':>4}"
+        mark = "*" if cat in NON_OWASP else " "
+        row = (f"{cat + mark:<7}{len(a_ids):>4}"
+               f"{_rate(rc,len(a_ids)):>14}{_rate(rf,len(b_ids)):>12}{'  |':>4}")
         if nano_on:
             nc = sum(na[i]["detected"] for i in a_ids)
             nf = sum(nb[i]["detected"] for i in b_ids)
@@ -212,11 +251,29 @@ def main():
             row += f"{_rate(nc,len(a_ids)):>14}{_rate(nf,len(b_ids)):>12}{('+'+str(added)):>12}"
         print(row)
     print(_rule())
-    trow = (f"{'ALL':<7}{_rate(tot['rc'],tot['na']):>14}{_rate(tot['rf'],tot['nb']):>12}{'  |':>4}")
+    trow = (f"{'ALL':<7}{tot['na']:>4}"
+            f"{_rate(tot['rc'],tot['na']):>14}{_rate(tot['rf'],tot['nb']):>12}{'  |':>4}")
     if nano_on:
         trow += (f"{_rate(tot['nc'],tot['na']):>14}{_rate(tot['nf'],tot['nb']):>12}"
                  f"{('+'+str(tot['added'])):>12}")
     print(trow)
+    # Nothing may be dropped between the per-category rows and the headline.
+    assert tot["na"] == len(attacks) and tot["nb"] == len(benign), (
+        f"per-category rows cover {tot['na']}/{len(attacks)} attacks and "
+        f"{tot['nb']}/{len(benign)} benign; a category is missing from the table"
+    )
+    if NON_OWASP:
+        print()
+        print(f"* {', '.join(NON_OWASP)} is NOT an OWASP Agentic Top 10 category. "
+              "See asi_battery/README.md.")
+    if thin:
+        print()
+        print("UNEQUAL DENOMINATORS - these categories carry fewer than 12 cases, so "
+              "their rate is")
+        print("not comparable with the others and, at small n, is not a rate at all:")
+        for cat, n in thin:
+            note = "  <- one case: read it as that case's verdict, not a rate" if n == 1 else ""
+            print(f"  {cat}: {n} case(s){note}")
     print()
 
     # ---- the increment ----
@@ -242,7 +299,7 @@ def main():
     print(f"MISSES - attacks NOT detected by {label}, by category")
     print(_rule("="))
     total_miss = 0
-    for cat in CATEGORIES:
+    for cat in categories:
         misses = [c for c in attacks if c["category"] == cat and not final[c["id"]]["detected"]]
         total_miss += len(misses)
         print(f"\n{cat}  ({len(misses)} missed)")
@@ -275,7 +332,7 @@ def main():
     # ---- machine-readable ----
     summary = {"counts": {"attacks": len(attacks), "benign": len(benign)},
                "nano_available": nano_on, "per_category": {}}
-    for cat in CATEGORIES:
+    for cat in categories:
         a_ids = [c["id"] for c in attacks if c["category"] == cat]
         b_ids = [c["id"] for c in benign if c["category"] == cat]
         entry = {"rules": {"catch": sum(ra[i]["detected"] for i in a_ids),

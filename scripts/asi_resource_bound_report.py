@@ -7,7 +7,7 @@ WHAT IT MEASURES, AND WHY EACH ONE.
 
   1. THE DISTINCTION, made concrete. The seventeen production benign tool calls a
      NAIVE magnitude-keyed detector fires on (8.9% of the 190-call corpus) are
-     printed next to the ASI04 attacks, so the difference can be read rather than
+     printed next to the EXH attacks, so the difference can be read rather than
      asserted. Volume is on the left; a removed bound is on the right.
   2. FALSE POSITIVES, on every committed benign pool: the 190 production tool
      calls, the 120-case register-matched battery mirror, the 50-case held-out
@@ -39,6 +39,11 @@ from xaidr.sensor import DelphiSensor  # noqa: E402
 from xaidr.scanner.resource_bound import scan_resource_bounds  # noqa: E402
 
 WIDTH = 84
+#: The rule IDs still read ASI04 while the cases they fire on now read EXH.
+#: That is not an oversight. Rule IDs are published in `ScanResult.rules`, so
+#: renaming them is a breaking change to the output contract and is tracked
+#: separately; the battery labels are documentation and were fixed here (F9).
+#: asi_battery/README.md records the divergence and what closing it needs.
 RULES = ("ASI04_bound_removed", "ASI04_unbounded_extent", "ASI04_unbounded_directive")
 
 
@@ -138,10 +143,10 @@ def main():
         hit = [f["rule"] for f in scan_resource_bounds(e["tool"], e["args"])]
         print(f"{e['id']:<10}{e['tool']:<22}{b:<34}{hit or 'silent'}")
     print()
-    print("The ASI04 attacks, same boundary, no magnitude in the signal at all:")
+    print("The EXH attacks, same boundary, no magnitude in the signal at all:")
     print(rule())
     for a in jl("asi_battery/attacks.jsonl"):
-        if a["category"] != "ASI04" or a["boundary"] != "tool_call":
+        if a["category"] != "EXH" or a["boundary"] != "tool_call":
             continue
         hit = [f["rule"] for f in scan_resource_bounds(a["tool"], a["args"])]
         print(f"{a['id']:<10}{a['tool']:<22}{json.dumps(a['args'])[:33]:<34}{hit}")
@@ -218,17 +223,17 @@ def main():
     print(f"whole battery : {len(caught)}/{len(attacks)} attacks flag or block")
     print(f"carrying a G4 rule: {len(by_g4)}")
     print()
-    print(f"{'ASI04 case':<12}{'boundary':<12}{'verdict':<10}{'rules'}")
+    print(f"{'EXH case':<12}{'boundary':<12}{'verdict':<10}{'rules'}")
     print(rule())
     for a in attacks:
-        if a["category"] != "ASI04":
+        if a["category"] != "EXH":
             continue
         v, rl = verdict(s, a)
         print(f"{a['id']:<12}{a['boundary']:<12}{v:<10}{sorted(rl)}")
-    misses = [a["id"] for a in attacks if a["category"] == "ASI04"
+    misses = [a["id"] for a in attacks if a["category"] == "EXH"
               and verdict(s, a)[0] == "allowed"]
     print()
-    print(f"ASI04 misses ({len(misses)}): {misses}")
+    print(f"EXH misses ({len(misses)}): {misses}")
     print("  A04/A11 — amplification. Their only per-message tell is aspectual")
     print("            ('Keep fanning it out', 'continuously'), which costs benign")
     print("            hits it does not earn. Recursive fan-out is OBSERVED, not")

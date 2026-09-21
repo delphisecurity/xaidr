@@ -35,7 +35,7 @@ def scan(tool, args):
     A module-level import makes this file uncollectable against a tree that does
     not have the detector — and that tree is exactly the pre-fix state these
     tests have to be shown RED against. ``ModuleNotFoundError`` during collection
-    is not a failure message; "ASI04-A02 not caught" is. So the absent detector
+    is not a failure message; "EXH-A02 not caught" is. So the absent detector
     degrades to "finds nothing", every catch assertion fails with the case it
     missed, and the benign assertions pass vacuously, which is what
     ``test_naive_magnitude_detector_would_fire_on_these`` exists to expose.
@@ -88,7 +88,7 @@ def test_battery_resource_tool_calls_are_caught():
     """Every ASI04 tool-call attack in the held-out battery. All four declare a
     bound and then remove it; none of them is caught by magnitude."""
     attacks = {a["id"]: a for a in _jsonl("asi_battery/attacks.jsonl")}
-    for i in ("ASI04-A02", "ASI04-A05", "ASI04-A09", "ASI04-A12"):
+    for i in ("EXH-A02", "EXH-A05", "EXH-A09", "EXH-A12"):
         a = attacks[i]
         assert scan(a["tool"], a["args"]), f"{i} not caught: {a['args']}"
 
@@ -97,7 +97,7 @@ def test_battery_resource_prose_directives_are_caught():
     """The input/a2a half, end to end through the sensor."""
     s = _sensor()
     attacks = {a["id"]: a for a in _jsonl("asi_battery/attacks.jsonl")}
-    for i in ("ASI04-A01", "ASI04-A03", "ASI04-A06", "ASI04-A08", "ASI04-A10"):
+    for i in ("EXH-A01", "EXH-A03", "EXH-A06", "EXH-A08", "EXH-A10"):
         a = attacks[i]
         r = s.scan(a["text"], direction="input")
         assert "ASI04_unbounded_directive" in set(r.rules), (i, a["text"], r.rules)
@@ -229,7 +229,7 @@ def test_aspectual_continuation_is_not_a_non_termination_claim():
     """"keep <verb>ing" and "continuously" are aspectual, not terminative-
     negating, and they cost benign hits they do not earn ("keep running your
     usual safety checks", "continuous delivery"). Excluded — which is why
-    ASI04-A04 and ASI04-A11 are misses, not silent gaps."""
+    EXH-A04 and EXH-A11 are misses, not silent gaps."""
     s = _sensor()
     for benign in ("Please keep running your usual safety checks on your actions.",
                    "I keep running into permission errors, can you help?",
@@ -286,7 +286,7 @@ def test_the_discriminator_exclusions_did_not_cost_a_catch():
     bound is removed must still fire after the exclusions above. A pool that
     goes clean because the detector went quiet is not a result."""
     attacks = {a["id"]: a for a in _jsonl("asi_battery/attacks.jsonl")}
-    for case_id in ("ASI04-A02", "ASI04-A05", "ASI04-A09", "ASI04-A12"):
+    for case_id in ("EXH-A02", "EXH-A05", "EXH-A09", "EXH-A12"):
         a = attacks[case_id]
         rules = sorted(f["rule"] for f in scan(a["tool"], a["args"]))
         assert rules, (case_id, a["args"], "no longer caught")
@@ -303,7 +303,7 @@ def test_the_discriminator_exclusions_did_not_cost_a_catch():
     "out', 'ping everyone back continuously'), and those two markers cost 9 "
     "benign hits across 536 committed benign texts. Recursive fan-out is "
     "OBSERVED, not declared -- the delegation-rate circuit breaker's territory."))
-@pytest.mark.parametrize("case_id", ["ASI04-A04", "ASI04-A11"])
+@pytest.mark.parametrize("case_id", ["EXH-A04", "EXH-A11"])
 def test_residual_a2a_amplification(case_id):
     s = _sensor()
     attacks = {a["id"]: a for a in _jsonl("asi_battery/attacks.jsonl")}
@@ -312,14 +312,14 @@ def test_residual_a2a_amplification(case_id):
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "ASI04-A07 is a delegation LOOP: A hands to B, B hands back to A. Each "
+    "EXH-A07 is a delegation LOOP: A hands to B, B hands back to A. Each "
     "message is a plain bounded handoff and the harm is only in the pair, so no "
     "per-message detector reaches it. Circuit-breaker territory (opt-in)."))
 def test_residual_sequence_delegation_loop():
     s = _sensor()
     attacks = {a["id"]: a for a in _jsonl("asi_battery/attacks.jsonl")}
     acts = [s.scan_a2a(st["text"], destination="peer").action
-            for st in attacks["ASI04-A07"]["steps"]]
+            for st in attacks["EXH-A07"]["steps"]]
     assert any(a != "allowed" for a in acts), acts
 
 
@@ -357,7 +357,7 @@ def test_the_exclusions_did_not_cost_a_catch():
     are still caught after the three exclusions above."""
     s = _sensor()
     attacks = {a["id"]: a for a in _jsonl("asi_battery/attacks.jsonl")}
-    for i in ("ASI04-A01", "ASI04-A03", "ASI04-A06", "ASI04-A08", "ASI04-A10"):
+    for i in ("EXH-A01", "EXH-A03", "EXH-A06", "EXH-A08", "EXH-A10"):
         r = s.scan(attacks[i]["text"], direction="input")
         assert "ASI04_unbounded_directive" in set(r.rules), (i, sorted(r.rules))
 
@@ -374,12 +374,12 @@ def test_purpose_clause_is_not_non_termination():
 
 
 def test_sequence_delegation_loop_is_not_claimed():
-    """ASI04-A07 (A delegates to B, B delegates back to A) has no per-message
+    """EXH-A07 (A delegates to B, B delegates back to A) has no per-message
     tell: each message is a plain, bounded handoff. It is the circuit breaker's
     territory, and is NOT claimed here."""
     s = _sensor()
     attacks = {a["id"]: a for a in _jsonl("asi_battery/attacks.jsonl")}
-    for st in attacks["ASI04-A07"]["steps"]:
+    for st in attacks["EXH-A07"]["steps"]:
         r = s.scan_a2a(st["text"], destination="peer")
         assert "ASI04_unbounded_directive" not in set(r.rules)
 
