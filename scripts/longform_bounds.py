@@ -45,6 +45,18 @@ import os
 import sys
 from contextlib import contextmanager
 
+# A LIBRARY, NOT A REPORT — so it binds but does not announce on its own.
+#
+# It is on the list of eleven scripts that put the repo root on `sys.path`
+# silently, and the reason it is exempt from printing is that it never prints
+# anything: it is imported by scripts/benign_longform_report.py and by
+# tests/test_benign_longform.py, both of which are the thing with output. The
+# report binds first, so the banner it prints is the one that describes the
+# xaidr this module's lazy `from xaidr.scanner import l1` will also resolve —
+# one process, one xaidr, one banner.
+#
+# The insert still has to happen HERE and at import time, because a test that
+# imports this module directly gets no report to bind for it.
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)

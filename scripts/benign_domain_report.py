@@ -39,8 +39,21 @@ import sys
 import warnings
 from collections import defaultdict
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, REPO)
+# ── which xaidr answered? ────────────────────────────────────────────────────
+# This script publishes the per-domain table quoted in README.md and
+# docs/privilege-tiers.md, so it is a U-1 regenerator and owes the same answer
+# as its ten siblings: `bind` puts the repo root on sys.path (the default, and
+# what every committed figure here was measured against), prints the resolved
+# path and version FIRST, and under XAIDR_FROM_INSTALL=1 leaves sys.path alone
+# and refuses a source tree. See scripts/_provenance.py.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from _provenance import bind, repo_root_of  # noqa: E402
+
+REPO = repo_root_of(__file__)
+PROV = bind(__file__)
+
 from xaidr.sensor import DelphiSensor  # noqa: E402
 
 WIDTH = 82

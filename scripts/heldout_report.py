@@ -49,12 +49,19 @@ import os
 import sys
 import warnings
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HELDOUT_DIR = os.path.join(REPO_ROOT, "heldout")
-
 # Measure THIS working tree, not whatever `xaidr` happens to be installed —
-# same reasoning as corpus_report.py and benchmark.py.
-sys.path.insert(0, REPO_ROOT)
+# same reasoning as corpus_report.py and benchmark.py. AND SAY SO: `bind`
+# prints the resolved path and version before any table, which is the half
+# this script used to be missing. XAIDR_FROM_INSTALL=1 measures a published
+# artifact instead. See scripts/_provenance.py.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from _provenance import bind, repo_root_of  # noqa: E402
+
+REPO_ROOT = repo_root_of(__file__)
+HELDOUT_DIR = os.path.join(REPO_ROOT, "heldout")
+PROV = bind(__file__)
 
 from xaidr.scanner.local import LocalScanner  # noqa: E402
 

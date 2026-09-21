@@ -18,8 +18,15 @@ machine had, merged green locally and red on the runner.
           is the top-level `sre_parse`. Both py3.10 jobs died at collection on
           `No module named 're._parser'; 're' is not a package`. See the
           private-stdlib section below for why neither check above saw it.
+  PR #24  `scripts/policy_width_report.py` wrote
+          `f"{f'{r['attacks_gated']} of {r['attacks_n']}':>18}"`. The
+          replacement expression reuses the `'` that opened the f-string, which
+          PEP 701 legalised in 3.12 and 3.10 and 3.11 reject at PARSE time. Both
+          py3.10 jobs and both py3.11 jobs died at collection in 20 seconds on
+          `SyntaxError: f-string: unmatched '['`. See the f-string section at
+          the bottom for why none of the three checks above could see it.
 
-None was a wrong assertion. All three were a right assertion asked through the
+None was a wrong assertion. All four were a right assertion asked through the
 wrong instrument, and in every case the instrument was invisible in review
 because it worked for the person typing it.
 
@@ -82,6 +89,40 @@ _ALLOWED_EXTERNAL_BINARIES = {
             "single surviving shell catches the defect. `sh` is asserted "
             "present, so the set can never skip to empty."
         )),
+    ("test_install_hints.py", "_grepped_hint_files"): (WHICH_GUARDED, (
+        "grep, resolved through shutil.which() and then ASSERTED present "
+        "rather than skipped. POSIX requires it and every platform this "
+        "package supports has it, so absence is not a portability case, it is "
+        "a broken environment — the same call `sh` gets in the shell test "
+        "above. It is which-guarded anyway so the failure names the missing "
+        "binary instead of surfacing as FileNotFoundError from subprocess. "
+        "A skip here would be WRONG: this is the second, independent "
+        "enumeration that catches the scan going short (nine hint sites "
+        "reported when there were ten), and without it the Python walk agrees "
+        "only with itself."
+    )),
+    ("test_battery_case_ids.py", "_walk"): (ALWAYS_PRESENT, (
+        "git, for the same reason as _tracked_files below, and with the same "
+        "degradation: a non-zero returncode or empty stdout falls back to a "
+        "filesystem walk of the repo root rather than raising or returning "
+        "nothing. That path is for an EXTRACTED SDIST — this branch ships "
+        "tests/ inside it — where there is no index to read and also none of "
+        "the gitignored run outputs the index was excluding, so the two "
+        "scopes coincide there. OSError and SubprocessError are both caught, "
+        "so a runner with no git binary takes the fallback instead of "
+        "erroring, and the `scanned` fixture asserts >50 files either way so "
+        "neither path can degrade into a green empty scan."
+    )),
+    ("test_sdist_contents.py", "_tracked_files"): (ALWAYS_PRESENT, (
+        "git, for the same reason as _git_grep above: actions/checkout@v4 IS a "
+        "git clone, so a runner that reached pytest has both the binary and a "
+        "repository. Unguarded by shutil.which() but not unguarded in effect — "
+        "a non-zero returncode returns None and the caller skips with a note "
+        "that only the explicit floor was checked. That path exists for an "
+        "EXTRACTED SDIST, where there is genuinely no index to enumerate, and "
+        "the floor is a non-empty list of named pool files so the skip narrows "
+        "the check rather than emptying it."
+    )),
 }
 
 
@@ -480,4 +521,233 @@ def test_the_private_stdlib_allowlist_has_no_stale_entries():
         "_ALLOWED_PRIVATE_STDLIB entries with no matching import — the site was "
         "renamed or removed and the exemption outlived it: "
         + ", ".join(f"{f}::{n}" for f, n in stale)
+    )
+
+
+# ── syntax, which is not an import and not a binary ──────────────────────────
+#
+# The fourth 3.10-specific break in two weeks, and the first that none of the
+# three checks above could see even in principle.
+# `scripts/policy_width_report.py` wrote
+#
+#     f"{f'{r['attacks_gated']} of {r['attacks_n']}':>18}"
+#
+# The inner replacement expression reuses the `'` that opened the f-string it
+# sits in. PEP 701 legalised that in 3.12; on 3.10 and 3.11 the tokenizer ends
+# the string at that quote and the file does not parse. Four of the six pytest
+# jobs died at COLLECTION on `SyntaxError: f-string: unmatched '['`, which is
+# the `re._parser` consequence again — the tests did not fail, they ceased to
+# exist.
+#
+# DOES A SYNTAX CHECK BELONG IN THIS FILE? Yes, and the argument is the thesis
+# of the docstring at the top: an instrument the author's interpreter had and
+# the oldest supported runner did not. A 3.12-only spelling is that exactly.
+# Nothing above reaches it, and not by oversight —
+#
+#   the binary rule   is about subprocess argv. Syntax is not a call.
+#   the new-stdlib rule  is keyed on _STDLIB_INTRODUCED_IN, a list of modules
+#       that were ADDED. No module is involved here at all.
+#   the private-stdlib rule  keys on a dotted import path. Same.
+#
+# All three ask their question about the AST. To have an AST you must first
+# parse, and parsing is the step that failed.
+#
+# THE TRAP, AND WHY THIS IS TWO TESTS. The obvious gate — compile() every file
+# under the running interpreter — is EXACT on the 3.10 job and VACUOUS on every
+# other one, because on 3.12 the offending file compiles fine. A gate that can
+# only fire where the build is already red is the passes-vacuously shape this
+# workstream keeps producing: it would report coverage on four of six jobs while
+# performing none, and it would give a developer on 3.12 — which is every
+# developer here — no local signal at all. That is the gap that let this reach
+# CI in the first place.
+#
+# `ast.parse(src, feature_version=(3, 10))` does NOT close it. Measured on
+# 3.12.2 and 3.14.5 against the pre-fix file: it parses clean at every
+# feature_version, including (3, 10). The flag does not reach the f-string
+# tokenizer.
+#
+# So the two halves below split the job along the line the interpreter draws:
+#
+#   test_every_first_party_file_parses_...   compile(). Complete at the floor,
+#       where it is the whole answer, and it covers files that NO test currently
+#       parses — the defect was only visible at collection because
+#       test_report_provenance.py happens to ast.parse() every script.
+#   test_no_f_string_uses_syntax_the_floor_rejects   an AST scan for the PEP 701
+#       relaxations specifically. This is the half that bites on 3.11, 3.12 and
+#       3.14, where compile() cannot see the defect. On 3.10 it is the redundant
+#       one. Between them no job in the matrix is vacuous.
+#
+# Scope is every first-party .py in the repo, derived rather than listed. The
+# sweep has no allowlist to keep in sync, so breadth is free — and three of the
+# four Python roots here (`xaidr`, `scripts`, `tests`, plus `repro_audit.py`)
+# ship inside the sdist, where a file that will not parse on 3.10 is a broken
+# artifact in a 3.10 user's hands with no CI job watching.
+
+_SKIP_DIRS = {"build", "dist", "__pycache__", "node_modules", "site-packages"}
+
+
+def _first_party_python_files():
+    """Every .py in the repo that is ours, derived from the tree."""
+    out = []
+    for path in sorted(REPO.rglob("*.py")):
+        rel = path.relative_to(REPO)
+        if any(p.startswith(".") or p in _SKIP_DIRS for p in rel.parts[:-1]):
+            continue
+        out.append(path)
+    return out
+
+
+def test_the_syntax_sweep_scope_is_not_empty():
+    """A derived scope can derive to nothing, and that must be red, not green.
+
+    Both tests below are a loop over `_first_party_python_files()`. If the
+    rglob, the `.`-prefix filter or `_SKIP_DIRS` ever swallows the tree, the
+    loops run zero times and pytest reports two passes — a check constraining
+    nothing, reported as coverage. 184 files matched when this was written; the
+    floor is well under that so ordinary churn does not trip it.
+    """
+    found = _first_party_python_files()
+    assert len(found) >= 100, (
+        f"only {len(found)} first-party .py file(s) found under {REPO}. The "
+        f"sweep below is a loop over this list, so a scope this small means the "
+        f"enumeration broke, not that the files went away."
+    )
+
+
+def test_every_first_party_file_parses_under_the_running_interpreter():
+    """Nothing in the tree may fail to PARSE on the Python running this test.
+
+    On the floor job this is the complete check and the whole point: CI runs a
+    py3.10 job, so a 3.12-only spelling anywhere in the tree fails here by name
+    instead of detonating at collection. Above the floor it is a tautology —
+    which is what the f-string test below exists to cover.
+    """
+    floor = _requires_python_floor()
+    running = sys.version_info[:2]
+    broken = []
+
+    for path in _first_party_python_files():
+        source = path.read_text(encoding="utf-8")
+        try:
+            compile(source, str(path), "exec")
+        except SyntaxError as exc:
+            broken.append(
+                f"  {path.relative_to(REPO)}:{exc.lineno}: {exc.msg}\n"
+                f"      {(exc.text or '').strip()}"
+            )
+
+    assert not broken, (
+        f"these files do not parse under the Python running this test "
+        f"({running[0]}.{running[1]}), while pyproject.toml claims "
+        f"{floor[0]}.{floor[1]} and CI runs a job on it:\n"
+        + "\n".join(broken) + "\n\n"
+        "A file that will not parse does not fail its tests, it DELETES them — "
+        "collection dies and every case in the module silently stops existing. "
+        "PEP 701 relaxed f-string quoting in 3.12, so a spelling that is fine "
+        "in your editor can be a SyntaxError on the oldest job; see the "
+        "f-string test below for the specific constructs."
+    )
+
+
+# The PEP 701 relaxations, as properties of a replacement expression's SOURCE
+# TEXT. Deliberately not an enumeration of "bad spellings": these are the rules
+# the pre-3.12 tokenizer enforced, so the list is closed by the language rather
+# than by whoever last got bitten.
+#
+# NOT included, and checked rather than assumed: `#` inside a replacement
+# expression. It reads like a fourth relaxation, but measured on 3.10.21,
+# `f"{s.replace('#','')}"` compiles clean — the restriction never applied inside
+# a nested string literal, which is the only way a `#` plausibly appears here.
+# Flagging it would have been a false positive on legal code.
+_QUOTE_PREFIXES = "fFrRbBuU"
+
+
+def _opening_quote(literal_source):
+    """The quote that opens an f-string literal, prefix skipped."""
+    i = 0
+    while i < len(literal_source) and literal_source[i] in _QUOTE_PREFIXES:
+        i += 1
+    for quote in ('"""', "'''", '"', "'"):
+        if literal_source.startswith(quote, i):
+            return quote
+    return None
+
+
+def _pep701_only_fstrings(source):
+    """(lineno, expression_source, why) for each pre-3.12-illegal f-string field.
+
+    Reads the SOURCE TEXT of each replacement expression rather than its AST
+    shape, because every rule here is about characters the old tokenizer could
+    not see past.
+    """
+    found = []
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.JoinedStr):
+            continue
+        literal = ast.get_source_segment(source, node)
+        if not literal:
+            continue
+        quote = _opening_quote(literal)
+        if not quote:
+            continue
+        for part in node.values:
+            if not isinstance(part, ast.FormattedValue):
+                continue
+            expr = ast.get_source_segment(source, part.value)
+            if not expr:
+                continue
+            why = []
+            if quote[0] in expr:
+                why.append(
+                    f"reuses the {quote[0]!r} that opened the f-string"
+                )
+            if "\\" in expr:
+                why.append("contains a backslash")
+            if len(quote) == 1 and "\n" in expr:
+                why.append("spans lines inside a singly-quoted f-string")
+            if why:
+                found.append((part.value.lineno, expr, "; ".join(why)))
+    return found
+
+
+def test_no_f_string_uses_syntax_the_floor_rejects():
+    """The half that bites ABOVE the floor, where compile() has nothing to say.
+
+    On 3.12+ the offending file parses, so the test above passes and the py3.12
+    jobs stay green while py3.10 and py3.11 are dead at collection. That is the
+    review-time gap: every developer here runs 3.12. This reads the parse tree
+    the newer interpreter was willing to build and asks whether the older one
+    would have been, which is a question compile() cannot be made to ask —
+    `ast.parse(feature_version=(3, 10))` parses the pre-fix file clean on both
+    3.12.2 and 3.14.5.
+
+    On 3.10 and 3.11 this is the redundant one: an offending file raises
+    SyntaxError from `ast.parse` here and from `compile` above, and the test
+    above is the one that reports it usefully.
+    """
+    floor = _requires_python_floor()
+    offenders = []
+
+    for path in _first_party_python_files():
+        source = path.read_text(encoding="utf-8")
+        try:
+            hits = _pep701_only_fstrings(source)
+        except SyntaxError:
+            continue  # the compile() sweep above owns this file's failure
+        for lineno, expr, why in hits:
+            offenders.append(
+                f"  {path.relative_to(REPO)}:{lineno}: {{{expr}}} — {why}"
+            )
+
+    assert not offenders, (
+        f"these f-string replacement expressions use syntax PEP 701 legalised "
+        f"in 3.12, and pyproject.toml claims {floor[0]}.{floor[1]}:\n"
+        + "\n".join(offenders) + "\n\n"
+        "Pre-3.12 the tokenizer ends the string at the reused quote, so the "
+        "FILE does not parse and collection takes every test in it down — "
+        "`f\"{f'{r['k']}'}\"` is `SyntaxError: f-string: unmatched '['` on 3.10 "
+        "and 3.11. Bind the value to a name first, or use the other quote "
+        "character. This test is the one that can tell you so from 3.12, where "
+        "the code you just wrote compiles."
     )

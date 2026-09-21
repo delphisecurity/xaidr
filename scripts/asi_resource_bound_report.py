@@ -33,8 +33,17 @@ import re
 import sys
 import warnings
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, REPO)
+# Which xaidr answered? See scripts/_provenance.py — repo root on sys.path by
+# default, resolved path and version printed before any table,
+# XAIDR_FROM_INSTALL=1 to measure a published artifact and refuse a tree.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from _provenance import bind, repo_root_of  # noqa: E402
+
+REPO = repo_root_of(__file__)
+PROV = bind(__file__)
+
 from xaidr.sensor import DelphiSensor  # noqa: E402
 from xaidr.scanner.resource_bound import scan_resource_bounds  # noqa: E402
 

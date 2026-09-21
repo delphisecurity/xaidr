@@ -34,9 +34,17 @@ import os
 import sys
 import warnings
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Which xaidr answered? See scripts/_provenance.py — repo root on sys.path by
+# default, resolved path and version printed before any table,
+# XAIDR_FROM_INSTALL=1 to measure a published artifact and refuse a tree.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from _provenance import bind, repo_root_of  # noqa: E402
+
+REPO = repo_root_of(__file__)
 POOL = os.path.join(REPO, "benign_toolcalls", "sql_dml.jsonl")
-sys.path.insert(0, REPO)
+PROV = bind(__file__)
 
 from xaidr.authz.classifier import classify        # noqa: E402
 from xaidr.scanner.sql_parse import parse_sql      # noqa: E402

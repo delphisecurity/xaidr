@@ -145,7 +145,15 @@ haystack = ["haystack-ai>=3.0"]
 # crewai and haystack when they are present, and skips cleanly when they are
 # not — install `xaidr[dev,langchain]` / `xaidr[dev,crewai]` /
 # `xaidr[dev,haystack]` to run those.
-dev = ["pytest"]
+#
+# hatchling is here as a TEST dependency, not a build one — it is already in
+# `build-system.requires`, but that resolves into an isolated build env the test
+# session never sees. tests/test_sdist_contents.py builds a real sdist and reads
+# the tarball, which is the only way to check the thing that actually broke: the
+# sdist include list shipped no pool and no regenerator while its LISTING showed
+# five pool directories. Without hatchling in the test env that check skips, and
+# a skipped packaging check is indistinguishable from a passing one.
+dev = ["pytest", "hatchling>=1.18"]
 
 [project.urls]
 Homepage = "https://github.com/delphisecurity/xaidr"
@@ -165,9 +173,84 @@ path = "xaidr/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["xaidr"]
 
-# --- Sdist: the package + project metadata; exclude dev scratch --------------
+# --- Sdist: the package, the pools, and the scripts that regenerate figures ---
+#
+# THE SDIST SHIPS THE CORPORA AND THE REGENERATORS. THIS IS A DECISION.
+#
+# It used to be `include = ["xaidr", "README.md", "pyproject.toml"]`, and that
+# list is wrong in two separate ways.
+#
+# 1. IT SHIPPED NO POOL AND NO SCRIPT. Every figure this project publishes —
+#    167 of 186, 165 of 277, 265 of 277, the nano false-positive range, the ASI
+#    battery baseline — is a measurement over a committed pool, made by a script
+#    in scripts/. U-1 requires each of those to have a regenerator. With this
+#    list, the only place a regenerator could run was a git clone; the published
+#    artifact could reproduce nothing it claimed. "Verified from the built
+#    artifact" was therefore never available to say about any of them.
+#
+# 2. IT LOOKED LIKE IT DID. These patterns are gitignore-style, so a bare
+#    `README.md` — no slash — matches at ANY DEPTH. The built sdist listed
+#
+#        xaidr-1.18.0/asi_battery/README.md
+#        xaidr-1.18.0/benign_a2a/README.md
+#        xaidr-1.18.0/benign_longform/README.md
+#        xaidr-1.18.0/benign_toolcalls/README.md
+#        xaidr-1.18.0/heldout/README.md
+#
+#    so every pool directory APPEARED in the listing while holding none of its
+#    data. Reading that listing is how the 1.16.0 body concluded the pools were
+#    present "measured from the built files". The check did not fail; it passed
+#    on evidence that meant nothing.
+#
+# Both halves of the fix matter. The directories are named, AND every pattern is
+# anchored with a leading `/` so no pattern can ever again match at a depth it
+# was not written for.
+#
+# COST, MEASURED: +2.7 MB uncompressed (tests 1.8M, pools 588K, scripts 288K),
+# sdist only. The WHEEL is unchanged and deliberately so — `pip install xaidr`
+# unpacks the wheel into site-packages for every user, and none of them wants a
+# 190-case benign tool-call corpus on their import path. The sdist is the only
+# published artifact that can carry this, which is the whole argument for
+# putting it there.
+#
+# WHAT THIS DOES NOT REPLACE. `scripts/corpus_diff.py` takes its pools from
+# `--pools` (a clone of the tag) and its CODE from whichever interpreter runs
+# the dump, on purpose: checking out each version and running its own pools
+# compares two pools as well as two sensors. Shipping the pools here does not
+# change that separation. It changes where the pool half can come from — an
+# `sdist` downloaded from PyPI, not only a GitHub clone.
+#
+# DISCLOSURE: asi_battery/attacks.jsonl and heldout/attacks.jsonl are attack
+# corpora. They are already public — the repository is public and the README
+# links into it by path — so this publishes nothing new. It makes the README's
+# "the per-entry detail ... ships with the repository" true of the distribution
+# as well.
+#
 # _phase1/ is dev oracles/verification scaffolding — kept in the repo, kept OUT
 # of the distribution.
 [tool.hatch.build.targets.sdist]
-include = ["xaidr", "README.md", "pyproject.toml"]
-exclude = ["_phase1", "**/__pycache__", "*.pyc"]
+include = [
+    # the package itself
+    "/xaidr",
+    # the regenerators U-1 requires, and the suite that gates them
+    "/scripts",
+    "/tests",
+    "/repro_audit.py",
+    # the committed pools every published figure is measured over
+    "/asi_battery",
+    "/benign_a2a",
+    "/benign_longform",
+    "/benign_toolcalls",
+    "/heldout",
+    # prose that states the figures, so a reader of the sdist can find the claim
+    # the regenerator answers
+    "/docs",
+    "/README.md",
+    "/BENCHMARKS.md",
+    "/THREAT_MODEL.md",
+    "/SECURITY.md",
+    "/CONTRIBUTING.md",
+    "/CODE_OF_CONDUCT.md",
+    "/pyproject.toml",
+]
+exclude = ["_phase1", "**/__pycache__", "*.pyc", "**/.pytest_cache"]

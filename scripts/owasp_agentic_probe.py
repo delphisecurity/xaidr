@@ -53,14 +53,21 @@ import json
 import os
 import sys
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
 # Measure THIS working tree, not whatever `xaidr` happens to be installed.
 # Same reasoning as scripts/corpus_report.py: run as documented from the repo
 # root, sys.path[0] is scripts/, so the repo root never reaches the path and an
 # unrelated site-packages xaidr would silently answer instead.
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
+#
+# "Silently" was the other half of the problem, and `bind` is what closes it:
+# it prints the resolved path and version before any verdict, and
+# XAIDR_FROM_INSTALL=1 measures a published artifact instead of the tree.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from _provenance import bind, repo_root_of  # noqa: E402
+
+REPO_ROOT = repo_root_of(__file__)
+PROV = bind(__file__)
 
 from xaidr import Sensor  # noqa: E402
 from xaidr.circuit_breaker import CircuitBreaker  # noqa: E402

@@ -70,7 +70,12 @@ import os
 import sys
 from collections import defaultdict
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from _provenance import FROM_INSTALL_ENV, bind, repo_root_of  # noqa: E402
+
+REPO_ROOT = repo_root_of(__file__)
 FIXTURE = os.path.join(REPO_ROOT, "tests", "fixtures", "shell_corpus.json")
 NANO_FP_SAMPLE = os.path.join(REPO_ROOT, "tests", "fixtures", "nano_fp_sample.json")
 DEVOPS_TEST = os.path.join(REPO_ROOT, "tests", "test_shell_classes_stage3.py")
@@ -80,14 +85,20 @@ PROSE_TEST = os.path.join(REPO_ROOT, "tests", "test_benign_prose.py")
 # scripts/corpus_report.py: run as documented, sys.path[0] is scripts/ and the
 # repo root never reaches the path, so an unrelated site-packages copy would win
 # and the table would silently describe code the contributor is not editing.
-# The header prints the resolved path either way.
+# The banner prints the resolved path either way.
 #
 # `--installed` opts out, which is how you point this script at a PUBLISHED wheel
 # in a fresh virtualenv: the fixture and the script still come from the checkout
 # (they are not in the wheel), the CODE comes from site-packages. Read before
 # argparse because the shadowing has to happen before the first xaidr import.
-if "--installed" not in sys.argv:
-    sys.path.insert(0, REPO_ROOT)
+#
+# It is translated into `XAIDR_FROM_INSTALL` rather than reimplemented, so this
+# script's opt-out and the one every other report in scripts/ now has are the
+# same switch with the same refusal behind it: under it, a `xaidr` that resolves
+# to the source tree anyway is a hard exit, not a silently mislabelled table.
+if "--installed" in sys.argv:
+    os.environ[FROM_INSTALL_ENV] = "1"
+PROV = bind(__file__)
 
 WIDTH = 78
 
@@ -185,20 +196,8 @@ def _literal_from_test(path: str, name: str):
 
 
 def _package_provenance():
-    try:
-        import xaidr
-        raw = getattr(xaidr, "__file__", None)
-        version = getattr(xaidr, "__version__", "unknown")
-    except Exception as exc:  # pragma: no cover
-        return f"<unresolvable: {exc}>", "unknown", False
-    if not raw:
-        return "<no __file__>", version, False
-    path = os.path.abspath(raw)
-    try:
-        is_repo = os.path.commonpath([path, REPO_ROOT]) == REPO_ROOT
-    except ValueError:
-        is_repo = False
-    return path, version, is_repo
+    """(path, version, is_repo_copy). Resolved once, by scripts/_provenance.py."""
+    return PROV.path, PROV.version, PROV.is_repo_copy
 
 
 class _NullReporter:

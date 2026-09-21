@@ -26,9 +26,18 @@ Standard library + xaidr. Monitor mode, null reporter, no network.
 from __future__ import annotations
 import json, os, re, sys, warnings
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Which xaidr answered? See scripts/_provenance.py. The banner prints once per
+# process, so importing this module from benign_toolcall_report.py (which binds
+# too) does not print it twice.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from _provenance import bind, repo_root_of  # noqa: E402
+
+REPO = repo_root_of(__file__)
 BATTERY = os.path.join(REPO, "asi_battery")
-sys.path.insert(0, REPO)
+PROV = bind(__file__)
+
 from xaidr.sensor import DelphiSensor  # noqa: E402
 
 
@@ -177,14 +186,41 @@ def _fires(cand, case):
 
 def main():
     attacks, benign = _load("attacks.jsonl"), _load("benign.jsonl")
-    rs, ns = _sensor(False), _sensor(True)
-    missed = {c["id"]: not _detected(ns, c) for c in attacks}  # currently missed by rules+nano
+    rs = _sensor(False)
+
+    # THE RULES-ONLY HALF MUST RUN WITHOUT THE `nano` EXTRA, because
+    # asi_battery/BOUNDARY_GAP.md's Reproduce block says it does: "the
+    # rules-only half runs with the core package alone". It did not — building
+    # both sensors unconditionally meant an ImportError from
+    # `DelphiNano.__init__` killed the whole script, so the documented
+    # invocation produced a traceback and no table. `asi_battery_report.py`
+    # already degrades this way and prints the reason; this now matches it.
+    try:
+        ns = _sensor(True)
+        nano_error = None
+    except Exception as exc:                       # noqa: BLE001 - reported, not swallowed
+        ns, nano_error = None, exc
+
+    if ns is None:
+        # With no nano, "currently missed" is missed-by-rules. Every NEW count
+        # below is then measured against a WEAKER baseline and is an UPPER
+        # bound on what the candidate adds over rules+nano.
+        missed = {c["id"]: not _detected(rs, c) for c in attacks}
+    else:
+        missed = {c["id"]: not _detected(ns, c) for c in attacks}
     rc = sum(_detected(rs, c) for c in attacks)
     nc = sum(not missed[c["id"]] for c in attacks)
     print("=" * 72)
     print("ASI BOUNDARY CANDIDATES  (measurement only, not shipped)")
     print("=" * 72)
-    print(f"baseline: rules {rc}/{len(attacks)} catch, rules+nano {nc}/{len(attacks)} catch")
+    if nano_error is not None:
+        print(f"nano runtime : NOT AVAILABLE - rules-plus-nano NOT RUN")
+        print(f"               reason: {nano_error!r}")
+        print(f"               the NEW column below is measured against the "
+              f"RULES-ONLY baseline and is an UPPER BOUND.")
+        print(f"baseline: rules {rc}/{len(attacks)} catch, rules+nano NOT MEASURED")
+    else:
+        print(f"baseline: rules {rc}/{len(attacks)} catch, rules+nano {nc}/{len(attacks)} catch")
     print(f"{'candidate':<20}{'atk_catch':>10}{'NEW':>6}{'benign_FP':>11}")
     print("-" * 72)
     union_new, all_fp = set(), set()
