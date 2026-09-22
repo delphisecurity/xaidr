@@ -18,10 +18,16 @@ import os
 import sys
 import time
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-for _p in (ROOT, os.path.join(ROOT, "scripts")):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+# Which xaidr answered? See scripts/_provenance.py. The `scripts/` entry is for
+# the sibling imports below and has nothing to do with which xaidr resolves —
+# that distinction is why the insert was silent and is now announced.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from _provenance import bind, repo_root_of   # noqa: E402
+
+ROOT = repo_root_of(__file__)
+PROV = bind(__file__, extra_paths=(os.path.join(ROOT, "scripts"),))
 
 from build_benign_longform import MANIFEST, generate   # noqa: E402
 from longform_bounds import (                          # noqa: E402

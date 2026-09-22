@@ -39,9 +39,20 @@ import os
 import sys
 from collections import defaultdict
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# ── which xaidr answered? ────────────────────────────────────────────────────
+# This is the script the defect was caught on: run under the published 1.17.0
+# wheel it printed the same `A2A nodes walked: 274` as under 1.18.0, from a
+# wheel whose a2a_structural.py has no `_walk_a2a_nodes` at all — because the
+# bare `sys.path.insert(0, REPO)` it used to do made both runs measure the tree.
+# `bind` prints which copy answered before anything else. See _provenance.py.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from _provenance import bind, repo_root_of  # noqa: E402
+
+REPO = repo_root_of(__file__)
 CORPUS = os.path.join(REPO, "benign_a2a", "nested.jsonl")
-sys.path.insert(0, REPO)
+PROV = bind(__file__)
 
 from xaidr.scanner.a2a_structural import (  # noqa: E402
     A2AStructuralValidator,

@@ -48,22 +48,28 @@ import statistics
 import sys
 import time
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRIPT_DIR = os.path.join(REPO_ROOT, "scripts")
-
 # Measure THIS working tree, not whatever `xaidr` happens to be installed. Same
 # reasoning as corpus_report.py, and the same failure if it is skipped: the
 # table would silently describe a package you are not editing. SCRIPT_DIR is
-# added too so the provenance helper below imports under `python -m` as well as
+# added first so the provenance helper imports under `python -m` as well as
 # under `python scripts/benchmark.py`.
-sys.path.insert(0, REPO_ROOT)
+#
+# One provenance helper, not two — and it is no longer corpus_report's. It used
+# to be imported from there, which dragged that script's whole module body in
+# just to learn a path; it now lives in scripts/_provenance.py, which every
+# report in this directory binds through and which prints the banner itself.
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
+from _provenance import bind, repo_root_of  # noqa: E402
 
-# One provenance helper, not two. corpus_report.py already answers "which xaidr
-# produced this table and is it the repo copy", and a second implementation
-# would be a second thing to keep true.
-from corpus_report import _package_provenance  # noqa: E402
+REPO_ROOT = repo_root_of(__file__)
+PROV = bind(__file__)
+
+
+def _package_provenance():
+    """(path, version, is_repo_copy) for the `xaidr` this benchmark measured."""
+    return PROV.path, PROV.version, PROV.is_repo_copy
 
 WIDTH = 78
 

@@ -62,7 +62,12 @@ import os
 import sys
 from collections import defaultdict
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from _provenance import bind, repo_root_of  # noqa: E402
+
+REPO_ROOT = repo_root_of(__file__)
 FIXTURE = os.path.join(REPO_ROOT, "tests", "fixtures", "shell_corpus.json")
 PROSE_TEST = os.path.join(REPO_ROOT, "tests", "test_benign_prose.py")
 
@@ -77,13 +82,19 @@ PROSE_TEST = os.path.join(REPO_ROOT, "tests", "test_benign_prose.py")
 # (On this repo it did not even stay silent: an older, unrelated `xaidr`
 # raised TypeError on the `enforcement_mode` keyword.)
 #
-# The header prints the resolved package path and version, so the table always
+# The banner prints the resolved package path and version, so the table always
 # names what produced it and this line can never regress unnoticed.
 #
 # CI is unaffected in substance: the `corpus` job checks out the PR and runs
 # `pip install .` from the same tree, so both copies are the same code. This
 # only guarantees WHICH one is measured.
-sys.path.insert(0, REPO_ROOT)
+#
+# THE INSERT AND THE BANNER ARE NOW THE SAME CALL. They used to be two things
+# this file happened to do together, which is why the ten sibling scripts that
+# copied the insert did not copy the banner. `bind` is in scripts/_provenance.py
+# and prints before anything else; `_package_provenance` used to live here and
+# moved there unchanged.
+PROV = bind(__file__)
 
 WIDTH = 78
 
@@ -103,26 +114,12 @@ def _quiet(fn, *args, **kwargs):
 def _package_provenance():
     """Where the measured `xaidr` came from, and whether it is this repo.
 
-    Returns (path, version, is_repo_copy). Never raises: a report that cannot
-    name its package still prints, it just says so.
+    Returns (path, version, is_repo_copy). Kept as a shim because this name was
+    the one other scripts imported; the implementation moved to
+    scripts/_provenance.py, which is also what prints the banner. One
+    definition, not two.
     """
-    try:
-        import xaidr
-        raw = getattr(xaidr, "__file__", None)
-        version = getattr(xaidr, "__version__", "unknown")
-    except Exception as exc:  # pragma: no cover - main() already imported it
-        return f"<unresolvable: {exc}>", "unknown", False
-    if not raw:
-        # abspath("") is the CWD, which would name the repo by accident.
-        return "<no __file__>", version, False
-    path = os.path.abspath(raw)
-    # commonpath raises across Windows drive letters; a mismatch is the answer
-    # we want there anyway.
-    try:
-        is_repo_copy = os.path.commonpath([path, REPO_ROOT]) == REPO_ROOT
-    except ValueError:
-        is_repo_copy = False
-    return path, version, is_repo_copy
+    return PROV.path, PROV.version, PROV.is_repo_copy
 
 
 def _pct(hit: int, total: int) -> str:

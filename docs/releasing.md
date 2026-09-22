@@ -66,8 +66,24 @@ is public and a release you have not verified should not be.
 
 Not from the working tree, and not from an editable install. The tree is what
 you have been editing; the artifact is what a consumer gets, and the two differ
-in ways that only show up here — `docs/` ships in neither artifact, the wheel is
-`packages = ["xaidr"]` and the sdist is `["xaidr", "README.md", "pyproject.toml"]`.
+in ways that only show up here.
+
+**What each artifact carries, since this sentence was wrong for five releases.**
+The wheel is `packages = ["xaidr"]` — the package and its `rules/*.json`, and
+nothing else. The sdist used to be `include = ["xaidr", "README.md",
+"pyproject.toml"]`, and that list did not mean what it reads as: hatchling's
+patterns are gitignore-style, so the bare `README.md` matched **at any depth**
+and the built sdist listed `asi_battery/README.md`, `heldout/README.md` and
+three more — five pool directories present by name, holding no data. Reading
+that listing is how the 1.16.0 body concluded the pools shipped "measured from
+the built files".
+
+The sdist now carries `/xaidr`, `/scripts`, `/tests`, `/docs`, the five pool
+directories and the root prose, every pattern anchored with a leading `/`. So a
+U-1 regenerator can be run from a downloaded artifact and not only from a
+clone, which is what "verified from the built artifact" has to mean.
+`tests/test_sdist_contents.py` builds one and reads the tarball; CI runs it in
+the `rules-in-wheel guard` job against the sdist that job already built.
 
 ```
 git clone --branch "v$VERSION" --single-branch . /tmp/rel && cd /tmp/rel
@@ -99,6 +115,25 @@ Both halves are load-bearing and neither is optional:
 
 Anything the notes claim about the shipped package — a redaction, a boundary, a
 refusal shape — is measured here, in this interpreter, and the output is pasted.
+
+**Running a report script against the released artifact.** Every runnable script
+in `scripts/` now prints the resolved path and version of the `xaidr` it
+measured before it prints anything else, and takes `XAIDR_FROM_INSTALL=1` to
+measure an installed wheel instead of the tree:
+
+```
+cd / && XAIDR_FROM_INSTALL=1 /tmp/relvenv/bin/python -I \
+    /tmp/rel/scripts/benign_toolcall_report.py
+```
+
+The flag does not put the repo root on `sys.path`, and it **exits non-zero** if
+what it imported turns out to be a source tree anyway. That refusal is the point
+and it is not theoretical: eleven of these scripts used to `sys.path.insert(0,
+REPO)` silently, so `benign_a2a_report.py` run under the published 1.17.0 wheel
+printed the same `A2A nodes walked: 274` as under 1.18.0 — from a wheel whose
+`a2a_structural.py` has no `_walk_a2a_nodes` at all. The two runs agreeing was
+the only tell. `tests/test_report_provenance.py` enumerates the scripts and
+pins both halves.
 
 ### 4. Prove detection did not move, and name every change that did
 

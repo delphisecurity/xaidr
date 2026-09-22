@@ -383,9 +383,15 @@ commands, mostly quoted.
 Everything below regenerates from a clone:
 
 ```bash
-python scripts/intent_metrics.py   # catch rate, its denominator, and every excluded entry with its reason
-python scripts/corpus_report.py    # raw classified / detected / blocked counts; holds the benign gates
+python scripts/intent_metrics.py      # catch rate, its denominator, and every excluded entry with its reason
+python scripts/corpus_report.py       # raw classified / detected / blocked counts; holds the benign gates
+python scripts/policy_width_report.py # the policy-width table below, and every DevOps command each width costs
 ```
+
+Each of those prints the resolved path and version of the `xaidr` it measured
+before it prints anything else, so a table always names the code that produced
+it. They measure the working tree by default; `XAIDR_FROM_INSTALL=1` points them
+at an installed wheel instead and refuses to run against a checkout.
 
 **Coverage is reported by family, not per command, and deliberately so.** A
 published list of which individual commands do and do not fire is an evasion map.
@@ -491,6 +497,24 @@ stopped in your environment.
 gated — the action does not execute — at a cost of 5 of 38 ordinary DevOps
 operations requiring approval.** Benign commands stay at 0 of 78 under every
 policy width above.
+
+`python scripts/policy_width_report.py` regenerates every figure in that table
+and names the DevOps commands each width costs you, rather than leaving them a
+count. **That script is new, and until it existed this table had no
+regenerator at all** — a gap worth stating plainly, because the figures long
+outlived any way of checking them: they entered this file in a doc-only commit
+whose body said "Measured" and nothing else, and for five releases no script or
+test in the repository could recompute any of them. They turn out to have been
+right — the first run reproduced all eight exactly — but "right" was not
+something a reader could check, and U-1 does not accept a figure on that basis.
+`tests/test_policy_width.py` now parses this table out of this file and compares
+it to a live sweep, so it fails if a rule change moves a number here *and* if a
+number here changes without a sweep.
+
+The report also prints something the table cannot: of the ten corpus classes the
+widest policy binds, `classify()` can return only seven. `exfiltration`,
+`obfuscation` and `discovery` match nothing — the same mapping gap the
+"classified" note below describes, seen from the policy side.
 
 One thing to know before you write that rule: binding to `impact_tier` and
 binding to `impact_class` do not give the same result. The corpus labels a whole

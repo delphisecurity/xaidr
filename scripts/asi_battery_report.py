@@ -51,9 +51,18 @@ import sys
 import warnings
 from collections import defaultdict
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# ── which xaidr answered? ────────────────────────────────────────────────────
+# See scripts/_provenance.py: the repo root goes on sys.path (the default), the
+# resolved path and version are printed before any table, and
+# XAIDR_FROM_INSTALL=1 measures a published artifact instead and refuses a tree.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from _provenance import bind, repo_root_of  # noqa: E402
+
+REPO_ROOT = repo_root_of(__file__)
 BATTERY_DIR = os.path.join(REPO_ROOT, "asi_battery")
-sys.path.insert(0, REPO_ROOT)
+PROV = bind(__file__)
 
 from xaidr.sensor import DelphiSensor  # noqa: E402
 

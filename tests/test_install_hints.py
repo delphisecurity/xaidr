@@ -15,8 +15,15 @@ refused to work. It has two ways to be wrong and only one of them is obvious:
 person who wrote it had the dependency installed already. The three framework
 integrations quote — `pip install 'xaidr[crewai]'`, `'xaidr[langchain]'`,
 `'xaidr[haystack]'` — and nothing else in the package does. The policy hint is
-the one 1.17.0 fixes; the remaining nine occurrences are recorded as a strict
+the one 1.17.0 fixes; the remaining TEN occurrences are recorded as a strict
 xfail at the bottom of this file rather than left to be found again.
+
+TEN, NOT NINE. This file said nine for three releases because it scanned a
+hand-typed list of six files rather than the package. `xaidr/types.py:117` was
+not on the list and so was not counted. The list is gone — `_emitting_files()`
+walks `xaidr/` — and `test_the_hint_scan_reaches_every_file_in_the_package`
+cross-checks that walk against an independent `grep`, so the scope of this file
+can no longer be a thing someone remembered to update.
 """
 from __future__ import annotations
 
@@ -223,14 +230,85 @@ def test_the_parserless_scan_agrees_with_a_real_toml_parse():
 
 # ── every other hint: declared, always ───────────────────────────────────────
 
-_EMITTING_FILES = [
-    "xaidr/local_policy.py",
-    "xaidr/reporters.py",
-    "xaidr/scanner/nano.py",
-    "xaidr/integrations/crewai.py",
-    "xaidr/integrations/langchain.py",
-    "xaidr/integrations/haystack.py",
-]
+PACKAGE = REPO / "xaidr"
+
+
+def _emitting_files():
+    """Every `.py` file in the SHIPPED PACKAGE, walked — not a list.
+
+    This used to be six paths typed out by hand, and the list was short by two:
+    `xaidr/sensor.py` (bolted onto the xfail at the bottom and nowhere else) and
+    `xaidr/types.py`, which nothing looked at. So this file reported NINE
+    unquoted hints over a package that has ten.
+
+    The scope is the package because the package is what an operator installs:
+    a hint is wrong exactly when it ships, and everything under `xaidr/` ships.
+    A hint added to a module invented tomorrow is covered the day it is written,
+    with nothing to remember.
+    """
+    return sorted(
+        p.relative_to(REPO).as_posix()
+        for p in PACKAGE.rglob("*.py")
+        if "__pycache__" not in p.parts
+    )
+
+
+_EMITTING_FILES = _emitting_files()
+
+
+def _grepped_hint_files():
+    """The files that print a hint, enumerated by `grep` instead of by Python.
+
+    A SECOND, INDEPENDENT ENUMERATION — the same device as
+    `test_the_parserless_scan_agrees_with_a_real_toml_parse` above, applied to
+    the other question this file asks. `_EMITTING_FILES` answers "which files do
+    we look at"; this answers "which files is there anything to look at in", and
+    the two must agree or the scan has a blind spot.
+
+    The pattern is deliberately a SUPERSET of `_HINT`: no backreference, so a
+    mismatched-quote site (`pip install 'xaidr[nano]`) matches here and not
+    there. That direction is the safe one — a superset can only ever accuse the
+    scan of missing something, never excuse it for missing something.
+    """
+    grep = shutil.which("grep")
+    assert grep, "no `grep` on PATH; this is not a POSIX environment"
+    p = subprocess.run(
+        [grep, "-rlE", r"pip install +['\"]?xaidr\[[a-z,]+\]",
+         "xaidr", "--include=*.py"],
+        capture_output=True, text=True, cwd=str(REPO))
+    # grep exits 1 for "no matches", which is a real answer, not an error.
+    assert p.returncode in (0, 1), f"grep failed: {p.stderr.strip()}"
+    return sorted(ln for ln in p.stdout.splitlines() if ln.strip())
+
+
+def test_the_hint_scan_reaches_every_file_in_the_package():
+    """The scan must be ENUMERATED from the package, never a hand-kept list.
+
+    This is the defect, not a hypothetical: `_EMITTING_FILES` was six paths
+    typed out by hand, so this file reported NINE unquoted hints and there were
+    ten. The tenth is `xaidr/types.py:117`, which teaches the broken form in the
+    one comment a human is most likely to read it in — the explanation of the
+    nano false-positive range, sitting on the dataclass field that carries it.
+
+    A hand-kept list of the places a defect can occur is the same enumeration
+    failure the detectors in this repo have had five times. It cannot be fixed
+    by adding the tenth entry; it is fixed by not keeping a list.
+    """
+    grepped = _grepped_hint_files()
+    assert grepped, (
+        "grep found NO file in xaidr/ printing an install hint. Either the "
+        "pattern stopped matching or the package moved — in both cases every "
+        "assertion in this file is now passing over an empty set"
+    )
+    missed = sorted(set(grepped) - set(_EMITTING_FILES))
+    assert not missed, (
+        "files that print a `pip install xaidr[...]` hint and are NOT scanned "
+        "by this file:\n  " + "\n  ".join(missed) + "\n"
+        "Every assertion below runs over `_EMITTING_FILES`, so a hint in one of "
+        "these is unchecked: it can name an extra pyproject.toml does not "
+        "declare, or print a form zsh refuses, and this suite stays green. "
+        "Enumerate the package instead of listing it."
+    )
 
 
 def test_every_emitted_hint_names_a_declared_extra():
@@ -247,19 +325,24 @@ def test_every_emitted_hint_names_a_declared_extra():
 # ── found, not fixed: the same defect at five more sites ─────────────────────
 
 @pytest.mark.xfail(strict=True, reason=(
-    "FOUND, NOT FIXED. Nine sibling occurrences are unquoted for the same reason "
+    "FOUND, NOT FIXED. TEN sibling occurrences are unquoted for the same reason "
     "the policy one was — reporters.py x3 ([http] x2, [otel]), nano.py x4 "
-    "([nano]), sensor.py x2 ([nano], [http]). Three of those are raised at the "
-    "operator (reporters.py:388/447, nano.py:701/741); the rest are prose that "
-    "teaches the broken form. Every named extra is real; each is printed in a "
-    "shape zsh refuses. Out of scope for 1.17.0, which changed one line as "
-    "asked; recorded so it is not rediscovered from scratch. strict=True, so "
-    "this flips to a hard failure the moment they are fixed and the marker is "
-    "then deleted."
+    "([nano]), sensor.py x2 ([nano], [http]), types.py x1 ([nano]). Three of "
+    "those are raised at the operator (reporters.py:388/447, nano.py:701/741); "
+    "the rest are prose that teaches the broken form. Every named extra is "
+    "real; each is printed in a shape zsh refuses. Out of scope for 1.17.0, "
+    "which changed one line as asked; recorded so it is not rediscovered from "
+    "scratch. strict=True, so this flips to a hard failure the moment they are "
+    "fixed and the marker is then deleted.\n"
+    "\n"
+    "THE COUNT WAS NINE UNTIL THE SCAN WAS ENUMERATED. It said nine because "
+    "the list above it named six files and this line bolted on a seventh; "
+    "`xaidr/types.py:117` was in none of them. The number was a property of "
+    "the list, not of the package — which is the reason the list is gone."
 ))
 def test_todo_every_emitted_hint_survives_the_shell():
     unquoted = []
-    for relpath in _EMITTING_FILES + ["xaidr/sensor.py"]:
+    for relpath in _EMITTING_FILES:
         for quote, extra, whole in _hints_in(relpath):
             if not quote:
                 unquoted.append(f"{relpath}: {whole}")

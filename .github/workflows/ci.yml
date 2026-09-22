@@ -206,6 +206,17 @@ jobs:
       - name: Benign tool-call corpora (the false-positive bar, both pools)
         run: python scripts/benign_toolcall_report.py
 
+      # The README's policy-width table — 165/188/253/265 of 277 and 0/0/4/5 of
+      # 38 — had NO regenerator until this script. It arrived in a doc-only
+      # commit whose body said "Measured" and nothing else, and for five
+      # releases nothing in the repository could recompute any of the eight
+      # figures. Reported here for the same reason as the two above: the current
+      # numbers land in every PR log. The CONTRACT is tests/test_policy_width.py
+      # in the gate job, which parses the table out of README.md and compares it
+      # to a live sweep, so it fails in both directions.
+      - name: Policy width (regenerates the README policy table)
+        run: python scripts/policy_width_report.py
+
   # ── Rules-in-wheel guard (carries Step 1's package-data protection into CI) ─
   # A future change must never silently drop the rules/*.json package data and
   # ship a wheel that loads 0 rules. Build the wheel, assert all 7 JSON files are
@@ -231,6 +242,26 @@ jobs:
       - name: Assert 7 rules JSON ship in the wheel
         run: |
           python -c "import zipfile, glob; z = zipfile.ZipFile(glob.glob('dist/*.whl')[0]); js = [n for n in z.namelist() if n.endswith('.json')]; assert len(js) == 7, f'expected 7 rules JSON in wheel, got {len(js)}: {js}'; assert not any('_phase1' in n for n in z.namelist()), '_phase1 leaked into wheel'; print('rules-in-wheel OK:', len(js), 'rules ship')"
+
+      # ── Pools-in-sdist guard ────────────────────────────────────────────────
+      # The mirror of the wheel guard above, and it exists because the sdist
+      # shipped NO pool, NO script and NO test while its file listing showed
+      # five pool directories: `include = ["xaidr", "README.md", ...]` is
+      # gitignore-style, so a bare `README.md` matched at any depth and pulled
+      # asi_battery/README.md, heldout/README.md and three more into the listing
+      # with none of their data. That listing is what the 1.16.0 body read to
+      # conclude the pools were present "measured from the built files".
+      #
+      # This runs the assertion against the sdist `python -m build` ALREADY
+      # produced in this job, via XAIDR_SDIST — so the bytes checked are the
+      # bytes that would be uploaded, not a second build of the same tree.
+      - name: Assert the pools and regenerators ship in the sdist
+        run: |
+          # `.` because tests/conftest.py imports xaidr; hatchling because the
+          # wheel half of this file builds one (build isolation puts hatchling
+          # in a throwaway env the test session never sees).
+          pip install . pytest hatchling
+          XAIDR_SDIST="$(ls dist/*.tar.gz)" python -m pytest tests/test_sdist_contents.py -q
 
       - name: Clean-venv install loads rules + scans
         run: |

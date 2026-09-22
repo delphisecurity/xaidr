@@ -39,9 +39,22 @@ import sys
 import warnings
 from collections import defaultdict
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# ── which xaidr answered? ────────────────────────────────────────────────────
+# This script is cited as a U-1 regenerator, and until 1.18.0 it was a bare
+# `sys.path.insert(0, REPO)` with nothing printed: run under the published
+# 1.14.1 wheel it reported the 1.18.0 tree and said so nowhere. `bind` puts the
+# repo root on sys.path (the default, and what every committed figure here was
+# measured against), prints the resolved path and version FIRST, and under
+# XAIDR_FROM_INSTALL=1 leaves sys.path alone and refuses a source tree.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from _provenance import bind, repo_root_of  # noqa: E402
+
+REPO = repo_root_of(__file__)
 CORPUS = os.path.join(REPO, "benign_toolcalls", "corpus.jsonl")
-sys.path.insert(0, REPO)
+PROV = bind(__file__)
+
 from xaidr.sensor import DelphiSensor  # noqa: E402
 
 WIDTH = 82
