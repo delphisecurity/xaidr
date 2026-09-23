@@ -148,8 +148,9 @@ def _tracked_files():
     """Every git-tracked file under the must-ship directories.
 
     ENUMERATED, not listed — `git ls-files` also excludes the run outputs
-    .gitignore already names (heldout/last_run.json and friends), which are
-    regenerated and have no business in a distribution.
+    .gitignore already matches (`**/*last_run.json`, one glob rather than the
+    six literal paths it replaced), which are regenerated and have no business
+    in a distribution.
     """
     git = subprocess.run(
         ["git", "ls-files", "-z", *_MUST_SHIP_DIRS],

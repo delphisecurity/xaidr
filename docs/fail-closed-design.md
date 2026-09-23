@@ -815,12 +815,19 @@ $ PYTHONPATH=. python -m pytest tests/test_fail_closed_sabotage.py -q
 
 ```
 $ PYTHONPATH=. python -m pytest <all tests except the two new pools> -q -p no:randomly
-5895 passed, 15 skipped in 17.16s
-1446 passed, 49 skipped, 5 xfailed in 44.51s
-1221 passed, 73 skipped, 3 xfailed in 31.77s
+5895 passed, 15 skipped in 17.16s <!-- suite-count-ok: verbatim run output, evidence for this change, not a suite size -->
+1446 passed, 49 skipped, 5 xfailed in 44.51s <!-- suite-count-ok: verbatim run output, evidence for this change, not a suite size -->
+1221 passed, 73 skipped, 3 xfailed in 31.77s <!-- suite-count-ok: verbatim run output, evidence for this change, not a suite size -->
 ```
 
-Run in three chunks; a full-suite run has crashed this machine before.
+Run in three chunks; a full-suite run has crashed this machine before. The
+three figures are the transcript of **that** run on macOS arm64 — the evidence
+this change was regression-tested, not a statement of how large the suite is
+now. They go stale the moment anything lands, and that is fine, because nothing
+reads them as current. A count that IS meant to describe the suite today does
+not belong in a doc at all; see the guard in
+`tests/test_docs_no_published_suite_counts.py`, whose opt-out markers on the
+three lines above are what this paragraph is the reason for.
 
 Committed benign pools, before and after the change, at the default posture —
 identical:
