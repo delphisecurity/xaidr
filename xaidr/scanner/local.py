@@ -335,6 +335,24 @@ NANO_MIN_WORDS = 4
 NANO_FAMILY_SILENT = "none"
 
 
+#: Rules whose match is CONTACT data (an address a user or a tool handed the agent),
+#: not an attack. Inbound, they may flag but never block on their own. Real
+#: secrets (LLM06_aws_key, _github_token, _openai_key, _credential), card numbers
+#: and SSNs are deliberately NOT here. See tests/test_inbound_contact_pii.py.
+CONTACT_PII_RULES = frozenset({"LLM06_email", "LLM06_phone"})
+
+
+def _l1_score_without(threats, excluded) -> float:
+    """L1's own score over `threats` minus `excluded` rules, INCLUDING the
+    multi-category bonus l1.scan applies, so removing a rule removes its share of
+    that bonus too rather than leaving the others inflated by it."""
+    kept = [t for t in threats if t.rule not in excluded]
+    score = max((t.score for t in kept), default=0.0)
+    if len({t.category for t in kept}) >= 2:
+        score = min(1.0, score * 1.3)
+    return score
+
+
 def _FLAG_BAND_CAP(block_threshold: float, flag_threshold: float) -> float:
     """A score strictly inside the flag band [flag_threshold, block_threshold):
     just below the block threshold so a benign mention SURFACES (flag) without
@@ -594,6 +612,33 @@ class LocalScanner:
         # Fuse: never let compositional LOWER the score, never let a weak
         # L1/L2/DLP composite suppress a strong compositional signal.
         score = max(score, comp_score)
+
+        # --- Inbound contact-PII cap (email / phone) ----------------------------
+        # An address in INBOUND text (a user naming a recipient, a CRM or inbox
+        # MCP result) is data, not an attack. LLM06_email (0.92) and LLM06_phone
+        # (0.80) both sit above block_threshold, so on their own they blocked every
+        # such input in block mode. The test is counterfactual rather than a
+        # blanket downgrade: re-score WITHOUT the contact rules (and without the
+        # layer/category bonuses they contributed); if nothing else reaches the
+        # block band, the contact match alone was deciding, so cap into the flag
+        # band. An injection or a real secret that also contains an address still
+        # blocks, because it blocks without the address too. Output is untouched:
+        # egress PII belongs to the OUT_* rules. Only lowers a score; the later
+        # positive signals (bypass / encoding / URL / tail) can still raise it.
+        if (
+            direction != "output"
+            and score >= self.block_threshold
+            and any(t.rule in CONTACT_PII_RULES for t in l1_threats)
+        ):
+            without = max(
+                self._compute_composite(
+                    _l1_score_without(l1_threats, CONTACT_PII_RULES),
+                    l2_score, dlp_score,
+                ),
+                comp_score,
+            )
+            if without < self.block_threshold:
+                score = min(score, _FLAG_BAND_CAP(self.block_threshold, self.flag_threshold))
 
         # --- Benign-security MENTION cap (flag-band calibration) ----------------
         # Text that QUOTES or DOCUMENTS an attack (security docs, checklists, test
