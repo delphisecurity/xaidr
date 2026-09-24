@@ -127,6 +127,78 @@ jobs:
       - name: Run test suite
         run: python -m pytest -q
 
+  # ── Real frameworks, pinned — the only job where they are installed ────────
+  # Neither `test` config installs an agent framework (`dev` is pytest +
+  # hatchling), so every test in tests/test_real_frameworks.py SKIPS there and a
+  # green `pytest (…, full)` says nothing about real-library behaviour. This job
+  # installs the LangChain stack at the exact versions the tool-result seam
+  # (#26/#27) was verified against and runs that file.
+  #
+  # langgraph-prebuilt is pinned too: ToolNode lives there, not in langgraph,
+  # and it is the class whose return-type contract the seam must honour.
+  # crewai / deepagents / haystack are not installed; their classes skip here.
+  real-frameworks:
+    name: real frameworks (py3.12, langchain-core 1.6.1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install (package + pinned LangChain stack)
+        run: |
+          python -m pip install --upgrade pip
+          pip install . pytest \
+            "langchain-core==1.6.1" "langchain==1.4.1" \
+            "langgraph==1.2.12" "langgraph-prebuilt==1.1.0"
+          pip list 2>/dev/null | grep -iE '^(langchain|langgraph)'
+
+      - name: Run tests/test_real_frameworks.py
+        run: python -m pytest tests/test_real_frameworks.py -q -rs --junitxml=real-frameworks.xml
+
+      # THE GUARD. A real-framework test that skips when its library is absent
+      # passes vacuously: pytest exits 0 and the job goes green having run
+      # nothing. So this reads what pytest actually DID, from its own report,
+      # and turns "collected too few" or "skipped" into a red. The pytest step's
+      # exit code cannot do this — an all-skipped run is exit 0.
+      - name: Guard — TestRealToolResultSeam ran all 6, none skipped
+        run: |
+          python - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          CLASS, MINIMUM = "TestRealToolResultSeam", 6
+          cases = [c for c in ET.parse("real-frameworks.xml").iter("testcase")
+                   if c.get("classname", "").split(".")[-1] == CLASS]
+          skipped = [c.get("name") for c in cases if c.find("skipped") is not None]
+          broken = [c.get("name") for c in cases
+                    if c.find("failure") is not None or c.find("error") is not None]
+          ran = len(cases) - len(skipped) - len(broken)
+          print(f"{CLASS}: collected={len(cases)} passed={ran} "
+                f"skipped={len(skipped)} failed/errored={len(broken)}")
+          for name in skipped:
+              reason = next(c for c in cases if c.get("name") == name).find("skipped").get("message")
+              print(f"  SKIPPED {name}: {reason}")
+          problems = []
+          if len(cases) < MINIMUM:
+              problems.append(f"collected {len(cases)} < {MINIMUM} — the class was "
+                              "removed, renamed or deselected, so the tool-result "
+                              "seam is no longer checked against the real library")
+          if skipped:
+              problems.append(f"{len(skipped)} skipped — the framework is not "
+                              "installed in this job, so nothing was verified and "
+                              "pytest's exit 0 is vacuous")
+          if broken:
+              problems.append(f"{len(broken)} failed/errored: {broken}")
+          if problems:
+              sys.exit("GUARD RED: " + "; ".join(problems))
+          print("GUARD GREEN")
+          PY
+
   # ── The corpus report, printed into the log ────────────────────────────────
   # A reviewer reading a rule PR should see what the rule did to the corpus
   # without checking anything out, so the table goes in the job log. The script
