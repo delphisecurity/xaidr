@@ -72,6 +72,12 @@ _INTERACTION_TYPE = {
     "a2a": "a2a",
     "a2a_inbound": "a2a",   # a RECEIVED A2A message (same surface, inbound flow)
     "tool_call": "a2tool",
+    # A tool's RETURN value. Same surface as the call that produced it (a2tool),
+    # opposite flow — see _INTERACTION_DIRECTION. Both entries are required: each
+    # map is read with `.get()` and contributes its own attribute, so a direction
+    # present in one and absent from the other yields a HALF-MAPPED event with no
+    # error raised anywhere.
+    "tool_result": "a2tool",
     "mcp": "a2mcp",
     "llm": "a2llm",
 }
@@ -84,6 +90,18 @@ _INTERACTION_DIRECTION = {
     "a2a": "outbound",
     "a2a_inbound": "inbound",
     "tool_call": "outbound",
+    # The call goes out, the result comes back. A consumer counting inbound
+    # untrusted content must see a poisoned tool result in that count; while the
+    # MCP seam emitted this as "input" it was counted there, which is the same
+    # number by accident and the wrong attribution on purpose.
+    "tool_result": "inbound",
+    # KNOWN GAP, NOT INTRODUCED HERE: `mcp` and `llm` appear in
+    # _INTERACTION_TYPE above with no entry in this map. Nothing emits either
+    # today — there is no `direction="mcp"` or `direction="llm"` anywhere in the
+    # tree — so the defect is dormant, but it is the shape design §4 warns about:
+    # a value in one table keyed on direction and missing from its sibling.
+    # Asserted as a strict xfail in tests/test_tool_result_direction.py so it
+    # cannot be rediscovered from scratch.
 }
 
 

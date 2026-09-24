@@ -328,6 +328,28 @@ def scan_l1_dual_view(normalized: str, raw: str, output: bool = False):
 # sounds good") are the bulk of what would otherwise pay the model's latency.
 NANO_MIN_WORDS = 4
 
+#: The `direction` labels this scanner treats as ONE detection mode: inbound
+#: chat-shaped text that the model is about to read. Everything in this set gets
+#: the identical pipeline — same ruleset, same compositional mode, same
+#: dampeners, same nano gate — so which label a caller passes changes the AUDIT
+#: RECORD and nothing else.
+#:
+#: WHY THIS IS A SET AND NOT A LITERAL. Seven of the eight `direction` branches
+#: in `scan()` are written as `!= "output"` or `== "a2a"`, so a NEW inbound label
+#: falls into the `input` arm of each one automatically. The nano gate was the
+#: eighth and was written `== "input"` — so adding `tool_result` for its own
+#: sake, and nothing else, would have switched the ML layer OFF for every MCP
+#: tool result, which the seam has been running it on since the seam existed.
+#: A relabelling PR that silently narrows detection on the surface it is naming
+#: is worse than the conflation it fixes; naming the equivalence here is what
+#: makes the next direction's author face the question instead of inheriting it.
+#:
+#: `output` and `a2a` are deliberately ABSENT. Nano's published false-positive
+#: figure was measured on inbound chat-shaped text only; those two are out of its
+#: envelope until measured, and `tool_result` is in it only in the weaker sense
+#: that it has always been there under the other name. See docs/nano.md.
+_INBOUND_CHAT_DIRECTIONS = frozenset({"input", "tool_result"})
+
 # The family that means "nano said nothing" — the one value that must NEVER be
 # attributed as a detection. It is also what the fail-open inference path
 # returns, which is deliberate: one name for "no signal" and "no answer" means a
@@ -756,13 +778,18 @@ class LocalScanner:
         #
         # Scoped to inbound chat text. Nano's accepted numbers were measured on
         # chat-shaped input only; a2a and output are out of scope until measured.
+        # `_INBOUND_CHAT_DIRECTIONS` is that scope, written down: `tool_result`
+        # is in it because the MCP seam has always run nano on tool results —
+        # it reached here labelled "input" — so keeping it out would make naming
+        # the label a coverage REGRESSION. Read the constant's comment before
+        # adding a direction to it.
         nano_score = None
         nano_raw = None
         nano_family = None
         if (
             self.nano_enabled
             and score == 0.0
-            and direction == "input"
+            and direction in _INBOUND_CHAT_DIRECTIONS
             and len(scan_text.split()) >= NANO_MIN_WORDS
         ):
             nano_raw, nano_score, nano_family = self._run_nano(scan_text)

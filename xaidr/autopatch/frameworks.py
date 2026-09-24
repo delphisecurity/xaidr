@@ -877,7 +877,9 @@ def _patch_haystack(ctx: PatchContext) -> None:
         "offer the seam (the after_tool hook point runs once the result messages "
         "are in State); this build deliberately does not register there, so a "
         "tool returning an injected payload is not caught. Scan it yourself with "
-        "sensor.scan(result, direction='input') in an after_tool hook of your own.",
+        "sensor.scan(result, direction='tool_result') in an after_tool hook of "
+        "your own — 'tool_result', not 'input', so your audit trail does not "
+        "record a server's answer as something a principal asked for.",
     )
     ctx.note(
         "haystack: the seam is Agent.__init__, so an Agent CONSTRUCTED BEFORE "
@@ -958,11 +960,21 @@ def _patch_mcp(ctx: PatchContext) -> None:
 
         def after(result: Any, args: tuple, kwargs: dict) -> Any:
             # An MCP server's RESULT is untrusted inbound content — tool-result
-            # poisoning is the headline MCP attack, so it is scanned as input.
+            # poisoning is the headline MCP attack, so it is scanned.
+            #
+            # `direction="tool_result"`, NOT "input". This scanned as "input"
+            # until 1.20.0, which made a value a server RETURNED
+            # indistinguishable at the type level from a value a principal
+            # SUPPLIED — the strongest and the weakest provenance in the estate
+            # sharing one label, on the surface where the difference matters
+            # most. Detection is unchanged (`_INBOUND_CHAT_DIRECTIONS` in
+            # scanner/local.py keeps the two labels one pipeline); what changes
+            # is that telemetry, and any extension's `ScanRequest`, can now tell
+            # them apart.
             text = _mcp_result_text(result)
             if not text:
                 return result
-            verdict = ctx.sensor.scan(text, direction="input")
+            verdict = ctx.sensor.scan(text, direction="tool_result")
             if not verdict.must_halt:
                 return result
             name = kwargs.get("name") or (args[1] if len(args) > 1 else "unknown_tool")
@@ -979,8 +991,10 @@ def _patch_mcp(ctx: PatchContext) -> None:
 
     ctx.install(
         "mcp", "ClientSession.call_tool", "tool", factory,
-        "scans the tool name + arguments before the call leaves the client, and "
-        "scans the server's returned content as untrusted inbound text",
+        "scans the tool name + arguments before the call leaves the client "
+        "(direction=tool_call), and scans the server's returned content as "
+        "untrusted inbound text (direction=tool_result — NOT input, so a SIEM "
+        "and any extension can tell a server's answer from a principal's ask)",
     )
     ctx.note(
         "mcp: only the CLIENT session is patched. If this process also RUNS an "

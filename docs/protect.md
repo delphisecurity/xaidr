@@ -57,7 +57,7 @@ the reversal handle (`manifest.unprotect()`). Four rules govern it:
 | `crewai` | `hooks.register_before_tool_call_hook` (a **hook**, not a patch), `Crew.kickoff` | agent-driven tool calls + crew input |
 | `autogen-core` / `autogen` | `BaseTool.run_json`, `ConversableAgent.execute_function` | tool |
 | `llama-index` | `FunctionTool.call` / `.acall` | tool |
-| `mcp` | `ClientSession.call_tool` | tool arguments + the server's returned content |
+| `mcp` | `ClientSession.call_tool` | tool arguments (`direction=tool_call`) + the server's returned content (`direction=tool_result`) |
 | `haystack` | `components.agents.agent.Agent.__init__` | input + output + tool, via `delphi_hooks` injection. **Agents built *before* `protect()` are not covered** — a constructor seam cannot reach an object that already exists |
 
 **Known limits, in the manifest rather than the footnotes.** A framework
@@ -384,7 +384,9 @@ router = ConditionalRouter(routes=[
   this build deliberately does not register there, so a tool that returns an
   injected payload reaches the model verbatim. It is reported as
   `found_unpatchable` and pinned by a negative test. Close it yourself with an
-  `after_tool` hook calling `sensor.scan(result, direction="input")`.
+  `after_tool` hook calling `sensor.scan(result, direction="tool_result")` —
+  `"tool_result"`, not `"input"`, so the audit record does not attribute a
+  server's answer to the principal who made the request.
 * **A `Pipeline` with no `Agent` in it gets nothing.** These are the *Agent's*
   hooks. `Pipeline._run_component` calls `instance.run(**inputs)` on an
   arbitrary per-component dict with no notion of a user message, so there is no
