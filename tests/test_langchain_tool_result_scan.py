@@ -198,13 +198,26 @@ def test_a_refused_result_is_a_ToolMessage_when_the_caller_passed_a_tool_call_id
     out = _poisoned_tool().invoke(
         {"type": "tool_call", "name": "read_doc", "args": BENIGN_ARGS, "id": "call-1"}
     )
+    # Two failure modes, and they are different defects, so each names its own.
+    # Pre-fix the type is already right (the tool's own ToolMessage) and the
+    # CONTENT is the injection; under a refusal that ignores tool_call_id the
+    # content is right and the TYPE crashes the graph.
     assert isinstance(out, messages.ToolMessage), (
         f"a refused tool RESULT came back as {type(out).__name__}; the caller "
-        "was promised a ToolMessage"
+        "is a ToolNode or a create_agent tool loop and raises TypeError on "
+        "anything but a ToolMessage — a correct block would crash the graph it "
+        "was protecting (the 1.9.0 shape)"
     )
-    assert out.content.startswith(_REFUSAL)
+    assert out.content.startswith(_REFUSAL), (
+        f"the ToolMessage the ToolNode receives carries {out.content!r} — the "
+        "injection reached the model in the type it was expecting, which is the "
+        "worst of the two outcomes: nothing anywhere reports a problem"
+    )
     assert out.tool_call_id == "call-1"
-    assert out.status == "error"
+    assert out.status == "error", (
+        f"status={out.status!r} — a refusal marked 'success' tells the agent "
+        "loop the tool worked"
+    )
 
 
 def test_a_refused_result_is_a_plain_string_for_a_direct_caller():
@@ -215,7 +228,14 @@ def test_a_refused_result_is_a_plain_string_for_a_direct_caller():
     _protect(cap)
 
     out = _poisoned_tool().run(BENIGN_ARGS)
-    assert isinstance(out, str) and out.startswith(_REFUSAL), type(out).__name__
+    assert isinstance(out, str), (
+        f"a direct run(args) caller got {type(out).__name__}; it has always been "
+        "promised the raw content and every caller that parses the string breaks"
+    )
+    assert out.startswith(_REFUSAL), (
+        f"the direct caller received {out!r} — the tool's poisoned return value, "
+        "unrefused"
+    )
 
 
 # ── 4 · the negative half: a clean result is untouched ───────────────────────
