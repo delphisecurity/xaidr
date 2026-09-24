@@ -49,7 +49,7 @@ the reversal handle (`manifest.unprotect()`). Four rules govern it:
 |---|---|---|
 | `httpx` | `Client.send`, `AsyncClient.send` | destination policy (every verb), request body, response DLP |
 | `requests` | `Session.send` | same |
-| `langchain-core` | `BaseTool.run` / `.arun` | tool — also covers LangGraph's `ToolNode` and bare tool calls |
+| `langchain-core` | `BaseTool.run` / `.arun` | tool arguments (`direction=tool_call`) + the tool's **result** (`direction=tool_result`) — also covers LangGraph's `ToolNode` and bare tool calls |
 | `langgraph` | *(none — no seam of its own)* | tool only, transitively via `langchain-core`. Graph input/output: **not covered** |
 | `deepagents` | *(none — no seam of its own)* | input + output + tool **iff `protect()` ran before `import deepagents`**; otherwise tool only |
 | `langchain` | `agents.create_agent` | input + output + tool, via `delphi_middleware` injection |
@@ -186,6 +186,31 @@ class, taking the same `func_call` dict and returning the same
 factory and the same refusal shape. Measured against `pyautogen==0.2.35`: a
 blocked credential read executed once before, zero times after. A documented gap
 is still a gap, and documenting it is not the same as being unable to close it.
+
+**Tool RESULTS are scanned at the `langchain-core` and `mcp` seams, and not at
+the others.** A tool that fetches a poisoned document, reads a poisoned row or
+calls a poisoned MCP server is the inbound half of the tool boundary, and until
+1.20.0 the `BaseTool.run`/`.arun` seam had no `after` position at all — it scanned
+arguments and handed the return value to the model unread. It now scans the
+result as `direction="tool_result"`, on both the sync and async halves, and
+refuses it in the same type the caller was promised. What is *not* covered, said
+here rather than left to be discovered:
+
+| seam | arguments | result |
+|---|---|---|
+| `langchain-core` `BaseTool.run` / `.arun` | yes | **yes** |
+| `mcp` `ClientSession.call_tool` | yes | **yes** |
+| `crewai` `before_tool_call` hook | yes | no — the `after_tool_call` hook is registered but only restates our refusal in our own vocabulary; it reads `context.tool_result` and does not scan it |
+| `autogen-core` `BaseTool.run_json` | yes | no |
+| `autogen` `ConversableAgent.execute_function` / `a_execute_function` | yes | no |
+| `llama-index` `FunctionTool.call` / `.acall` | yes | no |
+| `haystack` `Agent` hooks | yes | no — reported as `found_unpatchable`; close it with your own `after_tool` hook |
+| `openai-agents` | n/a (no patchable tool seam) | n/a |
+
+A result with no strings in it (bytes, a file handle, an opaque object) is passed
+through unscanned rather than stringified — scanning a `repr` is neither what the
+model reads nor bounded. Scan those yourself with
+`sensor.scan(text, direction="tool_result")`.
 
 **Enforcement shape.** Tool boundaries return a `[BLOCKED]` / `[APPROVAL
 REQUIRED]` refusal the agent can read and recover from, rather than raising.

@@ -148,7 +148,7 @@ def install_langchain_core() -> types.ModuleType:
                 setattr(clone, key, value)
             return clone
 
-        def run(self, tool_input, **kwargs):
+        def _dispatch(self, tool_input, kwargs):
             # `tool_call_id` is keyword-only on the real signature and is set by
             # langchain's own `_prep_run_args` when the caller passed a ToolCall.
             # It is modelled because it is the RETURN CONTRACT: real
@@ -164,8 +164,21 @@ def install_langchain_core() -> types.ModuleType:
             )
             return _format_output(result, kwargs.get("tool_call_id"), self.name)
 
+        def run(self, tool_input, **kwargs):
+            return self._dispatch(tool_input, kwargs)
+
         async def arun(self, tool_input, **kwargs):
-            return self.run(tool_input, **kwargs)
+            # NOT `return self.run(...)`, and the difference is load-bearing.
+            # `arun` used to delegate to `run`, which meant the PATCHED `run`
+            # wrapper ran inside every async call and any assertion about the
+            # async seam could be satisfied by the sync one. The real
+            # `BaseTool.arun` goes `arun -> _arun -> coroutine` and never touches
+            # `run` (langchain-core 1.6.1), so a fake that delegates is a fake
+            # that cannot tell a patched `arun` from an unpatched one — the exact
+            # blindness `tests/test_async_tool_seam.py` exists to prevent, and
+            # the reason `arun` is pinned separately there. `_dispatch` is
+            # deliberately not a patch target, so each seam is observed alone.
+            return self._dispatch(tool_input, kwargs)
 
         def invoke(self, value, **kwargs):
             """The ToolCall-driven caller, which is the one that gets a message."""
