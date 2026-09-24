@@ -152,9 +152,9 @@ jobs:
       - name: Install (package + pinned LangChain stack)
         run: |
           python -m pip install --upgrade pip
-          pip install . pytest \
-            "langchain-core==1.6.1" "langchain==1.4.1" \
-            "langgraph==1.2.12" "langgraph-prebuilt==1.1.0"
+          # THROWAWAY: langgraph deliberately NOT installed (and not langchain,
+          # which depends on it) — the guard must go red while pytest exits 0.
+          pip install . pytest "langchain-core==1.6.1"
           pip list 2>/dev/null | grep -iE '^(langchain|langgraph)'
 
       - name: Run tests/test_real_frameworks.py
