@@ -290,6 +290,34 @@ def _langchain_refusal(text: str, name: str, kwargs: dict) -> Any:
         return text
 
 
+def _langchain_result_text(result: Any) -> Optional[str]:
+    """The scannable text a ``BaseTool.run`` return value carries, or None.
+
+    Three shapes, because ``run`` has three return contracts:
+
+    * a plain ``str`` — the direct-caller contract;
+    * a ``ToolMessage`` — the ToolCall-driven contract (``.content``, which is
+      itself either a ``str`` or a list of content blocks);
+    * anything else the tool happened to return. A tool returning rows, a dict
+      or a dataclass is the ORDINARY case, not the exotic one, so these are
+      walked with ``strings_in`` — the same bounded string-leaf collector the
+      entrypoint seams already use for untyped framework payloads.
+
+    Deliberately NOT ``str(result)``. Stringifying an arbitrary object scans its
+    ``repr``, which is neither the content the model will read nor bounded, and
+    on an ORM row or a response object it can drag private attributes into a
+    content hash. A shape with no strings in it yields None and is passed
+    through untouched.
+    """
+    if isinstance(result, str):
+        return result or None
+    content = getattr(result, "content", None)
+    if isinstance(content, str):
+        return content or None
+    parts = strings_in(content if content is not None else result, limit=64)
+    return "\n".join(parts) if parts else None
+
+
 def _patch_langchain_core(ctx: PatchContext) -> None:
     ctx.module("langchain_core.tools")
 
@@ -310,23 +338,73 @@ def _patch_langchain_core(ctx: PatchContext) -> None:
                 return None
             return Halt(_langchain_refusal(halt.value, name, kwargs))
 
-        return make_wrapper(orig, before=before)
+        def after(result: Any, args: tuple, kwargs: dict) -> Any:
+            # WHAT THE TOOL HANDED BACK. Until this hook existed, this seam
+            # scanned tool ARGUMENTS and nothing else — on the most-used tool
+            # boundary in the estate (every BaseTool, every LangGraph ToolNode
+            # dispatch, every create_agent tool call, CrewAI's langchain
+            # interop). A tool that fetched a poisoned document, read a poisoned
+            # row or called a poisoned MCP server passed that content to the
+            # model verbatim. The MCP seam has scanned its results since it was
+            # written; this one had no position to scan from.
+            #
+            # `_MW_TOOL_SCANNED` IS DELIBERATELY NOT CONSULTED HERE, and the
+            # asymmetry with `before` above is the whole point. That guard is set
+            # for the entire duration of the middleware's `wrap_tool_call`,
+            # INCLUDING the `handler(request)` call that runs this very method, and
+            # it exists because the middleware scans the same ARGUMENTS. The
+            # middleware does not scan results — it returns `handler(request)`
+            # unexamined — so there is nothing here to double-count, and adding
+            # the check "for symmetry" would leave every create_agent tool result
+            # unscanned. Pinned by
+            # tests/test_langchain_tool_result_scan.py::
+            # test_the_middleware_guard_suppresses_the_argument_scan_and_not_the_result_scan
+            text = _langchain_result_text(result)
+            if not text or not text.strip():
+                return result
+            tool = args[0] if args else None
+            name = getattr(tool, "name", None) or "unknown_tool"
+            verdict = ctx.sensor.scan(text, direction="tool_result")
+            if not verdict.must_halt:
+                return result
+            message = (
+                f"[{'APPROVAL REQUIRED' if verdict.requires_approval else 'BLOCKED'}] "
+                f"The result returned by tool '{name}' was blocked by security "
+                f"policy ({verdict.category or 'policy'})."
+            )
+            # The refusal goes back through the SAME type discrimination the
+            # before path uses. A new return path is a new chance to repeat
+            # 1.9.0 — a correct verdict delivered as a `str` where a ToolMessage
+            # was promised crashed a LangGraph host — and `kwargs` carries the
+            # `tool_call_id` here exactly as it does on the way in.
+            return _langchain_refusal(message, name, kwargs)
+
+        return make_wrapper(orig, before=before, after=after)
 
     ctx.install(
         "langchain_core.tools", "BaseTool.run", "tool", factory,
-        "every sync tool invocation is scan_tool_call'd before it executes; a "
-        "halting verdict returns the refusal instead of running the tool — as a "
-        "ToolMessage when the caller passed a tool_call_id (a ToolNode or "
-        "create_agent tool call), as the refusal string otherwise",
+        "every sync tool invocation is scan_tool_call'd before it executes, and "
+        "the tool's RESULT is scanned on the way back (direction=tool_result); a "
+        "halting verdict on either returns the refusal instead of the tool's "
+        "output — as a ToolMessage when the caller passed a tool_call_id (a "
+        "ToolNode or create_agent tool call), as the refusal string otherwise",
     )
     ctx.try_install(
         "langchain_core.tools", "BaseTool.arun", "tool", factory,
-        "same coverage on the async tool path (ainvoke)",
+        "same coverage, arguments and result, on the async tool path (ainvoke)",
     )
     ctx.note(
         "langchain_core: BaseTool.run/arun is a class-method seam, so it covers "
         "tools defined before protect(), tools executed by a LangGraph ToolNode, "
         "and tools called directly — not just tools inside create_agent()."
+    )
+    ctx.note(
+        "langchain_core: a tool RESULT is scanned as whatever text it carries — "
+        "a str, a ToolMessage's content, or the string leaves of a structured "
+        "return (bounded at 64). A result with no strings in it is passed "
+        "through unscanned rather than stringified, so a tool returning bytes, a "
+        "file handle or an opaque object is NOT result-scanned; scan those "
+        "yourself with sensor.scan(text, direction='tool_result')."
     )
 
 

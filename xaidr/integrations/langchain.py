@@ -103,6 +103,17 @@ def delphi_middleware(
     * OUTPUT (``after_model``): scans the model's generated text via
       ``scan_output``. A ``blocked`` verdict jumps to ``end`` with a refusal.
 
+    **TOOL RESULTS ARE NOT SCANNED HERE, AND WHERE THEY ARE SCANNED DEPENDS ON
+    HOW YOU INSTALLED THIS.** ``wrap_tool_call`` returns ``handler(request)``
+    unexamined, so this middleware never looks at what a tool handed back. Under
+    ``xaidr.protect()`` that is covered anyway — the ``BaseTool.run``/``.arun``
+    patch underneath scans the result as ``direction="tool_result"``, and the
+    re-entrancy guard between the two suppresses only the duplicate ARGUMENT
+    scan. Passing ``middleware=[delphi_middleware(...)]`` yourself installs no
+    such patch, so in THAT configuration a tool returning an injected payload
+    reaches the model verbatim. Call ``protect()``, or scan results yourself
+    with ``sensor.scan(text, direction="tool_result")``.
+
     All scans emit telemetry via the sensor's reporter regardless of mode; in
     monitor mode nothing blocks (block verdicts are downgraded by the sensor).
     Every boundary fails OPEN — a scan fault lets the agent proceed (the sensor's

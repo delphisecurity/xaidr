@@ -192,6 +192,24 @@ def _attack_langchain_core_atool():
     return asyncio.run(tool.arun({"command": SHELL_ATTACK}))
 
 
+def _attack_langchain_core_poisoned_result():
+    """The ARGUMENTS are innocent; the RESULT is the attack.
+
+    Deliberately a different attack shape from the two rows above: those scan
+    `{"command": SHELL_ATTACK}` on the way in, so they would pass with the after
+    hook absent. Nothing here is objectionable until the tool returns.
+    """
+    tools = sys.modules["langchain_core.tools"]
+    tool = tools.BaseTool("read_doc", lambda path: INJECTION)
+    return tool.run({"path": "readme.md"})
+
+
+def _attack_langchain_core_poisoned_result_async():
+    tools = sys.modules["langchain_core.tools"]
+    tool = tools.BaseTool("read_doc", lambda path: INJECTION)
+    return asyncio.run(tool.arun({"path": "readme.md"}))
+
+
 def _import_httpx():
     import httpx  # noqa: F401 — protect() only patches what is already imported
 
@@ -311,6 +329,11 @@ BOUNDARIES: list[Boundary] = [
              _attack_langchain_core_tool, "tool:sync", {}),
     Boundary("langchain_core", ["langchain_core"], fakes.install_langchain_core,
              _attack_langchain_core_atool, "tool:async", {}),
+    Boundary("langchain_core", ["langchain_core"], fakes.install_langchain_core,
+             _attack_langchain_core_poisoned_result, "tool:poisoned-result", {}),
+    Boundary("langchain_core", ["langchain_core"], fakes.install_langchain_core,
+             _attack_langchain_core_poisoned_result_async,
+             "tool:poisoned-result-async", {}),
     Boundary("langchain", ["langchain", "langchain_core"],
              lambda: (fakes.install_langchain_core(), fakes.install_langchain()),
              _attack_langchain_input, "input", {}),
