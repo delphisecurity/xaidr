@@ -702,6 +702,52 @@ outbound HTTP, LangChain middleware and Haystack `Agent(hooks=...)`.
 
 ---
 
+## LangChain middleware
+
+```bash
+pip install "xaidr[langchain]"
+```
+
+One middleware object, one sensor, all three agent boundaries. Pass it to
+`create_agent`:
+
+```python
+from langchain.agents import create_agent
+from xaidr.integrations.langchain import delphi_middleware
+
+agent = create_agent(
+    model="anthropic:claude-sonnet-4-5",
+    tools=[search_tool, send_email],
+    middleware=[delphi_middleware(agent_id="support-agent",
+                                  enforcement_mode="block")],
+)
+```
+
+| Boundary | Hook | On block |
+|---|---|---|
+| Input | `before_model` → `scan` (or `scan_a2a` for a JSON-RPC A2A envelope) | refusal `AIMessage`, jump to end |
+| Tool call | `wrap_tool_call` → `scan_tool_call`, name + args, **before execution** | refusal `ToolMessage`; the tool is **not** invoked |
+| Output | `after_model` → `scan_output` | refusal `AIMessage`, jump to end |
+
+`enforcement_mode` defaults to `"monitor"` (scan and report, never block). All
+three hooks fail open.
+
+**Or let `xaidr.protect()` wire it.** With `langchain` imported first,
+`protect()` patches `langchain.agents.create_agent` to inject
+`delphi_middleware`, and patches `langchain_core.tools.BaseTool.run` / `.arun`
+so tool calls outside an agent — LangGraph's `ToolNode`, a bare `tool.invoke()`
+— are scanned too. Both seams share one sensor, and a tool call that crosses
+both is scanned once, not twice. The seam on `create_agent` is a module
+function, so it does not reach a name you already bound with
+`from langchain.agents import create_agent` before calling `protect()`; the
+manifest says which seams it reached.
+
+**Full guide — every hook, the MCP note, the import-order rule, and what
+LangGraph does and does not get:
+[docs/protect.md#langchain-middleware](https://github.com/delphisecurity/xaidr/blob/main/docs/protect.md#langchain-middleware).**
+
+---
+
 ## A2A protocol inspection
 
 This is the capability most guardrails don't have at all.
