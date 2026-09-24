@@ -258,7 +258,7 @@ internal fault lets the run proceed rather than taking your agent down.
   def scan_tool_results(state):
       for message in state.data.get("messages", []):
           if message.is_from("tool"):
-              sensor.scan(message.tool_call_result.result, direction="input")
+              sensor.scan(message.tool_call_result.result, direction="tool_result")
 
   hooks.setdefault("after_tool", []).append(scan_tool_results)
   ```

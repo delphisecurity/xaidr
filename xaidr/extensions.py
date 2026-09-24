@@ -78,8 +78,23 @@ class ScanRequest:
     """What is being scanned, at whichever boundary it arrived on.
 
     ``direction`` is the sensor's own vocabulary and is the field an extension
-    should branch on: ``"input"``, ``"output"``, ``"tool_call"``, ``"a2a"``
-    (outbound) or ``"a2a_inbound"``.
+    should branch on: ``"input"``, ``"output"``, ``"tool_call"``,
+    ``"tool_result"``, ``"a2a"`` (outbound) or ``"a2a_inbound"``.
+
+    ``"tool_result"`` IS NOT ``"input"``, AND THE DISTINCTION IS THE POINT.
+    Both are inbound text that the model will read, and until this label existed
+    the MCP seam scanned a server's ``CallToolResult`` as ``"input"`` — so at the
+    type level a value a tool RETURNED and a value a principal SUPPLIED were the
+    same thing. An extension implementing any rule of the form "a delegated
+    action may not be authorised by content that came back from the thing it is
+    delegating to" had nothing to branch on, and tool-result poisoning arrived
+    carrying the label of the one source a deployment trusts most.
+
+    The split is a LABEL, not a detection mode: the same bytes get the same
+    verdict under either, which ``tests/test_tool_result_direction.py`` asserts
+    over a payload set and at the one place in ``LocalScanner`` that read
+    ``"input"`` literally. A new direction that quietly moved a verdict would be
+    worse than the conflation it replaced.
 
     ``text`` is the scan input and is ``None`` on boundaries that do not have a
     single text body (a tool call carries ``tool_name`` plus

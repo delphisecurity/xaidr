@@ -292,7 +292,7 @@ who wants the distinction.
 |---|---|
 | `xaidr_event_type` | `scan`, `circuit_breaker` |
 | `xaidr_action` | `allowed`, `flagged`, `blocked`, `approval_required` |
-| `xaidr_direction` | `input`, `output`, `tool_call`, `a2a`, `a2a_inbound` |
+| `xaidr_direction` | `input`, `output`, `tool_call`, `tool_result`, `a2a`, `a2a_inbound` |
 | `xaidr_enforcement_mode` | `monitor`, `block` |
 | `xaidr_destination_type` | `external_api`, `tool_call`, `mcp_server` |
 | `xaidr_impact_tier` | `medium`, `high`, `critical` |

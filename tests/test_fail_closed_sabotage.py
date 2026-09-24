@@ -373,8 +373,8 @@ def _enable_broken_nano(s):
     test neither has nor needs: the site under test is the EXCEPTION arm, and a
     fake classifier that raises exercises it exactly. Setting the flag on the
     scanner is what makes the gate in `local.py` (`self.nano_enabled and score
-    == 0.0 and direction == "input" and len(words) >= NANO_MIN_WORDS`) admit
-    the call.
+    == 0.0 and direction in _INBOUND_CHAT_DIRECTIONS and len(words) >=
+    NANO_MIN_WORDS`) admit the call.
     """
     s._scanner.nano_enabled = True
     s._scanner._nano = _BrokenNano()

@@ -38,6 +38,17 @@ flush and stop one early.
 | `flush()` / `close_sync()` | sync telemetry flush / shutdown |
 | `await close()` | async shutdown |
 
+**`direction` is the audit label, not a detection switch.** `scan()` accepts
+`"input"` (a principal's text), `"tool_result"` (what a tool or MCP server
+returned), `"output"` (model output — use `scan_output()`) and `"a2a"` /
+`"a2a_inbound"` (A2A envelopes — use `scan_a2a()`). `"input"` and
+`"tool_result"` run the **identical** pipeline and give the same bytes the same
+verdict; they differ in what the telemetry event, and any extension's
+`ScanRequest`, records about where the text came from. Pass `"tool_result"` for
+anything a tool handed back: a result that says *"ignore your instructions"* is
+the headline MCP attack, and recording it as `"input"` attributes it to the user
+who merely asked a question.
+
 Direct scan APIs return `ScanResult`; check `.action` (one of the
 [four values](#the-four-action-values)), or the `.is_blocked` /
 `.is_allowed` / `.requires_approval` / `.must_halt` properties. `.must_halt` is
