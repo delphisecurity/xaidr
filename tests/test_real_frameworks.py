@@ -944,6 +944,213 @@ class TestRealLangGraph:
         )
 
 
+@requires_langgraph
+class TestRealToolResultSeam:
+    """The AFTER position of ``BaseTool.run``/``.arun``, on the real library.
+
+    Everything above scans a tool's ARGUMENTS. #27 added the scan of what the
+    tool RETURNED, and every assertion it shipped ran against
+    ``fake_frameworks`` — a fake whose ``arun`` contract was written by the same
+    hand as the seam it tests. These re-assert the two claims that matter on
+    real ``langchain_core`` + ``langgraph``:
+
+    1. a real ``arun`` return value reaches the after position and a poisoned
+       one is refused;
+    2. a real ``ToolNode`` accepts the refusal ``ToolMessage`` built on the
+       RESULT path — the 1.9.0 crash (right verdict, wrong return type) is as
+       reachable from the new return path as it was from the old one.
+
+    The tool's arguments are innocent and its result is the attack, so a pass
+    here cannot be coming from the arguments scan.
+    """
+
+    ARGS = {"path": "readme.md"}
+    BENIGN = "The Q3 report was filed on the 14th by the Lisbon office."
+
+    class _Cap:
+        def __init__(self):
+            self.events: list = []
+
+        def report(self, batch):
+            self.events.extend(batch)
+
+        def close(self, *a, **k):
+            pass
+
+        def directions(self):
+            return [e["data"].get("direction") for e in self.events
+                    if isinstance(e.get("data"), dict)]
+
+    @pytest.fixture
+    def bits(self):
+        from langchain_core.language_models.chat_models import BaseChatModel
+        from langchain_core.messages import AIMessage
+        from langchain_core.outputs import ChatGeneration, ChatResult
+        from langchain_core.tools import tool
+        from langgraph.graph import END, START, MessagesState, StateGraph
+        from langgraph.prebuilt import ToolNode
+
+        ran: list = []
+        result = {"text": INJECTION}
+
+        @tool
+        def read_doc(path: str) -> str:
+            """Read a document from the knowledge base."""
+            ran.append(path)
+            return result["text"]
+
+        call = AIMessage(content="", tool_calls=[{
+            "name": "read_doc", "args": self.ARGS,
+            "id": "call_r1", "type": "tool_call",
+        }])
+
+        class ScriptedModel(BaseChatModel):
+            @property
+            def _llm_type(self) -> str:
+                return "scripted"
+
+            def bind_tools(self, tools, **kwargs):
+                return self
+
+            def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+                return ChatResult(generations=[ChatGeneration(message=call)])
+
+        def build():
+            model = ScriptedModel()
+            graph = StateGraph(MessagesState)
+            graph.add_node(
+                "model", lambda s: {"messages": [model.invoke(s["messages"])]}
+            )
+            graph.add_node("tools", ToolNode([read_doc]))
+            graph.add_edge(START, "model")
+            graph.add_edge("model", "tools")
+            graph.add_edge("tools", END)
+            return graph.compile()
+
+        return read_doc, build, ran, result
+
+    def _protect(self, cap):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", XaidrProtectionWarning)
+            return xaidr.protect(agent_id="real-result", enforcement_mode="block",
+                                 quiet=True, reporter=cap)
+
+    @staticmethod
+    def _run_graph(graph, how):
+        import asyncio
+
+        from langchain_core.messages import HumanMessage
+
+        state = {"messages": [HumanMessage(content="summarise the readme")]}
+        if how == "ainvoke":
+            return asyncio.run(graph.ainvoke(state))
+        return graph.invoke(state)
+
+    # ── control ──────────────────────────────────────────────────────────
+
+    def test_control_the_poisoned_result_reaches_the_graph_unprotected(self, bits):
+        """A refusal that also happens with the feature off proves nothing."""
+        from langchain_core.messages import ToolMessage
+
+        _, build, ran, _ = bits
+        out = self._run_graph(build(), "invoke")
+        delivered = [m for m in out["messages"] if isinstance(m, ToolMessage)]
+        assert ran == ["readme.md"] and delivered[-1].content == INJECTION, (
+            "the poisoned result did not reach the graph unprotected — the "
+            "attack itself is broken, so a refusal below would mean nothing"
+        )
+
+    # ── 1 · a real arun return reaches the after position ────────────────
+
+    def test_a_benign_arun_result_is_scanned_and_returned_unchanged(self, bits):
+        import asyncio
+
+        read_doc, _, _, result = bits
+        result["text"] = self.BENIGN
+        cap = self._Cap()
+        manifest = self._protect(cap)
+        try:
+            out = asyncio.run(read_doc.arun(self.ARGS))
+        finally:
+            manifest.unprotect()
+        assert "tool_result" in cap.directions(), (
+            "a real BaseTool.arun return never reached the after position — "
+            "every tool result on the async path goes to the model unscanned "
+            f"(directions scanned: {cap.directions()})"
+        )
+        assert out == self.BENIGN, (
+            f"the after position altered a clean tool result: {out!r}"
+        )
+
+    def test_a_poisoned_arun_result_is_refused(self, bits):
+        import asyncio
+
+        read_doc, _, ran, _ = bits
+        manifest = self._protect(self._Cap())
+        try:
+            out = asyncio.run(read_doc.arun(self.ARGS))
+        finally:
+            manifest.unprotect()
+        assert ran == ["readme.md"], "the tool did not run — this is not the result path"
+        assert isinstance(out, str) and out.startswith("[BLOCKED]"), (
+            "a real tool returned an injection through arun and the seam handed "
+            f"it to the caller verbatim: {out!r}"
+        )
+
+    def test_a_tool_call_driven_arun_gets_the_refusal_as_a_ToolMessage(self, bits):
+        """``ainvoke(tool_call)`` is how a ToolNode reaches ``arun``: langchain
+        unpacks the call and passes ``tool_call_id=``. That caller was promised
+        a ToolMessage, and it must get one from the result path too."""
+        import asyncio
+
+        from langchain_core.messages import ToolMessage
+
+        read_doc, _, _, _ = bits
+        manifest = self._protect(self._Cap())
+        try:
+            out = asyncio.run(read_doc.ainvoke({
+                "name": "read_doc", "args": self.ARGS,
+                "id": "call_direct", "type": "tool_call",
+            }))
+        finally:
+            manifest.unprotect()
+        assert isinstance(out, ToolMessage), (
+            f"a ToolCall-driven caller got {type(out).__name__} from the result "
+            "path — a ToolNode raises TypeError on anything but a ToolMessage"
+        )
+        assert out.tool_call_id == "call_direct"
+        assert "[BLOCKED]" in out.content and INJECTION not in out.content, (
+            f"the ToolMessage carries the poisoned result: {out.content!r}"
+        )
+
+    # ── 2 · a real ToolNode accepts the result-path refusal ──────────────
+
+    @pytest.mark.parametrize("how", ["invoke", "ainvoke"])
+    def test_a_real_ToolNode_accepts_the_result_path_refusal(self, bits, how):
+        from langchain_core.messages import ToolMessage
+
+        _, build, ran, _ = bits
+        cap = self._Cap()
+        manifest = self._protect(cap)
+        try:
+            out = self._run_graph(build(), how)
+        finally:
+            manifest.unprotect()
+        tool_messages = [m for m in out["messages"] if isinstance(m, ToolMessage)]
+        assert tool_messages, f"no ToolMessage — the graph did not survive ({how})"
+        refusal = tool_messages[-1]
+        assert "[BLOCKED]" in refusal.content and INJECTION not in refusal.content, (
+            f"the ToolNode delivered the poisoned tool result to the model on "
+            f"{how}: {refusal.content!r}"
+        )
+        assert refusal.tool_call_id == "call_r1"
+        assert refusal.status == "error"
+        assert ran == ["readme.md"] and "tool_result" in cap.directions(), (
+            f"blocked, but not on the result path: ran={ran} "
+            f"directions={cap.directions()}"
+        )
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Deep Agents — the real `deepagents` package
 # ═══════════════════════════════════════════════════════════════════════

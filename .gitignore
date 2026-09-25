@@ -37,3 +37,7 @@ docs/internal/
 # Long-form benign corpus: 10M characters, regenerated from the committed
 # seed + generator and pinned by benign_longform/manifest.json.
 benign_longform/corpus.jsonl
+
+# Worktree-local venv for real-framework verification (the tracked .venv is a
+# symlink to a shared one and must not have frameworks installed into it).
+.venv-lc161/
