@@ -96,7 +96,7 @@ After the open downgrade logic, `for ext: result = ext.transform_verdict(req, re
 
 New test: an extension that downgrades every verdict; assert telemetry still carries the original action and `circuit_state` still opens (the same shape as `test_circuit_breaker.py:201`).
 
-### S7 · enforcement policy object (was H7) — seven sites, BUILT (commit 29b3430)
+### S7 · enforcement policy object (was H7) — seven sites, BUILT (the preceding commit)
 
 `enforcement_mode` was compared as a string literal in six places plus one membership test: `_circuit_is_blocking`, `_apply_mode`, three sites in the tool-argument hard-category path (`_scan_tool_call_impl` region), `LocalScanner.scan` (which collapses block→flagged inside the scanner before the sensor sees it), and the constructor's `not in ("monitor", "block")`. The recon listed four; the grep found seven. **Census lesson: enumerate sites from the tree, never from a document's line list.**
 
