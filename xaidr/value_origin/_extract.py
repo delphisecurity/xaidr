@@ -24,7 +24,7 @@ import dataclasses
 import re
 from typing import Any, Iterator, List, Mapping, Tuple
 
-from ._authority import PARSE_FAILURE, classify_value
+from ._authority import ParseFailure, classify_value
 from ._types import (
     MAX_ARG_DEPTH,
     MAX_ARG_LEAVES,
@@ -103,7 +103,9 @@ def extract_destinations(arguments: Mapping[str, object] | None
     A leaf yields a finding iff its WHOLE value is one destination or a
     comma/semicolon list of mailboxes. A destination-shaped value that does not
     parse yields ``Finding(destination=None, reason=PARSE_FAILURE)`` (V-4,
-    ruling 3.2); a walk that hits a bound yields exactly one
+    ruling 3.2), followed by one finding per mailbox-list part that did parse
+    (R1, 2026-10-03), so an untrusted part decides the wire; a walk that hits a
+    bound yields exactly one
     ``Finding(destination=None, reason=WALK_BOUND)``. Never raises: an internal
     fault is one PARSE_FAILURE finding, because an unparseable call is not a
     call with no destination.
@@ -118,9 +120,11 @@ def extract_destinations(arguments: Mapping[str, object] | None
             res = classify_value(leaf, arg_mode=True)
             if res is None:
                 continue
-            if res is PARSE_FAILURE:
+            if isinstance(res, ParseFailure):
                 out.append(Finding(path=path, destination=None,
                                    reason=UnresolvedReason.PARSE_FAILURE))
+                out.extend(Finding(path=path, destination=a, reason=None)
+                           for a in res.parsed)
             elif isinstance(res, list):
                 out.extend(Finding(path=path, destination=a, reason=None) for a in res)
             else:

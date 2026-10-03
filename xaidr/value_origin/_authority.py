@@ -1,4 +1,5 @@
-"""Per-scheme authority — the one normaliser (§6 C-6, V-19..V-23, rulings 3.2/3.6).
+"""Per-scheme authority — the one normaliser (§6 C-6, V-19..V-23, rulings 3.2/3.6,
+R1/R4 of 2026-10-03).
 
     mailto:<local@domain>   the full mailbox, local part .lower(), domain as
                             UTS-46 A-labels. No plus-stripping, no dot removal:
@@ -184,20 +185,41 @@ def _host_authority(raw_host: str, *, arg_fallback: bool) -> Optional[Authority]
 
 # ── URLs ─────────────────────────────────────────────────────────────────────
 _SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]{0,31})://")
+# R4 (2026-10-03): a WHATWG special scheme other than file: (C-6) takes its
+# authority after ANY run of '/' and '\', so `http:evil.test`, `http:/evil.test`,
+# `http:\\evil.test` and `http:///evil.test` all name evil.test. Such a value is
+# rewritten to `scheme://` and parsed as one. A non-special scheme with no `//`
+# has no host (`gopher:evil.test`), as WHATWG and urllib.parse agree.
+_SPECIAL_RE = re.compile(r"^(https?|wss?|ftp):[/\\]*(?=[^\s/\\])", re.IGNORECASE)
 # V-19: `host/path` with no scheme — ≥2 labels, alphabetic final label, and a
 # path. Labels are \w so a Unicode host is accepted here too (ruling 3.6).
 _IMPLIED_RE = re.compile(r"^((?:[\w\-]{1,63}\.){1,126}[^\W\d_]{1,63})/")
+# R4 (2026-10-03): no scheme, a STRICT address literal (a dotted quad, or IPv6 in
+# brackets), then a port, path, query or fragment — `169.254.169.254/latest`.
+# Strict because V-19 confines the integer spellings (hex, decimal, octal, short
+# dotted) to a URL host: `2024/report` is a path, not 0.0.7.232.
+_IMPLIED_IP_RE = re.compile(r"^(\[[0-9A-Fa-f:.]{2,45}\]|[0-9]{1,3}(?:\.[0-9]{1,3}){3})"
+                            r"(?::[0-9]{1,5}(?![^/?#])|(?=[/?#]))")
 _NON_DESTINATION_SCHEMES = frozenset({"file", "data"})
 
 # Sentinels for the argument walk's three-way answer.
 NOT_A_DESTINATION = None
 
 
-class _ParseFailure:
-    """Destination-shaped and unparseable: UNRESOLVED, never no_destination."""
+class ParseFailure:
+    """Destination-shaped and unparseable: UNRESOLVED, never no_destination.
+
+    ``parsed`` holds the parts of a mailbox list that DID parse (R1, 2026-10-03):
+    the value is still UNRESOLVED as a whole, and each of them is its own finding.
+    """
+
+    __slots__ = ("parsed",)
+
+    def __init__(self, parsed=()) -> None:
+        self.parsed: Tuple[Authority, ...] = tuple(parsed)
 
 
-PARSE_FAILURE = _ParseFailure()
+PARSE_FAILURE = ParseFailure()
 
 
 def _url_host(value: str):
@@ -305,21 +327,29 @@ def _mailbox_part(part: str) -> Optional[Authority]:
 
 def mailbox_list(value: str):
     """Ruling 3.2: a value with '@' that is not a URL is a mailbox list. Every
-    part must parse, or the WHOLE value is PARSE_FAILURE. Empty parts (a trailing
-    separator) are skipped."""
+    part must parse, or the WHOLE value is a ParseFailure. Empty parts (a
+    trailing separator) are skipped.
+
+    R1 (2026-10-03): the failure carries every part that DID parse, and each is
+    its own finding, so an untrusted part decides the wire. Without it,
+    `evil@x.example, junk` is UNRESOLVED, and UNRESOLVED never blocks. Quoting
+    that does not balance is junk too: the value fails, and its separators are
+    taken literally to find the parts that parse (`evil@x.example, "`)."""
     parts = _split_mailbox_list(value)
-    if parts is None:
-        return PARSE_FAILURE
+    failed = parts is None
+    if failed:
+        parts = re.split(r"[,;]", value)
     out = []
     for part in parts:
         if not part.strip():
             continue
         a = _mailbox_part(part)
         if a is None:
-            return PARSE_FAILURE
-        out.append(a)
-    if not out:
-        return PARSE_FAILURE
+            failed = True
+        else:
+            out.append(a)
+    if failed or not out:
+        return ParseFailure(out)
     return out
 
 
@@ -343,11 +373,14 @@ def phone_authority(text: str) -> Optional[Authority]:
 def classify_value(value: str, *, arg_mode: bool):
     """The whole-value classifier behind ``authority_of`` and the argument walk.
 
-    Returns NOT_A_DESTINATION (None), PARSE_FAILURE, an Authority, or — for a
+    Returns NOT_A_DESTINATION (None), a ParseFailure (whose ``parsed`` may hold
+    the parts of a mailbox list that did parse, R1), an Authority, or — for a
     mailbox list — a list of Authorities. Order (ruling 3.2 as settled
-    2026-09-24): a URL is tried first, so a URL carrying '@' is still a URL;
-    otherwise a value with '@' is a mailbox list; then a phone; then a bare
-    strict IP. Bare hostnames are never destinations here (V-19).
+    2026-09-24): a URL is tried first, so a URL carrying '@' is still a URL —
+    including a special scheme with no `//` and a strict IP literal followed by
+    a port or path (R4); otherwise a value with '@' is a mailbox list; then a
+    phone; then a bare strict IP. Bare hostnames are never destinations here
+    (V-19).
     """
     v = value.strip()
     if not v or len(v) > MAX_LEAF_CHARS:
@@ -357,12 +390,21 @@ def classify_value(value: str, *, arg_mode: bool):
         if not addr:
             return NOT_A_DESTINATION           # mailto: with no address (C-6)
         return mailbox_list(addr) if arg_mode else _single(mailbox_list(addr))
+    m = _SPECIAL_RE.match(v)
+    if m:
+        v = m.group(1) + "://" + v[m.end():]
     if _SCHEME_RE.match(v):
         if any(c.isspace() for c in v):
             return PARSE_FAILURE if arg_mode else NOT_A_DESTINATION
         return url_authority(v, arg_mode=arg_mode)
-    if _IMPLIED_RE.match(v) and not any(c.isspace() for c in v):
-        return implied_url_authority(v, arg_mode=arg_mode)
+    if not any(c.isspace() for c in v):
+        if _IMPLIED_RE.match(v):
+            return implied_url_authority(v, arg_mode=arg_mode)
+        m = _IMPLIED_IP_RE.match(v)
+        if m:
+            ip = _strict_ip(m.group(1))
+            if ip is not None:
+                return Authority(scheme="ip", value=ip_key(ip))
     if "@" in v:
         res = mailbox_list(v)
         return res if arg_mode else _single(res)
@@ -379,7 +421,7 @@ def classify_value(value: str, *, arg_mode: bool):
 def _single(res):
     if isinstance(res, list):
         return res[0] if len(res) == 1 else NOT_A_DESTINATION
-    if res is PARSE_FAILURE:
+    if isinstance(res, ParseFailure):
         return NOT_A_DESTINATION
     return res
 
@@ -388,8 +430,10 @@ def authority_of(value: str) -> Authority | None:
     """The per-scheme normaliser (§6 C-6). ``None`` = not a destination.
 
     Accepts one addr-spec mailbox (optionally ``display <addr>`` or
-    ``mailto:``), a ``scheme://host…`` URL, a V-19 ``host/path``, a ``+`` phone,
-    or a bare strict IP. A bare hostname is NOT a destination (V-19). A URL host
+    ``mailto:``), a ``scheme://host…`` URL (a special scheme without the ``//``
+    too, R4), a V-19 ``host/path``, a strict IP literal alone or followed by a
+    port, path, query or fragment (R4), or a ``+`` phone. A bare hostname is NOT
+    a destination (V-19). A URL host
     that fails UTS-46 still yields ``dns:<raw host lowercased>`` (V-23). Never
     raises.
     """

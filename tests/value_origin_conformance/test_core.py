@@ -16,7 +16,16 @@ import json
 
 import pytest
 
-from xaidr.value_origin import WireValue, row_text, unbind_ledger
+from xaidr.value_origin import (
+    Mode,
+    WireValue,
+    bind_fresh_ledger,
+    evaluate_call,
+    record_tool_result,
+    row_text,
+    should_block,
+    unbind_ledger,
+)
 
 from .harness import (
     HERE,
@@ -128,6 +137,41 @@ def test_supplementary_case(case):
     got = observed(v, outcomes if "record_outcomes" in exp else None)
     problems = diff(exp, got)
     assert not problems, f"{case['id']} ({case['rule']}):\n  " + "\n  ".join(problems)
+
+
+# R1 (2026-10-03) is a ruling about BLOCKING, so it is pinned at should_block
+# under ENFORCE, not only at the wire: an untrusted part beside junk blocks, and
+# a trusted or principal part beside junk does not newly block.
+R1_BLOCKS = {
+    "R32-untrusted-plus-bad-part": True, "R32-untrusted-junk-before": True,
+    "R32-untrusted-junk-semicolon": True, "R32-two-untrusted-parts": True,
+    "R32-untrusted-unbalanced-quote": True,
+    "R32-trusted-plus-junk": False, "R32-one-bad-part": False,
+}
+SUPPLEMENTARY_BY_ID = {c["id"]: c for c in SUPPLEMENTARY}
+
+
+@pytest.mark.parametrize("cid", sorted(R1_BLOCKS))
+def test_r1_an_untrusted_part_beside_junk_blocks_and_a_trusted_one_does_not(cid):
+    v, _ = run_supplementary(SUPPLEMENTARY_BY_ID[cid])
+    got = should_block(v, mode=Mode.ENFORCE)
+    assert got is R1_BLOCKS[cid], (
+        f"{cid}: should_block under ENFORCE is {got}, R1 says {R1_BLOCKS[cid]} — "
+        + ("an untrusted mailbox walked through behind a junk part" if R1_BLOCKS[cid]
+           else "a trusted mailbox beside junk now BLOCKS, which R1 forbids"))
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "found, not fixed (2026-10-03): junk in the SAME part as the address. R1 works "
+    "on the parts of a ','/';' split; `evil@x.example <` has one part, and it fails. "
+    "email.utils.getaddresses reads [('', 'evil@x.example'), ('', '')] out of it."))
+def test_r1_residual_junk_inside_the_part_still_hides_an_untrusted_mailbox():
+    bind_fresh_ledger()
+    record_tool_result("web_fetch", {"url": "https://news.example/"}, "evil@x.example",
+                       designations=(), result_blocked=False)
+    v = evaluate_call("send_email", {"to": "evil@x.example <"}, flow_active=True)
+    assert should_block(v, mode=Mode.ENFORCE), (
+        f"wire {v.wire.value}: an untrusted mailbox walked through behind '<'")
 
 
 def test_row_text_matches_the_committed_export():
