@@ -1,0 +1,20 @@
+{
+  "cases": 620,
+  "commit": "01450c7bbf5f05de31aacb6e94b4b451b1426ac6",
+  "expected_sha256": "31fd220c7522e62e2de9697e52fb18ab8b2b9b67fb055fdaef2702086bbd015c",
+  "inputs": {
+    "classes.py": {
+      "path": "bench/action-path-corpus/classes.py",
+      "sha256": "565121f25d58f29e4a341098afa1aa11e712e26b41c0aa173668fe34a6255437"
+    },
+    "corpus.jsonl": {
+      "path": "bench/action-path-corpus/corpus.jsonl",
+      "sha256": "2fdd4ada66277694ffa20c179779990616953d1cbd33851f500ee6b2d4c81cec"
+    },
+    "reference_ledger.py": {
+      "path": "bench/action-path-corpus/reference_ledger.py",
+      "sha256": "4053415bf80e762fca51ae37e5d861780f007eb2d63005fb41de72c801745df4"
+    }
+  },
+  "repo": "github.com/delphisecurity/delphi-sentinel"
+}

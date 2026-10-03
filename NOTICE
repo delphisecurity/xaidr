@@ -2,3 +2,15 @@ xaidr
 Copyright 2026 Delphi Security Inc.
 
 This product includes software developed at Delphi Security Inc.
+
+This product includes data from the Public Suffix List
+(https://publicsuffix.org/list/public_suffix_list.dat), vendored as
+xaidr/value_origin/_psl_data.py. That file is subject to the terms of the
+Mozilla Public License, v. 2.0. A copy of the MPL is available at
+https://mozilla.org/MPL/2.0/.
+
+This product includes data derived from the Unicode Character Database and
+the Unicode IDNA Compatibility Processing tables (UTS #46), version 13.0.0,
+vendored as xaidr/value_origin/_idna_data.py. Copyright (c) 1991-2020
+Unicode, Inc. Distributed under the Unicode License Agreement - Data Files
+and Software (https://www.unicode.org/license.txt).
