@@ -164,6 +164,23 @@ def test_s10_a_drop_makes_a_miss_ledger_saturated_and_hits_still_answer(caplog):
                               result_blocked=False) is RecordOutcome.RECORDED
 
 
+def test_r1_a_parsed_part_that_misses_in_a_saturated_ledger_reports_saturation():
+    """R1 with §1.4 step 5: a part that parsed is a destination like any other.
+    After a drop, `x@…, junk` whose part misses is LEDGER_SATURATED, as S10's
+    list is; before R1 the part was invisible and the value read UNRESOLVED. An
+    untrusted part still outranks the blind spot."""
+    bind_fresh_ledger()
+    record_tool_result("web_fetch", {}, "evil@x.example", designations=(),
+                       result_blocked=False)
+    _fill_to(LEDGER_MAX_ENTRIES - 1)            # evil@x.example is the other one
+    assert record_tool_result("filler", {}, "over@x.example", designations=(),
+                              result_blocked=False) is RecordOutcome.SATURATED
+    assert _wire("never@x.example, junk") is WireValue.LEDGER_SATURATED, (
+        "a junk part hid a destination the saturated ledger cannot vouch for")
+    assert _wire("evil@x.example, junk") is WireValue.UNTRUSTED_SOURCE, (
+        "an untrusted part beside junk walked through a saturated ledger")
+
+
 def test_v16d_destinations_are_a_separate_unit_from_ngrams():
     """V-16(d), settled 2026-09-24: a long prompt whose n-grams overflow the cap
     drops its n-grams, not the principal's addresses."""

@@ -163,19 +163,25 @@ Each is listed so it can be overruled, not so it can pass unnoticed.
    `email.utils.getaddresses` reads `evil@x.example` out of it.
 2. **R1's finding order.** The whole-value `parse_failure` finding comes first,
    then the parts that parsed, in text order.
-3. **R4: what may follow the IP literal.** The ruled spelling is a dotted quad
+3. **R1 in a saturated ledger.** A part that parsed is a destination like any
+   other, so §1.4 step 5 applies to it. After a drop, `x@…, junk` whose part
+   misses reports `ledger_saturated`; before R1 the part was invisible and the
+   value read `unresolved`. Neither blocks, and an untrusted part still outranks
+   the blind spot
+   (`test_r1_a_parsed_part_that_misses_in_a_saturated_ledger_reports_saturation`).
+4. **R4: what may follow the IP literal.** The ruled spelling is a dotted quad
    with a path. A port alone (`10.0.0.5:80`), a query and a fragment count too,
    and so does IPv6 in brackets. Each is the same address with a different
    locator.
-4. **R4 takes strict literals only.** The integer spellings stay
+5. **R4 takes strict literals only.** The integer spellings stay
    `no_destination` with no scheme; see the list below.
-5. **R4's accepted costs.**
+6. **R4's accepted costs.**
    - A CIDR like `10.0.0.0/8` now reads as `ip:10.0.0.0`. That is UNRESOLVED
      unless something recorded it.
    - A special-scheme value containing whitespace (`http:evil.test/a b`) is now
      `parse_failure`, which `http://evil.test/a b` already was.
    - `HTTP: 404` is not a URL, because a space follows the colon.
-6. **R4 also reaches prose and results.** The prose URL scan already matched
+7. **R4 also reaches prose and results.** The prose URL scan already matched
    `http:///evil.test` but found it hostless and blanked it. Now it records
    `evil.test`. Prose `http:evil.test` was already recorded, by the bare-host
    scan.
