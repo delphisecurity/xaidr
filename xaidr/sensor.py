@@ -759,9 +759,13 @@ class DelphiSensor:
         # that reads it lands on its own milestone, measured against the C-11
         # gate (tests/test_value_origin_c11.py), which this storage exists to
         # let construct OFF and RECORD sensors side by side.
+        # A2 M4: NO LONGER INERT. RECORD (the default) and ENFORCE evaluate every
+        # tool call in scan_tool_call, attach ScanResult.value_origin, and log one
+        # no_flow warning per sensor (Q6). The comment above predates M4.
         self._value_origin = _vo.validate_mode(value_origin)
         self._value_origin_sources = _vo.validate_designations(value_origin_sources)
         self._vo_no_flow_warned = False          # Q6: one no_flow warning per sensor
+        self._vo_attach_fault_logged = False
         self._vo_lock = threading.Lock()
         if self._value_origin is _vo.Mode.ENFORCE:
             # ONE warning, and only for ENFORCE. Two facts an operator must not
@@ -2204,16 +2208,30 @@ class DelphiSensor:
         server_name: Optional[str] = None,
     ) -> ScanResult:
         """Scan a tool call. Value origin is evaluated FIRST (A2 M4, V-7a):
-        before the gates, the breaker and ``_resolve_provenance``, which can
-        start a flow. Its verdict is attached to whatever comes back, so every
+        before the gates, the breaker and ``_resolve_provenance`` (V-7a). Its verdict is attached to whatever comes back, so every
         exit carries it (C-13): the main path, the circuit-open, gate,
         fail-closed, scan-error and not-scannable ones. Attaching it once,
-        here, means a new exit path cannot be added without it. RECORD and
+        here, means no exit INSIDE this method can miss it; a caller that
+        builds a fresh result afterwards must carry it, as
+        autopatch.tool_verdict does (M4 review). RECORD and
         ENFORCE evaluate; nothing acts on the verdict until M8."""
         cv = self._value_origin_verdict(tool_name, arguments)
         result = self._scan_tool_call_unattached(
             tool_name, arguments, mcp_server, origin_context, server_name)
-        return result if cv is None else replace(result, value_origin=cv)
+        if cv is None:
+            return result
+        try:
+            return replace(result, value_origin=cv)
+        except Exception:
+            # An S6 transform_verdict may return any object with a valid
+            # `.action`; replace() raises on a non-dataclass. Dropping the
+            # field (absent, never null) is strictly better than raising into
+            # the host. Logged once per sensor (M4 silent-failure review).
+            if not self._vo_attach_fault_logged:
+                self._vo_attach_fault_logged = True
+                logger.exception("xaidr: value origin could not attach its verdict to a "
+                                 "%s result; the field is omitted", type(result).__name__)
+            return result
 
     def _value_origin_verdict(self, tool_name, arguments):
         """``evaluate_call`` for this call, or None (OFF, or a fault: the field

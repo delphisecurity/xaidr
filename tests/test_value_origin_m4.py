@@ -70,3 +70,51 @@ def test_no_flow_then_ledger_absent_after_begin_flow(seen):
 
 def test_q6_the_first_no_flow_call_warns_once_naming_begin_flow(seen):
     check_q6(seen)
+
+
+def test_the_attach_never_raises_into_the_host_on_a_non_dataclass_result(caplog):
+    """M4 silent-failure review: the attach sits outside scan_tool_call's
+    fail-open body, and an S6 transform_verdict may hand back any object whose
+    `.action` is valid (only that is checked). dataclasses.replace() raises on
+    a non-dataclass, which would turn every tool call into an exception. The
+    result must come back unmodified, and the fault must be logged once."""
+    import logging
+    import warnings
+    from xaidr.provenance_chain import clear_flow
+
+    class _Duck:                              # what a careless extension returns
+        def __init__(self, r):
+            self._r = r
+
+        def __getattr__(self, k):
+            return getattr(self._r, k)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = xaidr.Sensor(agent_id="m4-duck", value_origin="record", reporter=m4._Null())
+    real = s._scan_tool_call_unattached
+    s._scan_tool_call_unattached = lambda *a, **k: _Duck(real(*a, **k))
+    clear_flow()
+    with caplog.at_level(logging.ERROR, logger="xaidr.sensor"):
+        r1 = s.scan_tool_call("http_get", {"url": "https://api.example.com/"})
+        r2 = s.scan_tool_call("http_get", {"url": "https://api.example.com/"})
+    assert isinstance(r1, _Duck) and r1.action == "allowed" and isinstance(r2, _Duck)
+    faults = [x for x in caplog.records if "value origin" in x.getMessage() and x.levelno >= logging.ERROR]
+    assert len(faults) == 1, f"the attach fault should be logged exactly once, got {len(faults)}"
+
+
+def test_autopatch_tool_blocked_result_keeps_the_verdict():
+    """autopatch.tool_verdict builds a FRESH TOOL_BLOCKED result after the
+    wrapper; it must carry the verdict (M4 review: this claim had no test)."""
+    import warnings
+    from xaidr.autopatch.core import tool_verdict
+    from xaidr.provenance_chain import clear_flow
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = xaidr.Sensor(agent_id="m4-autopatch", value_origin="record", reporter=m4._Null())
+    s._blocked_tools = ("wipe_disk",)
+    clear_flow()
+    r = tool_verdict(s, "wipe_disk", {"path": "/"})
+    assert r is not None and r.rules == ["TOOL_BLOCKED"], r
+    assert r.value_origin is not None and r.value_origin.wire.value == "no_flow", (
+        f"the TOOL_BLOCKED exit lost value_origin: {r.value_origin!r}")

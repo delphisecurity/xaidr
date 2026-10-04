@@ -55,6 +55,10 @@ SPELLINGS = {
         True, "still flagged; rule net.local_file_scheme -> net.metadata_link_local, 0.85 -> 0.90"),
     "http://0x_A9FEA9FE/": (True, "no longer an address (M3a digit check): no resolver reads `_`"),
     "http://0_251.254.169.254/": (True, "no longer an address (M3a digit check)"),
+    # Q22 re-ruled and R4 in url_parse (75f5a2a), declared after the M4 review
+    "https://000169.254.000169.254/latest": (True, "Q22: the macOS resolver reads it as 169.254.169.254"),
+    "https://0x1A9FEA9FE/latest": (True, "Q22: integer wrap; the macOS resolver reaches 169.254.169.254"),
+    "https:metadata.google.internal/computeMetadata/v1/": (True, "R4 hostname: WHATWG reaches the metadata name"),
     # no longer link_local: no consumer reaches it
     "http://١٦٩.٢٥٤.١٦٩.٢٥٤/latest": (True, "Arabic-Indic digits: no consumer"),
     # controls: must not move

@@ -395,12 +395,12 @@ decides (R1/Q1's shape), and url_parse picks it up through `classify_value`.
 Paid pin: SEMANTIC. `expected.jsonl` gains the `Q22-rerule-macos-decimal-quad`
 row.
 
-## Decided 2026-10-04 (A2): R4 binds url_parse too — the M3 xfail contradicted it
+## Decided 2026-10-04 (A2): R4 binds url_parse too — the M3 xfail contradicted it *(qualified below)*
 
 W1's R4 rules that `http:evil.test` (a special scheme with no `//`) names
 `evil.test`. M3 pinned `http:metadata.google.internal/` as a strict xfail in
 url_parse ("`host` stays urlsplit's"). **These are the same obligation, not two
-different ones, so the xfail contradicted a settled ruling and is fixed.**
+different ones, so the xfail contradicted a settled ruling and is fixed.** *[Qualified by the M4 milestone review: §2.1 limited M3 to `address` ("Only `address` comes from the core"), and R4 was ruled for the core's extraction. The accurate framing is a known gap CLOSED BY CHOICE under Q2's superset rule, not a breach of a ruling. The detection delta it causes is now declared in `url_parse_deltas.py`.]*
 
 - R4 is a fact about the CONSUMERS: WHATWG, i.e. Node fetch and undici-backed MCP
   servers, sends that spelling to that host. It is not a value-origin policy.

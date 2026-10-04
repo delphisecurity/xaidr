@@ -1029,8 +1029,10 @@ is named open.
 - `scan_tool_call` evaluates `evaluate_call` FIRST: before the gates, the
   breaker and `_resolve_provenance` (V-7a).
 - It attaches `ScanResult.value_origin` once, around the whole body, so every
-  exit carries it (C-13). This replaces the plan's attach-at-each-exit, and a
-  new exit path cannot be added without it.
+  exit carries it (C-13). This replaces the plan's attach-at-each-exit. ~~A new exit path cannot be
+  added without it.~~ *[Retracted, M4 review: a caller that builds a fresh
+  result after the wrapper loses the verdict. `autopatch.tool_verdict`
+  carries it, and that is now tested.]*
 - OFF evaluates nothing.
 - `autopatch.tool_verdict`'s fresh `TOOL_BLOCKED` result keeps the verdict.
 - Q6, as ruled: the first `no_flow` call per sensor logs ONE warning naming
@@ -1096,6 +1098,77 @@ ENFORCE, from wheels: **all 18 identical**, P-input block `80f31ff0b5d5`.
 
 **Still strict xfails, as planned:** 4a-I (M6), 4a-R (M7) and 4b (M8).
 `no_destination` and `truncated` are unreachable until M5 binds a ledger.
+
+---
+
+## M4 fresh-context reviews, and what changed after them (`9ac4474` → the next commit)
+
+**CI on `9ac4474`: green.** 13 of 13 checks, run `37178759851`, including
+the full `pytest` matrix.
+
+**silent-failure-hunter, medium-high.** `replace(result, value_origin=cv)` sat
+outside the fail-open body. An extension's `gate` or `transform_verdict` can
+return a non-dataclass with a valid `.action`, and the attach then raised into
+the host. **Fixed:** the result comes back unmodified, and the fault is logged
+once per sensor. Red first:
+
+```
+E  TypeError: replace() should be called on dataclass instances
+```
+
+**milestone-reviewer.** Every red, every sabotage, the outside run and a
+Linux leg reproduced. What it found:
+1. The same `replace()` defect, from the `gate` path as well. Fixed above.
+2. **The DEFAULT `Sensor` (`value_origin="record"`) now logs the Q6 warning
+   on its first unflowed tool call.** That reaches every existing user who
+   never calls `begin_flow()`, and nothing said so. It is stated here and in
+   the report. The stale "INERT" comment in `sensor.py` is corrected in
+   place. README and `docs/api.md` still say nothing about `value_origin`.
+   **Not done.**
+3. **The autopatch claim had no test.** Now it has one. Red with the line
+   removed: `the TOOL_BLOCKED exit lost value_origin: None`. "A new exit path
+   cannot be added without it" is retracted in place.
+4. **`75f5a2a` moved detection, undeclared** (on OFF wheels):
+   `https://000169.254.000169.254/latest`, `https://0x1A9FEA9FE/latest` and
+   `https:metadata.google.internal/…` all went `allowed` → `flagged`. They
+   are now declared. Base `f95f5df` against this tree gives `moved=30
+   declared=30 undeclared_moves=[]`, and OFF, RECORD and ENFORCE are
+   identical on every spelling.
+5. **The Q22 change over-reads on Linux, and no gate names it.**
+   - `010.0.0.1` reaches public `8.0.0.1` on glibc, and url_parse reports
+     `private`.
+   - None of the Q22 spellings are in either gate's corpus.
+   - This is the ruling's intended effect (read on every platform), but §2.3
+     rule 2 wants a named class. **Open.**
+6. **Integer wraps that land in public space are still exempt.** On macOS,
+   `4311810312` resolves to `1.1.1.8`. Under ENFORCE, an untrusted public IP
+   in the ledger is reachable through that spelling. The ruling's text says
+   "integer wrap is NOT exempt", and its reason is sensitivity. **Held for
+   the owner:** read ALL macOS readings in the core, or only sensitive ones?
+7. **R4 framing.** "Contradicted a settled ruling" overreached, because §2.1
+   limited M3 to `address`. It is qualified in place as a gap closed by
+   choice under Q2.
+8. **`c11_oracle --compare` crashed** on a base wheel that already has
+   `value_origin=`. Fixed: it falls back to the base's OFF digests. Run on
+   `75f5a2a` against M4, it says `cross-commit: all identical`.
+
+**Refuted by the reviewer:**
+- A re-raise path that loses the verdict: none. Contract errors carry no
+  `ScanResult`.
+- V-7a: it holds. The docstring's reason ("which can start a flow") was
+  wrong and is fixed.
+
+**Final M4 tree.** The files are `tests/test_value_origin_m4.py`,
+`tests/outside/test_m4_from_the_wheel.py`,
+`tests/outside/test_m3_url_parse_from_the_wheel.py`,
+`tests/test_value_origin_c11.py`, `tests/test_differential_oracles.py`,
+`tests/value_origin_conformance`, `tests/test_url_classes.py` and
+`tests/test_seam_zero_movement.py`:
+
+```
+== macOS 3.12.2    574 passed, 13 xfailed
+== linux 3.12.14   574 passed, 13 xfailed
+```
 
 ---
 

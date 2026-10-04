@@ -42,7 +42,7 @@ def test_the_driver_ran_the_installed_wheel(installed):
 
 @pytest.mark.parametrize("url", [u for u, (moves, why) in SPELLINGS.items()
                                  if moves and "no consumer" not in why
-                                 and not why.startswith("no longer")])
+                                 and not why.startswith(("no longer", "R4 hostname"))])
 def test_a_link_local_spelling_a_consumer_reaches_is_classified_link_local(installed, url):
     line = installed["lines"][url]
     assert "net.metadata_link_local" in line and not line.startswith("allowed"), (

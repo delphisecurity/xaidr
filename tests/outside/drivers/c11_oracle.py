@@ -341,7 +341,9 @@ def compare(base_json, head_json):
     print("head xaidr:", h["xaidr_file"], "| py", h["python"])
     bad = 0
     for e in ENFORCEMENT:
-        base = b["digests"][f"default/{e}"]
+        # a base wheel that already has value_origin= ran off/record/enforce, not
+        # default (M4 review: --compare crashed on such a base); its OFF is the base
+        base = b["digests"].get(f"default/{e}") or b["digests"][f"off/{e}"]
         for p in sorted(base):
             row = {m: h["digests"][f"{m}/{e}"][p] for m in MODES}
             same = base[p] == row["off"] == row["record"] == row["enforce"]
