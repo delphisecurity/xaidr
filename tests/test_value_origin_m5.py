@@ -53,9 +53,9 @@ def test_m5_binding(seen):
     check(seen)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "V-7's S25, pinned as planned: set_origin + a principal-only emit is not a flow in "
-    "open, so both calls are no_flow; paid's reference gives (no_flow, unresolved)"))
+# S25 was a strict xfail at M5 (open gave (no_flow, no_flow)). M6's input seam
+# binds per input (S-2), so the principal-only emit now binds, and open matches
+# paid's reference. The plan did not predict M6 closing it.
 def test_s25_origin_without_a_flow():
     from xaidr import provenance_chain as pc
     from xaidr.provenance import set_origin

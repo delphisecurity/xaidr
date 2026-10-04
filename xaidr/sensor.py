@@ -766,6 +766,8 @@ class DelphiSensor:
         self._value_origin_sources = _vo.validate_designations(value_origin_sources)
         self._vo_no_flow_warned = False          # Q6: one no_flow warning per sensor
         self._vo_attach_fault_logged = False
+        self._vo_spans_warned = False            # M6: spans= on a non-input direction
+        self._vo_record_fault_logged = False     # M6: input recording fault, logged once
         self._vo_lock = threading.Lock()
         if self._value_origin is _vo.Mode.ENFORCE:
             # ONE warning, and only for ENFORCE. Two facts an operator must not
@@ -1795,8 +1797,22 @@ class DelphiSensor:
         provider: Optional[str] = None,
         origin_context: dict | None = None,
         parent_context: Optional[ParentContext] = None,
+        *,
+        spans=None,
     ) -> ScanResult:
         """Synchronous scan — used by LangChain middleware and direct calls.
+
+        A2 M6 (§1.1): with value origin on, EVERY ``direction="input"`` exit
+        records the principal input (``record_principal_input``): the normal
+        path, the gate, circuit-open, fail-closed, scan-error and
+        not-scannable ones, and a raised ``DelphiBlockedError``. A new input is a
+        new request (S-2). ``input_clean`` is True only when the scanner's
+        PRE-mode action was ``allowed`` and ``_post_scan_gate`` left the
+        result unchanged. It is False for a gate verdict, fail-closed or a block,
+        and None for circuit-open or a scan error. ``spans`` (Q8, keyword-only)
+        is a sequence of ``value_origin.Span`` declaring who wrote which part of
+        the input. It is honoured for ``direction="input"`` only; elsewhere it is
+        ignored with one WARNING per sensor.
 
         Wrapped so an UNEXPECTED internal fault fails OPEN with a signal (see
         ``_emit_scan_error``) instead of raising into the host. ``DelphiBlockedError``
@@ -1810,6 +1826,39 @@ class DelphiSensor:
         posture is unchanged: with ``fail_closed=()`` not one line below
         behaves differently from before the option existed.
         """
+        held = {"clean": None}
+        try:
+            return self._scan_unrecorded(prompt, direction, destination, provider,
+                                         origin_context, parent_context, held)
+        finally:
+            self._vo_record_input(prompt, spans, direction, held["clean"])
+
+    def _vo_record_input(self, prompt, spans, direction, clean) -> None:
+        """The value-origin input seam (§1.1). Never raises: a fault here is
+        logged once per sensor at ERROR and never becomes a scan verdict."""
+        try:
+            if self._value_origin is _vo.Mode.OFF:
+                return
+            if direction != "input":
+                if spans is not None and not self._vo_spans_warned:
+                    self._vo_spans_warned = True
+                    logger.warning("xaidr: Sensor(agent_id=%r): scan(spans=...) is honoured only "
+                                   "for direction='input'; ignored for %r. Logged once.",
+                                   self.agent_id, direction)
+                return
+            text = _coerce_scannable(prompt)
+            _vo.record_principal_input(text if text is not None else prompt,
+                                       list(spans) if spans is not None else None,
+                                       input_clean=clean)
+        except Exception:
+            if not self._vo_record_fault_logged:
+                self._vo_record_fault_logged = True
+                logger.exception("xaidr: value origin's input recording faulted; the "
+                                 "verdict is unaffected")
+
+    def _scan_unrecorded(self, prompt, direction, destination, provider,
+                         origin_context, parent_context, held) -> ScanResult:
+        """``scan``'s body. ``held['clean']`` carries ``input_clean`` out (§1.1)."""
         extra = {
             "destinationType": "external_api",
             "destinationIdentifier": destination or provider or "llm",
@@ -1822,27 +1871,39 @@ class DelphiSensor:
                 **extra,
             )
             if gated is not None:
+                held["clean"] = (None if "CIRCUIT_BREAKER_OPEN" in (gated.rules or [])
+                                 else False)
                 return gated
+            true = []
             result = self._scan_impl(
-                prompt, direction, destination, provider, origin_context, parent_context
+                prompt, direction, destination, provider, origin_context, parent_context,
+                _true=true,
             )
         except (DelphiBlockedError, _ExtensionContractError):
+            held["clean"] = False
             # _VerdictStrengthenedError is a CONTRACT violation in an
             # extension, not an environment fault. Failing it open would
             # turn a mis-written enterprise control into a silent
             # 'allowed', which is the exact shape this sensor refuses.
             raise
         except _FailClosedError as fc:
+            held["clean"] = False
             return self._fail_closed_result(
                 direction, fc.group, fc.detail, prompt, **extra)
         except Exception as exc:
+            held["clean"] = None
             if "internal" in self._fail_closed:
                 return self._fail_closed_result(
                     direction, "internal",
                     f"{type(exc).__name__} in {self._fault_origin(exc)}",
                     prompt, **extra)
             return self._emit_scan_error(direction, exc, prompt, **extra)
-        return self._post_scan_gate(result, direction, prompt, **extra)
+        held["clean"] = False
+        final = self._post_scan_gate(result, direction, prompt, **extra)
+        # the scanner's PRE-mode verdict (monitor softening never yields
+        # "allowed"; an S6 transform runs after it), and no post-scan gate change
+        held["clean"] = bool(true) and true[0].action == "allowed" and final is result
+        return final
 
     def _scan_impl(
         self,
@@ -1852,6 +1913,7 @@ class DelphiSensor:
         provider: Optional[str] = None,
         origin_context: dict | None = None,
         parent_context: Optional[ParentContext] = None,
+        _true: Optional[list] = None,
     ) -> ScanResult:
         """Core scan implementation — see ``scan`` for the fail-open wrapper.
 
@@ -1952,6 +2014,8 @@ class DelphiSensor:
 
         # Breaker sees the TRUE verdict — before _apply_mode softens it.
         self._breaker_observe(result)
+        if _true is not None:
+            _true.append(result)            # A2 M6: the pre-mode verdict, for input_clean
         return self._apply_mode(
             result, direction,
             lambda: {"text": prompt if isinstance(prompt, str) else None,

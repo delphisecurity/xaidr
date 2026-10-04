@@ -147,10 +147,15 @@ def test_record_moves_no_verdict_score_or_rule(runs, p, enforcement):
 
 # ── 4 · non-vacuity: strict xfails until the milestone that makes them true ─
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="not wired: RECORD records no input until M6")
+# Strict xfail until M6 (the red is in PROGRESS.md). K_I = 26, measured at M6 on
+# the 456-row corpus: the flagged attack inputs (V-9) whose destinations the
+# calls built from them then name.
+K_I = 26
+
+
 def test_4a_I_record_reports_untrusted_source_on_input_derived_calls(runs):
     wires = runs("record", "block")["P-flow-I"][2]
-    assert wires.count("untrusted_source") >= 1, collections.Counter(wires)
+    assert wires.count("untrusted_source") >= K_I, collections.Counter(wires)
 
 
 # One assertion PER PASS (the M1 review): the public scan(direction=

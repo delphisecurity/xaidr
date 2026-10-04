@@ -1365,6 +1365,134 @@ It also noted:
 
 ---
 
+## Ruling 3.1 changed (owner, after M5), `b621987`
+
+`record_hop` binds no ledger. Only `begin_flow` and `extract_context` bind,
+and `clear_flow` unbinds.
+
+**My first red was not the defect, and I did not paste it as if it were.**
+- The test drove the SENSOR's per-call-principal path
+  (`scan_tool_call(..., origin_context={"on_behalf_of": ...})`). User B's call
+  did NOT carry user A's authority, even under the old ruling. The
+  record_hop-only path read `['no_flow', 'no_flow']`.
+- `_resolve_provenance` returns early when a per-call principal is set and no
+  flow is active, so **the sensor never reaches `record_hop` that way.** The
+  M5 silent-failure reviewer's claim was false (its repro called
+  `build_provenance` directly). I relayed it to the owner in the M5 report
+  without checking. Retracted in place in M5's review section and in the
+  rulings doc.
+
+**Rewritten on the real path:** a host calling the public
+`provenance_chain.build_provenance` on ONE reused pool thread. Red against
+the old ruling:
+
+```
+E  AssertionError: user B's call to user A's address came back 'principal_undeclared_span': user A's principal authority reached user B on a reused thread (record_hop bound a ledger nobody owns)
+```
+
+Green after the change: `88 passed, 3 skipped, 1 xfailed`, including the four
+provenance suites. The rulings doc records the change, the corrected "why",
+the measured cost, and that the provenance-chain tests cannot see this class.
+
+---
+
+## M6 — principal input recording. **Green. STOP AND REPORT.**
+
+**Build (§1.1), in `xaidr/sensor.py`.**
+- `scan(..., *, spans=None)` records the principal input on EVERY
+  `direction="input"` exit, through a `finally`: the normal path, gate,
+  circuit-open, fail-closed, scan-error, not-scannable, and a raised
+  `DelphiBlockedError`.
+- `input_clean` is True only when the scanner's PRE-mode action was
+  `allowed` and `_post_scan_gate` left the result unchanged. It is False for
+  a gate verdict, fail-closed or a block, and None for circuit-open or a scan
+  error.
+- A bytes prompt is recorded as its decoded text.
+- `spans=` (Q8) is honoured for input only. Elsewhere it is ignored, with one
+  WARNING per sensor.
+- A recording fault is logged once per sensor and never becomes a verdict.
+
+**Red first.**
+
+```
+E  AssertionError: M6 principal input: undeclared: got 'unresolved', want 'principal_undeclared_span' -- the input seam recorded nothing; declared: got "TypeError: ... unexpected keyword argument 'spans'"; bytes: got 'unresolved' ...; s30: got ['no_flow', 'no_flow'] ...; s30_host_record_hop: got ['ledger_absent', 'ledger_absent'] ...; s2_circuit_open: got ['no_flow', True, 'no_flow'], want ['principal_undeclared_span', True, 'unresolved']
+```
+
+**Green.** The suites are M6, M5, M4, C-11, the 456-row oracle, two provenance
+suites, conformance and `tests/outside` (including `test_m6_from_the_wheel`):
+
+```
+== macOS 3.12.2    486 passed, 12 xfailed
+== linux 3.10.21   486 passed, 12 xfailed
+== linux 3.11.16   486 passed, 12 xfailed
+== linux 3.12.14   486 passed, 12 xfailed
+```
+
+**Acceptance, one driver run in-tree and from the built wheel:**
+- an input naming bob, then a call to bob, gives `principal_undeclared_span`;
+- with declared spans it gives `principal`;
+- a flagged input gives `untrusted_source` (V-9);
+- **a flagged input softened to `allowed` by an S6 `transform_verdict` still
+  gives `untrusted_source`**;
+- a bytes prompt is recorded as decoded text;
+- a circuit-open input ends the previous request's implicit authority (S-2);
+- **S30, EXTENDED as the owner asked.** It runs twice on one reused pool
+  thread, plain and with the host recording its own hop through
+  `build_provenance` per request (the path that reached the old carry).
+  Request 2 gets `unresolved` both times.
+
+**C-11.**
+- 4a-I is un-xfailed, with **K_I = 26** untrusted-source calls on the
+  456-row corpus, measured and pinned. Its red was the M1-era strict xfail
+  turning into an unexpected pass once M6 landed.
+- RECORD == OFF still holds in-tree.
+- Across commits (`b621987` against M6, from wheels): **all 18 identical**.
+
+**S25 flipped, which the plan did not predict.** M6's input seam binds per
+input (S-2), so `set_origin` plus a principal-only emit now gives
+(`no_flow`, `unresolved`), which is paid's reference. The strict xfail became
+a plain assertion.
+
+**Sabotage.** Each restore is cmp-confirmed, and each run used
+`PYTHONDONTWRITEBYTECODE=1`.
+
+```
+=== 1: input_clean read from the POST-mode verdict
+E  AssertionError: M6 principal input: flagged_softened: a flagged input donated principal authority once an S6 transform softened it to 'allowed' (wire 'principal_undeclared_span'): input_clean read the post-mode verdict
+--- discriminating half, same sabotage: flagged (plain): ['flagged', 'untrusted_source']   (monitor softening never yields allowed)
+=== 2: nothing recorded on the gated (circuit-open) path
+E  AssertionError: ... s2_circuit_open: got ['principal_undeclared_span', True, 'principal_undeclared_span'], want [..., 'unresolved'] -- a circuit-open input did not end the previous request's implicit authority (S-2)
+=== 3: the seam's own fault guard removed, a raising recorder injected
+  C-11 P-input under RECORD RAISED into the host: RuntimeError: m6 injected recorder fault
+--- same injection, guard in place: OFF and RECORD P-input identical, 0 SCAN_ERROR rows
+```
+
+**A finding: sabotage 3 went red in a different shape than predicted.** The
+plan expected `SCAN_ERROR` rows. Recording runs in a `finally` OUTSIDE
+`scan()`'s own try/except, so without its guard a recorder fault RAISES into
+the host. The guard is the only line between the two, and the test now
+proves it is there.
+
+**Q17, the latency of default RECORD: reported, and weak.**
+`benign_longform/` holds only `manifest.json` and `README.md`. The 24 long
+documents are NOT in the tree. Measured on the one 11.8 KB file, scanned 5
+times inside `begin_flow`:
+- OFF: p50 460 ms, p99 498 ms;
+- RECORD: p50 452 ms, p99 496 ms.
+
+The delta is noise. F8's 0.8 ms/KB predicts about 9 ms of recording against a
+460 ms scan. This is one document, not the corpus the plan meant.
+
+**Still owed:**
+- **The false-positive cost of reading every macOS reading.** The owner
+  ruled that it must land before ENFORCE (M8), on a benign corpus that
+  really holds the affected host shapes, drawn from outside our own
+  examples. Not started.
+- The protect_tools result position (M7).
+- Q13's block-rate measurement, before any circuit-breaker wiring.
+
+---
+
 ## Status (updated after M3), and what is waiting on the owner
 
 | milestone | state | commit |
