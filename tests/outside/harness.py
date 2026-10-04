@@ -67,8 +67,12 @@ def run_driver(py: Path, driver: str, cwd: Path, *args: str) -> dict:
     return json.loads(r.stdout.strip().splitlines()[-1])
 
 
-if __name__ == "__main__":       # evidence runs: harness.py <tree> <workdir> <driver>
-    tree, work, driver = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+if __name__ == "__main__":
+    # Evidence runs: harness.py <tree> <workdir> <driver> [pip extras ...] [-- driver args ...]
+    argv = sys.argv[1:]
+    driver_args = argv[argv.index("--") + 1:] if "--" in argv else []
+    argv = argv[:argv.index("--")] if "--" in argv else argv
+    tree, work, driver = Path(argv[0]), Path(argv[1]), argv[2]
     wheel = build_wheel(tree, work / "dist")
-    py = fresh_venv(work / "venv", wheel, *sys.argv[4:])
-    print(json.dumps(run_driver(py, driver, work), indent=1, sort_keys=True))
+    py = fresh_venv(work / "venv", wheel, *argv[3:])
+    print(json.dumps(run_driver(py, driver, work, *driver_args), indent=1, sort_keys=True))

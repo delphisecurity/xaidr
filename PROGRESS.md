@@ -329,3 +329,188 @@ the A2 build (M0)":
   The reviewer also noted the tree changed while it was reviewing. Every number
   in this file comes from the final commit candidate (`_authority.py`
   re-checked after the last edit).
+
+---
+
+## M1 — the C-11 gate, "RECORD never changes an action". **Green. STOP AND REPORT (BRIEF: before any seam wiring).**
+
+**What was built.**
+- `tests/test_value_origin_c11.py`: OFF against RECORD in `block` and
+  `monitor` enforcement.
+- `tests/outside/drivers/c11_oracle.py`: the passes as one module. The
+  in-tree gate imports it, and it runs as a driver against built wheels, with
+  `--base` for a wheel that predates the parameter and `--compare` for the
+  cross-commit table.
+- `tests/outside/test_m1_c11_from_the_wheel.py`: C-11 and the construction
+  checks asserted in the built wheel (CI `full`).
+- **Inert, loudly validated** `Sensor(value_origin="record",
+  value_origin_sources=())` (V-34). Nothing reads either parameter yet. ENFORCE
+  logs exactly ONE warning, saying what is true: value origin is **NOT YET
+  WIRED**, so `enforce` changes no action today, and, with no designations,
+  every destination a tool result names will be blocked once it enforces
+  (C-11). Default, OFF and RECORD log nothing.
+
+**The passes.** Main corpus, the 456 shell rows:
+
+| pass | what it drives |
+|---|---|
+| P-input | byte-for-byte the existing oracle, computed by its own `_digest` |
+| P-flow-I | T as principal input, then the calls built from T |
+| P-flow-R | a neutral input, T as a tool result, then the calls |
+| P-seam | T as a `protect_tools`-wrapped tool's return value |
+| P-fault | circuit-open, gate, bounds fail-closed, scan-error and not-scannable exits, each one's marker counted |
+
+The §3.3 adversarial corpora, which the gate was not built on:
+
+| pass | what it drives |
+|---|---|
+| A-flow-I | heldout 100 prompts plus asi_battery 128 text rows, as principal input |
+| A-flow-R | the same 228 texts as tool results |
+| A-calls | benign_toolcalls 410 calls plus asi_battery 60 tool rows, arguments verbatim |
+| A-steps | asi_battery's 52 multi-turn rows, 105 steps, replayed in one flow each |
+
+Every one of asi_battery's 240 rows is driven by exactly one pass.
+
+**What P-seam does NOT cover yet (corrected after the M1 review).**
+`protect_tools` has no result position (ARCHITECTURE.md §1.2), so at M1 P-seam
+covers **no** result seam: its digest is the same whatever the tool returns. M7
+gives `protect_tools` its result position and adds the `langchain_core` and MCP
+after-hooks. That is now written into M7's build list, not only here.
+
+### Failing first
+
+Before the constructor change:
+
+```
+16 failed, 5 xfailed in 0.30s
+E   TypeError: DelphiSensor.__init__() got an unexpected keyword argument 'value_origin'   (x15)
+```
+
+The strict xfails had "passed" on that TypeError, which is the wrong reason.
+All of them are now `raises=AssertionError`.
+
+### Honest reds on the way (each corrected where it was asserted)
+
+- **The call denominator** was first written as `>= 39`, from a scratch script.
+  `calls_for()` gives `{'run_command': 456, 'http_post': 36, 'send_email': 2}`,
+  now pinned exactly. ARCHITECTURE.md §3.2 is retracted in place.
+- **asi_battery** was assumed to have 56 tool rows per file. That was the count
+  WITHOUT `text`. It actually has three shapes: 64 text, 30 tool and 26
+  multi-turn rows. The loader crashed (`KeyError: 'text'`) and then counted
+  470 against a pinned 522. Both counts are now measured and pinned, and the
+  multi-turn rows got their own pass instead of being skipped.
+
+### Green: four interpreters
+
+The suites are C-11, the 456-row oracle, `tests/outside/`, the conformance
+suite and the multi-oracle differential:
+
+```
+== macOS 3.12.2      425 passed, 14 xfailed, 1 warning
+== linux 3.10        425 passed, 14 xfailed
+== linux 3.11        425 passed, 14 xfailed
+== linux 3.12        425 passed, 14 xfailed
+```
+
+The one macOS warning did not recur when re-run with `-W
+error::pytest.PytestWarning` (`425 passed, 14 xfailed`). It is recorded as
+observed once, not reproduced.
+
+The C-11 strict xfails (6 of the 14; the rest are the core's pre-existing
+strict xfails) state the gate's vacuity:
+
+```
+XFAIL test_4a_I_..._input_derived_calls                      - not wired: RECORD records no input until M6
+XFAIL test_4a_R_..._result_derived_calls[P-flow-R]            - not wired: RECORD records no tool result until M7
+XFAIL test_4a_R_..._result_derived_calls[P-seam]              - not wired: RECORD records no tool result until M7
+XFAIL test_4b_enforce_moves_an_action_...[P-flow-I|P-flow-R|P-seam] - not wired: nothing can block until M8
+```
+
+4a-R is one assertion per pass, because the public `scan(tool_result)` alone
+would flip a pooled count at M7 (the M1 review).
+
+### Sabotage, on the final code
+
+```
+=== SABOTAGE A: inert RECORD appends a rule on the INPUT path
+FAILED ...test_record_moves_no_verdict_score_or_rule[P-input-block]
+FAILED ...test_record_moves_no_verdict_score_or_rule[P-input-monitor]
+FAILED ...test_record_moves_no_action_on_the_adversarial_corpora[A-steps-block]
+FAILED ...test_record_moves_no_action_on_the_adversarial_corpora[A-steps-monitor]
+4 failed, 15 passed, 16 deselected
+--- existing 456-row oracle (must stay green):
+4 passed
+=== SABOTAGE B: inert RECORD flags allowed TOOL CALLS
+FAILED ...[P-flow-I-block] [P-flow-I-monitor] [P-flow-R-block] [P-flow-R-monitor]
+FAILED ...[P-seam-block] [P-seam-monitor] [P-fault-block] [P-fault-monitor]
+FAILED ...adversarial_corpora[A-flow-I-block] [A-flow-I-monitor] [A-flow-R-block] [A-flow-R-monitor]
+FAILED ...adversarial_corpora[A-calls-block] [A-calls-monitor] [A-steps-block] [A-steps-monitor]
+16 failed, 3 passed, 16 deselected
+--- existing 456-row oracle (must stay green):
+4 passed
+=== SABOTAGE C: the warning fires on EVERY construction (the M1 reviewer's probe)
+FAILED ...test_construction_warns_only_for_enforce_and_says_what_is_true[kwargs0-0]
+FAILED ...test_construction_warns_only_for_enforce_and_says_what_is_true[kwargs1-0]
+FAILED ...test_construction_warns_only_for_enforce_and_says_what_is_true[kwargs2-0]
+3 failed, 2 passed, 30 deselected
+=== RESTORED (byte-identical)
+33 passed, 6 xfailed
+```
+
+- **The discriminating half of A and B:** the existing oracle stays green. It
+  never calls `scan_tool_call` (F4), and both of its sensors run the default
+  mode, so a RECORD regression moves them equally.
+- **Sabotage C** is the gap the milestone reviewer demonstrated: the first
+  version of the warning test stayed green under it. It is now red.
+
+### Outside the process, across commits
+
+See the next section: it is run on the COMMITTED M1 tree, so the evidence
+names a SHA.
+
+### Fresh-context reviews
+
+- **silent-failure-hunter:** nothing silent found. It ran checks rather than
+  reading code:
+  - the strict xfails fail for the right reason (`--runxfail`);
+  - the call count;
+  - the raise order is preserved;
+  - `protect()` forwards the new keywords, because its accepted set comes from
+    `inspect.signature`;
+  - there is no state leak in either file order, alongside the conformance and
+    `protect` suites;
+  - the breaker really stays open;
+  - the driver's refusals return non-zero.
+- **milestone-reviewer:** it reproduced every central claim: P-input equals
+  the real `_digest`, failing first, both sabotages, and identical
+  cross-commit digests. It found the following, all fixed and re-verified
+  above:
+  1. the warning had no must-stay-quiet test, and its text claimed blocking
+     while inert;
+  2. P-input was compared against a hand copy of the oracle, not the oracle's
+     own function;
+  3. 4a-R was pooled;
+  4. the P-seam deferral was understated, and absent from M7's build list;
+  5. a nonexistent `scripts/c11_oracle.py` was named in the plan;
+  6. the §3.3 adversarial re-run was silently dropped;
+  7. the outside "`enforec` raises" check was missing;
+  8. the cross-commit table came from an uncommitted tree and a scratchpad
+     script;
+  9. PROGRESS.md said C-11 runs in "the full config only". The in-tree gate
+     has no marker, so it runs in BOTH configs, about 15 to 25 s per Python;
+     only the outside test is `full`-only.
+
+### What C-11 does NOT yet prove
+
+Nothing is wired, so **RECORD ≡ OFF holds because RECORD does nothing yet**.
+The six strict xfails say so. What M1 establishes is:
+1. the instrument, with every pass and every fault path reached;
+2. the baseline, identical across commits from the built wheel;
+3. that the gate catches a RECORD regression on the input path, on the tool
+   path, across turns, and on corpora it was not built on, none of which the
+   existing oracle can see.
+
+### CI
+
+CI did not run. It triggers on `pull_request` and on pushes to `main`, the
+instruction is to push the branch only, and no PR was opened.

@@ -357,7 +357,7 @@ its availability and licence are to be verified at M2.*
 Value origin acts only on tool calls, and `url_parse` only on tool calls. A
 gate over that oracle alone passes vacuously for the tool-call and result seams.
 
-### 3.1 The gate: `tests/test_value_origin_c11.py` plus `scripts/c11_oracle.py`
+### 3.1 The gate: `tests/test_value_origin_c11.py` plus `tests/outside/drivers/c11_oracle.py`
 
 The 456 texts *T* of `tests/fixtures/shell_corpus.json` are driven through the
 passes below. Each pass runs once per mode in {OFF, RECORD, ENFORCE} and once
@@ -377,7 +377,7 @@ plus `scan_tool_call("run_command", {"command": T})` for every row.
 | **P-input** | **byte-for-byte the existing oracle**: a fresh sensor and `scan(T, direction="input")` | `bucket[i] action score category rules`, unchanged, so "byte-identical" keeps its established meaning |
 | **P-flow-I** (input-derived) | `clear_flow(); begin_flow(); scan(T, "input")`, then the calls | `bucket[i] I<k> action score category rules` |
 | **P-flow-R** (result-derived) | `clear_flow(); begin_flow(); scan(NEUTRAL, "input")`, with `NEUTRAL` a fixed prompt naming no destination; then *T* returned as a tool **result**, then the calls | `bucket[i] R<k> …` |
-| **P-seam** | as P-flow-R, but *T* comes back through the **real result seams**: a `protect_tools`-wrapped stub tool, plus the `langchain_core` and MCP after-hooks driven in-tree through `tests/fake_frameworks.py` (real libraries in the outside harness, §4) | `bucket[i] S<k> …` |
+| **P-seam** | as P-flow-R, but *T* comes back through the **real result seams**. *[As built at M1, corrected after the M1 review: only a `protect_tools`-wrapped stub tool, and `protect_tools` has NO result position yet (§1.2), so at M1 P-seam covers no result seam at all. Its digest is the same whatever the tool returns. M7 gives `protect_tools` its result position and adds the `langchain_core` and MCP after-hooks through `tests/fake_frameworks.py`; that is in M7's build list.]* | `bucket[i] S<k> …` |
 | **P-fault** | one tool call per row through each **non-normal exit**: circuit forced open (block mode), a gating extension, `fail_closed=("bounds",)` with a bound hit, an injected fault in `classify` that scan-errors, and a non-`str` tool name. The fault goes into `classify`, not the scanner, because a scanner fault never reaches `scan_tool_call` (memory: `xaidr-tool-path-bypasses-scanner-scan`). | `bucket[i] F<path> …` |
 
 P-flow-R uses a neutral prompt because principal entries persist under C-18
@@ -394,8 +394,10 @@ about **actions**: C-11 says RECORD makes "no action change".
 
 1. **Denominator.**
    - 456 rows.
-   - At least 39 destination calls per flow pass. That is the measured count
-     of rows carrying a stdlib-visible URL or mailbox token, pinned as a floor.
+   - ~~At least 39 destination calls per flow pass~~ *[corrected at M1: 39 came
+     from a scratch script with a different token strip. The gate's own
+     `calls_for()` gives exactly 36 `http_post` and 2 `send_email`, pinned as an
+     exact count in `test_the_corpus_and_the_calls_are_the_size_this_gate_claims`]*.
    - P-fault must show each path's own marker before it is compared:
      `CIRCUIT_BREAKER_OPEN`, the gate's rule, `fail_closed`, the scan-error
      rule, and `not_scannable`. A fault that never reached its path makes the
@@ -407,7 +409,7 @@ about **actions**: C-11 says RECORD makes "no action change".
    commits from **outside the process**:
    - build a wheel from `git archive 25dc9de` and one from HEAD;
    - install each into its own clean venv;
-   - run `scripts/c11_oracle.py` in each with `python -I` from a neutral cwd;
+   - run `tests/outside/drivers/c11_oracle.py` in each with `python -I` from a neutral cwd;
    - the script **refuses** unless `xaidr.__file__` is in that venv's
      site-packages (the `xaidr-report-scripts-shadow-the-wheel` failure);
    - **`value_origin=` is required on HEAD.** A HEAD wheel that lost the
@@ -552,7 +554,7 @@ vendors (§4.5, P4). The owner sees the diff before anything builds on it.
 - **Build:** inert, validated `Sensor(value_origin="record",
   value_origin_sources=())` (V-34, through `validate_mode` and
   `validate_designations`, with C-11's WARNING for ENFORCE without
-  designations). §3's gate with all five passes. `scripts/c11_oracle.py`. The
+  designations). §3's gate with all five passes. `tests/outside/drivers/c11_oracle.py`. The
   `tests/outside/` harness and a trivial driver.
 - **Acceptance:**
   - §3.2 items 1–3 green. Items 4a-I, 4a-R and 4b strict-xfail, with their
@@ -665,6 +667,10 @@ vendors (§4.5, P4). The owner sees the diff before anything builds on it.
   - `protect_tools` per Q10;
   - LangChain argument binding per Q12;
   - the I/O-backed result guard per Q18.
+  - **the C-11 P-seam pass grows to real result seams**: `protect_tools`' new
+    result position, and the `langchain_core` and MCP after-hooks via
+    `tests/fake_frameworks.py`. 4a-R stays one assertion per pass, so
+    P-flow-R (public `scan(tool_result)`) cannot flip it for P-seam.
 - **Acceptance, from outside:**
   - The poisoned read then the call gives `untrusted_source`, through the
     LangChain after-hook and through MCP (a stub `ClientSession`).
@@ -697,7 +703,9 @@ Under ENFORCE, the core's reading is what acts.
 - **Build:** `should_block` right after `evaluate_call`, returning before the
   circuit check, the gates and detection (V-18). The block goes through the
   existing emit path with V-31's rule and category and `_apply_mode`, so
-  `monitor` gives `flagged`. **Not** counted by `_breaker_observe` until Q13's
+  `monitor` gives `flagged`. **Remove the "NOT YET WIRED" clause** from the construction
+  warning added at M1; `test_construction_warns_only_for_enforce_and_says_what_is_true`
+  and the outside construction check pin its text and must change in the same commit. **Not** counted by `_breaker_observe` until Q13's
   measurement says so.
 - **Q13, as qualified by the owner:** MEASURE the value-origin block rate first
   — over the C-11 corpora, `benign_toolcalls/`, and the 620-case flows — and

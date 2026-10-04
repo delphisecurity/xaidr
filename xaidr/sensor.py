@@ -52,6 +52,7 @@ from .failclosed import (
     resolve as _resolve_fail_closed,
 )
 from .extensions import DestinationView, ScanRequest, SensorExtension
+from . import value_origin as _vo
 from .reporters import Reporter, safe_fault
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
 from .scanner.command_parse import reconstruct as _reconstruct_command
@@ -499,6 +500,8 @@ class DelphiSensor:
         extensions: Sequence[SensorExtension] = (),
         emit_provenance_headers: bool = False,
         fail_closed=(),
+        value_origin="record",
+        value_origin_sources: Sequence = (),
     ):
         if not agent_id:
             raise ValueError("agent_id is required")
@@ -742,6 +745,38 @@ class DelphiSensor:
                     circuit_breaker, self.agent_id, self.enforcement_mode
                 )
                 self._breaker._emit_hook = self._emit_circuit_event
+
+        # ── value origin (A2): validated LOUDLY here, inert until wired ───
+        # ``Sensor(value_origin="off"|"record"|"enforce", value_origin_sources=
+        # [SourceDesignation, ...])`` (spec V-34). RECORD is the default (C-11):
+        # it evaluates and reports and never changes an action. A bad value
+        # raises ValueError naming it (non-negotiable 2), AFTER every existing
+        # check, so the raise order for a constructor given several bad
+        # arguments is what it has always been.
+        #
+        # INERT at this milestone (A2 M1): stored and read by nothing. Each seam
+        # that reads it lands on its own milestone, measured against the C-11
+        # gate (tests/test_value_origin_c11.py), which this storage exists to
+        # let construct OFF and RECORD sensors side by side.
+        self._value_origin = _vo.validate_mode(value_origin)
+        self._value_origin_sources = _vo.validate_designations(value_origin_sources)
+        if self._value_origin is _vo.Mode.ENFORCE:
+            # ONE warning, and only for ENFORCE. Two facts an operator must not
+            # learn from an incident (the owner's Q6 principle: a configuration
+            # that silently does nothing is a defect):
+            #   * value origin is NOT YET WIRED in this build, so 'enforce'
+            #     changes no action today. This clause is removed by the
+            #     milestone that wires ENFORCE (A2 M8), which a test pins.
+            #   * C-11: with no designations no read is ever trusted, so once it
+            #     enforces, every destination any tool result names is blocked.
+            logger.warning(
+                "xaidr: Sensor(agent_id=%r, value_origin='enforce'): value origin "
+                "is NOT YET WIRED in this build, so 'enforce' changes no action "
+                "today.%s", self.agent_id,
+                "" if self._value_origin_sources else
+                " With no value_origin_sources designations, once it enforces no "
+                "tool result can be a trusted source and every destination a tool "
+                "result names will be blocked.")
 
         # ── S1 · attach, part 2 of 2: on_attach ──────────────────────────
         # LAST in the constructor, deliberately: on_attach receives a fully
