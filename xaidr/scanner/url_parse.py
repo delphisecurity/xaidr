@@ -176,8 +176,8 @@ def _r4_host(value: str) -> str:
         return ""
     try:
         h = urlsplit(_whatwg(m.group(1) + "://" + value[m.end():])).hostname
-    except ValueError:
-        return ""
+    except Exception:                       # a core fault is not "not a URL" either
+        return ""                           # (fault-isolation sweep: never propagate)
     return (h or "").lower().rstrip(".")
 
 

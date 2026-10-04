@@ -39,6 +39,18 @@ from typing import Any
 from uuid import uuid4
 from . import value_origin as _vo
 
+import logging as _logging
+_vo_log = _logging.getLogger("xaidr.provenance_chain")
+
+
+def _vo_fault(where: str) -> None:
+    """A value-origin binding fault at a flow seam (owner, after M7: the safety
+    layer never crashes what it protects). Logged at ERROR; the flow seam
+    carries on, and the call it guards reads ledger_absent / no_flow instead
+    of a verdict the ledger could not support."""
+    _vo_log.exception("xaidr: value origin's ledger binding faulted in %s; the flow "
+                      "continues without a value-origin ledger", where)
+
 # The accumulated delegation chain for the current in-process flow.
 # Each hop: {"agent_id": str, "role": "principal"|"agent"|"tool"|"mcp_server"}.
 _chain_ctx: contextvars.ContextVar[list[dict[str, Any]] | None] = contextvars.ContextVar(
@@ -93,7 +105,10 @@ def begin_flow(
     """
     # A2 M5 (§1.4): every flow starts with a fresh EXPLICIT value-origin ledger,
     # so a request never inherits the caller's recorded sources.
-    _vo.bind_fresh_ledger()
+    try:
+        _vo.bind_fresh_ledger()
+    except Exception:
+        _vo_fault("begin_flow")
     corr = correlation_id or _new_corr()
     _corr_ctx.set(corr)
     chain: list[dict[str, Any]] = []
@@ -322,7 +337,10 @@ def current_tiers() -> list[int | None]:
 
 
 def clear_flow() -> None:
-    _vo.unbind_ledger()                     # A2 M5: the request's ledger ends with it
+    try:
+        _vo.unbind_ledger()                 # A2 M5: the request's ledger ends with it
+    except Exception:
+        _vo_fault("clear_flow")
     _chain_ctx.set(None)
     _corr_ctx.set(None)
     _tiers_ctx.set(None)
@@ -452,7 +470,12 @@ def extract_context(headers: dict[str, str] | None) -> bool:
     # A2 M5, V-7c: an inbound request starts a fresh ledger FIRST, before the
     # inbound mark and every early return, so a header-stripped request cannot
     # keep the previous request's recorded sources.
-    _vo.bind_fresh_ledger()
+    try:
+        _vo.bind_fresh_ledger()
+    except Exception:
+        # a raising bind must not skip the inbound mark below, the
+        # security-critical half of this function (fault-isolation sweep)
+        _vo_fault("extract_context")
     # Set BEFORE any early return. See the docstring: this is the whole fix.
     _inbound_ctx.set(True)
     if not headers:

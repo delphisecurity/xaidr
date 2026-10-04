@@ -1853,6 +1853,63 @@ Its gaps:
 
 ---
 
+## Before M8, item 1 — the fault-isolation sweep (owner, after M7)
+
+Three milestones produced three defects of one shape, each caught by review
+and not by the build:
+- M4's attach raised `TypeError` on a non-dataclass extension result;
+- M6's raising recorder reached the host;
+- M7's `protect_tools` crashed on a tool with no implementation, even with
+  value origin OFF.
+
+`tests/test_value_origin_fault_sweep.py` makes guarding the default:
+1. **Structural.** Every call from outside `xaidr/value_origin` into the
+   core's recording, evaluation, binding or parsing functions must sit inside a
+   `try` that catches `Exception`. That covers the `_vo.` alias and names
+   imported directly. A new call site fails here until it is guarded.
+   (Sabotage 2: an M8-shaped unguarded `_vo.should_block` is named by
+   file:line.)
+2. **Behavioural.** 17 public entry points, each with the core function it
+   reaches made to raise:
+   - scan in input, tool_result and output, plus `scan_output`;
+   - `scan_a2a(received)` and `scan_tool_call`;
+   - `_scan_tool_result`, the verdict source for the LangChain and MCP hooks;
+   - `protect_tools` sync, async and no-implementation;
+   - the `protect()` LangChain and MCP hooks, through fake frameworks;
+   - `begin_flow`, `extract_context`, `clear_flow`, `record_hop` and
+     `build_provenance`.
+
+   Nothing may reach the caller, and the documented outcome must appear: a
+   logged fault, the field omitted, or `ledger_absent`.
+
+**Red against the tree as it stood, cb7f09b:**
+
+```
+E  AssertionError: calls into the value-origin core that a fault would propagate from into the host (...): xaidr/provenance_chain.py:96 bind_fresh_ledger(); xaidr/provenance_chain.py:325 unbind_ledger(); xaidr/provenance_chain.py:455 bind_fresh_ledger()
+[begin_flow] a raising bind_fresh_ledger() reached the caller
+[extract_context] a raising bind_fresh_ledger() reached the caller
+[clear_flow] a raising unbind_ledger() reached the caller
+4 failed, 15 passed
+```
+
+**A finding.** In `extract_context` the bind ran BEFORE the inbound mark, so a
+raising bind would also have skipped the mark, the security-critical half of
+that function. The guard keeps the mark, and the sweep asserts it.
+
+**After guarding the three flow seams, the structural test found a fourth
+site that I had not listed:** `url_parse._r4_host` called the core's
+`_whatwg` inside `except ValueError` only. It now catches `Exception`.
+
+**Green:** `19 passed`.
+
+**Sabotage.**
+- 1: the `clear_flow` guard removed. Both tests go red, named.
+- 2: an unguarded `should_block` added to `scan_tool_call`. The structural
+  test names `xaidr/sensor.py:2391 should_block()`.
+- Restores were cmp-confirmed.
+
+---
+
 ## Status (updated after M3), and what is waiting on the owner
 
 | milestone | state | commit |
