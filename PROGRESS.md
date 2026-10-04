@@ -1804,6 +1804,55 @@ The macOS figure is in the commit message.
 
 ---
 
+## M7 milestone review, and what changed after it
+
+It confirmed:
+- every red and the green;
+- K_R 37/37, both 0 before M7;
+- all four sabotages;
+- Q10 (`protect_tools` alone gives `untrusted_source`, sync and async);
+- that C-11's P-seam runs through the new position: removing
+  `record_unscanned` turns ONLY 4a-R[P-seam] red;
+- that `input_truncated`'s placement matches `ledger_saturated`. Ranking it
+  above `ledger_saturated` is an unspecified choice; ARCHITECTURE.md never
+  mentions the value.
+
+Its gaps:
+1. **The no-implementation crash, which also happens with value origin OFF.**
+   Already fixed in `729dc2d`.
+2. **The Q18 guard checked only the outer object.** The core's result walk
+   still read `.content` on an I/O-backed object nested inside the result.
+   **Fixed in the core** (`_extract._normalise_result_node`): such a node
+   yields no leaves. This is a core byte change, so paid's pin moves.
+   Red first:
+   `E  AssertionError: recording read a nested I/O-backed object's .content 1 time(s)`.
+3. **Two truncation claims had no test.** Now pinned: under ENFORCE,
+   `input_truncated` does not block, and an untrusted finding in the same call
+   decides. The pin catches the reviewer's mutation:
+   `E  AssertionError: ('input_truncated', False, 'input_truncated', False)`.
+4. **`row_text.json` lacked the new value's input and None rows.** Added: 36
+   rows, 3 for `input_truncated`. **"Checked against the Brain's copy" was
+   false.** No Brain copy exists yet: delphi-sentinel's branch reads "when
+   row_text.json lands from open" and lists nine values, so the Brain would
+   store the new value as NULL. Retracted in place.
+5. **The "not built" list was incomplete, and two sabotages used unlabeled
+   substitutes.**
+   - A poisoned read through the LangChain after-hook had no test. It has one
+     now (`untrusted_source`). The behaviour already worked; only the test was
+     missing.
+   - **Substitutes, labeled now.** §5 M7's sabotages 2 and 3 name
+     B-designated-twin and §4 sabotage 1. Neither can run yet:
+     `drivers/langchain_poisoned_read.py` does not exist, and those are M8/M10
+     acceptance cases. I used the S23 and internal-method checks instead.
+   - Sabotage 1's "LangChain-only designated case stays green" was
+     mislabeled. The case that stayed green calls the private
+     `_scan_tool_result` directly, not LangChain.
+   - From the wheel, S23 and S24 reach only that private method, never
+     `protect()`. F7 and the hook tests are in-tree only (fake
+     `langchain_core`).
+
+---
+
 ## Status (updated after M3), and what is waiting on the owner
 
 | milestone | state | commit |

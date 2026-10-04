@@ -139,6 +139,11 @@ def extract_destinations(arguments: Mapping[str, object] | None
 
 
 # ── results (V-15) ───────────────────────────────────────────────────────────
+# Q18: a result node from these modules may hold an unread stream; V-15's
+# `.content` read would consume it, a host-behaviour change no verdict sees.
+_IO_BACKED_MODULES = frozenset({"httpx", "requests", "urllib3", "aiohttp"})
+
+
 def _normalise_result_node(node: Any) -> Any:
     """V-15: str → leaf; Mapping/Sequence → walk; an object with a str
     ``.content`` → that content; ``model_dump()`` → its dict; a dataclass
@@ -148,6 +153,8 @@ def _normalise_result_node(node: Any) -> Any:
         return node
     if isinstance(node, (bytes, bytearray, int, float, bool)) or node is None:
         return None
+    if type(node).__module__.split(".")[0] in _IO_BACKED_MODULES:
+        return None    # Q18 (A2 M7 review): reading .content would consume a stream
     content = getattr(node, "content", None)
     if isinstance(content, str):
         return content

@@ -472,7 +472,7 @@ so it never blocks, like `ledger_saturated`. Its own §3.4 row reads: "the
 principal's input was longer than value origin records; a destination past that
 point cannot be traced." An untrusted finding still outranks it. Absence is a
 row, never a missing row. **This is a vocabulary and interface change:**
-`WireValue`, `row_text.json` (checked against the Brain's copy) and
+`WireValue`, `row_text.json` (the export the Brain is MEANT to be checked against; *[M7 review: no Brain copy exists yet. delphi-sentinel's branch reads "when row_text.json lands from open" and lists nine values, so the Brain would store `input_truncated` as NULL]*) and
 `record_principal_input(..., truncated=False)` changed. Paid's re-vendor and the
 Brain/blank-canvas row tables must learn the value before M9 emits the field.
 
