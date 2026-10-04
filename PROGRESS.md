@@ -75,6 +75,8 @@ FAILED tests/value_origin_conformance/test_authority.py::test_q1_authority_of_an
 
 E  AssertionError: Q1-backslash-userinfo-bypass: should_block under ENFORCE is False (wire principal), Q1 says True —
    a call httpx/urllib send to an UNTRUSTED host walked through because the core read only the other side of the backslash
+   [M2 note: this pasted message's "httpx/urllib send" was false when it ran. urllib.request reaches
+    neither host; the test message was corrected at the M0 review. Kept verbatim because it is a pasted red.]
 E  AssertionError: 3703 readings name a host the core never reads ({'urllib.parse': 1705, 'httpx': 1674, 'ada-url (WHATWG)': 324}):
    a call the transport sends there is invisible to value origin, and under ENFORCE an untrusted host walks through.
    First five: 'http://corp.example\\@evil.test' urllib.parse reads dns:evil.test, core reads ['dns:corp.example']; ...

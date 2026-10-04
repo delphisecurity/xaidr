@@ -259,3 +259,377 @@ def test_the_named_over_read_class_stands_for_a_measured_interpreter(comparison)
         assert absorbed, ("the urlsplit-bracket-validation class absorbed nothing on "
                           "a post-backport interpreter; delete it rather than keep "
                           "an allowance that hides nothing")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# url_parse: the ADDRESS CLASS every consumer reaches (A2 M2, ARCHITECTURE.md §2.4)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# `url_parse` decides detection on the tool-call path: `classify()`, the
+# `danger` findings that move an action, `bound_faults`, and whether a
+# scheme-less value is a URL at all (§2.1). Its load-bearing output is
+# `address`, and `link_local` is the class that BLOCKS. So the question here is
+# not "which host" but "which address class", asked of every consumer:
+#
+#   each oracle's host is handed to the platform resolver exactly as a Python
+#   HTTP client hands it over — `socket.getaddrinfo(str, AI_NUMERICHOST)`,
+#   which applies Python's IDNA codec and then libc's numeric parse, and makes
+#   no network call — and classified by the address it reaches; a host the
+#   resolver does not read as an address is a NAME (class None).
+#
+# Superset rule (Q2), for a single-valued field: `address` must be at least as
+# severe as the most severe class any consumer reaches. Severity is a total
+# order, so an equal rank means an equal class.
+#
+# The resolver is per-platform (F9). Its one divergence — BSD libc reading a
+# leading-zero dotted quad as DECIMAL — is Q22's single named exemption,
+# asserted present on darwin and empty on Linux, never skipped.
+
+import ipaddress
+import socket
+import sys
+
+_ADDRESS_ORDER = (None, "public", "private", "loopback", "link_local")
+
+
+def _rank(cls):
+    return _ADDRESS_ORDER.index(cls)
+
+
+def _kind(ip):
+    """The class of an address, in url_parse's own check order. Written out
+    here, not imported, so the oracle does not reuse the code under test."""
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.is_link_local:
+        return "link_local"
+    if ip.is_loopback:
+        return "loopback"
+    if ip.is_private:
+        return "private"
+    return "public"
+
+
+_RESOLVED = {}
+
+
+def _resolve(host):
+    """The address the platform resolver reads ``host`` as, or None (a name).
+    ``gaierror`` is the resolver saying "not a numeric host", which is the
+    answer, not a fault. UnicodeError is Python's IDNA codec refusing the label
+    before libc sees it: nothing is sent, so it is a name too."""
+    if host in _RESOLVED:
+        return _RESOLVED[host]
+    h = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    try:
+        info = socket.getaddrinfo(h, None, flags=socket.AI_NUMERICHOST)
+        ip = ipaddress.ip_address(info[0][4][0].split("%")[0])
+    except (OSError, UnicodeError, ValueError):
+        ip = None
+    _RESOLVED[host] = ip
+    return ip
+
+
+def _bsd_decimal_leading_zero(host, ip):
+    """Q22's one exemption, exactly: a 4-part dotted quad of ASCII digits with
+    at least one leading-zero part, which the resolver read as DECIMAL
+    (macOS: 0251.254.0251.254 -> 251.254.251.254). glibc, WHATWG, inet_aton
+    and the core read the leading zero as octal."""
+    parts = host.split(".")
+    if ip is None or len(parts) != 4 or not all(p.isascii() and p.isdigit() for p in parts):
+        return False
+    # a leading-zero part whose octal reading differs from its decimal one; where
+    # they agree (`10.01.10.01`) the resolver read nothing differently
+    if not any(len(p) > 1 and p.startswith("0")
+               and (not set(p) <= set("01234567") or int(p, 8) != int(p, 10))
+               for p in parts):
+        return False
+    vals = [int(p, 10) for p in parts]
+    return all(v <= 255 for v in vals) and ip == ipaddress.ip_address(".".join(map(str, vals)))
+
+
+def _url_parse_address(url):
+    from xaidr.scanner.url_parse import parse_url
+    shape = parse_url(url)
+    return shape.address if shape else None
+
+
+# The grid: the §2.2 measurement's axes (url_diff.py, 3,888 spellings) widened
+# with M0's split-disagreement prefixes, the mirror tail `\@corp.example`, the
+# hosts M3's deltas name, and the standing gate's `_urls()` userinfo and IPv6
+# forms.
+_UP_SCHEMES = ("http://", "https://", "HTTP://", "wss://", "ftp://", "gopher://",
+               "http:", "http:/", "http:\\\\", "http:///")
+_UP_PREFIXES = ("", "user@", "user:pw@", "svc%40corp@", "a@b@", "x@corp.example@",
+                "corp.example\\@", "corp.example%5C@", "\\@", "[::1]\\@", "&a:foo(b]c@",
+                "corp.example:80\\@")
+_UP_HOSTS = ("169.254.169.254", "0xA9FEA9FE", "2852039166", "0251.0376.0251.0376",
+             "169.254.43518", "0251.254.0251.254", "[::ffff:169.254.169.254]",
+             "[::ffff:a9fe:a9fe]", "%31%36%39.254.169.254", "１６９.２５４.１６９.２５４",
+             "169．254．169．254", "169.254.169.254.", "١٦٩.٢٥٤.١٦٩.٢٥٤", "1.2.3.256",
+             "1.2.65536", "0x.0x.0", "10.0.0.5", "127.1", "0x7f.1", "[::1]",
+             "[2001:db8::1]", "8.8.8.8", "evil.test", "ev%69l.test", "EVIL.test", "corp.example")
+_UP_TAILS = ("", "/latest", ":80/x", "?q", "#f", "\\x", "\\@corp.example", "/@corp.example")
+
+
+def _url_parse_spellings():
+    for s, p, h, t in itertools.product(_UP_SCHEMES, _UP_PREFIXES, _UP_HOSTS, _UP_TAILS):
+        yield f"{s}{p}{h}{t}"
+
+
+# Under-reads that url_parse has TODAY, by class. Each class is a property of
+# the spelling, never a list of spellings, so a regenerated grid cannot hide
+# one; first match wins, in this order. Each is a strict xfail until M3 moves
+# url_parse onto the core's host pipeline and its two splits, and the
+# `unclassified` bucket is green throughout: a shape not named here is red.
+def _urlsplit_raises(u):
+    from urllib.parse import urlsplit
+    try:
+        urlsplit(u)
+    except ValueError:
+        return True
+    return False
+
+
+def _special_without_slashes(u):
+    return re.match(r"(?i)(https?|wss?|ftp):(?!//[^/])", u) is not None
+
+
+_UP_UNDER_READ_CLASSES = (
+    ("special-scheme-without-//",
+     _special_without_slashes,
+     "R4: WHATWG (ada) takes the authority after any run of / and \\; urlsplit finds none"),
+    ("backslash",
+     lambda u: "\\" in u,
+     "F1's shape for url_parse: WHATWG and urllib3 read a backslash as a slash"),
+    ("urlsplit-refusal",
+     lambda u: _urlsplit_raises(u),
+     "this interpreter's urlsplit raises, url_parse returns None, and httpx, urllib3 "
+     "and WHATWG send the request anyway (M0's WPT sibling, `http://&a:foo(b]c@d:2/`)"),
+    ("fullwidth",
+     lambda u: any(0xFF00 <= ord(c) <= 0xFFEF for c in u),
+     "F3: httpx IDNA-maps U+FF0E, and Python's IDNA codec maps it for the resolver"),
+    ("percent-encoded-host",
+     lambda u: re.search(r"//[^/?#]*%3[0-9]", u) is not None,
+     "F3: urllib3 and WHATWG percent-decode the host"),
+    ("empty-hex-part",
+     lambda u: re.search(r"(?i)(^|[/@.])0x(\.|[/:?#\\]|$)", u) is not None,
+     "WHATWG reads an empty hex part as 0 (and the macOS resolver does)"),
+)
+
+
+def _under_read_class(url):
+    return next((name for name, pred, _ in _UP_UNDER_READ_CLASSES if pred(url)), "unclassified")
+
+
+@pytest.fixture(scope="module")
+def url_parse_comparison(oracles):
+    under, over = collections.defaultdict(list), []
+    per_oracle, reached = collections.Counter(), collections.Counter()
+    n = 0
+    for url in _url_parse_spellings():
+        n += 1
+        readings = {}
+        for name, fn in oracles.items():
+            host = fn(url)
+            if not host:
+                continue
+            ip = _resolve(host)
+            readings[name] = _kind(ip) if ip is not None else None
+            per_oracle[name] += 1
+        want = max(readings.values(), key=_rank, default=None)
+        reached[want] += 1
+        got = _url_parse_address(url)
+        if _rank(want) > _rank(got):
+            who = sorted(name for name, c in readings.items() if c == want)
+            under[_under_read_class(url)].append((url, got, want, who))
+        elif _rank(got) > _rank(want):
+            over.append((url, got, readings))
+    return {"n": n, "under": under, "over": over, "per_oracle": per_oracle,
+            "reached": reached}
+
+
+def test_the_url_parse_differential_is_not_vacuous(oracles, url_parse_comparison):
+    c = url_parse_comparison
+    assert c["n"] >= 20_000, c["n"]
+    assert set(c["per_oracle"]) == set(oracles), c["per_oracle"]
+    assert min(c["per_oracle"].values()) >= 5_000, c["per_oracle"]
+    # the readings reach every class, and link-local (the class that blocks) a lot
+    assert set(c["reached"]) == set(_ADDRESS_ORDER), c["reached"]
+    assert c["reached"]["link_local"] >= 3_000, c["reached"]
+
+
+_M3 = "url_parse reads one urlsplit host through _coerce_ip; fixed when M3 moves it onto the core"
+
+
+@pytest.mark.parametrize("cls", [
+    *(pytest.param(name, marks=pytest.mark.xfail(strict=True, raises=AssertionError,
+                                                 reason=f"{_M3} ({why})"))
+      for name, _, why in _UP_UNDER_READ_CLASSES),
+    "unclassified",
+])
+def test_url_parse_address_covers_every_consumer_reading(url_parse_comparison, cls):
+    """THE url_parse DIFFERENTIAL (§2.3 rule 1). A consumer that reaches a more
+    severe address than url_parse reports is a call detection under-classifies;
+    for link_local, a credential fetch that is not blocked."""
+    rows = url_parse_comparison["under"].get(cls, [])
+    who = collections.Counter(o for *_, names in rows for o in names)
+    assert not rows, (
+        f"[{cls}] {len(rows)} spellings reach an address more severe than url_parse "
+        f"reports (reached by {dict(who)}); first five: "
+        + "; ".join(f"{u!r}: url_parse={g}, {', '.join(n)} reach {w}" for u, g, w, n in rows[:5]))
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    "Arabic-Indic digits (int() takes Unicode digits) and inet_aton overflow "
+    "(1.2.3.256 -> 1.2.4.0) are addresses no consumer reaches; fixed at M3"))
+def test_url_parse_over_reads_only_in_named_classes(url_parse_comparison):
+    """§2.3 rule 2: url_parse may not report an address class no consumer
+    reaches, outside a named class. Over-reading link_local blocks a call no
+    transport sends to the metadata service."""
+    over = url_parse_comparison["over"]
+    assert not over, (
+        f"{len(over)} spellings where url_parse reports a class no consumer reaches; "
+        f"first five: " + "; ".join(f"{u!r}: url_parse={g}, readings={r}" for u, g, r in over[:5]))
+
+
+@pytest.mark.parametrize("url, consumer, form", [
+    # F3 — url_parse misses these today; a transport reaches 169.254.169.254
+    pytest.param("http://169．254．169．254/latest", "httpx", "fullwidth dots",
+                 marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=_M3)),
+    pytest.param("http://%31%36%39.254.169.254/", "urllib3", "percent-encoded",
+                 marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=_M3)),
+    # caught TODAY (int() takes fullwidth digits) and the core's coerce_ip
+    # ALONE drops it (F3's regression risk): it must stay caught through M3
+    ("http://１６９.２５４.１６９.２５４/latest", "ada-url (WHATWG)", "fullwidth digits"),
+])
+def test_f3_a_link_local_spelling_a_consumer_reaches_is_link_local(oracles, url, consumer, form):
+    """Named, with the consumer that actually reaches the address. The
+    consumer's reach is asserted first, so this cannot pass on a spelling
+    nothing sends to the metadata service."""
+    host = oracles[consumer](url)
+    ip = _resolve(host) if host else None
+    assert ip is not None and _kind(ip) == "link_local", (
+        f"precondition: {consumer} was expected to reach a link-local address for "
+        f"{url!r}, it read host {host!r} -> {ip}")
+    got = _url_parse_address(url)
+    assert got == "link_local", (
+        f"{form}: {consumer} reaches {ip} for {url!r} and url_parse reports "
+        f"address={got!r}, so a credential fetch through it is not blocked")
+
+
+# The IP spellings, each inside a URL host (V-19 confines the integer forms to
+# one), against the resolver alone: coerce_diff.py's forms (ARCHITECTURE §2.4).
+def _ip_forms():
+    def spell(n):
+        return [str(n), hex(n), hex(n).upper().replace("X", "x"),
+                "0" + oct(n)[2:] if n else "0", "000" + str(n)]
+    forms = set()
+    for a, b in ((169, 254), (127, 0), (10, 1)):
+        for sa in spell(a):
+            for sb in spell(b):
+                forms.add(f"{sa}.{sb}.{sa}.{sb}")
+    forms |= {"2852039166", "0xA9FEA9FE", "0251.0376.0251.0376", "169.254.43518",
+              "169.16689662", "1.2.3.256", "1.2.3.4.5", "1.2.65536",
+              "１６９.２５４.１６９.２５４", "١٦٩.٢٥٤.١٦٩.٢٥٤", "169．254．169．254", "0x",
+              "0x.1.1.1", "0x.0x.0", "08.1.1.1", "4294967296", "4294967295", "127.1", "0",
+              "[::ffff:169.254.169.254]", "[::ffff:a9fe:a9fe]", "[::1]", "1e2.1.1.1",
+              "169.254.169.254.", "0177.1", "017700000001", "0x7f.1", "0x7f000001"}
+    return sorted(forms)
+
+
+def _ip_comparison():
+    """(form, resolver ip, url_parse class, core keys) for every form the
+    resolver reads as an address."""
+    from xaidr.value_origin import extract_destinations
+    rows = []
+    for h in _ip_forms():
+        ip = _resolve(h)
+        if ip is None:
+            continue
+        url = f"http://{h}/"
+        found, _ = extract_destinations({"url": url})
+        core = {f.destination.key() for f in found if f.destination is not None}
+        rows.append((h, ip, _url_parse_address(url), core))
+    return rows
+
+
+def _ip_key(ip):
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return "ip:" + (ip.compressed if isinstance(ip, ipaddress.IPv6Address) else str(ip))
+
+
+def _bsd_integer_wrap(host, ip):
+    """NOT exempted, and not ruled: a decimal integer above 2**32 - 1 that the
+    resolver read modulo 2**32 (macOS: 4294967296 -> 0.0.0.0). glibc and
+    WHATWG refuse it. Measured 2026-10-03; Q22 exempted exactly ONE darwin
+    class, so this one is held out of the two tests below only to be pinned
+    on its own, red on darwin, in test_bsd_libc_integer_wrap_is_an_unruled_platform_class."""
+    if ip is None or not (host.isascii() and host.isdigit()):
+        return False
+    n = int(host, 10)
+    return n > 0xFFFFFFFF and ip == ipaddress.ip_address(n % (1 << 32))
+
+
+def _platform_class(h, ip):
+    return _bsd_decimal_leading_zero(h, ip) or _bsd_integer_wrap(h, ip)
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    "F3 fullwidth dots and the empty hex part: url_parse reads them with _coerce_ip; "
+    "fixed at M3"))
+def test_ip_spellings_resolve_where_the_resolver_does_url_parse():
+    """url_parse's class is at least the class of what the resolver reaches,
+    for every literal form, except Q22's exemption."""
+    rows = _ip_comparison()
+    assert len(rows) >= 50, len(rows)
+    bad = [(h, ip, got) for h, ip, got, _ in rows
+           if _rank(got) < _rank(_kind(ip)) and not _platform_class(h, ip)]
+    assert not bad, (f"{len(bad)} host spellings the resolver reaches at a more severe "
+                     f"class than url_parse reports: {bad[:8]}")
+
+
+@pytest.mark.xfail(sys.platform == "darwin", strict=True, raises=AssertionError, reason=(
+    "the empty hex part (0x.1.1.1 -> 0.1.1.1), which the macOS resolver reads and "
+    "glibc refuses; the core's coerce_ip raises on int('0x', 16). Fixed at M3"))
+def test_ip_spellings_resolve_where_the_resolver_does_core():
+    """The core names the address the resolver reaches, for every literal
+    form, except Q22's exemption."""
+    rows = _ip_comparison()
+    bad = [(h, str(ip), sorted(core)) for h, ip, _, core in rows
+           if _ip_key(ip) not in core and not _platform_class(h, ip)]
+    assert not bad, (f"{len(bad)} host spellings where the resolver reaches an address "
+                     f"the core never names: {bad[:8]}")
+
+
+@pytest.mark.xfail(sys.platform == "darwin", strict=True, raises=AssertionError, reason=(
+    "UNRULED: the macOS resolver wraps a decimal integer modulo 2**32. Q22 exempted "
+    "exactly one darwin class (decimal leading zeros); this is a second, held for "
+    "the owner"))
+def test_bsd_libc_integer_wrap_is_an_unruled_platform_class():
+    """Pinned both ways, as Q22's class is: red (strict xfail) on darwin, where
+    the resolver reads it; green on Linux, where glibc refuses it. Neither url_parse
+    nor the core reads it, so on darwin `http://4294967296/` reaches 0.0.0.0
+    unclassified."""
+    wrapped = [(h, str(ip), got, sorted(core)) for h, ip, got, core in _ip_comparison()
+               if _bsd_integer_wrap(h, ip)]
+    assert not wrapped, (
+        f"{len(wrapped)} decimal integers above 2**32-1 that the resolver wraps to an "
+        f"address neither url_parse nor the core reads: {wrapped}")
+
+
+def test_q22_bsd_libc_decimal_leading_zero_class_is_present_on_darwin_and_empty_on_linux():
+    """Q22, both ways. On darwin the class EXISTS: the resolver reads at least
+    one leading-zero quad as decimal (so the exemption above is spent on a real
+    divergence). On Linux it is EMPTY: glibc reads those quads as octal, the
+    exemption absorbs nothing, and so it cannot grow silently."""
+    exempt = [(h, str(ip)) for h, ip, _, _ in _ip_comparison() if _bsd_decimal_leading_zero(h, ip)]
+    if sys.platform == "darwin":
+        assert exempt, ("Q22: on darwin the resolver was expected to read a leading-zero "
+                        "quad as decimal (0251.254.0251.254 -> 251.254.251.254); it read "
+                        "none that way, so the exemption is stale")
+        assert ("0251.254.0251.254", "251.254.251.254") in exempt, exempt
+    else:
+        assert not exempt, (f"Q22: the BSD-decimal class absorbed {len(exempt)} forms on "
+                            f"{sys.platform}, where it must be empty: {exempt[:8]}")
