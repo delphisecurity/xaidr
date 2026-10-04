@@ -254,6 +254,12 @@ def parse_url(text: str) -> Optional[UrlShape]:
         if not b:
             return None
         host = b.group(1).strip("[]").lower()
+        if host.endswith("."):
+            # No consumer reads `169.254.169.254.` as an address (glibc and the
+            # macOS resolver refuse it, and without a scheme no client sends it
+            # anywhere). The core's pipeline strips a URL host's root dot, so
+            # this branch refuses it explicitly, as it did before A2 M3.
+            return None
         kind = _address_kind(host)
         if kind is None:
             return None

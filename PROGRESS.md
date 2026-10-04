@@ -698,8 +698,12 @@ comparison loop. With that cut, the two named F3 tests fail with a
      everywhere it was written, including a docstring in `_authority.py`.
      urllib.request is not among the four oracles; this is named, not fixed.
   3. **Q22's exemption hides a link-local reach on darwin.**
-     `000169.254.000169.254` resolves to 169.254.169.254 there, and url_parse
-     and the core read octal `121.254.121.254`. Q22 was ruled on the premise
+     `000169.254.000169.254` resolves to 169.254.169.254 there, ~~and url_parse
+     and the core read octal `121.254.121.254`~~ *[retracted, M3 review,
+     measured: url_parse reads NO address and the core `dns:000169.254`, since
+     `000169` is not octal; `169.000254.169.000254` reads public
+     `169.172.169.172` in both. The same false premise is in commit `6463337`'s
+     message, which is not rewritten (no force-push)]*. Q22 was ruled on the premise
      "the decimal reading lands in 240/4", which is false for these forms.
      Pinned as a darwin strict xfail
      (`test_q22_exemption_hides_no_link_local_reach`) **for a re-ruling**.
@@ -773,7 +777,7 @@ unmoved url_parse. Ten failures, the same classes and counts as M2's
 10 failed, 9 passed, 1 xfailed
 ```
 
-Green on the final M3 tree (`6463337`). The suites are the url_parse and core
+Green on the M3 tree (`6463337`); the final numbers are just below. The suites are the url_parse and core
 differentials, `test_url_classes`, `test_differential_parsers`, conformance,
 C-11, the 456-row oracle and `tests/outside`:
 
@@ -782,6 +786,15 @@ C-11, the 456-row oracle and `tests/outside`:
 == linux 3.10.21     589 passed, 17 xfailed
 == linux 3.11.16     589 passed, 17 xfailed
 == linux 3.12.14     589 passed, 17 xfailed
+```
+
+**Final tree** (after `ea7fa59` and the milestone-review fixes):
+
+```
+== macOS 3.12.2      604 passed, 20 xfailed
+== linux 3.10.21     606 passed, 18 xfailed
+== linux 3.11.16     606 passed, 18 xfailed
+== linux 3.12.14     606 passed, 18 xfailed
 ```
 
 **Honest reds on the way, each fixed before the green above.**
@@ -848,6 +861,21 @@ the moved set equals the declared set.
 moved=13 declared=13 undeclared_moves=[] declared_but_unmoved=[]
 ```
 
+That first list was **incomplete** (M3 milestone review, above). On the final
+tree, against the same base wheel:
+
+```
+head: OFF, RECORD and ENFORCE identical on every spelling: True
+  MOVED  'ws://169．254．169．254/'              base=allowed 0.0000 - -  head=flagged 0.9000 credential_access net.metadata_link_local
+  MOVED  'https://169。254。169。254/'           base=allowed 0.0000 - -  head=flagged 0.9000 ...
+  MOVED  'https://169.254.169.254%2e/'        base=allowed 0.0000 - -  head=flagged 0.9000 ...
+  MOVED  'gopher://%31%36%39.254.169.254/'    base=flagged 0.8500 execute net.scheme_smuggling  head=flagged 0.9000 credential_access net.metadata_link_local
+  MOVED  'http://0x_A9FEA9FE/'                base=flagged 0.9000 credential_access net.metadata_link_local  head=allowed 0.0000 - -
+  same   '169.254.169.254./latest'            (control: refused before M3 and again now)
+  ... (27 moved in all, 21 controls)
+moved=27 declared=27 undeclared_moves=[] declared_but_unmoved=[]
+```
+
 The default sensor flags; it does not block. `flagged` at 0.90 is the action
 the link-local rule produces in the default enforcement mode.
 `tests/outside/test_m3_url_parse_from_the_wheel.py` asserts the HEAD half in
@@ -899,7 +927,39 @@ M3 url_parse,     linux 3.12.14: 0 under-reads, 0 over-reads
      The reviewer ran `0X1F`, `00`, `08`, `0x1_f` and whitespace.
   4. Q22's darwin link-local reach is open and pinned; it is not resolved.
   5. No vacuous passes. Its run gave `502 passed, 9 xfailed`.
-- **milestone-reviewer:** see below.
+- **milestone-reviewer, on `6463337`.** It reproduced the 13/13 delta compare,
+  the sabotage, the expected.jsonl regeneration byte for byte, and Linux.
+  It found the following; each is fixed in the commit after `ea7fa59`.
+  1. **The declared list was incomplete.** "Moved equals declared" held only
+     over the driver's own spellings. Moving and undeclared were:
+     - `ws`, `wss` and `ftp` forms;
+     - U+3002 and U+FF61 dots;
+     - `https:///`, `https:\\` and `%2e`;
+     - the M3a digit-check consequences (`0x_A9FEA9FE`, `0_251…`, both now
+       allowed);
+     - gopher and file percent hosts, whose rule, score and category change.
+
+     All are declared now. The differential's fullwidth class and its grid now
+     include U+3002 and U+FF61.
+  2. **A new over-read.** Scheme-less `169.254.169.254./latest` became
+     link_local, and both resolvers refuse it. The scheme-less branch refuses
+     a root dot again, as it did before M3. It is a driver control, and it does
+     not move.
+  3. **C-11 was vacuous for M3.** No C-11 corpus row contains a delta spelling.
+     The delta driver now also runs every spelling under OFF, RECORD and
+     ENFORCE, and `--compare` fails unless all three are identical at HEAD.
+     The CI test asserts it too. **Still not done:** §3.2's "append the §2.2 grid
+     to P-flow-R" in `c11_oracle.py`, and a delta allowance in its
+     `compare()`. The delta driver carries C-11 for the spellings M3 moves.
+  4. **False claims, retracted in place.**
+     - "raw netloc" was still in the rulings doc, line-wrapped where my grep
+       missed it.
+     - The Q22 premise "url_parse and the core read octal 121.254.121.254" is
+       false. They read no address and `dns:000169.254`. It is corrected in
+       the xfail reason and above, and it also stands in commit `6463337`'s
+       message, which is not rewritten.
+     - "The macOS resolver reads `0x`" is false: it refuses `0x` alone.
+     - The PROGRESS evidence was missing at `6463337`. It landed in `ea7fa59`.
 
 ### Found, not fixed
 

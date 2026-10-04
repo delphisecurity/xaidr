@@ -38,6 +38,23 @@ SPELLINGS = {
     "https:169.254.169.254/latest": (True, "R4 over https: ada"),
     "https://&a:foo(b]c@169.254.169.254/latest": (
         True, "urlsplit refusal over https: httpx, urllib3, ada"),
+    # added after the M3 milestone review, which found these moving undeclared
+    "ws://169．254．169．254/": (True, "fullwidth dots over ws: httpx, ada"),
+    "ftp://169．254．169．254/": (True, "fullwidth dots over ftp: httpx, ada"),
+    "wss:169.254.169.254/": (True, "R4 over wss: ada"),
+    "ftp:169.254.169.254/": (True, "R4 over ftp: ada"),
+    "https:///169.254.169.254/latest": (True, "R4, three slashes: ada"),
+    "https:\\\\169.254.169.254/latest": (True, "R4, backslashes: ada"),
+    "https://169。254。169。254/": (True, "U+3002 dots: httpx IDNA, ada"),
+    "https://169｡254｡169｡254/": (True, "U+FF61 dots: httpx IDNA, ada"),
+    "https://%31%36%39.254.169.254/latest": (True, "percent-encoded over https: urllib3, ada"),
+    "https://169.254.169.254%2e/": (True, "percent-encoded root dot: urllib3, ada"),
+    "gopher://%31%36%39.254.169.254/": (
+        True, "still flagged; rule net.scheme_smuggling -> net.metadata_link_local, 0.85 -> 0.90, execute -> credential_access"),
+    "file://%31%36%39.254.169.254/x": (
+        True, "still flagged; rule net.local_file_scheme -> net.metadata_link_local, 0.85 -> 0.90"),
+    "http://0x_A9FEA9FE/": (True, "no longer an address (M3a digit check): no resolver reads `_`"),
+    "http://0_251.254.169.254/": (True, "no longer an address (M3a digit check)"),
     # no longer link_local: no consumer reaches it
     "http://١٦٩.٢٥٤.١٦٩.٢٥٤/latest": (True, "Arabic-Indic digits: no consumer"),
     # controls: must not move
@@ -51,6 +68,7 @@ SPELLINGS = {
         False, "control: fullwidth DIGITS, caught before M3; coerce_ip alone drops it"),
     "http://corp.example\\@169.254.169.254/": (False, "control: urlsplit read it before M3"),
     "169.254.169.254/latest": (False, "control: scheme-less"),
+    "169.254.169.254./latest": (False, "control: scheme-less root dot, no consumer reads it"),
     "0xA9FEA9FE/latest": (False, "control: scheme-less hex"),
     "https://0x.0x.0/": (False, "0.0.0.0 is private: classify-only, no action"),
     "http://1.2.3.256/": (False, "no longer an address (was public): no action either way"),
@@ -69,6 +87,9 @@ def _compare(base_path, head_path):
     head = json.load(open(head_path, encoding="utf-8"))
     print(f"base xaidr: {base['xaidr_file']} | py {base['python']}")
     print(f"head xaidr: {head['xaidr_file']} | py {head['python']}")
+    modes_ok = head.get("modes_identical")
+    print(f"head: OFF, RECORD and ENFORCE identical on every spelling: {modes_ok}"
+          + ("" if modes_ok else f" {head.get('mode_diffs')}"))
     moved, declared = set(), {u for u, (m, _) in SPELLINGS.items() if m}
     for u, (_, why) in SPELLINGS.items():
         b, h = base["lines"][u], head["lines"][u]
@@ -78,7 +99,7 @@ def _compare(base_path, head_path):
     extra, missing = sorted(moved - declared), sorted(declared - moved)
     print(f"moved={len(moved)} declared={len(declared)} "
           f"undeclared_moves={extra} declared_but_unmoved={missing}")
-    return 0 if not extra and not missing else 1
+    return 0 if not extra and not missing and modes_ok else 1
 
 
 if __name__ == "__main__":
@@ -102,13 +123,28 @@ if __name__ == "__main__":
         def close(self, *a, **k):
             pass
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        sensor = xaidr.Sensor(agent_id="m3-deltas", reporter=_Null())
-    lines = {}
-    for url in SPELLINGS:
-        r = sensor.scan_tool_call("http_get", {"url": url})
-        rules = ",".join(sorted(r.rules or []))
-        lines[url] = f"{r.action} {float(r.score):.4f} {r.category or '-'} {rules or '-'}"
+    import inspect
+
+    def run(**kw):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sensor = xaidr.Sensor(agent_id="m3-deltas", reporter=_Null(), **kw)
+        out = {}
+        for url in SPELLINGS:
+            r = sensor.scan_tool_call("http_get", {"url": url})
+            rules = ",".join(sorted(r.rules or []))
+            out[url] = f"{r.action} {float(r.score):.4f} {r.category or '-'} {rules or '-'}"
+        return out
+
+    lines = run()
+    # C-11 on the spellings M3 moves: the delta must be the same in every
+    # value-origin mode. A wheel without the parameter has no modes to compare.
+    modes_identical, diffs = None, []
+    if "value_origin" in inspect.signature(xaidr.Sensor).parameters:
+        by_mode = {m: run(value_origin=m) for m in ("off", "record", "enforce")}
+        diffs = [u for u in SPELLINGS
+                 if len({by_mode[m][u] for m in by_mode} | {lines[u]}) != 1]
+        modes_identical = not diffs
     print(json.dumps({"xaidr_file": xaidr.__file__, "python": sys.version.split()[0],
-                      "lines": lines}, ensure_ascii=False))
+                      "lines": lines, "modes_identical": modes_identical,
+                      "mode_diffs": diffs}, ensure_ascii=False))

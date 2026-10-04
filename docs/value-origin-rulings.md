@@ -329,16 +329,19 @@ Each is listed so it can be overruled, not so it can pass unnoticed.
 
    *[Corrected 2026-10-03, M0 milestone review: an earlier version said "31
    spellings, Linux only", and gave the reason as "urllib.request on such an
-   interpreter sends there". Both were wrong. urllib.request passes the raw
-   netloc on and reaches neither host, and the count was from an earlier grid
+   interpreter sends there". Both were wrong. urllib.request passes the ~~raw~~
+   netloc on (*M3 review: percent-DECODED, userinfo included; "raw" was false*)
+   and reaches neither host here, and the count was from an earlier grid
    and an earlier split.]*
 
 ## Decisions made in the A2 build (M3) that still need a ruling
 
 1. **An empty hex part is 0** (`coerce_ip`). `https://0x.0x.0/` is `ip:0.0.0.0`,
    `http://0x.1.1.1/` is `ip:0.1.1.1`, `http://0x/` is `ip:0.0.0.0`: WHATWG's
-   IPv4 number parser reads an empty hex part as 0, and so does the macOS
-   resolver httpx and urllib3 hand the name to. glibc refuses all three. That
+   IPv4 number parser reads an empty hex part as 0. The macOS resolver httpx
+   and urllib3 hand the name to reads `0x.0x.0` and `0x.1.1.1` ~~and so does
+   the macOS resolver~~ *[corrected, M3 review: it REFUSES `0x` alone; WHATWG
+   reads it]*. glibc refuses all three. That
    makes this a superset reading on Linux, not an over-read, because WHATWG
    reaches it everywhere. Found by the M0 WPT run, pinned by the
    `M3-empty-hex-part` supplementary row. SEMANTIC for paid (P4).

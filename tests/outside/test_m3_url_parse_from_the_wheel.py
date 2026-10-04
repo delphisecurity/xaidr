@@ -41,12 +41,24 @@ def test_the_driver_ran_the_installed_wheel(installed):
 
 
 @pytest.mark.parametrize("url", [u for u, (moves, why) in SPELLINGS.items()
-                                 if moves and "no consumer" not in why])
+                                 if moves and "no consumer" not in why
+                                 and not why.startswith("no longer")])
 def test_a_link_local_spelling_a_consumer_reaches_is_classified_link_local(installed, url):
     line = installed["lines"][url]
     assert "net.metadata_link_local" in line and not line.startswith("allowed"), (
         f"{url!r} ({SPELLINGS[url][1]}) reaches 169.254.169.254 and the INSTALLED "
         f"sensor gives {line!r}")
+
+
+def test_head_moves_no_action_between_value_origin_modes(installed):
+    """C-11 on the spellings M3 moves: OFF, RECORD and ENFORCE give the same line."""
+    assert installed["modes_identical"] is True, installed["mode_diffs"]
+
+
+@pytest.mark.parametrize("url", ["http://0x_A9FEA9FE/", "http://0_251.254.169.254/",
+                                 "169.254.169.254./latest"])
+def test_spellings_no_resolver_reads_are_not_link_local(installed, url):
+    assert installed["lines"][url].startswith("allowed"), installed["lines"][url]
 
 
 def test_arabic_indic_digits_are_no_longer_an_address(installed):

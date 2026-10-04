@@ -367,7 +367,7 @@ _UP_PREFIXES = ("", "user@", "user:pw@", "svc%40corp@", "a@b@", "x@corp.example@
 _UP_HOSTS = ("169.254.169.254", "0xA9FEA9FE", "2852039166", "0251.0376.0251.0376",
              "169.254.43518", "0251.254.0251.254", "[::ffff:169.254.169.254]",
              "[::ffff:a9fe:a9fe]", "%31%36%39.254.169.254", "１６９.２５４.１６９.２５４",
-             "169．254．169．254", "169.254.169.254.", "١٦٩.٢٥٤.١٦٩.٢٥٤", "1.2.3.256",
+             "169．254．169．254", "169。254。169。254", "169｡254｡169｡254", "169.254.169.254.", "١٦٩.٢٥٤.١٦٩.٢٥٤", "1.2.3.256",
              "1.2.65536", "0x.0x.0", "10.0.0.5", "127.1", "0x7f.1", "[::1]",
              "[2001:db8::1]", "8.8.8.8", "evil.test", "ev%69l.test", "EVIL.test", "corp.example")
 _UP_TAILS = ("", "/latest", ":80/x", "?q", "#f", "\\x", "\\@corp.example", "/@corp.example")
@@ -411,7 +411,8 @@ _UP_UNDER_READ_CLASSES = (
      lambda u: "\\" in u,
      "F1's shape for url_parse: WHATWG and urllib3 read a backslash as a slash"),
     ("fullwidth",
-     lambda u: any(0xFF00 <= ord(c) <= 0xFFEF for c in u),
+     # U+3002 and U+FF61 too: IDNA maps both to '.' (M3 review)
+     lambda u: any(0xFF00 <= ord(c) <= 0xFFEF or c == "\u3002" for c in u),
      "F3: httpx IDNA-maps U+FF0E, and Python's IDNA codec maps it for the resolver"),
     ("percent-encoded-host",
      lambda u: re.search(r"//[^/?#]*%3[0-9]", u) is not None,
@@ -693,9 +694,10 @@ def test_bsd_libc_integer_wrap_is_an_unruled_platform_class():
 @pytest.mark.xfail(sys.platform == "darwin", strict=True, raises=AssertionError, reason=(
     "FOR THE OWNER (found by the M2 milestone review): Q22's exemption was ruled on "
     "the premise that the decimal reading lands in reserved space (251.254.251.254). "
-    "It also covers 000169.254.000169.254, which the macOS resolver reads as "
-    "169.254.169.254, LINK-LOCAL, while url_parse and the core read octal "
-    "121.254.121.254. Held for a re-ruling; behaviour unchanged."))
+    "It also covers 000169.254.000169.254 and 169.000254.169.000254, which the macOS "
+    "resolver reads as 169.254.169.254, LINK-LOCAL. url_parse reads no address and "
+    "the core dns:000169.254 for the first ('000169' is not octal), and both read "
+    "public 169.172.169.172 for the second. Held for a re-ruling; behaviour unchanged."))
 def test_q22_exemption_hides_no_link_local_reach():
     """The exemption may absorb a platform divergence, never a reach of the
     metadata service. Green on Linux (the class is empty there); a strict xfail
