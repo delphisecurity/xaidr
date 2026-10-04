@@ -60,6 +60,7 @@ simply not a URL.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import re
 from typing import NamedTuple, Optional
 from urllib.parse import urlsplit
@@ -104,6 +105,21 @@ class UrlShape(NamedTuple):
     raw: str                  # the value, capped
 
 
+_log = logging.getLogger("xaidr.scanner.url_parse")
+_FAULT_LOGGED = False
+
+
+def _core_fault() -> None:
+    """A fault in the value-origin core's reading. Logged ONCE per process at
+    ERROR (attacker-controlled input must not be able to flood the log), never
+    swallowed silently, and never allowed to erase the other readings."""
+    global _FAULT_LOGGED
+    if not _FAULT_LOGGED:
+        _FAULT_LOGGED = True
+        _log.exception("url_parse: the value-origin core's URL reading faulted; "
+                       "classifying from the urlsplit reading alone")
+
+
 # When a URL's readings disagree, ``address`` is the MOST SEVERE class any of
 # them reaches (A2 Q4). A total order, so an equal rank is an equal class.
 _SEVERITY = (None, "public", "private", "loopback", "link_local")
@@ -141,7 +157,11 @@ def _address_kind(host: str) -> Optional[str]:
     reaches."""
     if not host:
         return None
-    return _address_of(_host_authority(host, arg_fallback=False))
+    try:
+        return _address_of(_host_authority(host, arg_fallback=False))
+    except Exception:
+        _core_fault()
+        return None
 
 
 def _url_address(value: str, split_host: str) -> Optional[str]:
@@ -157,7 +177,11 @@ def _url_address(value: str, split_host: str) -> Optional[str]:
     one of them is a bypass of the others: before M3, ``http://169.254.169.254\\x``
     (WHATWG) and ``http://&a:foo(b]c@169.254.169.254/`` (httpx, urllib3,
     WHATWG) reached the metadata service with ``address`` None."""
-    res = classify_value(value, arg_mode=True)
+    try:
+        res = classify_value(value, arg_mode=True)
+    except Exception:
+        _core_fault()
+        res = None
     if isinstance(res, ParseFailure):
         found = list(res.parsed)
     elif isinstance(res, list):

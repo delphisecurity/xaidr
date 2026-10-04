@@ -306,3 +306,27 @@ def test_hostname_metadata_is_a_string_list_on_purpose():
     assert classify_url("http://metadata.google.internal/computeMetadata/v1/") == (
         "credential_access", "critical"
     )
+
+
+def test_a_fault_in_the_core_reading_is_logged_and_keeps_the_urlsplit_reading(monkeypatch, caplog):
+    """A2 M3 silent-failure review: url_parse's blanket `except` now wraps the
+    value-origin core's readings. A fault there must not turn a link-local URL
+    into "not a URL" silently: the urlsplit reading still classifies it, and
+    the fault is logged (once per process, so attacker input cannot flood)."""
+    import logging
+    import xaidr.scanner.url_parse as up
+
+    def boom(*a, **k):
+        raise RuntimeError("injected core fault")
+
+    monkeypatch.setattr(up, "classify_value", boom)
+    monkeypatch.setattr(up, "_FAULT_LOGGED", False, raising=False)
+    with caplog.at_level(logging.ERROR, logger="xaidr.scanner.url_parse"):
+        shape = up.parse_url("https://169.254.169.254/latest/meta-data/")
+        up.parse_url("https://169.254.169.254/latest/meta-data/")
+    assert shape is not None and shape.address == "link_local", (
+        f"a core fault made a link-local URL read as {shape}: the credential fetch "
+        "would go unclassified, silently")
+    faults = [r for r in caplog.records if "injected core fault" in (r.exc_text or "")
+              or "injected core fault" in r.getMessage()]
+    assert len(faults) == 1, f"expected the fault logged exactly once, got {len(faults)}"

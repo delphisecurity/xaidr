@@ -721,3 +721,22 @@ def test_q22_bsd_libc_decimal_leading_zero_class_is_present_on_darwin_and_empty_
     else:
         assert not exempt, (f"Q22: the BSD-decimal class absorbed {len(exempt)} forms on "
                             f"{sys.platform}, where it must be empty: {exempt[:8]}")
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    "found at M3, not fixed: url_parse takes `address` from the core's readings "
+    "but `host` from urlsplit (§2.1 kept the hostname string-list rules on "
+    "urlsplit's spelling), so R4's `http:name/` is not a URL to url_parse and the "
+    "metadata HOSTNAME rules never see it"))
+def test_r4_a_metadata_hostname_without_slashes_reaches_the_hostname_rules(oracles):
+    """WHATWG (Node fetch, undici MCP servers) sends `http:metadata.google.internal/…`
+    to the metadata hostname; the hostname rules key on ``UrlShape.host``."""
+    from xaidr.scanner.url_parse import parse_url
+    url = "http:metadata.google.internal/computeMetadata/v1/"
+    reached = oracles["ada-url (WHATWG)"](url)
+    if reached != "metadata.google.internal":
+        pytest.fail(f"precondition: WHATWG was expected to reach the metadata hostname "
+                    f"for {url!r}; it read {reached!r}", pytrace=False)
+    shape = parse_url(url)
+    assert shape is not None and shape.host == "metadata.google.internal", (
+        f"WHATWG reaches metadata.google.internal for {url!r}; url_parse gives {shape}")

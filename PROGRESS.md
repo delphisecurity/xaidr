@@ -561,19 +561,389 @@ recorded for earlier seams.
 
 ---
 
-## Status after M1, and what is waiting on the owner
+## The owner's open M0 question: what reaches the verdict when `authority_of` is None
+
+**Answer: None never reaches the verdict.** `authority_of` is not on the
+verdict path. In `xaidr/`, its only uses are its definition and the export in
+`value_origin/__init__.py`. The verdict path is:
+
+- `evaluate_call` (`_evaluate.py`);
+- then `extract_destinations` (`_extract.py`);
+- then `classify_value(leaf, arg_mode=True)` (`_authority.py`).
+
+For a two-host value, `classify_value` returns a **list**, and
+`extract_destinations` emits one `Finding` per host (`out.extend(...)`). Each
+is looked up, and the weakest wire decides. Executed at M3:
+
+```
+authority_of(url)            = None
+extract_destinations         = [('dns:corp.example', None), ('dns:evil.test', None)]
+evaluate_call.wire           = untrusted_source | findings: [('dns:corp.example', 'principal'), ('dns:evil.test', 'untrusted_source')]
+should_block(ENFORCE)        = True
+key_authority(url) [designation key arg] = None -> no authority basis; only an n-gram could authorize the key
+```
+
+Two other sites have the same "one answer or None" shape. Both fail closed:
+
+- **The recording side.** `result_authorities` and `prose_candidates` extend
+  with every host of the list. Both readings are recorded.
+- **`key_authority`, the designation's key argument (`_ledger._KeyPlan`).**
+  None means the key has no authority basis. The read is then trusted only if
+  an n-gram authorizes the key. A two-host URL is not a valid n-gram (V-8d
+  refuses it), so the read records `untrusted_source`.
+
+So None means "no single authority". It never means "no destination".
+
+---
+
+## M2 — the url_parse differential, tests only. **Green.**
+
+**Commit `f95f5df`.** The tests are at the bottom of
+`tests/test_differential_oracles.py`. They live in M0's multi-oracle module,
+not in `test_differential_parsers.py` as §2.4 said. They need the dev-extra
+oracles and share M0's refuse-not-skip fixture. The core half of §2.4 was
+delivered at M0 as `test_core_reads_every_host_any_consumer_reads`.
+
+**What it compares.**
+- The code under test is `parse_url(url).address`.
+- It is compared with the address class each of four consumers reaches:
+  urllib.parse, httpx, urllib3 and ada (WHATWG).
+- Each consumer's host goes to the platform resolver the way a Python client
+  hands it over: `socket.getaddrinfo(str, AI_NUMERICHOST)`, which runs Python's
+  IDNA codec and then libc's numeric parse.
+- Superset rule: `address` must be at least as severe as the most severe class
+  any consumer reaches.
+- The grid is 24,960 spellings: url_diff.py's axes widened with M0's split
+  prefixes, the mirror tail and `_urls()`'s userinfo forms.
+
+### Red: every strict xfail at M2, by `--runxfail` (macOS 3.12.2)
+
+```
+[special-scheme-without-//] 6304 spellings ... (reached by {'ada-url (WHATWG)': 6304}); 'http:169.254.169.254': url_parse=None ...
+[backslash] 2742 ... (reached by {'ada-url (WHATWG)': 2213, 'urllib3': 2002, 'httpx': 252, 'urllib.parse': 252}); 'http://169.254.169.254\\x': url_parse=None
+[urlsplit-refusal] 528 ... (reached by {'ada-url (WHATWG)': 516, 'httpx': 360, 'urllib3': 420}); 'http://&a:foo(b]c@169.254.169.254': url_parse=None
+[fullwidth] 252 ... 'http://169．254．169．254': url_parse=None, ada-url (WHATWG), httpx, urllib.parse reach link_local
+[percent-encoded-host] 210 ... 'http://%31%36%39.254.169.254': url_parse=None, ada-url (WHATWG), urllib3 reach link_local
+[empty-hex-part] 252 ... 'http://0x.0x.0': url_parse=None, ada-url (WHATWG), httpx, urllib.parse, urllib3 reach private
+1428 spellings where url_parse reports a class no consumer reaches; 'http://١٦٩.٢٥٤.١٦٩.٢٥٤': url_parse=link_local, readings={'urllib.parse': None}
+fullwidth dots: httpx reaches 169.254.169.254 for 'http://169．254．169．254/latest' and url_parse reports address=None, so a credential fetch through it is not blocked
+percent-encoded: urllib3 reaches 169.254.169.254 for 'http://%31%36%39.254.169.254/' and url_parse reports address=None, so a credential fetch through it is not blocked
+3 host spellings the resolver reaches at a more severe class than url_parse reports: [('0x.0x.0', ...0.0.0.0, None), ('0x.1.1.1', ...0.1.1.1, None), ('169．254．169．254', ...169.254.169.254, None)]
+2 host spellings where the resolver reaches an address the core never names: [('0x.0x.0', '0.0.0.0', ['dns:0x.0']), ('0x.1.1.1', '0.1.1.1', ['dns:1.1'])]
+1 decimal integers above 2**32-1 that the resolver wraps to an address neither url_parse nor the core reads: [('4294967296', '0.0.0.0', None, ['dns:4294967296'])]
+12 failed, 8 passed
+```
+
+**Found by M2, not in the plan:** `urlsplit-refusal`. When `urlsplit` raises,
+url_parse returned None, meaning "not a URL". httpx, urllib3 and WHATWG send
+`http://&a:foo(b]c@169.254.169.254/` to the link-local address anyway.
+
+**Counts by class (M2 silent-failure review).** The M2 per-class counts used
+first-match order, with backslash before refusal. 176 of the 2,742 backslash
+rows are really refusals. From M3 on, refusal is checked first.
+
+### Green at M2: four interpreters
+
+```
+== macOS 3.12.2      8 passed, 12 xfailed
+== linux 3.10.21    10 passed, 10 xfailed
+== linux 3.11.16    10 passed, 10 xfailed
+== linux 3.12.14    10 passed, 10 xfailed      (the 2 darwin-conditional xfails pass on Linux)
+```
+
+**CI on `f95f5df`: green.** PR #34, GitHub Actions run `37173748403`, "CI completed success"; DCO run `37173748321` passed.
+
+### Sabotage at M2: the reading set cut to `urllib.parse` alone
+
+```
+macOS:  [XPASS(strict)] special-scheme-without-//, urlsplit-refusal, percent-encoded-host
+        XFAIL (still)   backslash, fullwidth, empty-hex-part      4 failed (incl. non-vacuity)
+linux:  XPASS(strict) also empty-hex-part (glibc refuses 0x.)     5 failed
+restored byte-identical (sha 54a1fdf4...), 8 passed, 12 xfailed
+```
+
+**The plan's sabotage claim was wrong, and it is retracted in place in
+ARCHITECTURE.md §5 M2.** The fullwidth class stays a genuine xfail with
+`urllib.parse` alone: `getaddrinfo` runs Python's IDNA codec, which maps
+U+FF0E. The M2 milestone reviewer cut `_oracles()` itself rather than the
+comparison loop. With that cut, the two named F3 tests fail with a
+`KeyError` instead of flipping, so that sabotage proves nothing through them.
+
+### Two darwin-only resolver classes beyond Q22, held for the owner
+
+1. **Integer wrap.** The macOS resolver reads a number above 2**32-1 modulo
+   2**32: `4294967296` → `0.0.0.0`, and WPT's `0x100000000` → `0.0.0.0`.
+   glibc and WHATWG refuse both. It is pinned as a strict xfail on darwin
+   (`test_bsd_libc_integer_wrap_is_an_unruled_platform_class`, decimal form).
+   It is neither exempted nor read.
+2. **A leading zero in an embedded IPv4** (WPT
+   `https://[0:1:2:3:4:5:192.0.02.1]/`). urllib3 hands the host to the macOS
+   resolver, which reads `0:1:2:3:4:5:c000:201`. It is a public class, so it
+   moves no block decision. Found by the M3 WPT run. Not pinned yet.
+
+### Fresh-context reviews of M2
+
+- **silent-failure-hunter.**
+  1. First-match ordering misattributed 176 refusals to the backslash class.
+     Fixed at M3.
+  2. `_resolve`'s `ValueError` branch is likely dead.
+  3. The exemption predicates are exact.
+  4. The floors are real.
+  5. Refuse-not-skip holds.
+- **milestone-reviewer.** It confirmed every count and both platform halves.
+  It found the following. Each is fixed at M3 unless the line says otherwise.
+  1. Rule 2 (named over-read classes) was a blanket xfail.
+  2. **"urllib.request passes the raw netloc on" is false.** It percent-decodes
+     the host and reaches `%31%36%39.254.169.254`. Retracted in place
+     everywhere it was written, including a docstring in `_authority.py`.
+     urllib.request is not among the four oracles; this is named, not fixed.
+  3. **Q22's exemption hides a link-local reach on darwin.**
+     `000169.254.000169.254` resolves to 169.254.169.254 there, and url_parse
+     and the core read octal `121.254.121.254`. Q22 was ruled on the premise
+     "the decimal reading lands in 240/4", which is false for these forms.
+     Pinned as a darwin strict xfail
+     (`test_q22_exemption_hides_no_link_local_reach`) **for a re-ruling**.
+  4. ARCHITECTURE.md called urlsplit-refusal "WHATWG-only". Corrected.
+  5. No M2 evidence was in the commit. This section is it.
+  6. **Q19 (vendoring WPT) was dropped without saying so.** It is still not
+     vendored. M3 ran WPT from the pinned copy instead (sha256 `81e85fd3…f652`,
+     commit `c48d5874`). Vendoring is open.
+  7. The departures from §2.4 were not stated. They are now annotated in
+     §2.4.
+
+---
+
+## M3 — url_parse moved onto the core's host canonicalisation. **Green on four interpreters.**
+
+**Commits.**
+- `dfb4334`: core, **SEMANTIC, a new paid pin**. `coerce_ip` reads an empty
+  hex part as 0 and digit-checks integer parts.
+- `e2e8bb9`: the url_parse move.
+- `6463337`: the outside driver, the named over-read classes, the Q22
+  consequence pin and the retractions. It includes a behaviour-neutral
+  DOCSTRING change in `_authority.py`, which still changes the pin bytes.
+
+**How the move is built.** Q5 (a) "a shared helper" needed no new helper: url_parse calls the core's
+existing `classify_value` (every reading: WHATWG, 3.12.2's RFC split, the
+refusal reading, R4) and `_host_authority` (the whole host pipeline) directly,
+so the pipeline order lives only in the vendored unit. `address` = the most
+severe class across those readings plus this interpreter's `urlsplit` host
+(which also covers `file:`). `UrlShape.host` keeps urlsplit's spelling.
+
+### `https://0x.0x.0/`: fixed, not left as an xfail (`dfb4334`)
+
+Red against the unfixed core:
+
+```
+E  AssertionError: assert Authority(sch... value='0x.0') == Authority(sch...lue='0.0.0.0')
+E  AssertionError: M3-empty-hex-part (...): ...
+E  AssertionError: 2 host spellings where the resolver reaches an address the core never names: [('0x.0x.0', '0.0.0.0', ['dns:0x.0']), ('0x.1.1.1', '0.1.1.1', ['dns:1.1'])]
+3 failed
+```
+
+Pre-fix against fixed core (`git show` of the pre-fix file, run side by side):
+
+```
+https://0x.0x.0/         pre-fix=dns:0x.0       fixed=ip:0.0.0.0
+http://0x.1.1.1/         pre-fix=dns:1.1        fixed=ip:0.1.1.1
+http://0x/               pre-fix=dns:0x         fixed=ip:0.0.0.0
+http://0x_1.1.1.1/       pre-fix=ip:1.1.1.1     fixed=dns:1.1     (int() took the `_`; no resolver does)
+http://0_7.1.1.1/        pre-fix=ip:7.1.1.1     fixed=dns:1.1
+http://0x1f.1/           pre-fix=ip:31.0.0.1    fixed=ip:31.0.0.1
+```
+
+**`expected.jsonl`.** sha256 `d8bd14cd…ffbd53` → `dc9329b6…7109b`. That is one
+added row, `M3-empty-hex-part`, regenerated by `convert.py --rev 01450c7…`.
+SEMANTIC, so paid's re-vendor bumps `EVALUATOR_GENERATION`.
+
+**Green for `dfb4334`.**
+
+```
+== macOS 3.12.2      503 passed, 22 xfailed
+== linux 3.10/3.11/3.12   504 passed, 21 xfailed each
+```
+
+### url_parse move (`e2e8bb9`): red first, then green
+
+The M2 strict xfails were un-xfailed first, and the run went red against the
+unmoved url_parse. Ten failures, the same classes and counts as M2's
+`--runxfail` above:
+
+```
+10 failed, 9 passed, 1 xfailed
+```
+
+Green on the final M3 tree (`6463337`). The suites are the url_parse and core
+differentials, `test_url_classes`, `test_differential_parsers`, conformance,
+C-11, the 456-row oracle and `tests/outside`:
+
+```
+== macOS 3.12.2      587 passed, 19 xfailed
+== linux 3.10.21     589 passed, 17 xfailed
+== linux 3.11.16     589 passed, 17 xfailed
+== linux 3.12.14     589 passed, 17 xfailed
+```
+
+**Honest reds on the way, each fixed before the green above.**
+1. Over-reads of Q22's class from the other side: 534 on darwin. url_parse
+   reads octal link-local, and the macOS resolver reads decimal.
+2. Over-reads from the core's one host pipeline: 356. The pipeline
+   percent-decodes, strips the root dot and parses an empty hex part, on hosts
+   that only RFC readings split out.
+3. 296 over-reads of M0's `urlsplit-bracket-validation` class, on Linux only.
+4. 24 darwin over-reads that the bracket predicate grabbed. Their real cause
+   was Q22. The mechanism classes are now checked first.
+5. 134 Linux over-reads behind a `\@`, which glibc refuses: `0x.0x.0`.
+
+Each class is named with a reason and pinned. The Q22 and bracket classes
+are pinned both ways, by platform or interpreter. The pipeline class must
+absorb something, or it is red.
+
+### F3: each spelling named with the consumer that reaches it
+
+| spelling | before M3 | after | consumer that reaches 169.254.169.254 |
+|---|---|---|---|
+| `http://169．254．169．254/latest` | None | link_local | httpx (also urllib.parse+resolver, ada) |
+| `http://%31%36%39.254.169.254/` | None | link_local | urllib3 (also ada, and urllib.request per the M2 review) |
+| `http://１６９.２５４.１６９.２５４/latest` | link_local | link_local (pinned) | ada; urllib.parse+resolver |
+
+**F3's "live bypass" was half true, and that is measured.** On `http://`, the
+`SHELL_cloud_metadata_credentials` regex accident already flagged the
+fullwidth-dots spelling at 0.90 before M3. The live bypass was the
+`https://` form, which went from `allowed 0.0000` to `flagged 0.9000`. The
+percent form was a live bypass on both schemes.
+
+### Sabotage, both directions
+
+```
+=== SABOTAGE M3: url_parse reverted to its pre-M3 bytes (_coerce_ip)
+E  AssertionError: fullwidth dots: httpx reaches 169.254.169.254 for 'http://169．254．169．254/latest' and url_parse reports address=None, so a credential fetch through it is not blocked
+E  AssertionError: percent-encoded: urllib3 reaches 169.254.169.254 for 'http://%31%36%39.254.169.254/' and url_parse reports address=None, so a credential fetch through it is not blocked
+10 failed, 11 passed, 1 xfailed
+=== same sabotage: tests/test_url_classes.py (must stay green)
+98 passed
+=== SABOTAGE M3-b: the naive move, the core's coerce_ip ALONE on the urlsplit host
+E  AssertionError: fullwidth digits: ada-url (WHATWG) reaches 169.254.169.254 for 'http://１６９.２５４.１６９.２５４/latest' and url_parse reports address=None, so a credential fetch through it is not blocked
+8 failed, 2 passed
+=== RESTORED (sha 15c063a0..., byte-identical)
+```
+
+### Outside the process: built wheels, fresh venvs, `python -I`
+
+**The Q4 delta list.** `tests/outside/drivers/url_parse_deltas.py` sends 32
+spellings through `scan_tool_call("http_get", ...)` of the installed sensor.
+The base wheel is `f95f5df`; HEAD is the M3 tree. `--compare` exits 0 only if
+the moved set equals the declared set.
+
+```
+  MOVED  'http://%31%36%39.254.169.254/latest'       base=allowed 0.0000 - -  head=flagged 0.9000 credential_access net.metadata_link_local
+  MOVED  'https://169．254．169．254/latest'          base=allowed 0.0000 - -  head=flagged 0.9000 credential_access net.metadata_link_local
+  MOVED  'https://169.254.169.254\\latest'           base=allowed 0.0000 - -  head=flagged 0.9000 ...
+  MOVED  'https://169.254.169.254\\@corp.example/'   base=allowed 0.0000 - -  head=flagged 0.9000 ...
+  MOVED  'https:169.254.169.254/latest'              base=allowed 0.0000 - -  head=flagged 0.9000 ...
+  MOVED  'https://&a:foo(b]c@169.254.169.254/latest' base=allowed 0.0000 - -  head=flagged 0.9000 ...
+  MOVED  'http://١٦٩.٢٥٤.١٦٩.٢٥٤/latest'             base=flagged 0.9000 credential_access net.metadata_link_local  head=allowed 0.0000 - -
+  MOVED  (6 http:// spellings: same action, flagged 0.9000, rules gain net.metadata_link_local)
+  same   19 controls, incl. fullwidth DIGITS, 0x.0x.0 (private: classify-only), 1.2.3.256, metadata.google.internal
+moved=13 declared=13 undeclared_moves=[] declared_but_unmoved=[]
+```
+
+The default sensor flags; it does not block. `flagged` at 0.90 is the action
+the link-local rule produces in the default enforcement mode.
+`tests/outside/test_m3_url_parse_from_the_wheel.py` asserts the HEAD half in
+CI's `full` config.
+
+**C-11 across commits** (base `f95f5df` OFF against M3's OFF, RECORD and
+ENFORCE, from built wheels): **all 18 pass×mode digests identical**.
+They match M1's digests.
+
+```
+  block   P-input   base=80f31ff0b5d5 off=80f31ff0b5d5 record=80f31ff0b5d5 enforce=80f31ff0b5d5  IDENTICAL
+  ... (18 rows) ...
+cross-commit: all identical
+```
+
+**Deviation from §3.2 item 3, stated.** The §2.2 grid was NOT appended to
+P-flow-R. The C-11 corpora contain none of M3's delta spellings, so no C-11
+row moved. The requirement that "at least one listed row must move" is met by
+the delta driver (13 = 13), not by C-11. `c11_oracle.py --compare` also
+assumes a base wheel that predates `value_origin=`. Against `f95f5df` it
+raised `KeyError: 'default/block'`, so the 18 rows above came from a
+scratchpad comparison of base OFF against HEAD's three modes.
+
+### Adversarial: WPT urltestdata.json (560 absolute inputs, a corpus M3 was not built on)
+
+```
+pre-M3 url_parse, macOS:  7 under-reads (incl. https://0x.0x.0, https://0x.0x.0x.0x reached by ada)
+M3 url_parse,     macOS:  5 under-reads, all macOS-resolver readings, none link-local:
+                            3 x Q22 decimal (09.2.3.4, 1.2.3.08, 1.2.3.09 -> public)
+                            0x100000000 -> 0.0.0.0 (the unruled wrap class, hex form)
+                            [0:1:2:3:4:5:192.0.02.1] -> public (a third darwin class)
+M3 url_parse,     linux 3.12.14: 0 under-reads, 0 over-reads
+```
+
+### Fresh-context reviews of M3
+
+- **silent-failure-hunter, on `6463337`.**
+  1. **Medium, fixed in the next commit.** `parse_url`'s blanket `except
+     Exception: return None` now wrapped the core's readings. A fault there
+     turned a link-local URL into "not a URL", silently. The core calls are
+     now isolated. A fault is logged once per process at ERROR, and the
+     `urlsplit` reading still classifies the URL. Red first:
+     ```
+     E  AssertionError: a core fault made a link-local URL read as None: the credential fetch would go unclassified, silently
+     ```
+     Then green (`121 passed, 3 xfailed`, url_classes + differentials).
+  2. The refused branch: no regression.
+  3. The `coerce_ip` digit checks change exactly the two stated behaviours.
+     The reviewer ran `0X1F`, `00`, `08`, `0x1_f` and whitespace.
+  4. Q22's darwin link-local reach is open and pinned; it is not resolved.
+  5. No vacuous passes. Its run gave `502 passed, 9 xfailed`.
+- **milestone-reviewer:** see below.
+
+### Found, not fixed
+
+- **R4 hostnames.** `http:metadata.google.internal/x` (no `//`): url_parse
+  returns None, so the hostname rules never see it, and WHATWG reaches the
+  name. `address` comes from the core now. `host` still comes from urlsplit,
+  as §2.1 required. It is pinned as a strict xfail,
+  `test_r4_a_metadata_hostname_without_slashes_reaches_the_hostname_rules`.
+  The WHATWG reach is checked first with `pytest.fail`, so a broken
+  precondition cannot pass as the xfail. Its red:
+  ```
+  E  AssertionError: WHATWG reaches metadata.google.internal for 'http:metadata.google.internal/computeMetadata/v1/'; url_parse gives None
+  ```
+- **urllib.request** is not one of the oracles (M2 review, item 2).
+- **Q19 vendoring** is open (see above).
+
+---
+
+## Status (updated after M3), and what is waiting on the owner
 
 | milestone | state | commit |
 |---|---|---|
 | M0: finding 1 (Q1) | green, **STOP AND REPORT** | `77ee2f8` (the new paid pin, SEMANTIC) |
 | M1: the C-11 gate | green, **STOP AND REPORT** | `a4df0e6` |
-| M2 / M3: url_parse differential + move | next; does not depend on either STOP | — |
+| M2: url_parse differential (tests only) | green on 4 interpreters; CI green (run 37173748403) | `f95f5df` |
+| M3: url_parse onto the core | green on 4 interpreters; CI: see the M3 report | `dfb4334` (core, **SEMANTIC, new paid pin**), `e2e8bb9`, `6463337` (docstring-only core bytes) |
 | M4–M7: seam wiring | **held**: the BRIEF STOPs before any seam wiring until the owner has seen C-11 | — |
 | M8: ENFORCE | **held**: needs the owner's review of M0, plus STOP 3 (vocabulary) | — |
 | M9: wire field | held at STOP 4 (wire format) | — |
 | M10 / M11 | after the above | — |
 
-**Waiting on the owner:**
+**Waiting on the owner (added at M3):**
+- **Q22 re-ruling.** The exemption also hides a darwin link-local reach
+  (`000169.254.000169.254`). It was ruled on the premise that the decimal
+  reading lands in 240/4. Pinned as a darwin strict xfail.
+- **Two further darwin resolver classes**, not covered by Q22: integer wrap
+  (`4294967296`, `0x100000000` → `0.0.0.0`), and a leading zero in an embedded
+  IPv4 (`[0:1:2:3:4:5:192.0.02.1]`). Neither is exempted. The wrap is pinned.
+- **Paid pins.** `dfb4334` is SEMANTIC (`expected.jsonl` +1 row). `6463337`
+  changes `_authority.py`'s docstring only. A re-vendor takes the last one.
+- **Q19.** The WPT corpus is still not vendored. It was run from a pinned
+  copy.
+
+**Waiting on the owner (from M1):**
 1. Review M0, which unblocks ENFORCE (M8).
 2. Review C-11 (M1), which unblocks the seam wiring (M4–M7).
 3. Rule on the four M0 build decisions in `docs/value-origin-rulings.md`
