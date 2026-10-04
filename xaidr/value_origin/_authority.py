@@ -346,6 +346,99 @@ def _authority_host(url: str, *, whatwg: bool) -> Optional[str]:
     return host
 
 
+# ── the macOS resolver (Q22, RE-RULED 2026-10-04) ───────────────────────────
+_DEC_QUAD_RE = re.compile(r"[0-9]{1,16}(?:\.[0-9]{1,16}){3}")
+
+
+def _leading_zero_decimal(parts: List[str]):
+    """A leading-zero dotted quad read as DECIMAL, as the macOS resolver does."""
+    if not any(len(p) > 1 and p[0] == "0" for p in parts):
+        return None
+    vals = [int(p, 10) for p in parts]
+    return ".".join(map(str, vals)) if all(v <= 255 for v in vals) else None
+
+
+def _macos_resolver_ip(host: str):
+    """The address the macOS resolver reads ``host`` as, where it differs from
+    the inet_aton / WHATWG reading the core makes, else None. Measured
+    2026-10-04: a leading-zero dotted quad is DECIMAL (000169.254.000169.254 ->
+    169.254.169.254), so is the IPv4 tail of an IPv6 literal
+    ([::ffff:169.254.0169.254] -> the mapped 169.254.169.254), and one number
+    above 2**32 - 1 wraps modulo 2**32 (4294967296, 0x100000000 -> 0.0.0.0;
+    0x1A9FEA9FE -> 169.254.169.254). glibc and WHATWG refuse all three."""
+    if ":" in host:
+        head, _, tail = host.rpartition(":")
+        if head and _DEC_QUAD_RE.fullmatch(tail):
+            quad = _leading_zero_decimal(tail.split("."))
+            if quad is not None:
+                try:
+                    return ipaddress.ip_address(head + ":" + quad)
+                except ValueError:
+                    return None
+        return None
+    if _DEC_QUAD_RE.fullmatch(host):
+        quad = _leading_zero_decimal(host.split("."))
+        return ipaddress.ip_address(quad) if quad is not None else None
+    if "." not in host and 0 < len(host) <= 64:
+        lp = host.lower()
+        if lp.startswith("0x"):
+            n = int(lp[2:], 16) if lp[2:] and set(lp[2:]) <= _HEX_DIGITS else None
+        elif len(lp) > 1 and lp[0] == "0":
+            n = int(lp, 8) if set(lp) <= _OCT_DIGITS else None
+        else:
+            n = int(lp, 10) if lp.isascii() and lp.isdigit() else None
+        if n is not None and n > 0xFFFFFFFF:
+            return ipaddress.ip_address(n % (1 << 32))
+    return None
+
+
+def _sensitive(ip) -> bool:
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return ip.is_link_local or ip.is_loopback or ip.is_private
+
+
+def _raw_split_host(url: str) -> Optional[str]:
+    """The authority's host with NO validation: after the last `@`, inside the
+    brackets or before the port. Used only to find macOS readings, which a
+    validating split refuses (`[::ffff:169.254.0169.254]`)."""
+    m = _SCHEME_RE.match(url)
+    if not m:
+        return None
+    rest = url[m.end():]
+    end = _AUTHORITY_END_RE.search(rest)
+    hostinfo = (rest[:end.start()] if end else rest).rpartition("@")[2]
+    if hostinfo.startswith("[") and "]" in hostinfo:
+        return hostinfo[1:].partition("]")[0].lower()
+    return hostinfo.partition(":")[0].lower() or None
+
+
+def _macos_sensitive_readings(raw_host: Optional[str]) -> List[Authority]:
+    """Q22 as RE-RULED: a macOS-resolver reading that reaches link-local,
+    loopback or private space is READ, on every platform (a verdict must not
+    depend on where the agent runs). One that reaches public space stays the
+    named darwin exemption. Developers run macOS: that is where an agent runs
+    before anyone is watching. The old premise, that the decimal reading lands
+    in reserved space, was wrong: it reaches 169.254.169.254."""
+    if not raw_host:
+        return []
+    h = raw_host.strip().rstrip(".")
+    if "%" in h:
+        try:
+            h = unquote_to_bytes(h).decode("utf-8")
+        except (UnicodeDecodeError, ValueError):
+            return []
+    if ":" not in h:
+        h = to_ascii(h) or ""
+    try:
+        ip = _macos_resolver_ip(h) if h else None
+    except ValueError:
+        return []
+    if ip is None or not _sensitive(ip):
+        return []
+    return [Authority(scheme="ip", value=ip_key(ip))]
+
+
 def url_authority(value: str, *, arg_mode: bool, written: Optional[str] = None):
     """Authority of a whole-value URL; None if hostless; PARSE_FAILURE if broken.
 
@@ -389,6 +482,10 @@ def url_authority(value: str, *, arg_mode: bool, written: Optional[str] = None):
         a = _host_authority(h, arg_fallback=arg_mode) if h else None
         if a is not None and a != primary and a not in extra:
             extra.append(a)
+    for raw in (_raw_split_host(whatwg), _raw_split_host(value if written is None else written)):
+        for a in _macos_sensitive_readings(raw):     # Q22, re-ruled 2026-10-04
+            if a != primary and a not in extra:
+                extra.append(a)
     if not extra:
         if primary is PARSE_FAILURE and not arg_mode:
             return NOT_A_DESTINATION

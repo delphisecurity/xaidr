@@ -580,7 +580,11 @@ def _ip_forms():
               "[::ffff:169.254.169.254]", "[::ffff:a9fe:a9fe]", "[::1]", "1e2.1.1.1",
               "169.254.169.254.", "0177.1", "017700000001", "0x7f.1", "0x7f000001",
               # the M2 review's: read as 169.254.169.254 by the macOS resolver
-              "000169.254.000169.254", "169.000254.169.000254"}
+              "000169.254.000169.254", "169.000254.169.000254",
+              # Q22 re-ruling (2026-10-04)
+              "09.2.3.4", "0177.0.0.01", "010.0.0.1", "0127.0.0.1", "0x100000000",
+              "040000000000", "0x1A9FEA9FE", "[::ffff:169.254.0169.254]",
+              "[0:1:2:3:4:5:192.0.02.1]"}
     return sorted(forms)
 
 
@@ -606,20 +610,51 @@ def _ip_key(ip):
     return "ip:" + (ip.compressed if isinstance(ip, ipaddress.IPv6Address) else str(ip))
 
 
+def _int_literal(p):
+    """A single inet_aton number: 0x hex, 0-prefixed octal or decimal, digit-checked."""
+    lp = p.lower()
+    if lp.startswith("0x"):
+        return int(lp[2:], 16) if lp[2:] and set(lp[2:]) <= set("0123456789abcdef") else None
+    if len(p) > 1 and p.startswith("0"):
+        return int(p, 8) if set(p) <= set("01234567") else None
+    return int(p, 10) if p.isascii() and p.isdigit() else None
+
+
 def _bsd_integer_wrap(host, ip):
-    """NOT exempted, and not ruled: a decimal integer above 2**32 - 1 that the
-    resolver read modulo 2**32 (macOS: 4294967296 -> 0.0.0.0). glibc and
-    WHATWG refuse it. Measured 2026-10-03; Q22 exempted exactly ONE darwin
-    class, so this one is held out of the two tests below only to be pinned
-    on its own, red on darwin, in test_bsd_libc_integer_wrap_is_an_unruled_platform_class."""
-    if ip is None or not (host.isascii() and host.isdigit()):
+    """The macOS resolver reads one number above 2**32 - 1 modulo 2**32
+    (4294967296, 0x100000000, 040000000000 -> 0.0.0.0; 0x1A9FEA9FE ->
+    169.254.169.254). glibc and WHATWG refuse it."""
+    if ip is None or "." in host or ":" in host:
         return False
-    n = int(host, 10)
-    return n > 0xFFFFFFFF and ip == ipaddress.ip_address(n % (1 << 32))
+    n = _int_literal(host)
+    return n is not None and n > 0xFFFFFFFF and ip == ipaddress.ip_address(n % (1 << 32))
+
+
+def _bsd_embedded_v4(host, ip):
+    """The macOS resolver reads a leading-zero IPv4 tail of an IPv6 literal as
+    decimal ([::ffff:169.254.0169.254] -> ::ffff:169.254.169.254). glibc refuses."""
+    h = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    head, _, tail = h.rpartition(":")
+    parts = tail.split(".")
+    if ip is None or not head or len(parts) != 4 or not all(p.isdigit() for p in parts):
+        return False
+    if not any(len(p) > 1 and p.startswith("0") for p in parts):
+        return False
+    try:
+        return ip == ipaddress.ip_address(head + ":" + ".".join(str(int(p)) for p in parts))
+    except ValueError:
+        return False
+
+
+_SENSITIVE = {"link_local", "loopback", "private"}
 
 
 def _platform_class(h, ip):
-    return _bsd_decimal_leading_zero(h, ip) or _bsd_integer_wrap(h, ip)
+    """Q22 AS RE-RULED 2026-10-04: a darwin-only resolver reading is exempt ONLY
+    when it reaches no sensitive address. One that reaches link-local, loopback
+    or private space is read and classified, never exempted."""
+    return ((_bsd_decimal_leading_zero(h, ip) or _bsd_integer_wrap(h, ip)
+             or _bsd_embedded_v4(h, ip)) and _kind(ip) not in _SENSITIVE)
 
 
 def test_the_named_url_parse_over_read_class_stands_for_a_measured_platform(url_parse_comparison):
@@ -675,38 +710,50 @@ def test_ip_spellings_resolve_where_the_resolver_does_core():
                      f"the core never names: {bad[:8]}")
 
 
-@pytest.mark.xfail(sys.platform == "darwin", strict=True, raises=AssertionError, reason=(
-    "UNRULED: the macOS resolver wraps a decimal integer modulo 2**32. Q22 exempted "
-    "exactly one darwin class (decimal leading zeros); this is a second, held for "
-    "the owner"))
-def test_bsd_libc_integer_wrap_is_an_unruled_platform_class():
-    """Pinned both ways, as Q22's class is: red (strict xfail) on darwin, where
-    the resolver reads it; green on Linux, where glibc refuses it. Neither url_parse
-    nor the core reads it, so on darwin `http://4294967296/` reaches 0.0.0.0
-    unclassified."""
-    wrapped = [(h, str(ip), got, sorted(core)) for h, ip, got, core in _ip_comparison()
-               if _bsd_integer_wrap(h, ip)]
-    assert not wrapped, (
-        f"{len(wrapped)} decimal integers above 2**32-1 that the resolver wraps to an "
-        f"address neither url_parse nor the core reads: {wrapped}")
+# Q22 as RE-RULED 2026-10-04. Platform-INDEPENDENT on purpose: the code reads
+# what the macOS resolver reaches in sensitive space on every platform, so a
+# verdict does not depend on where the agent runs (F9), and these are red on
+# Linux too until the core reads them.
+_MACOS_SENSITIVE_READINGS = [
+    ("000169.254.000169.254", "169.254.169.254"),     # decimal quad (Q22's own class)
+    ("169.000254.169.000254", "169.254.169.254"),
+    ("010.0.0.1", "10.0.0.1"),                        # decimal private; octal is public
+    ("0127.0.0.1", "127.0.0.1"),                      # decimal loopback
+    ("4294967296", "0.0.0.0"),                        # integer wrap
+    ("0x100000000", "0.0.0.0"),
+    ("040000000000", "0.0.0.0"),
+    ("0x1A9FEA9FE", "169.254.169.254"),
+    ("[::ffff:169.254.0169.254]", "169.254.169.254"),  # embedded leading-zero IPv4
+    ("[::ffff:0169.254.169.254]", "169.254.169.254"),
+]
 
 
-@pytest.mark.xfail(sys.platform == "darwin", strict=True, raises=AssertionError, reason=(
-    "FOR THE OWNER (found by the M2 milestone review): Q22's exemption was ruled on "
-    "the premise that the decimal reading lands in reserved space (251.254.251.254). "
-    "It also covers 000169.254.000169.254 and 169.000254.169.000254, which the macOS "
-    "resolver reads as 169.254.169.254, LINK-LOCAL. url_parse reads no address and "
-    "the core dns:000169.254 for the first ('000169' is not octal), and both read "
-    "public 169.172.169.172 for the second. Held for a re-ruling; behaviour unchanged."))
-def test_q22_exemption_hides_no_link_local_reach():
-    """The exemption may absorb a platform divergence, never a reach of the
-    metadata service. Green on Linux (the class is empty there); a strict xfail
-    on darwin until the owner re-rules Q22 on the true premise."""
-    hidden = [(h, str(ip)) for h, ip, _, _ in _ip_comparison()
-              if _bsd_decimal_leading_zero(h, ip) and _kind(ip) == "link_local"]
-    assert not hidden, (
-        f"Q22's exemption hides {len(hidden)} spellings the resolver sends to a "
-        f"LINK-LOCAL address that neither url_parse nor the core reads: {hidden}")
+@pytest.mark.parametrize("host, want", _MACOS_SENSITIVE_READINGS)
+def test_q22_rerule_a_macos_reading_of_sensitive_space_is_read(host, want):
+    """Developers run macOS, which is where an agent runs before anyone is
+    watching. A reading the macOS resolver makes that reaches link-local,
+    loopback or private space is a host the code reads, on every platform."""
+    from xaidr.value_origin import extract_destinations
+    url = f"http://{host}/latest"
+    found, _ = extract_destinations({"url": url})
+    core = sorted(f.destination.key() for f in found if f.destination is not None)
+    got = _url_parse_address(url)
+    cls = _kind(ipaddress.ip_address(want))
+    assert f"ip:{want}" in core and _rank(got) >= _rank(cls), (
+        f"the macOS resolver sends {url!r} to {want} ({cls}); the core reads {core} "
+        f"and url_parse reports {got!r}")
+
+
+def test_q22_rerule_the_embedded_v4_public_class_is_named_and_stays_exempt():
+    """The owner's ruling: `[0:1:2:3:4:5:192.0.02.1]` reaches PUBLIC space on
+    macOS (0:1:2:3:4:5:c000:201); a named class, exempt, no fix. Asserted both
+    ways: present on darwin, absent (glibc refuses it) on Linux."""
+    h = "[0:1:2:3:4:5:192.0.02.1]"
+    ip = _resolve(h)
+    if sys.platform == "darwin":
+        assert ip is not None and _bsd_embedded_v4(h, ip) and _platform_class(h, ip), ip
+    else:
+        assert ip is None, f"glibc read {h} as {ip}; the class was darwin-only"
 
 
 def test_q22_bsd_libc_decimal_leading_zero_class_is_present_on_darwin_and_empty_on_linux():
@@ -714,22 +761,19 @@ def test_q22_bsd_libc_decimal_leading_zero_class_is_present_on_darwin_and_empty_
     one leading-zero quad as decimal (so the exemption above is spent on a real
     divergence). On Linux it is EMPTY: glibc reads those quads as octal, the
     exemption absorbs nothing, and so it cannot grow silently."""
-    exempt = [(h, str(ip)) for h, ip, _, _ in _ip_comparison() if _bsd_decimal_leading_zero(h, ip)]
+    exempt = [(h, str(ip)) for h, ip, _, _ in _ip_comparison()
+              if _bsd_decimal_leading_zero(h, ip) and _platform_class(h, ip)]
     if sys.platform == "darwin":
         assert exempt, ("Q22: on darwin the resolver was expected to read a leading-zero "
                         "quad as decimal (0251.254.0251.254 -> 251.254.251.254); it read "
                         "none that way, so the exemption is stale")
-        assert ("0251.254.0251.254", "251.254.251.254") in exempt, exempt
+        assert ("09.2.3.4", "9.2.3.4") in exempt, exempt     # public: still exempt
     else:
         assert not exempt, (f"Q22: the BSD-decimal class absorbed {len(exempt)} forms on "
                             f"{sys.platform}, where it must be empty: {exempt[:8]}")
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "found at M3, not fixed: url_parse takes `address` from the core's readings "
-    "but `host` from urlsplit (§2.1 kept the hostname string-list rules on "
-    "urlsplit's spelling), so R4's `http:name/` is not a URL to url_parse and the "
-    "metadata HOSTNAME rules never see it"))
+# Strict xfail at M3; it contradicted W1's R4 and is fixed (rulings doc, 2026-10-04).
 def test_r4_a_metadata_hostname_without_slashes_reaches_the_hostname_rules(oracles):
     """WHATWG (Node fetch, undici MCP servers) sends `http:metadata.google.internal/…`
     to the metadata hostname; the hostname rules key on ``UrlShape.host``."""

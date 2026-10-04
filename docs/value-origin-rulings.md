@@ -355,6 +355,72 @@ Each is listed so it can be overruled, not so it can pass unnoticed.
    on darwin (`test_bsd_libc_integer_wrap_is_an_unruled_platform_class`), and it
    is neither exempted nor read.
 
+## Ruling 2026-10-04 (A2): Q22 is RE-RULED, narrower — the old premise was wrong
+
+Q22 (2026-10-03) exempted the macOS resolver's decimal reading of leading-zero
+dotted quads **on the premise that it lands in reserved space**
+(0251.254.0251.254 -> 251.254.251.254, in 240/4). **That premise was wrong.**
+`000169.254.000169.254` and `169.000254.169.000254` reach **169.254.169.254**, the
+metadata endpoint (found by the M2 milestone review). The new rule:
+
+- The darwin exemption covers ONLY readings that reach no sensitive address.
+- A macOS-resolver reading that reaches link-local, loopback or private space is
+  read and classified, on every platform, never exempted. Developers run macOS,
+  and that is where an agent runs before anyone is watching.
+- Integer wrap is not exempt (`4294967296`, `0x100000000` -> 0.0.0.0). 0.0.0.0
+  reaches local services on most stacks.
+- The leading-zero embedded IPv4 that reaches public space
+  (`[0:1:2:3:4:5:192.0.02.1]`) is a named class, exempt, no fix.
+
+**As built (M4 prelude, the core's `_macos_sensitive_readings`).** Measured on
+macOS 2026-10-04, the resolver differs from inet_aton / WHATWG in three ways:
+
+1. A 4-part all-digit quad with a leading zero is DECIMAL.
+2. So is the IPv4 tail of an IPv6 literal.
+3. A single number above 2**32 - 1 wraps modulo 2**32, in decimal, hex and
+   octal (`0x1A9FEA9FE` -> 169.254.169.254).
+
+Each reading that lands in sensitive space is one more finding, the weakest
+decides (R1/Q1's shape), and url_parse picks it up through `classify_value`.
+
+**Two things the ruling did not anticipate, applied by its general rule:**
+
+- The embedded class is NOT always public. `[::ffff:169.254.0169.254]` resolves
+  to the mapped link-local address, so that variant is READ. Only the
+  public-space form stays exempt.
+- `251.254.251.254`, Q22's original example, is `is_private` to Python's
+  `ipaddress` (240/4 is listed as reserved), so under the new rule even it is
+  read.
+
+Paid pin: SEMANTIC. `expected.jsonl` gains the `Q22-rerule-macos-decimal-quad`
+row.
+
+## Decided 2026-10-04 (A2): R4 binds url_parse too — the M3 xfail contradicted it
+
+W1's R4 rules that `http:evil.test` (a special scheme with no `//`) names
+`evil.test`. M3 pinned `http:metadata.google.internal/` as a strict xfail in
+url_parse ("`host` stays urlsplit's"). **These are the same obligation, not two
+different ones, so the xfail contradicted a settled ruling and is fixed.**
+
+- R4 is a fact about the CONSUMERS: WHATWG, i.e. Node fetch and undici-backed MCP
+  servers, sends that spelling to that host. It is not a value-origin policy.
+- url_parse exists to decide what a tool call's URL reaches, and A2 Q2's superset
+  rule binds it as it binds the core. A component that sees fewer hosts than the
+  transport reaches is the bypass shape this whole build closes.
+- §2.1's "`UrlShape.host` keeps today's spelling" was about the host-string
+  rules' spelling (lowercase, root dot stripped). It was not a licence to read
+  fewer hosts. A different obligation would need a component that does not
+  decide reachability, and url_parse is not one.
+
+**As built:** where urlsplit finds no host, url_parse fills `host` from the core's
+R4 rewrite (`_SPECIAL_RE` + `_whatwg`).
+
+**Still open, named:** the hostname MIRROR shape
+(`http://metadata.google.internal\@corp.example/`). `host` is single-valued, so
+the host-string rules see urlsplit's `corp.example` while WHATWG reaches the
+metadata name. Q1's obligation, for hostnames, needs a hosts tuple on
+`UrlShape`.
+
 ## What A1 does not do
 
 It adds no seams, sends nothing anywhere, and changes neither paid nor the Brain.

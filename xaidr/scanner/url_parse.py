@@ -65,7 +65,8 @@ import re
 from typing import NamedTuple, Optional
 from urllib.parse import urlsplit
 
-from ..value_origin._authority import ParseFailure, _host_authority, classify_value
+from ..value_origin._authority import (
+    _SPECIAL_RE, ParseFailure, _host_authority, _whatwg, classify_value)
 
 # Hard input ceiling. A URL longer than this is not something we can say anything
 # useful about, and the cap keeps the scan cost flat regardless of what a caller
@@ -164,6 +165,22 @@ def _address_kind(host: str) -> Optional[str]:
         return None
 
 
+def _r4_host(value: str) -> str:
+    """W1's R4: a WHATWG special scheme takes its host after ANY run of / and \\,
+    so `http:metadata.google.internal/` names metadata.google.internal (Node
+    fetch, undici MCP servers send it there). urlsplit finds no host. The
+    host-string rules key on ``UrlShape.host``, so it is filled here, through
+    the core's own R4 rewrite."""
+    m = _SPECIAL_RE.match(value)
+    if not m:
+        return ""
+    try:
+        h = urlsplit(_whatwg(m.group(1) + "://" + value[m.end():])).hostname
+    except ValueError:
+        return ""
+    return (h or "").lower().rstrip(".")
+
+
 def _url_address(value: str, split_host: str) -> Optional[str]:
     """The most severe address class across EVERY reading of a URL's authority.
 
@@ -239,6 +256,8 @@ def parse_url(text: str) -> Optional[UrlShape]:
             # resolves to the same endpoint, and leaving the dot on would make
             # the root anchor a one-character bypass of every hostname rule.
             host = "" if refused else (parts.hostname or "").lower().rstrip(".")
+            if not host and not refused:
+                host = _r4_host(capped)
             address = _url_address(capped, host)
             if not host and address is None and (refused or scheme not in NON_HTTP_LOCAL_SCHEMES):
                 return None
