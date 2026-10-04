@@ -1910,6 +1910,35 @@ site that I had not listed:** `url_parse._r4_host` called the core's
 
 ---
 
+### Item 1, after the silent-failure review of the sweep itself
+
+1. **The structural test was bypassable.** It recognised only the literal
+   alias `_vo` and `from ... import` names, so `import xaidr.value_origin as
+   v2`, a stored reference (`fn = _vo.should_block`) or `getattr(_vo, ...)` went
+   unseen. It now tracks every name bound to the package by ANY import form. It
+   flags a REFERENCE to a core function that is not the callee of a guarded
+   call, and it flags `getattr` on the package. **Proven both ways** with an
+   aliased, stored-reference, unguarded `should_block` added to
+   `scan_tool_call`:
+   - **the old sweep: `1 passed` (blind to it);**
+   - **the new sweep:**
+     `E  AssertionError: ... xaidr/sensor.py:2392 should_block (a reference, not a guarded call)()`.
+2. **Five behavioural rows were vacuous.** `scan(output)`, `scan_output`,
+   `protect_tools` with no implementation, `record_hop` and `build_provenance`
+   never invoked the function they broke, so they asserted nothing. Each row
+   now DECLARES whether it reaches the core:
+   - a reaching row must invoke the broken function, and must log;
+   - a non-reaching row must not invoke it (outputs record nothing, C-2; no
+     implementation means no read; `record_hop` binds nothing since ruling 3.1
+     changed).
+3. **Public entry points NOT in the behavioural table**, named: `protect_http`
+   / `ProtectedHttpClient` (reaches only the output and outbound-A2A scans,
+   which record nothing), `delphi_middleware` (`wrap_tool_call` reaches
+   `scan_tool_call`, `before_model` reaches `scan(input)`), and the CrewAI and
+   Haystack hooks. Each funnels through the guarded call sites the structural
+   test checks. That covers them structurally, not behaviourally.
+4. `extract_context`'s inbound mark survives a bind fault: confirmed.
+
 ## Before M8, item 2 — the macOS-widening false-positive cost, on an outside corpus
 
 *[This section was garbled in `10ec7eb` by an unquoted shell heredoc: the shell

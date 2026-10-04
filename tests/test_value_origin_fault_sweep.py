@@ -56,7 +56,27 @@ def _guarded(node, parents):
     return False
 
 
+def _module_aliases(tree):
+    """Every name bound to the value_origin package or one of its submodules, by
+    ANY import form (M-sweep review: matching only the literal `_vo` let
+    `import xaidr.value_origin as v2` through)."""
+    names = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                if "value_origin" in a.name:
+                    names.add(a.asname or a.name.split(".")[0])
+        elif isinstance(n, ast.ImportFrom):
+            for a in n.names:
+                if a.name == "value_origin" or a.name.startswith("_") and n.module and "value_origin" in n.module and a.name not in CORE_FNS and a.name[1:2].islower() and a.name in ("_ledger", "_evaluate", "_extract", "_authority"):
+                    names.add(a.asname or a.name)
+    return names
+
+
 def call_sites():
+    """(site, function, guarded). A REFERENCE to a core function that is not
+    the callee of a guarded call (stored in a variable, passed along, fetched by
+    getattr) is reported unguarded too: it can be called from anywhere."""
     out = []
     for path in sorted(ROOT.rglob("*.py")):
         rel = path.relative_to(ROOT)
@@ -64,20 +84,30 @@ def call_sites():
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         parents = {c: p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
+        aliases = _module_aliases(tree) | {"_vo"}
         direct = {a.asname or a.name for n in ast.walk(tree)
                   if isinstance(n, ast.ImportFrom) and n.module and "value_origin" in n.module
                   for a in n.names if a.name in CORE_FNS}
+
+        def refers(node):
+            if (isinstance(node, ast.Attribute) and node.attr in CORE_FNS
+                    and isinstance(node.value, ast.Name) and node.value.id in aliases):
+                return node.attr
+            if isinstance(node, ast.Name) and node.id in direct and isinstance(node.ctx, ast.Load):
+                return node.id
+            return None
         for n in ast.walk(tree):
-            if not isinstance(n, ast.Call):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "getattr" \
+                    and n.args and isinstance(n.args[0], ast.Name) and n.args[0].id in aliases:
+                out.append((f"xaidr/{rel}:{n.lineno}", "getattr(value_origin, ...)", False))
+            name = refers(n)
+            if not name:
                 continue
-            f, name = n.func, None
-            if (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
-                    and f.value.id == "_vo" and f.attr in CORE_FNS):
-                name = f.attr
-            elif isinstance(f, ast.Name) and f.id in direct:
-                name = f.id
-            if name:
-                out.append((f"xaidr/{rel}:{n.lineno}", name, _guarded(n, parents)))
+            parent = parents.get(n)
+            if isinstance(parent, ast.Call) and parent.func is n:
+                out.append((f"xaidr/{rel}:{n.lineno}", name, _guarded(parent, parents)))
+            else:
+                out.append((f"xaidr/{rel}:{n.lineno}", f"{name} (a reference, not a guarded call)", False))
     return out
 
 
@@ -234,31 +264,35 @@ def _p_build_provenance():
     pc.clear_flow()
 
 
-# (id, core function made to raise, entry point). Every PUBLIC entry point that
-# can reach recording or evaluation; a new one belongs here.
+# (id, core function made to raise, does the path REACH it?, entry point). Every
+# PUBLIC entry point that can reach recording or evaluation; a new one belongs
+# here. A path declared to reach the function must invoke it (so its row is
+# not vacuous), and one declared not to must not (outputs record nothing, C-2;
+# record_hop binds nothing since ruling 3.1 changed). M-sweep review: five rows
+# had silently reached nothing and asserted nothing.
 PATHS = [
-    ("scan(input)", "record_principal_input", _p_scan("input")),
-    ("scan(tool_result)", "record_tool_result", _p_scan("tool_result")),
-    ("scan(output)", "record_principal_input", _p_scan("output")),
-    ("scan_output", "record_principal_input", lambda: _sensor().scan_output("a reply")),
-    ("scan_a2a(received)", "record_principal_input", _p_a2a),
-    ("scan_tool_call", "evaluate_call", _p_tool_call),
-    ("_scan_tool_result (LangChain/MCP verdict source)", "record_tool_result", _p_internal_result),
-    ("protect_tools sync", "record_tool_result", _p_protect_tools_sync),
-    ("protect_tools async", "record_tool_result", _p_protect_tools_async),
-    ("protect_tools no implementation", "record_tool_result", _p_protect_tools_no_impl),
-    ("protect() LangChain BaseTool.run hook", "record_tool_result", _p_langchain_hook),
-    ("protect() MCP ClientSession.call_tool hook", "record_tool_result", _p_mcp_hook),
-    ("begin_flow", "bind_fresh_ledger", _p_begin_flow),
-    ("extract_context", "bind_fresh_ledger", _p_extract_context),
-    ("clear_flow", "unbind_ledger", _p_clear_flow),
-    ("record_hop", "bind_ledger", _p_record_hop),
-    ("build_provenance", "bind_ledger", _p_build_provenance),
+    ("scan(input)", "record_principal_input", True, _p_scan("input")),
+    ("scan(tool_result)", "record_tool_result", True, _p_scan("tool_result")),
+    ("scan(output)", "record_principal_input", False, _p_scan("output")),
+    ("scan_output", "record_principal_input", False, lambda: _sensor().scan_output("a reply")),
+    ("scan_a2a(received)", "record_principal_input", True, _p_a2a),
+    ("scan_tool_call", "evaluate_call", True, _p_tool_call),
+    ("_scan_tool_result (LangChain/MCP verdict source)", "record_tool_result", True, _p_internal_result),
+    ("protect_tools sync", "record_tool_result", True, _p_protect_tools_sync),
+    ("protect_tools async", "record_tool_result", True, _p_protect_tools_async),
+    ("protect_tools no implementation", "record_tool_result", False, _p_protect_tools_no_impl),
+    ("protect() LangChain BaseTool.run hook", "record_tool_result", True, _p_langchain_hook),
+    ("protect() MCP ClientSession.call_tool hook", "record_tool_result", True, _p_mcp_hook),
+    ("begin_flow", "bind_fresh_ledger", True, _p_begin_flow),
+    ("extract_context", "bind_fresh_ledger", True, _p_extract_context),
+    ("clear_flow", "unbind_ledger", True, _p_clear_flow),
+    ("record_hop", "bind_ledger", False, _p_record_hop),
+    ("build_provenance", "bind_ledger", False, _p_build_provenance),
 ]
 
 
-@pytest.mark.parametrize("pid, fn, path", PATHS, ids=[p[0] for p in PATHS])
-def test_a_core_fault_never_reaches_the_caller(monkeypatch, caplog, pid, fn, path):
+@pytest.mark.parametrize("pid, fn, reaches, path", PATHS, ids=[p[0] for p in PATHS])
+def test_a_core_fault_never_reaches_the_caller(monkeypatch, caplog, pid, fn, reaches, path):
     calls = {"n": 0}
 
     def boom(*a, **k):
@@ -272,6 +306,10 @@ def test_a_core_fault_never_reaches_the_caller(monkeypatch, caplog, pid, fn, pat
             if "sweep: injected" in str(e):
                 pytest.fail(f"[{pid}] a raising {fn}() reached the caller: {e}", pytrace=False)
             raise
-    if calls["n"]:
-        assert any(r.levelno >= logging.ERROR for r in caplog.records), (
-            f"[{pid}] {fn}() raised and nothing was logged: a fault must never be silent")
+    if not reaches:
+        assert calls["n"] == 0, f"[{pid}] was declared to reach no {fn}() and reached it"
+        return
+    assert calls["n"] > 0, (f"[{pid}] never invoked {fn}(): this row would assert nothing "
+                            "(fix the row, not the code)")
+    assert any(r.levelno >= logging.ERROR for r in caplog.records), (
+        f"[{pid}] {fn}() raised and nothing was logged: a fault must never be silent")
