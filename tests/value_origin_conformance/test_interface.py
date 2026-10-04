@@ -40,7 +40,7 @@ SIGNATURES = {                 # §1.4 as written, extract_destinations as corre
     "unbind_ledger": "() -> 'None'",
     "ledger_bound": "() -> 'bool'",
     "record_principal_input": "(text: 'str', spans: 'Sequence[Span] | None' = None, *, "
-                              "input_clean: 'bool | None') -> 'RecordOutcome'",
+                              "input_clean: 'bool | None', truncated: 'bool' = False) -> 'RecordOutcome'",
     "record_tool_result": "(tool_name: 'str', arguments: 'Mapping[str, object] | None', "
                           "result: 'object', *, designations: 'Sequence[SourceDesignation]', "
                           "result_blocked: 'bool | None') -> 'RecordOutcome'",
@@ -69,7 +69,7 @@ ENUMS = {
     "Verdict": ["authorized", "unauthorized", "unresolved", "not_evaluated"],
     "WireValue": ["principal", "principal_undeclared_span", "trusted_source",
                   "untrusted_source", "unresolved", "no_destination", "no_flow",
-                  "ledger_absent", "ledger_saturated"],
+                  "ledger_absent", "ledger_saturated", "input_truncated"],
     "RowState": ["decided", "ran_evidence", "ran_clean", "not_reached", "not_applicable",
                  "not_recorded"],
     "Writer": ["principal", "untrusted"],

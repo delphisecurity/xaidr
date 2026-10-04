@@ -28,7 +28,9 @@ class Verdict(str, enum.Enum):
 
 
 class WireValue(str, enum.Enum):
-    """The complete value set of ``valueOrigin`` (§2). Nine, case-sensitive."""
+    """The complete value set of ``valueOrigin`` (§2). Ten, case-sensitive
+    (INPUT_TRUNCATED added by the owner, A2 after M6: truncation is its own
+    state, never a silent unresolved)."""
 
     PRINCIPAL = "principal"                                   # a DECLARED principal span
     PRINCIPAL_UNDECLARED_SPAN = "principal_undeclared_span"   # rests on C-1's default
@@ -39,6 +41,7 @@ class WireValue(str, enum.Enum):
     NO_FLOW = "no_flow"                    # no flow context visible to this call
     LEDGER_ABSENT = "ledger_absent"        # flow visible, ledger not bound
     LEDGER_SATURATED = "ledger_saturated"  # ledger dropped an emission AND lookup missed
+    INPUT_TRUNCATED = "input_truncated"    # principal input was capped AND lookup missed
 
 
 class RowState(str, enum.Enum):

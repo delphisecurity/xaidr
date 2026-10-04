@@ -462,6 +462,28 @@ or inbound mark those suites check. They stayed green through every variant of
 it (M5 sabotage: 79 passed). Do not read their green as evidence about ledger
 lifetime.
 
+## Decided 2026-10-04 (A2, after M6): truncation is a verdict state; S25 needs paid's confirmation
+
+**Truncation (owner).** The recorded principal input stays capped at 65,536
+chars (M6), but a destination past the cap no longer reads a silent
+`unresolved`. If the flow's principal input was capped and a lookup misses, the
+wire is **`input_truncated`**, a TENTH wire value. Its verdict is NOT_EVALUATED,
+so it never blocks, like `ledger_saturated`. Its own §3.4 row reads: "the
+principal's input was longer than value origin records; a destination past that
+point cannot be traced." An untrusted finding still outranks it. Absence is a
+row, never a missing row. **This is a vocabulary and interface change:**
+`WireValue`, `row_text.json` (checked against the Brain's copy) and
+`record_principal_input(..., truncated=False)` changed. Paid's re-vendor and the
+Brain/blank-canvas row tables must learn the value before M9 emits the field.
+
+**S25 agrees with paid's reference BY ACCIDENT (owner): this is a note, not a
+fix.** After M6, `set_origin` plus a principal-only emit gives (`no_flow`,
+`unresolved`), paid's pair. Nobody designed it: the input seam binds an implicit
+ledger on every input (S-2), and `set_origin` plays no part (the same calls
+without it give the same pair). **Paid's semantics were NOT verified from this
+repo.** Confirm S25 against paid's spec when paid re-vendors, before relying on
+the agreement.
+
 ## What A1 does not do
 
 It adds no seams, sends nothing anywhere, and changes neither paid nor the Brain.

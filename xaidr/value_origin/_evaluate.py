@@ -30,6 +30,7 @@ _VERDICT = {
     WireValue.NO_FLOW: Verdict.NOT_EVALUATED,
     WireValue.LEDGER_ABSENT: Verdict.NOT_EVALUATED,
     WireValue.LEDGER_SATURATED: Verdict.NOT_EVALUATED,
+    WireValue.INPUT_TRUNCATED: Verdict.NOT_EVALUATED,
 }
 
 
@@ -66,6 +67,10 @@ _ROWS = {
     "ledger_saturated": (RowState.NOT_RECORDED,
                          "Intent: not evaluated — this flow's ledger was full; an "
                          "unmatched destination cannot be called novel."),
+    "input_truncated": (RowState.NOT_RECORDED,
+                        "Intent: not evaluated — the principal's input was longer than "
+                        "value origin records; a destination past that point cannot be "
+                        "traced."),
     "no_destination": (RowState.NOT_APPLICABLE,
                        "Intent: not applicable — this call carries no "
                        "destination-shaped value."),
@@ -154,10 +159,11 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
         if not found:
             return _verdict(WireValue.NO_DESTINATION, (), truncated)
         auths = [f.destination for f in found if f.destination is not None]
-        entries, saturated = _ledger.lookup(lg, auths)
+        entries, saturated, input_truncated = _ledger.lookup(lg, auths)
         it = iter(entries)
         out: List[DestinationFinding] = []
         saturated_miss = False
+        truncated_miss = False
         for f in found:
             if f.destination is None:
                 out.append(DestinationFinding(path=f.path, destination=None, reason=f.reason,
@@ -167,6 +173,7 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
             e = next(it)
             if e is None:
                 saturated_miss = saturated_miss or saturated
+                truncated_miss = truncated_miss or input_truncated
                 out.append(DestinationFinding(path=f.path, destination=f.destination,
                                               reason=None, origin=Origin.UNRESOLVED,
                                               span_declared=None, source_label=None))
@@ -180,7 +187,9 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
         findings = tuple(out)
         wires = [_finding_wire(f) for f in findings]
         wire = min(wires, key=WIRE_STRENGTH.__getitem__)
-        if saturated_miss and WireValue.UNTRUSTED_SOURCE not in wires:
+        if truncated_miss and WireValue.UNTRUSTED_SOURCE not in wires:
+            wire = WireValue.INPUT_TRUNCATED      # owner, after M6: never a silent unresolved
+        elif saturated_miss and WireValue.UNTRUSTED_SOURCE not in wires:
             wire = WireValue.LEDGER_SATURATED
         return _verdict(wire, findings, truncated)
     except Exception:

@@ -1867,7 +1867,8 @@ class DelphiSensor:
                 return
             text = _coerce_scannable(prompt)
             spans = list(spans) if spans is not None else None
-            if text is not None and len(text) > _VO_INPUT_CAP:
+            truncated = text is not None and len(text) > _VO_INPUT_CAP
+            if truncated:
                 # Capped like a tool-result leaf (the core's MAX_RESULT_LEAF_CHARS):
                 # the input seam's cost must not scale with the prompt (F8: 0.8 ms/KB;
                 # CI caught a 5MB input crossing test_truncation_bypass's bound).
@@ -1875,7 +1876,7 @@ class DelphiSensor:
                 # reads unresolved, which never blocks.
                 text, spans = _cap_principal_input(text, spans)
             out = _vo.record_principal_input(text if text is not None else prompt,
-                                             spans, input_clean=clean)
+                                             spans, input_clean=clean, truncated=truncated)
             # A FAULT on a scannable input means the record was dropped (a spans
             # list that does not concatenate to the text, or a core fault): say
             # so once (M6 silent-failure review). A non-scannable input FAULTs by

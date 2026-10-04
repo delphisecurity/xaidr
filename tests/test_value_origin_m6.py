@@ -27,7 +27,7 @@ EXPECT = {
     "a2a_inbound_ends_implicit": "unresolved",
     "a2a_inbound_keeps_explicit": "principal_undeclared_span",
     "spans_mismatch_warnings": 1,
-    "input_cap": [True, "unresolved"],
+    "input_cap": [True, "input_truncated"],
 }
 WHY = {
     "undeclared": "the input seam recorded nothing",
@@ -40,7 +40,7 @@ WHY = {
     "a2a_inbound_ends_implicit": "an inbound A2A message kept the previous request's implicit ledger (Q21)",
     "a2a_inbound_keeps_explicit": "an inbound A2A message dropped begin_flow's explicit ledger (ruling 3.1)",
     "spans_mismatch_warnings": "a spans/text mismatch dropped the record silently (M6 silent-failure review)",
-    "input_cap": "the recorded input is not capped: the input seam's cost scales with the prompt (CI: 5MB bomb 2.55s)",
+    "input_cap": "a destination past the input cap read silently unresolved instead of input_truncated (owner, after M6: truncation is its own state, never a missing row)",
 }
 
 

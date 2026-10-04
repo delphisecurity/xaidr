@@ -103,7 +103,8 @@ def _digest_ngram(g: str) -> bytes:
 
 
 class _Ledger:
-    __slots__ = ("lock", "pid", "explicit", "entries", "ngrams", "saturated", "sat_logged")
+    __slots__ = ("lock", "pid", "explicit", "entries", "ngrams", "saturated", "sat_logged",
+                 "input_truncated")
 
     def __init__(self, *, explicit: bool) -> None:
         self.lock = _new_lock()
@@ -112,6 +113,7 @@ class _Ledger:
         self.entries: Dict[bytes, Entry] = {}
         self.ngrams: Dict[bytes, bool] = {}
         self.saturated = False
+        self.input_truncated = False     # a principal input was capped before recording
         self.sat_logged = False
 
     def __repr__(self) -> str:                  # discloses nothing (C-12)
@@ -226,7 +228,7 @@ def _principal_clean(input_clean: Optional[bool]) -> bool:
 
 
 def record_principal_input(text: str, spans: Sequence[Span] | None = None, *,
-                           input_clean: bool | None) -> RecordOutcome:
+                           input_clean: bool | None, truncated: bool = False) -> RecordOutcome:
     """Record every destination candidate in a principal-direction input.
 
     Binds per ruling 3.1 FIRST (a new input is a new request even when its
@@ -239,6 +241,8 @@ def record_principal_input(text: str, spans: Sequence[Span] | None = None, *,
     """
     try:
         lg = _bind_for_input()
+        if truncated and lg is not None:
+            lg.input_truncated = True     # owner, after M6: a miss here is input_truncated
         if not isinstance(text, str):
             return RecordOutcome.FAULT
         if spans is None:
@@ -387,9 +391,9 @@ def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
 
 
 # ── lookup (for evaluate_call) ───────────────────────────────────────────────
-def lookup(lg: _Ledger, auths: List[Authority]) -> Tuple[List[Optional[Entry]], bool]:
+def lookup(lg: _Ledger, auths: List[Authority]) -> Tuple[List[Optional[Entry]], bool, bool]:
     """Entries for ``auths`` in one lock acquisition, plus whether the ledger
     is saturated — a read racing a multi-entry write sees all or none of it."""
     digests = [_digest_authority(a) for a in auths]
     with lg.lock:
-        return [lg.entries.get(d) for d in digests], lg.saturated
+        return [lg.entries.get(d) for d in digests], lg.saturated, lg.input_truncated
