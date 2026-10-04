@@ -46,9 +46,10 @@ def check_paths(seen):
 
 def check_flow(seen):
     assert seen["no_flow"] == "no_flow", seen["no_flow"]
-    assert seen["after_begin_flow"] == "ledger_absent", (
-        f"after begin_flow() the wire is {seen['after_begin_flow']!r}; ledger_absent is the "
-        "honest answer until M5 binds a ledger in begin_flow")
+    # M4 pinned ledger_absent here, "the honest answer until M5 binds a ledger in
+    # begin_flow". M5 does, so the same call is now unresolved.
+    assert seen["after_begin_flow"] == "unresolved", (
+        f"after begin_flow() the wire is {seen['after_begin_flow']!r}; M5 binds a ledger there")
 
 
 def check_q6(seen):

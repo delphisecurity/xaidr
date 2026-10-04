@@ -37,6 +37,7 @@ import contextvars
 import re
 from typing import Any
 from uuid import uuid4
+from . import value_origin as _vo
 
 # The accumulated delegation chain for the current in-process flow.
 # Each hop: {"agent_id": str, "role": "principal"|"agent"|"tool"|"mcp_server"}.
@@ -90,6 +91,9 @@ def begin_flow(
     correlation id shared by every hop. Typically called once at the entry
     point, alongside set_origin(). Returns the correlation id.
     """
+    # A2 M5 (§1.4): every flow starts with a fresh EXPLICIT value-origin ledger,
+    # so a request never inherits the caller's recorded sources.
+    _vo.bind_fresh_ledger()
     corr = correlation_id or _new_corr()
     _corr_ctx.set(corr)
     chain: list[dict[str, Any]] = []
@@ -137,6 +141,8 @@ def record_hop(
     the parallel tier list. When the agent is already the tail, its tier is
     refreshed rather than appended, so re-scanning does not lose it.
     """
+    # A2 M5, ruling 3.1: an EXPLICIT ledger iff none is bound; never rebinds.
+    _vo.bind_ledger()
     chain = _chain_ctx.get()
     if chain is None:
         chain = []
@@ -311,6 +317,7 @@ def current_tiers() -> list[int | None]:
 
 
 def clear_flow() -> None:
+    _vo.unbind_ledger()                     # A2 M5: the request's ledger ends with it
     _chain_ctx.set(None)
     _corr_ctx.set(None)
     _tiers_ctx.set(None)
@@ -437,6 +444,10 @@ def extract_context(headers: dict[str, str] | None) -> bool:
     information tightens the verdict" — and hands an attacker a strictly better
     move than leaving the headers alone.
     """
+    # A2 M5, V-7c: an inbound request starts a fresh ledger FIRST, before the
+    # inbound mark and every early return, so a header-stripped request cannot
+    # keep the previous request's recorded sources.
+    _vo.bind_fresh_ledger()
     # Set BEFORE any early return. See the docstring: this is the whole fix.
     _inbound_ctx.set(True)
     if not headers:

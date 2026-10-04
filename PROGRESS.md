@@ -1172,6 +1172,115 @@ Linux leg reproduced. What it found:
 
 ---
 
+## The owner's three answers after M4, and the standing bytecode rule, `460c541`
+
+1. **The warning is documented.** README.md has one line under "API
+   reference": what it means and what `begin_flow()` does. `docs/api.md` has a
+   short section.
+2. **Every macOS-resolver reading is read, public ones included.** Q22 is
+   re-ruled a second time.
+   - Red first, 7 named:
+     ```
+     E  AssertionError: the macOS resolver sends 'http://4311810312/latest' to 1.1.1.8 (public); the core reads ['dns:4311810312'] and url_parse reports None
+     E  AssertionError: the macOS resolver sends 'http://[0:1:2:3:4:5:192.0.02.1]/latest' to 0:1:2:3:4:5:c000:201 (public); the core reads [] and url_parse reports None
+     7 failed, 14 passed
+     ```
+   - New conformance row `Q22-rerule-macos-public-wrap`. SEMANTIC.
+   - **False-positive cost on the benign corpora: 0.** Across 9 files and
+     16,683 string leaves, comparing HEAD's core with the new one, no leaf's
+     destination readings change. The files are `benign_toolcalls`,
+     `benign_a2a`, `benign_longform`, heldout and asi_battery benign, and the
+     456-row shell corpus.
+3. **The Linux over-read class is named:** `macos-reading-read-everywhere`.
+   - Its own predicate (`_names_a_macos_host` / `_macos_reading`) bounds it,
+     independently of the core.
+   - It is pinned on the discriminating spelling: plain
+     `http://010.0.0.1/latest` is absorbed on Linux, and on darwin it is not an
+     over-read at all.
+   - **It also absorbs on darwin**, where only a WHATWG split names the host
+     (`http://\@010.0.0.1\x`). Node parses that itself, as octal. My first
+     predicate missed this (1,490 unnamed), then missed R4's
+     `http:010.0.0.1` and `http:010.0.0.1:80`. Each was red, and each is fixed.
+
+**Standing rule** (ARCHITECTURE.md §5): every sabotage runs with
+`PYTHONDONTWRITEBYTECODE=1` from no `__pycache__`, and the restore is confirmed
+with `cmp`. `tests/conftest.py` sets `sys.dont_write_bytecode`.
+
+**Interpreters.**
+- The full affected set ran on macOS 3.12.2 and Linux 3.10, 3.11 and 3.12.
+- The corrected differential (39 tests) ran on macOS, Linux 3.10 and 3.12. It
+  was not re-run on 3.11 after the final predicate fix.
+
+---
+
+## M5 — hops and delegation binding. **Green. STOP AND REPORT.**
+
+**Build (§1.4), in `provenance_chain.py`:**
+- `begin_flow` → `bind_fresh_ledger()`;
+- `extract_context` → `bind_fresh_ledger()` FIRST, before the inbound mark and
+  every early return (V-7c);
+- `record_hop` → `bind_ledger()`, explicit iff nothing is bound (ruling 3.1);
+- `clear_flow` → `unbind_ledger()`.
+
+**Red first** (the M5 driver, against the unchanged chain):
+
+```
+E  AssertionError: M5 binding: s5_after_begin_flow: got 'ledger_absent', want 'unresolved' -- begin_flow() bound no ledger (S5 should flip ledger_absent -> unresolved); no_destination: got 'ledger_absent', want 'no_destination'; truncated: got ['ledger_absent', False, []], want ['unresolved', True, ['walk_bound']]; s9_propagate_context: got 'ledger_absent' ...
+E  AssertionError: after begin_flow() the wire is 'ledger_absent'; M5 binds a ledger there      (M4's pin, moved as M4 predicted)
+2 failed, 4 passed, 1 xfailed
+```
+
+**Green.** The suites are M5, M4, C-11, the 456-row oracle, the four
+provenance suites, the LangChain result scan, conformance and `tests/outside`
+(including `test_m5_from_the_wheel`):
+
+```
+== macOS 3.12.2    559 passed, 3 skipped, 14 xfailed
+== linux 3.10.21   560 passed, 2 skipped, 14 xfailed
+== linux 3.11.16   560 passed, 2 skipped, 14 xfailed
+== linux 3.12.14   560 passed, 2 skipped, 14 xfailed
+```
+
+**Acceptance, from the built wheel and in-tree, through one driver:**
+- S5: `unresolved` after `begin_flow` (it was `ledger_absent`).
+- `no_destination`.
+- `truncated`, with a `walk_bound` finding.
+- `extract_context({})` binds, and its call gives `unresolved`.
+- S9: a bare `ThreadPoolExecutor.submit` gives `no_flow`, and
+  `propagate_context` gives `unresolved`.
+- `clear_flow` gives `no_flow`, with the ledger unbound.
+- `begin_flow` binds a FRESH ledger every time.
+- **The pinned consequence of ruling 3.1:** `record_hop` with no
+  `begin_flow`/`clear_flow` keeps ONE explicit ledger across "requests" on the
+  thread. This is documented, not fixed.
+- **S25** is a strict xfail, as planned: (no_flow, no_flow) against paid's
+  (no_flow, unresolved).
+
+**Sabotage (§4 sabotage 3).** `bind_fresh_ledger` was removed from
+`begin_flow`:
+
+```
+E  AssertionError: M5 binding: s5_after_begin_flow: got 'ledger_absent', want 'unresolved' -- begin_flow() bound no ledger (S5 should flip ledger_absent -> unresolved); begin_flow_binds_fresh: got False, want True -- begin_flow() reused the caller's ledger
+--- same sabotage, the provenance-chain tests: 79 passed, 3 skipped   (discriminating: they cannot see it)
+=== RESTORED (cmp identical to snapshot): 1 passed, 1 xfailed
+```
+
+**A finding: the sabotage went red NARROWER than the plan predicted.** The
+plan expected every call under the flow to read `ledger_absent`. Only the
+FIRST call after `begin_flow` does. The scan path calls `record_hop` (through
+`_resolve_provenance`), and ruling 3.1 makes that bind an explicit ledger when
+none is bound. From the second call on, the missing `begin_flow` bind is
+masked, by a ledger that is not guaranteed fresh. The freshness check is what
+catches the rest. Consequence for M10: the plan's A-enforce-block red
+(`wire=ledger_absent`) holds only if the poisoned read is recorded before the
+first tool call's own `record_hop`.
+
+**C-11 across commits** (base `460c541` against the M5 tree, from wheels;
+`c11_oracle --compare`, which now accepts such a base): **all 18
+identical.**
+
+---
+
 ## Status (updated after M3), and what is waiting on the owner
 
 | milestone | state | commit |
