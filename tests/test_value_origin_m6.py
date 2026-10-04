@@ -23,6 +23,11 @@ EXPECT = {
     "s30_host_record_hop": ["principal_undeclared_span", "unresolved"],
     "s2_circuit_open": ["principal_undeclared_span", True, "unresolved"],
     "spans_ignored_warnings": 1,
+    "not_scannable_ends_previous": "unresolved",
+    "a2a_inbound_ends_implicit": "unresolved",
+    "a2a_inbound_keeps_explicit": "principal_undeclared_span",
+    "spans_mismatch_warnings": 1,
+    "input_cap": [True, "unresolved"],
 }
 WHY = {
     "undeclared": "the input seam recorded nothing",
@@ -31,6 +36,11 @@ WHY = {
     "s30": "request 2 saw request 1's principal input (S30)",
     "s30_host_record_hop": "a host recording its own hop carried request 1's authority into request 2",
     "s2_circuit_open": "a circuit-open input did not end the previous request's implicit authority (S-2)",
+    "not_scannable_ends_previous": "a non-scannable input did not end the previous request (S-2)",
+    "a2a_inbound_ends_implicit": "an inbound A2A message kept the previous request's implicit ledger (Q21)",
+    "a2a_inbound_keeps_explicit": "an inbound A2A message dropped begin_flow's explicit ledger (ruling 3.1)",
+    "spans_mismatch_warnings": "a spans/text mismatch dropped the record silently (M6 silent-failure review)",
+    "input_cap": "the recorded input is not capped: the input seam's cost scales with the prompt (CI: 5MB bomb 2.55s)",
 }
 
 
@@ -56,3 +66,26 @@ def check(seen):
 
 def test_m6_principal_input(seen):
     check(seen)
+
+
+def test_a_recorder_fault_never_reaches_the_host(monkeypatch, caplog):
+    """Recording runs in a finally OUTSIDE scan()'s own try/except, so its guard
+    is the only line between a recorder fault and the caller (M6 sabotage 3 and
+    review: nothing committed guarded it). The verdict equals OFF's, and the
+    fault is logged once."""
+    import logging
+    import warnings
+    import xaidr.value_origin as vo
+
+    def boom(*a, **k):
+        raise RuntimeError("m6 injected recorder fault")
+    monkeypatch.setattr(vo, "record_principal_input", boom)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rec = xaidr.Sensor(agent_id="m6-guard", value_origin="record", reporter=m6._Null())
+        off = xaidr.Sensor(agent_id="m6-guard-off", value_origin="off", reporter=m6._Null())
+    with caplog.at_level(logging.ERROR, logger="xaidr.sensor"):
+        r = [rec.scan("summarise the quarterly report", direction="input") for _ in range(2)]
+    o = off.scan("summarise the quarterly report", direction="input")
+    assert [(x.action, x.score, x.rules) for x in r] == [(o.action, o.score, o.rules)] * 2
+    assert sum("input recording faulted" in x.getMessage() for x in caplog.records) == 1

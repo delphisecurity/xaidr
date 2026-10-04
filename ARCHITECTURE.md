@@ -180,7 +180,7 @@ middleware and `protect()` stack.
 |---|---|---|---|---|
 | `begin_flow` | `provenance_chain.py:82` (correlation set at `:94`) | — | `bind_fresh_ledger()` | Yes |
 | `extract_context` | `provenance_chain.py:415` | — | `bind_fresh_ledger()` as the **first statement**, before the inbound mark at `:441` and every early return (V-7c) | Yes |
-| `record_hop` | `provenance_chain.py:124` (seeds the correlation id at `:152-153`) | — | `bind_ledger()`: explicit iff nothing is bound, otherwise a no-op *[ruling 3.1]* | Yes |
+| `record_hop` | `provenance_chain.py:124` (seeds the correlation id at `:152-153`) | — | `bind_ledger()`: explicit iff nothing is bound, otherwise a no-op *[ruling 3.1]* | Yes | *[Ruling 3.1 CHANGED 2026-10-04: `record_hop` binds NO ledger — see docs/value-origin-rulings.md, "Ruling 3.1 CHANGED".]*
 | `clear_flow` | `provenance_chain.py:313` | — | `unbind_ledger()` | Yes |
 | in-scan hop | `_resolve_provenance` `sensor.py:396` → `build_provenance` → `record_hop` | — | covered by `record_hop` | Yes |
 
@@ -650,7 +650,7 @@ vendors (§4.5, P4). The owner sees the diff before anything builds on it.
     `propagate_context` the thread sees the ledger.
   - `clear_flow` gives `no_flow`.
   - S25 as a strict xfail.
-  - A pinned consequence of ruling 3.1: a host that calls `record_hop` with no
+  - ~~A pinned consequence of ruling 3.1~~ *[Ruling 3.1 CHANGED 2026-10-04: `record_hop` binds NO ledger — see "Ruling 3.1 CHANGED" in docs/value-origin-rulings.md.]* A host that calls `record_hop` with no
     `begin_flow` or `clear_flow` keeps that explicit ledger across requests on
     the thread, just as its chain persists today. The test documents this; it
     is not a fix.

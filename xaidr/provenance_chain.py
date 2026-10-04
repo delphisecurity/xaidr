@@ -142,10 +142,11 @@ def record_hop(
     refreshed rather than appended, so re-scanning does not lose it.
     """
     # Ruling 3.1 CHANGED (owner, 2026-10-04): record_hop binds NO ledger. It
-    # used to bind an explicit one iff none was bound, and the sensor reaches
-    # record_hop itself (on_behalf_of / set_origin), so that ledger had no owner
-    # and no unbind, outlived the request, and on a reused pool thread carried
-    # user A's principal authority to user B. Only begin_flow / extract_context
+    # used to bind an explicit one iff none was bound, so a HOST that calls
+    # record_hop / build_provenance itself with no begin_flow got a ledger with
+    # no owner and no unbind, which outlived the request and, on a reused pool
+    # thread, carried user A's principal authority to user B. (The sensor never
+    # reaches record_hop without a flow: _resolve_provenance returns early.) Only begin_flow / extract_context
     # bind, and clear_flow unbinds.
     chain = _chain_ctx.get()
     if chain is None:

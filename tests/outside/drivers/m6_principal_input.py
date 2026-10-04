@@ -124,6 +124,50 @@ def collect(xaidr):
         return [before, "CIRCUIT_BREAKER_OPEN" in (r2.rules or []), after]
     res["s2_circuit_open"] = isolated(circuit)
 
+    # a non-scannable input still binds (S-2): it ends the previous request's
+    # implicit authority, then the record FAULTs by design
+    def not_scannable():
+        s.scan(f"email {BOB} the report", direction="input")
+        s.scan(12345, direction="input")
+        return wire(s.scan_tool_call("send_email", {"to": BOB}))
+    res["not_scannable_ends_previous"] = isolated(not_scannable)
+
+    # Q21: an inbound A2A message starts a fresh ledger: it ends an IMPLICIT one
+    # (no flow), records nothing, and keeps an EXPLICIT one (begin_flow)
+    A2A = {"jsonrpc": "2.0", "method": "message/send", "id": "1",
+           "params": {"message": {"role": "user", "parts": [{"kind": "text", "text": "status?"}]}}}
+
+    def a2a_implicit():
+        s.scan(f"email {BOB} the report", direction="input")
+        s.scan_a2a(json.dumps(A2A), "peer-agent", received=True)
+        return wire(s.scan_tool_call("send_email", {"to": BOB}))
+    res["a2a_inbound_ends_implicit"] = isolated(a2a_implicit)
+
+    def a2a_explicit():
+        s.scan(f"email {BOB} the report", direction="input")
+        s.scan_a2a(json.dumps(A2A), "peer-agent", received=True)
+        return wire(s.scan_tool_call("send_email", {"to": BOB}))
+    res["a2a_inbound_keeps_explicit"] = isolated(lambda: in_flow(a2a_explicit))
+
+    # the recorded input is capped like a result leaf (65,536 chars): a long input
+    # must not make the input seam's cost scale with its size (test_truncation_bypass)
+    def capped():
+        out = []
+        for where in ("head", "tail"):
+            filler = "lorem ipsum " * 6000          # ~72,000 chars
+            text = (f"email {BOB} " + filler) if where == "head" else (filler + f" email {BOB}")
+            pc.begin_flow()
+            try:
+                s.scan(text, direction="input")
+                w = wire(s.scan_tool_call("send_email", {"to": BOB}))
+                # the head is RECORDED (its origin depends on whether the scanner
+                # flags the filler); the tail, past the cap, is not
+                out.append(w != "unresolved" if where == "head" else w)
+            finally:
+                pc.clear_flow()
+        return out
+    res["input_cap"] = isolated(capped)
+
     seen = []
 
     class H(logging.Handler):
@@ -140,7 +184,17 @@ def collect(xaidr):
                 seen.append("TypeError: no spans=")
     finally:
         logging.getLogger("xaidr").removeHandler(h)
-    res["spans_ignored_warnings"] = sum("spans" in m for m in seen)
+    res["spans_ignored_warnings"] = sum("spans" in m and "honoured only" in m for m in seen)
+    seen.clear()
+    logging.getLogger("xaidr").addHandler(h)
+    try:
+        m = sensor()
+        for _ in range(2):                  # a caller's mis-split: spans != text
+            m.scan("email bob the report", direction="input",
+                   spans=[Span(text="something else", writer=Writer.PRINCIPAL)])
+    finally:
+        logging.getLogger("xaidr").removeHandler(h)
+    res["spans_mismatch_warnings"] = sum("did not record" in x for x in seen)
     return res
 
 

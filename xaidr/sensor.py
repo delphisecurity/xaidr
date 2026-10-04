@@ -395,6 +395,25 @@ _TOOL_ARG_KEEP_CATEGORIES = _TOOL_ARG_BLOCK_CATEGORIES | _TOOL_ARG_FLAG_CATEGORI
 _BIND_FAILURES: set = set()
 
 
+# A2 M6: the principal input value origin records, capped like a tool-result leaf.
+_VO_INPUT_CAP = 65_536
+
+
+def _cap_principal_input(text, spans):
+    """``text[:_VO_INPUT_CAP]``, with declared spans cut to match so they still
+    concatenate to it (a mismatch would drop the whole record)."""
+    if spans is None:
+        return text[:_VO_INPUT_CAP], None
+    out, n = [], 0
+    for sp in spans:
+        if n >= _VO_INPUT_CAP:
+            break
+        t = sp.text[:_VO_INPUT_CAP - n]
+        out.append(_vo.Span(text=t, writer=sp.writer))
+        n += len(t)
+    return text[:_VO_INPUT_CAP], out
+
+
 def _resolve_provenance(
     agent_id: str,
     per_call: dict | None = None,
@@ -1847,14 +1866,45 @@ class DelphiSensor:
                                    self.agent_id, direction)
                 return
             text = _coerce_scannable(prompt)
-            _vo.record_principal_input(text if text is not None else prompt,
-                                       list(spans) if spans is not None else None,
-                                       input_clean=clean)
+            spans = list(spans) if spans is not None else None
+            if text is not None and len(text) > _VO_INPUT_CAP:
+                # Capped like a tool-result leaf (the core's MAX_RESULT_LEAF_CHARS):
+                # the input seam's cost must not scale with the prompt (F8: 0.8 ms/KB;
+                # CI caught a 5MB input crossing test_truncation_bypass's bound).
+                # Fail-safe: a destination past the cap is not principal, so it
+                # reads unresolved, which never blocks.
+                text, spans = _cap_principal_input(text, spans)
+            out = _vo.record_principal_input(text if text is not None else prompt,
+                                             spans, input_clean=clean)
+            # A FAULT on a scannable input means the record was dropped (a spans
+            # list that does not concatenate to the text, or a core fault): say
+            # so once (M6 silent-failure review). A non-scannable input FAULTs by
+            # design after binding (S-2), and is not logged.
+            if (out is _vo.RecordOutcome.FAULT and text is not None
+                    and not self._vo_record_fault_logged):
+                self._vo_record_fault_logged = True
+                logger.warning("xaidr: Sensor(agent_id=%r): value origin did not record this "
+                               "input%s. Logged once.", self.agent_id,
+                               " (its spans do not concatenate to the text)"
+                               if spans is not None else "")
         except Exception:
             if not self._vo_record_fault_logged:
                 self._vo_record_fault_logged = True
                 logger.exception("xaidr: value origin's input recording faulted; the "
                                  "verdict is unaffected")
+
+    def _vo_inbound_a2a(self) -> None:
+        """Q21 (owner, YES): an inbound A2A message starts a fresh ledger. It ends
+        the previous request's IMPLICIT ledger through S-2's own path (bind for an
+        input, recording nothing) and keeps an EXPLICIT one from begin_flow
+        (ruling 3.1). C-17: it records no destination. Never raises."""
+        try:
+            if self._value_origin is not _vo.Mode.OFF:
+                _vo.record_principal_input("", None, input_clean=None)
+        except Exception:
+            if not self._vo_record_fault_logged:
+                self._vo_record_fault_logged = True
+                logger.exception("xaidr: value origin's inbound-A2A bind faulted")
 
     def _scan_unrecorded(self, prompt, direction, destination, provider,
                          origin_context, parent_context, held) -> ScanResult:
@@ -2063,6 +2113,8 @@ class DelphiSensor:
         after the open-circuit check, mirroring ``scan_tool_call``, so calls
         already rejected by an open circuit do not keep re-counting.
         """
+        if received:
+            self._vo_inbound_a2a()          # Q21, A2 M6 (silent-failure review)
         emit_direction = "a2a_inbound" if received else "a2a"
         extra = {"destinationAgent": destination}
         text = message if isinstance(message, str) else None

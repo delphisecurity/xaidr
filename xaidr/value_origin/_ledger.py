@@ -8,7 +8,9 @@ and concurrent flows that each bound their own do not (row P).
 BINDING (ruling 3.1). A ledger is EXPLICIT or IMPLICIT (an internal attribute):
 
     bind_fresh_ledger()        explicit, unconditionally      begin_flow, extract_context
-    bind_ledger()              explicit iff nothing is bound  record_hop; never rebinds
+    bind_ledger()              explicit iff nothing is bound  (no caller: record_hop stopped
+                                                              binding when ruling 3.1 changed,
+                                                              2026-10-04); never rebinds
     record_principal_input()   nothing bound  -> fresh implicit
                                implicit bound -> REPLACED by a fresh implicit
                                explicit bound -> kept

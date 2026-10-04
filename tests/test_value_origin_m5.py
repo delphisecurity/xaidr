@@ -54,8 +54,11 @@ def test_m5_binding(seen):
 
 
 # S25 was a strict xfail at M5 (open gave (no_flow, no_flow)). M6's input seam
-# binds per input (S-2), so the principal-only emit now binds, and open matches
-# paid's reference. The plan did not predict M6 closing it.
+# binds an IMPLICIT ledger per input (S-2), so the second call reads unresolved.
+# Stated plainly (M6 review): set_origin plays no part in the flip. The same
+# calls without set_origin give the same pair, so this pins the input seam's
+# bind, not set_origin's semantics. Matching paid's (no_flow, unresolved) cannot
+# be checked against paid's spec from this repo.
 def test_s25_origin_without_a_flow():
     from xaidr import provenance_chain as pc
     from xaidr.provenance import set_origin

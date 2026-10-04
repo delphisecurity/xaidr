@@ -14,8 +14,8 @@ document differ, the ruling wins.
 
 **3.1 Ledger binding.** A ledger is *explicit* or *implicit* (an internal
 attribute). `begin_flow` and `extract_context` bind explicit
-(`bind_fresh_ledger`). `record_hop` binds explicit only when nothing is bound,
-otherwise it is a no-op (`bind_ledger`). An input scan with nothing bound binds
+(`bind_fresh_ledger`). ~~`record_hop` binds explicit only when nothing is bound,
+otherwise it is a no-op (`bind_ledger`).~~ *[Ruling 3.1 CHANGED 2026-10-04: `record_hop` binds NO ledger — see "Ruling 3.1 CHANGED" below.]* An input scan with nothing bound binds
 implicit. A later input scan replaces an implicit ledger (the V-27 cross-user
 fix), never an explicit one. Public `bind_ledger()` is the explicit bind and
 never rebinds an explicit ledger. No new public parameter.
@@ -62,7 +62,7 @@ owner's choice, not the builder's.
 | # | question | settled |
 |---|---|---|
 | S-1 | 3.3's `Finding` against §1.2's `DestinationFinding` | **Two types.** `Finding{path, destination: Authority \| None, reason: UnresolvedReason \| None}` is what `extract_destinations` returns. `DestinationFinding` keeps its fields, except `authority` is renamed `destination: Authority \| None` and it gains `reason`. `UnresolvedReason` is a str enum `{walk_bound, parse_failure}`. All three are exported. |
-| S-2 | which public entry point binds the implicit ledger (3.1, no new parameter) | **`record_principal_input` binds.** Nothing bound → a fresh implicit ledger. Implicit bound → replaced by a fresh implicit ledger. Explicit bound → kept. It binds *before* validating, so a faulting input still ends the previous request's authority. This drops §1.4's "Does not bind" for that one function. `bind_ledger()` stays a no-op whenever anything is bound, which is what `record_hop` needs. |
+| S-2 | which public entry point binds the implicit ledger (3.1, no new parameter) | **`record_principal_input` binds.** Nothing bound → a fresh implicit ledger. Implicit bound → replaced by a fresh implicit ledger. Explicit bound → kept. It binds *before* validating, so a faulting input still ends the previous request's authority. This drops §1.4's "Does not bind" for that one function. `bind_ledger()` stays a no-op whenever anything is bound, which is what `record_hop` needs. | *[Ruling 3.1 CHANGED 2026-10-04: `record_hop` binds NO ledger — see docs/value-origin-rulings.md, "Ruling 3.1 CHANGED".]*
 | S-3 | 3.2 against URLs that carry `@` (`https://corp.example@evil.test/`) | **URL first.** A whole value that opens with `scheme://`, or is V-19's `host/path`, is tried as a URL before the mailbox rule, so C-6/V-23 hold and the host is `evil.test`. The literal reading made the userinfo spelling UNRESOLVED, an evasion of a recorded untrusted host (`R32-url-first`). |
 | S-4 | 3.6's "UTS-46" against the doc's stdlib `idna` codec (IDNA2003) | **Nontransitional, Unicode 13.0.** ß stays ß (`xn--zca`), as browsers resolve it. CheckBidi on; STD3 rules off; CheckHyphens and VerifyDnsLength off. ZWJ/ZWNJ labels fail, because CONTEXTJ needs Joining_Type data the stdlib lacks. The mapping table, bidi classes and combining marks are vendored from Unicode 13.0 (`_idna_data.py`). 13.0 is Python 3.10's `unicodedata` version, so every valid code point is assigned on every supported interpreter, and NFC is stable for assigned code points. On failure, an argument URL host yields `dns:<raw host lowercased>` (V-23) and a mailbox is UNRESOLVED. |
 | S-5 | whether 3.4's TLD filter applies to bare hosts in **result** text | **The same filter for both.** One candidate extractor serves spans and results (`R34-result-same-filter*`). Cost: a poisoned read that names a bare `evil.corpnet` (no scheme, non-ICANN last label) is not recorded, so a call there is `unresolved`. Scheme URLs are unaffected. |
