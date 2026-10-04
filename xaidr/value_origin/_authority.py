@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import unicodedata
 from typing import List, Optional, Tuple
 from urllib.parse import unquote_to_bytes, urlsplit
 
@@ -201,6 +202,10 @@ _IMPLIED_RE = re.compile(r"^((?:[\w\-]{1,63}\.){1,126}[^\W\d_]{1,63})/")
 _IMPLIED_IP_RE = re.compile(r"^(\[[0-9A-Fa-f:.]{2,45}\]|[0-9]{1,3}(?:\.[0-9]{1,3}){3})"
                             r"(?::[0-9]{1,5}(?![^/?#])|(?=[/?#]))")
 _NON_DESTINATION_SCHEMES = frozenset({"file", "data"})
+# Q1: where an RFC 3986 authority ends (urlsplit's netloc delimiters).
+_AUTHORITY_END_RE = re.compile(r"[/?#]")
+# urlsplit's IPvFuture literal (`_check_bracketed_host`).
+_IPVFUTURE_RE = re.compile(r"v[a-fA-F0-9]{1,32}\..{1,64}")
 
 # Sentinels for the argument walk's three-way answer.
 NOT_A_DESTINATION = None
@@ -222,37 +227,163 @@ class ParseFailure:
 PARSE_FAILURE = ParseFailure()
 
 
-def _url_host(value: str):
-    """(raw host or None, parse_ok). ``value`` must start with ``scheme://``."""
-    m = _SCHEME_RE.match(value)
-    scheme_len = m.end()
-    # V-23: backslashes in the scheme-relative part are slashes, as WHATWG does
-    # for special schemes — `https://evil.test\@corp.example/` is evil.test.
-    rest = value[scheme_len:].replace("\\", "/")
+def _split_host(url: str):
+    """(raw host or None, parse_ok) for ONE authority split of ``url``."""
     try:
-        parts = urlsplit(value[:scheme_len] + rest)
-        host = parts.hostname
+        return urlsplit(url).hostname, True
     except ValueError:
         return None, False
-    return host, True
 
 
-def url_authority(value: str, *, arg_mode: bool):
-    """Authority of a whole-value URL; None if hostless; PARSE_FAILURE if broken."""
+def _whatwg(value: str) -> str:
+    """``value`` (which starts with ``scheme://``) as WHATWG splits it. V-23:
+    backslashes in the scheme-relative part are slashes, as WHATWG does for
+    special schemes — `https://evil.test\\@corp.example/` is evil.test."""
+    m = _SCHEME_RE.match(value)
+    return value[:m.end()] + value[m.end():].replace("\\", "/")
+
+
+def _urlsplit_3_12_2_refuses(netloc: str) -> bool:
+    """The netloc checks of CPython 3.12.2's ``urlsplit``, the most permissive
+    version measured (2026-10-03): brackets must balance, the FIRST bracketed
+    segment of the netloc must be an IPv6 or IPvFuture literal, and no
+    character may NFKC-normalise into a delimiter (``_checknetloc``). Later
+    patch releases also check the bracket in the host itself, after the last
+    ``@``, and refuse more; reading what 3.12.2 reads is the superset."""
+    if ("[" in netloc) != ("]" in netloc):
+        return True
+    if "[" in netloc:
+        first = netloc.partition("[")[2].partition("]")[0]
+        if first.startswith("v"):
+            if not _IPVFUTURE_RE.fullmatch(first):
+                return True
+        else:
+            try:
+                if not isinstance(ipaddress.ip_address(first), ipaddress.IPv6Address):
+                    return True
+            except ValueError:
+                return True
+    if not netloc.isascii():
+        bare = netloc.replace("@", "").replace(":", "").replace("#", "").replace("?", "")
+        folded = unicodedata.normalize("NFKC", bare)
+        if folded != bare and any(c in folded for c in "/?#@:"):
+            return True
+    return False
+
+
+def _authority_host(url: str, *, whatwg: bool) -> Optional[str]:
+    """The host of ``url``'s authority, without delegating to this interpreter's
+    ``urlsplit``; None if there is none.
+
+    The authority runs from ``//`` to the first ``/``, ``?`` or ``#``, and the
+    host follows its LAST ``@``. No ``//`` is no authority (R4's
+    ``http:\\\\host``), and a host still carrying a backslash is not a name any
+    resolver can look up. Brackets differ by reading, because the consumers
+    differ:
+
+      * ``whatwg=False``, the RFC 3986 reading (urllib.parse, httpx): exactly
+        what CPython 3.12.2's ``urlsplit(...).hostname`` reads, the most
+        permissive version measured. The host is the part between the first
+        ``[`` of the host and the next ``]``, otherwise the part before the
+        first ``:``. A netloc 3.12.2 refuses is no host
+        (``_urlsplit_3_12_2_refuses``). Measured: 3.12.2 reads ``il`` from
+        ``http://[::1]\\@ev[il].test`` because it validates only the netloc's
+        FIRST bracket, and 3.12.14 refuses it. urllib.parse is a covered
+        consumer, and xaidr's own ``ProtectedHttpClient._extract_host`` decides
+        destination policy with it. ``urllib.request``, by contrast, passes the
+        raw netloc on and reaches neither host.
+      * ``whatwg=True``, used only where ``urlsplit`` refused the WHATWG string:
+        WHATWG's host rule. A ``[`` must open the host and enclose an IPv6
+        literal. Any other bracket means no host, as WHATWG refuses
+        ``http:[evil.test]`` and ``http:ev[il].test``.
+
+    Written out rather than delegated, because ``urlsplit`` is not the same
+    function on every interpreter (V-4) and because what it REFUSES, a transport
+    may still send. Measured 2026-10-03: its bracketed-host validation, a
+    security backport, raises on ``http://[::1]\\@evil.test/`` on CPython
+    3.10.21 / 3.12.14 and returns ``evil.test`` on 3.12.2; and it raises on
+    ``http://&a:foo(b]c@d:2/``, which httpx, urllib3 and WHATWG all send to ``d``.
+    """
+    m = _SCHEME_RE.match(url)
+    if not m:
+        return None
+    rest = url[m.end():]
+    end = _AUTHORITY_END_RE.search(rest)
+    netloc = rest[:end.start()] if end else rest
+    hostinfo = netloc.rpartition("@")[2]
+    if whatwg:
+        if hostinfo.startswith("[") and "]" in hostinfo:
+            host = hostinfo[1:].partition("]")[0]
+            if not isinstance(_strict_ip(host), ipaddress.IPv6Address):
+                return None
+        elif "[" in hostinfo or "]" in hostinfo:
+            return None
+        else:
+            host = hostinfo.partition(":")[0]
+    else:
+        if _urlsplit_3_12_2_refuses(netloc):
+            return None
+        _, bracket, inside = hostinfo.partition("[")
+        host = inside.partition("]")[0] if bracket else hostinfo.partition(":")[0]
+    host = host.lower()
+    if not host or "\\" in host:
+        return None
+    return host
+
+
+def url_authority(value: str, *, arg_mode: bool, written: Optional[str] = None):
+    """Authority of a whole-value URL; None if hostless; PARSE_FAILURE if broken.
+
+    Q1 (2026-10-03, amends V-23): EVERY reading of the authority split that a
+    real consumer performs is a destination, and the weakest decides the wire.
+    The readings are
+
+      * WHATWG (backslash is a slash; urllib3 and ada agree), via ``urlsplit``;
+      * RFC 3986 (backslash is userinfo; urllib.parse and httpx agree) of the
+        value as ``written``, before R4's special-scheme rewrite;
+      * where ``urlsplit`` REFUSES the WHATWG string, that string's authority
+        split anyway — a refusal by one parser is not a refusal by the
+        transport.
+
+    `https://corp.example\\@evil.test/` is corp.example to WHATWG and evil.test
+    to httpx (which sends there) and urllib.parse; reading only the first made a
+    call httpx sends to an UNTRUSTED evil.test come back AUTHORIZED (finding 1). Distinct
+    authorities come back as a list, WHATWG first — the mailbox-list shape — and
+    readings that normalise to one authority are one answer. A value
+    ``urlsplit`` refuses stays PARSE_FAILURE (decision 7), carrying what the
+    other readings found: R1's shape, so an untrusted host still decides.
+    """
     m = _SCHEME_RE.match(value)
     if not m:
         return NOT_A_DESTINATION
     if m.group(1).lower() in _NON_DESTINATION_SCHEMES:
         return NOT_A_DESTINATION
-    host, ok = _url_host(value)
+    whatwg = _whatwg(value)
+    host, ok = _split_host(whatwg)
     if not ok:
-        return PARSE_FAILURE if arg_mode else NOT_A_DESTINATION
-    if not host:
-        return NOT_A_DESTINATION                 # hostless (C-6)
-    a = _host_authority(host, arg_fallback=arg_mode)
-    if a is None:
-        return PARSE_FAILURE if arg_mode else NOT_A_DESTINATION
-    return a
+        primary = PARSE_FAILURE
+    elif not host:
+        primary = NOT_A_DESTINATION              # hostless (C-6)
+    else:
+        primary = _host_authority(host, arg_fallback=arg_mode) or PARSE_FAILURE
+    others = [_authority_host(value if written is None else written, whatwg=False)]  # RFC 3986
+    if not ok:
+        others.insert(0, _authority_host(whatwg, whatwg=True))          # what urlsplit refused
+    extra = []
+    for h in others:
+        a = _host_authority(h, arg_fallback=arg_mode) if h else None
+        if a is not None and a != primary and a not in extra:
+            extra.append(a)
+    if not extra:
+        if primary is PARSE_FAILURE and not arg_mode:
+            return NOT_A_DESTINATION
+        return primary
+    if isinstance(primary, Authority):
+        return [primary, *extra]
+    if primary is PARSE_FAILURE:                 # R1's shape: UNRESOLVED, plus what parsed
+        if arg_mode:
+            return ParseFailure(extra)
+    return extra[0] if len(extra) == 1 else extra   # hostless or refused to WHATWG
 
 
 def implied_url_authority(value: str, *, arg_mode: bool):
@@ -390,13 +521,14 @@ def classify_value(value: str, *, arg_mode: bool):
         if not addr:
             return NOT_A_DESTINATION           # mailto: with no address (C-6)
         return mailbox_list(addr) if arg_mode else _single(mailbox_list(addr))
+    written = v
     m = _SPECIAL_RE.match(v)
     if m:
         v = m.group(1) + "://" + v[m.end():]
     if _SCHEME_RE.match(v):
         if any(c.isspace() for c in v):
             return PARSE_FAILURE if arg_mode else NOT_A_DESTINATION
-        return url_authority(v, arg_mode=arg_mode)
+        return url_authority(v, arg_mode=arg_mode, written=written)
     if not any(c.isspace() for c in v):
         if _IMPLIED_RE.match(v):
             return implied_url_authority(v, arg_mode=arg_mode)
@@ -434,8 +566,11 @@ def authority_of(value: str) -> Authority | None:
     too, R4), a V-19 ``host/path``, a strict IP literal alone or followed by a
     port, path, query or fragment (R4), or a ``+`` phone. A bare hostname is NOT
     a destination (V-19). A URL host
-    that fails UTS-46 still yields ``dns:<raw host lowercased>`` (V-23). Never
-    raises.
+    that fails UTS-46 still yields ``dns:<raw host lowercased>`` (V-23). A URL
+    whose authority split names two authorities (Q1) is None here, exactly as a
+    two-mailbox list is: one answer cannot name both, and either one alone is a
+    host some real consumer does not send to. ``extract_destinations`` reports
+    both. Never raises.
     """
     try:
         if not isinstance(value, str):
@@ -486,6 +621,8 @@ def prose_candidates(text: str) -> List[Tuple[int, Authority]]:
         a = classify_value(cand, arg_mode=False)
         if isinstance(a, Authority):
             out.append((m.start(), a))
+        elif isinstance(a, list):                # Q1: every reading of the split
+            out.extend((m.start(), x) for x in a)
     text = _blank(text, taken)
     taken = []
     for m in _P_EMAIL_RE.finditer(text):

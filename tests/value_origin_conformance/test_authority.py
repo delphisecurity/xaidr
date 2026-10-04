@@ -43,7 +43,10 @@ def A(key):
     ("http://intranet/", "dns:intranet"),
     ("HTTPS://Corp.Example./", "dns:corp.example"),
     ("https://corp.example@evil.test/", "dns:evil.test"),
-    ("https://evil.test\\@corp.example/", "dns:evil.test"),
+    # `https://evil.test\@corp.example/` -> dns:evil.test was pinned here under
+    # V-23. Q1 (2026-10-03) amends V-23: that value names TWO authorities, so the
+    # single-answer normaliser returns None and the walk reports both. See
+    # test_q1_authority_of_answers_none_for_a_value_with_two_authorities.
     ("https://ev%69l.test/", "dns:evil.test"),
     ("https://pаypal.example/", "dns:xn--pypal-4ve.example"),
     ("https://xn--pypal-4ve.example/", "dns:xn--pypal-4ve.example"),
@@ -80,6 +83,39 @@ def test_authority_of_accepts(value, key):
 ])
 def test_authority_of_rejects(value):
     assert authority_of(value) is None
+
+
+@pytest.mark.parametrize("value,keys", [
+    # Q1 (2026-10-03, amends V-23): WHATWG reads the backslash as a slash, RFC
+    # 3986 (urllib, httpx) reads it as userinfo. Each reading is a finding,
+    # WHATWG first, so neither consumer's host can be walked past.
+    ("https://corp.example\\@evil.test/x", ["dns:corp.example", "dns:evil.test"]),
+    ("https://evil.test\\@corp.example/x", ["dns:evil.test", "dns:corp.example"]),
+    ("http://169.254.169.254\\@corp.example/", ["ip:169.254.169.254", "dns:corp.example"]),
+    ("http://\\@evil.test/", ["dns:evil.test"]),           # WHATWG: hostless; RFC: evil.test
+    ("https://a.corp.example\\@b.corp.example/", ["dns:corp.example"]),   # one authority
+    ("https://evil.test\\x", ["dns:evil.test"]),           # RFC host is unresolvable junk
+    # V-4: the same answer on every interpreter. urlsplit raises on this value on
+    # CPython 3.10.21 / 3.12.14 (bracketed-host validation, a security backport)
+    # and returns evil.test on 3.12.2; httpx sends it to evil.test on all of
+    # them. The RFC 3986 reading must not inherit that patch-level difference.
+    ("http://[::1]\\@evil.test/x", ["ip:::1", "dns:evil.test"]),
+    # The WPT adversarial run (2026-10-03): urlsplit REFUSES a ']' in userinfo;
+    # httpx, urllib3 and WHATWG send it to the host after '@'. The value stays
+    # parse_failure (decision 7) and the host is a finding beside it (R1's shape).
+    ("http://&a:foo(b]c@d:2/", ["dns:d"]),
+])
+def test_q1_every_reading_of_the_authority_split_is_a_finding(value, keys):
+    found, _ = extract_destinations({"url": value})
+    assert [f.destination.key() for f in found if f.destination is not None] == keys
+
+
+def test_q1_authority_of_answers_none_for_a_value_with_two_authorities():
+    """The single-answer normaliser cannot name two hosts, exactly as it cannot
+    for a two-mailbox list. It never picks one: either pick would be a host a
+    real consumer does not send to. ``extract_destinations`` reports both."""
+    assert authority_of("https://corp.example\\@evil.test/x") is None
+    assert authority_of("https://a.corp.example\\@b.corp.example/") == A("dns:corp.example")
 
 
 def test_idna_failure_in_an_argument_still_yields_the_raw_host():
@@ -225,6 +261,17 @@ def test_v19_residual_a_name_with_a_port_and_no_scheme():
     want = _oracle("http://evil.test:8080/x")
     assert _core("evil.test:8080/x") == (want, [want]), (
         f"'evil.test:8080/x': urllib.parse finds {want}; the core finds no destination")
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "found, not fixed (2026-10-03, the WPT adversarial run for Q1): an EMPTY hex "
+    "part. WHATWG (ada) reads https://0x.0x.0/ as 0.0.0.0 and so does the macOS "
+    "libc resolver httpx and urllib3 hand the name to; glibc does not. coerce_ip "
+    "raises on int('0x', 16) and reads dns:0x.0. IP canonicalisation, the "
+    "integer-spelling family; fixed where coerce_ip is shared (the url_parse "
+    "milestone), not by Q1's split readings."))
+def test_residual_empty_hex_part_is_the_zero_address():
+    assert authority_of("https://0x.0x.0/") == A("ip:0.0.0.0")
 
 
 @pytest.mark.xfail(strict=True, reason=(

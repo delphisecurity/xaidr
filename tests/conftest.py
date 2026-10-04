@@ -20,6 +20,16 @@ import pytest
 from xaidr import Sensor, clear_flow, clear_origin
 
 
+def pytest_configure(config):
+    # Tests that need the dev extra's oracles or build tooling REFUSE when it is
+    # missing (Q3): they never skip. The `base` CI config, which installs no
+    # third-party package by design, deselects them explicitly by this marker.
+    config.addinivalue_line(
+        "markers",
+        "requires_dev_extra: needs '.[dev]' (urllib3, ada-url, hatchling); refuses, "
+        "never skips, without it")
+
+
 class CapturingReporter:
     """A reporter that just collects delivered events for inspection."""
 

