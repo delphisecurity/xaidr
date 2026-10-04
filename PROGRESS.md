@@ -1294,11 +1294,17 @@ identical.**
 **CI on `b84671e`: green.** 13 of 13 checks, run `37217084055`.
 
 **silent-failure-hunter.**
-1. **High, held for the owner.** A host that passes a per-call principal
+1. **High, held for the owner.** ~~A host that passes a per-call principal
    (`origin_context={"on_behalf_of": ...}`, or `set_origin`) with no
    `begin_flow()` reaches `build_provenance`, then `record_hop`, then
    `bind_ledger()`. The sensor itself binds an explicit ledger, and nothing
-   unbinds it.
+   unbinds it.~~ *[RETRACTED after M5, measured while writing the ruling-3.1
+   test: the SENSOR never reaches `record_hop` this way.
+   `_resolve_provenance` returns early when a per-call principal is set and
+   no flow is active. The reviewer's repro called `build_provenance`
+   directly, and I relayed the claim to the owner in the M5 report without
+   checking it (clause 4). The carry is reached by a HOST that calls
+   `record_hop` / `build_provenance` itself with no `begin_flow()`.]*
    - The chain side, `is_flow_active()` turning True, predates M5.
    - What M5 adds is the ledger: those calls now read `unresolved` instead of
      `ledger_absent`.

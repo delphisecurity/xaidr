@@ -421,6 +421,47 @@ the host-string rules see urlsplit's `corp.example` while WHATWG reaches the
 metadata name. Q1's obligation, for hostnames, needs a hosts tuple on
 `UrlShape`.
 
+## Ruling 3.1 CHANGED (owner, 2026-10-04, A2 after M5): `record_hop` binds no ledger
+
+**Was:** `record_hop` binds an explicit ledger iff none is bound (§1.4 / M5).
+**Now:** `record_hop` binds nothing. Only `begin_flow()` and `extract_context()`
+bind (fresh), and `clear_flow()` unbinds.
+
+**Why.** A ledger bound by `record_hop` has **no owner and no unbind**, so it
+outlives the request. ~~The sensor calls `record_hop` itself, through
+`_resolve_provenance` → `build_provenance`, whenever a host passes a per-call
+principal without `begin_flow()`.~~ *[Corrected 2026-10-04, measured while
+writing the failing test: FALSE. `_resolve_provenance` returns early when a
+per-call principal is set and no flow is active, so the sensor never reaches
+`record_hop` that way. The claim came from the M5 silent-failure review, whose
+repro called `build_provenance` directly, and it reached the owner through my M5
+report. What DOES reach the old consequence is a host that calls the public
+`provenance_chain.record_hop` / `build_provenance` itself without
+`begin_flow()`, which is what the M5 milestone review measured. The decision
+stands on the lifetime argument alone.]* Pools reuse threads by design, so on a reused thread user
+A's principal input authorized user B's call (V-27's cross-request carry,
+measured by the M5 milestone review). The defect was never that `record_hop`
+binds. It was a ledger nobody owns. Options that kept the implicitly bound
+ledger and reasoned about when it is safe were rejected as the same lifetime
+bug wearing a label.
+
+**Cost, measured.**
+- The sensor's per-call-principal path (no `begin_flow()`) reads `no_flow` on
+  every tool call and logs the Q6 warning once. It never reached `record_hop`,
+  so it is unchanged by this ruling.
+- A host that calls `record_hop` / `build_provenance` directly with no
+  `begin_flow()` now gets no ledger: `no_flow` until `record_hop` marks the
+  chain, then `ledger_absent`.
+- Neither path has value-origin detection. That is the fail-safe direction,
+  and the warning names `begin_flow()`.
+
+**Pinned by** `test_ruling_3_1_changed_user_a_authority_never_reaches_user_b_on_a_reused_thread`,
+red against the old ruling. **The provenance-chain tests CANNOT see this
+class:** the carry lives in the value-origin ledger, not in the chain, tiers
+or inbound mark those suites check. They stayed green through every variant of
+it (M5 sabotage: 79 passed). Do not read their green as evidence about ledger
+lifetime.
+
 ## What A1 does not do
 
 It adds no seams, sends nothing anywhere, and changes neither paid nor the Brain.

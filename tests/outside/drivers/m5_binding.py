@@ -66,13 +66,12 @@ def collect(xaidr):
     pc.begin_flow()
     res["begin_flow_binds_fresh"] = first is not None and _ledger._LEDGER.get() is not first
     pc.clear_flow()
-    # ruling 3.1, a PINNED CONSEQUENCE (documented, not a fix): a host that
-    # calls record_hop with no begin_flow/clear_flow keeps that explicit ledger
-    # across "requests" on the thread, just as its chain persists today.
+    # ruling 3.1 CHANGED (2026-10-04): record_hop binds no ledger. M5 pinned the
+    # old consequence ("keeps one ledger across requests"); this inverts it.
     pc.record_hop("agent-a")
-    lg = _ledger._LEDGER.get()
+    first = ledger_bound()
     pc.record_hop("agent-b")                    # request 2, same thread, no clear_flow
-    res["record_hop_keeps_one_ledger_across_requests"] = [lg is not None, _ledger._LEDGER.get() is lg]
+    res["record_hop_binds_no_ledger"] = [first, ledger_bound()]
     pc.clear_flow()
     return res
 

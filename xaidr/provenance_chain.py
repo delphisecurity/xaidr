@@ -141,8 +141,12 @@ def record_hop(
     the parallel tier list. When the agent is already the tail, its tier is
     refreshed rather than appended, so re-scanning does not lose it.
     """
-    # A2 M5, ruling 3.1: an EXPLICIT ledger iff none is bound; never rebinds.
-    _vo.bind_ledger()
+    # Ruling 3.1 CHANGED (owner, 2026-10-04): record_hop binds NO ledger. It
+    # used to bind an explicit one iff none was bound, and the sensor reaches
+    # record_hop itself (on_behalf_of / set_origin), so that ledger had no owner
+    # and no unbind, outlived the request, and on a reused pool thread carried
+    # user A's principal authority to user B. Only begin_flow / extract_context
+    # bind, and clear_flow unbinds.
     chain = _chain_ctx.get()
     if chain is None:
         chain = []
