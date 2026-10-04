@@ -61,12 +61,5 @@ without also stopping on `flagged`. The protected HTTP wrapper raises
 
 ## The one-time `no_flow` warning (value origin)
 
-- **What it means:** a tool call reached the sensor with no flow active, so value origin (which
-  traces whether a call's destination came from the principal or from untrusted content) could not
-  evaluate it. The verdict is `no_flow`, and under `value_origin="enforce"` such a call is never
-  blocked. It is logged once per sensor, on the first such call. `Sensor(value_origin="off")`
-  turns value origin off, warning included.
-- **What `begin_flow()` does:** it starts one request's scope: a fresh provenance chain, a
-  correlation id and, from A2 M5, a fresh value-origin ledger. Call it at the start of each agent
-  request and `clear_flow()` at the end, OUTSIDE any LangGraph graph. Use `extract_context()` on an
-  inbound A2A request instead.
+- **What it means:** a tool call arrived with no flow active, so value origin could not trace its destination (logged once per sensor).
+- **What `begin_flow()` does:** it opens one request's scope (chain, correlation id and a fresh value-origin ledger); call it per agent request, outside any LangGraph graph, and `clear_flow()` at the end.

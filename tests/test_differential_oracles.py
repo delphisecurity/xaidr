@@ -728,9 +728,14 @@ MACOS_EVERYWHERE = (
 
 
 def _names_a_macos_host(url):
-    """True iff some split of ``url`` names a host string the macOS resolver
-    reads differently (independent of the core: `_macos_reading`)."""
-    for tok in re.split(r"[/\\@?#]", url):
+    """True iff the AUTHORITY of ``url`` (any split of it: RFC's userinfo, WHATWG's
+    backslash, R4's missing //) names a host string the macOS resolver reads
+    differently (independent of the core: `_macos_reading`). Path, query and
+    fragment are never looked at (M5 silent-failure review: a path segment like
+    `/00169.254.00169.254/` must not launder an unrelated over-read here)."""
+    rest = re.sub(r"^[A-Za-z][A-Za-z0-9+.\-]*:[/\\]*", "", url)
+    authority = re.split(r"[/?#]", rest, maxsplit=1)[0]
+    for tok in re.split(r"[\\@]", authority):
         if tok.startswith("["):
             cand = tok[1:].partition("]")[0]
             if cand and _macos_reading(cand) is not None:
@@ -750,6 +755,13 @@ def test_the_macos_everywhere_over_read_class_is_bounded_and_platform_split(url_
     and is NOT one on darwin (its resolver reaches private 10.0.0.1)."""
     absorbed = {u for u, _, _ in url_parse_comparison["over"].get("macos-reading-read-everywhere", [])}
     assert absorbed, "the macOS-reading over-read class absorbed nothing; delete it"
+    assert not _names_a_macos_host("http://example.com/00169.254.00169.254/profile")
+    assert not _names_a_macos_host("https://api.example.com/v1/orders")
+    # the bound, checked on the grid's HOST axis, not with the predicate itself
+    macos_hosts = [h for h in _UP_HOSTS if _macos_reading(h) is not None]
+    stray = [u for u in absorbed if not any(h.lower() in u.lower() for h in macos_hosts)]
+    assert not stray, f"the class absorbed spellings with no macOS host: {stray[:5]}"
+    assert _names_a_macos_host("http://corp.example\\@010.0.0.1/x")
     plain = "http://010.0.0.1/latest"
     assert (plain in absorbed) == (sys.platform != "darwin"), (
         f"{plain!r} absorbed={plain in absorbed} on {sys.platform}: " + MACOS_EVERYWHERE)

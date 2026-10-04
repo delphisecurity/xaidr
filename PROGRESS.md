@@ -1186,8 +1186,15 @@ Linux leg reproduced. What it found:
      7 failed, 14 passed
      ```
    - New conformance row `Q22-rerule-macos-public-wrap`. SEMANTIC.
-   - **False-positive cost on the benign corpora: 0.** Across 9 files and
-     16,683 string leaves, comparing HEAD's core with the new one, no leaf's
+   - ~~**False-positive cost on the benign corpora: 0.** Across 9 files and
+     16,683 string leaves,~~ *[RETRACTED, M5 milestone review: vacuous by
+     construction. No benign corpus here contains a host any macOS reading can
+     change. The only numeric host in all nine files is `169.254.169.254`. The
+     16,683 also counted dict keys and `benign_longform/manifest.json`
+     metadata. Honest statement: the widening touches only hosts with a
+     leading-zero numeric part, a single number above 2**32-1, or a
+     leading-zero embedded IPv4. Its cost is bounded by that shape, NOT
+     measured.]* comparing HEAD's core with the new one, no leaf's
      destination readings change. The files are `benign_toolcalls`,
      `benign_a2a`, `benign_longform`, heldout and asi_battery benign, and the
      456-row shell corpus.
@@ -1204,7 +1211,8 @@ Linux leg reproduced. What it found:
 
 **Standing rule** (ARCHITECTURE.md §5): every sabotage runs with
 `PYTHONDONTWRITEBYTECODE=1` from no `__pycache__`, and the restore is confirmed
-with `cmp`. `tests/conftest.py` sets `sys.dont_write_bytecode`.
+with `cmp`. ~~`tests/conftest.py` sets `sys.dont_write_bytecode`.~~
+*[Corrected below: that guard did not protect.]*
 
 **Interpreters.**
 - The full affected set ran on macOS 3.12.2 and Linux 3.10, 3.11 and 3.12.
@@ -1261,7 +1269,7 @@ provenance suites, the LangChain result scan, conformance and `tests/outside`
 
 ```
 E  AssertionError: M5 binding: s5_after_begin_flow: got 'ledger_absent', want 'unresolved' -- begin_flow() bound no ledger (S5 should flip ledger_absent -> unresolved); begin_flow_binds_fresh: got False, want True -- begin_flow() reused the caller's ledger
---- same sabotage, the provenance-chain tests: 79 passed, 3 skipped   (discriminating: they cannot see it)
+--- same sabotage, the provenance-chain tests (test_provenance, test_set_origin_provenance, test_delegation_rate_breaker, test_report_provenance): 79 passed, 3 skipped   (discriminating: they cannot see it)
 === RESTORED (cmp identical to snapshot): 1 passed, 1 xfailed
 ```
 
@@ -1278,6 +1286,76 @@ first tool call's own `record_hop`.
 **C-11 across commits** (base `460c541` against the M5 tree, from wheels;
 `c11_oracle --compare`, which now accepts such a base): **all 18
 identical.**
+
+---
+
+## M5 fresh-context reviews, and what changed after them
+
+**CI on `b84671e`: green.** 13 of 13 checks, run `37217084055`.
+
+**silent-failure-hunter.**
+1. **High, held for the owner.** A host that passes a per-call principal
+   (`origin_context={"on_behalf_of": ...}`, or `set_origin`) with no
+   `begin_flow()` reaches `build_provenance`, then `record_hop`, then
+   `bind_ledger()`. The sensor itself binds an explicit ledger, and nothing
+   unbinds it.
+   - The chain side, `is_flow_active()` turning True, predates M5.
+   - What M5 adds is the ledger: those calls now read `unresolved` instead of
+     `ledger_absent`.
+   - **The milestone review showed what this does once M6 records input.**
+     User A's principal authority reaches user B on the same thread
+     (`principal_undeclared_span` against `unresolved` before M5). That is
+     V-27's cross-request carry, reached through ruling 3.1's pinned
+     consequence.
+   - M6's planned S30 never calls `record_hop`, so it cannot see this.
+   - Only the owner can change ruling 3.1 or `build_provenance`'s gate, so
+     it is held as the STOP's first item.
+2. **Medium, fixed.** The over-read predicate `_names_a_macos_host` scanned
+   path tokens. `http://example.com/00169.254.00169.254/profile` returned True.
+   It now reads only the authority, and that spelling is asserted False.
+
+**milestone-reviewer.** It reproduced the M5 red, the sabotage, `record_hop`
+as the masker (a spy: bound `False, True, True` before each call),
+per-seam reds, the outside run, Linux 3.12 and **3.11** (closing the 3.11
+gap), C-11 and S25. It refuted:
+1. **The `conftest.py` bytecode guard.** It set `dont_write_bytecode` after
+   `xaidr` was imported, and that flag stops writes, not reads. **Fixed:**
+   before any import, `sys.pycache_prefix` now points at a fresh empty
+   directory, so in-tree bytecode is neither read nor written. **Proven** with
+   the reviewer's own experiment. A stale sabotaged `.pyc` is planted, the
+   source is restored cmp-identical with the same size and mtime, then:
+   ```
+   OLD conftest (dont_write_bytecode after import): 1 failed  E  AssertionError: M5 binding: s5_after_begin_flow: got 'ledger_absent' ...
+   NEW conftest (pycache_prefix before import)    : 1 passed
+   ```
+   My first attempt put the guard above `from __future__ import annotations`.
+   That is a SyntaxError, and it broke collection until the guard was moved.
+2. **The "0 of 16,683" false-positive cost.** Retracted in place above as
+   vacuous. The `460c541` message carries the claim, and the PR body now
+   corrects it.
+3. **The over-read pin did not check its bound.** It passed on macOS with
+   the predicate replaced by `return True`. Now it asserts the predicate is
+   False on non-macOS hosts, and checks the bound on the grid's HOST axis
+   (every absorbed spelling contains a host the macOS resolver reads
+   differently), not with the predicate itself.
+4. **Ruling 3.1 plus S-2 reopens V-27.** Held: STOP item 1.
+5. **The docs were longer than "one line each".** Trimmed: README is one
+   line, and `docs/api.md` is one line each for what it means and what
+   `begin_flow()` does.
+
+It also noted:
+- the M5 sabotage ran in-process, not through a rebuilt wheel;
+- the "consequence for M10" (in-scan `record_hop` masking) is UNVERIFIED for
+  LangGraph, where F5 makes a bind inside a node node-local. M10's driver has
+  to settle it.
+
+**After the fixes:**
+
+```
+== macOS 3.12.2    503 passed, 14 xfailed
+== linux 3.10.21   503 passed, 14 xfailed
+== linux 3.12.14   503 passed, 14 xfailed
+```
 
 ---
 

@@ -538,7 +538,12 @@ what to do once the STOP is lifted. It never lifts the STOP in advance.
   with no `__pycache__`.
 - The restore is confirmed with `cmp` against a snapshot, not only by a green
   run.
-- `tests/conftest.py` sets `sys.dont_write_bytecode = True` for every test run.
+- `tests/conftest.py` sets, before anything imports `xaidr`,
+  `sys.pycache_prefix` to a fresh empty directory and
+  `sys.dont_write_bytecode = True`. A run then neither reads nor writes
+  in-tree bytecode. *[Corrected, M5 review: the first version set only
+  `dont_write_bytecode`, after `xaidr` was imported. That stops writes, not
+  reads, and a stale `.pyc` with a matching mtime was still executed.]*
 
 A same-length edit restored within one second survived in a stale `.pyc` at
 M4: the "restored" run still executed the sabotage. A sabotage can then report

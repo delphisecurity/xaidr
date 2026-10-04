@@ -10,8 +10,17 @@ Two things to know about the sensor under test:
     so every test is isolated via the autouse ``_clean_provenance_state`` fixture
     — otherwise a ``begin_flow`` in one test leaks into the next.
 """
-
 from __future__ import annotations
+
+# Standing rule (ARCHITECTURE.md §5), FIRST, before anything imports xaidr:
+# this run neither reads nor writes in-tree bytecode. sys.pycache_prefix points
+# both at a fresh empty directory, so a stale __pycache__/*.pyc left by a
+# sabotage cannot be read even when the restored source has the same size and
+# mtime. dont_write_bytecode alone stops writes, not reads (M5 milestone review).
+import sys as _sys
+import tempfile as _tempfile
+_sys.dont_write_bytecode = True
+_sys.pycache_prefix = _tempfile.mkdtemp(prefix="xaidr-nopyc-")
 
 import time
 
@@ -118,8 +127,3 @@ def pytest_make_parametrize_id(config, val, argname):
         return "{}_{}chars".format(argname, len(val))
     return None
 
-
-# Standing rule (ARCHITECTURE.md §5): no test run writes bytecode, so a sabotage
-# edit restored within one second cannot survive in a stale .pyc (seen at A2 M4).
-import sys as _sys
-_sys.dont_write_bytecode = True
