@@ -2070,6 +2070,64 @@ nothing outside this repo was changed.
 
 ---
 
+## Pre-M8 milestone review, and what changed after it
+
+It reproduced:
+- the sweep red, both sabotages, and the inbound-mark guard (with its own
+  mutation);
+- every Q13 number and all 18 named benign blocks;
+- inventory rows #1, #6 and #7.
+
+Its gaps and their fixes:
+1. **Sweep.**
+   - The five vacuous rows were already fixed in `80a2e77`.
+   - **The `_r4_host` fix was covered only structurally.** url_parse imports
+     the core directly, so patching the package cannot break it.
+     `test_url_parse_core_faults_never_reach_the_caller` now breaks
+     `classify_value`, `_host_authority` and `_whatwg` where url_parse looks
+     them up.
+   - The pasted red's site list was cut off by my `cut -c1-260`. It did not
+     come from an earlier test version, but it cannot be reproduced word for
+     word either.
+2. **False-positive cost: corrections.**
+   - **"0 of 2,978 real URL hosts" is zero BY CONSTRUCTION:** none of those
+     hosts had an affected shape (counted below). **The FP rate for
+     leading-zero quads and leading-zero embedded IPv4 is UNMEASURED.** No
+     real text in the corpus held them, so only the number-above-2**32 shape
+     has real data.
+   - The file filter skipped `.ts`/`.d.ts` and source code. The reviewer
+     found a real `127.000.000.001` in `node_modules/@types/node/net.d.ts`.
+     Its readings do not change: octal and decimal agree.
+   - The owner asked for real host lists and log samples. The corpus has
+     neither: logs were excluded for privacy, and no host list was found.
+   - The evidence file now also holds the 2,978 distinct URL hosts, one
+     source each.
+   - `10ec7eb`'s "every case is named" overclaimed: the hosts and 382 of the
+     1,339 token occurrences were not named. The PR body corrects it.
+3. **Q13, completed.** A-flow-I and A-flow-R at 0% MEAN NOTHING: every call
+   there came back `no_destination` (`heldout/benign` names no URLs). The two
+   benign corpora left out are now measured:
+   ```
+reviewer's real leading-zero quad (node_modules/@types/node/net.d.ts):
+  '127.000.000.001': changed=False before=([], None) after=([], None)
+  'http://127.000.000.001/': changed=False before=(['ip:127.0.0.1'], 'loopback') after=(['ip:127.0.0.1'], 'loopback')
+real URL hosts with an affected shape: 0 []
+Q13 P-flow-I: benign_a2a: would block 0/64 calls ([('no_destination', 58), ('principal_undeclared_span', 4), ('unresolved', 2)]) | benign_longform: would block 0/24 calls ([('unresolved', 24)])
+Q13 P-flow-R: benign_a2a: would block 4/64 calls ([('no_destination', 58), ('untrusted_source', 4), ('unresolved', 2)]) | benign_longform: would block 0/24 calls ([('unresolved', 24)])
+   ```
+4. **Inventory.** `origin/main` WAS readable, and the Brain files are
+   identical there: the Brain code is merged. Corrected in place. Whether the
+   migration is applied live is still unverified.
+5. **The second "nine"** in `verdict_of`'s docstring is fixed. `10ec7eb`'s
+   "benign blocked calls are named in PROGRESS.md" was false at that commit
+   (the list had been wiped) and true from `08c2d08`.
+
+**Docker:** it was available to me this loop (Linux 3.10 and 3.12 legs for
+item 1). It was NOT available to the reviewer, so its 3.10/3.11 matrix did not
+run.
+
+---
+
 ## Status (updated after M3), and what is waiting on the owner
 
 | milestone | state | commit |

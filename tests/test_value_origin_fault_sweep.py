@@ -313,3 +313,17 @@ def test_a_core_fault_never_reaches_the_caller(monkeypatch, caplog, pid, fn, rea
                             "(fix the row, not the code)")
     assert any(r.levelno >= logging.ERROR for r in caplog.records), (
         f"[{pid}] {fn}() raised and nothing was logged: a fault must never be silent")
+
+
+def test_url_parse_core_faults_never_reach_the_caller(monkeypatch):
+    """url_parse imports the core's functions DIRECTLY, so patching the package
+    cannot break them (pre-M8 review): each is broken where url_parse looks it
+    up, and parse_url must still answer (it never raises)."""
+    import xaidr.scanner.url_parse as up
+
+    def boom(*a, **k):
+        raise RuntimeError("sweep: injected url_parse core fault")
+    for name in ("classify_value", "_host_authority", "_whatwg"):
+        monkeypatch.setattr(up, name, boom)
+    for url in ("http:metadata.google.internal/x", "https://169.254.169.254/latest", "http://010.0.0.1/"):
+        up.parse_url(url)

@@ -6,7 +6,9 @@ read-only (2026-10-04, at xaidr `efe2ad7`). The tenth value is `input_truncated`
 `not_recorded`, and an untrusted finding outranks it.
 
 **Headline.** One consumer outside xaidr encodes the vocabulary today: the
-Brain, on delphi-sentinel branch `feat/value-origin-brain` (`a603239`). It
+Brain, on delphi-sentinel branch `feat/value-origin-brain` (`a603239`) **and on
+`origin/main` (`01450c7`, #137), where those four files are identical** *[corrected by the
+pre-M8 review: the census said origin/main could not be read; it can, and the Brain code is merged]*. It
 hard-codes NINE values and would store `input_truncated` as **NULL**: silent
 data loss in the state that exists to make truncation visible. blank-canvas has
 no value-origin code yet. The paid repo (`delphi-python-sdk`) has no vendored
@@ -31,7 +33,8 @@ comment.
 | — | xaidr itself | `verdict_of`'s docstring said "nine" | — | **fixed in this commit** (docstring only; a paid pin byte change) |
 
 **Effective rule for `ai_guard_logs.value_origin`.** Its only definition is the
-sentinel branch migration.
+sentinel migration (on `origin/main` too, so it is merged, though whether it is APPLIED to the live
+database is unverified).
 - CHECK: none, deliberately (`add-value-origin.sql:37-43`).
 - Trigger: `trg_validate_feedback_status` checks only `feedback_status`.
 - NOT NULL, DEFAULT, enum: none.
@@ -43,9 +46,9 @@ sentinel branch migration.
   Brain. Unverified.
 
 **Not read.**
-- delphi-sentinel `origin/main` (`01450c7`, ahead of the checkout). layers-spec
-  cites `origin/main:src/value-origin.test.mjs` with matching line numbers, so
-  the Brain code has probably merged. This is second-hand.
+- ~~delphi-sentinel `origin/main` (`01450c7`, ahead of the checkout).~~ *[It
+  was readable: the pre-M8 review diffed it against `feat/value-origin-brain`, and
+  the four Brain files are identical. The Brain code is on main.]*
 - About 60 sentinel branches without a worktree; 14 blank-canvas branches
   (including `feat/xaidr-brain-port`); delphi-python-sdk `release/0.6.0`,
   `feat/parent-scan-id`, `fix/*`.
