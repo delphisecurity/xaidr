@@ -1912,79 +1912,132 @@ site that I had not listed:** `url_parse._r4_host` called the core's
 
 ## Before M8, item 2 — the macOS-widening false-positive cost, on an outside corpus
 
+*[This section was garbled in `10ec7eb` by an unquoted shell heredoc: the shell
+ran every backticked name as a command. Rewritten here from the same result
+files.]*
+
 **The corpus.** It is drawn from **24,466 files outside this project and the
 Delphi repos**:
-- system config ();
-- Homebrew package docs, configs and man pages;
+- system config (`/etc`, `/private/etc`);
+- Homebrew package docs, configs and man pages (`/opt/homebrew/...`,
+  `/usr/share/man`);
 - Python package manifests in site-packages.
 
 Excluded: test suites (adversarial by design) and personal system logs, which
 would put local IPs into a pushed PR. It holds **80,114 URL hosts (2,978
-distinct)** and **1,339 affected-shape tokens**, saved with their sources in
-. **Real-world text held ZERO
+distinct)** and **1,339 affected-shape tokens (687 distinct values, 957 with
+their source files)**, saved in
+`docs/evidence/macos-widening-fp-corpus.json`. **Real-world text held ZERO
 leading-zero dotted quads and ZERO leading-zero embedded IPv4.** Every affected
 token was a number above 2**32-1: dates, sequence bounds, ids, hex
 fingerprints.
 
 **The measurement.** Each case runs through the current core and through the
-same core with the macOS readings switched off. A change is any difference in
-the destination readings, url_parse's class, or the  action.
+same core with `_macos_readings` switched off. A change is any difference in
+the destination readings (`extract_destinations`), url_parse's address class,
+or the `scan_tool_call` action.
 
-
+```
+{
+ "distinct_cases": {
+  "real URL host": 2978,
+  "big_number as found (whole value)": 687,
+  "big_number as a URL host": 687
+ },
+ "changed": {
+  "big_number as a URL host": 335
+ }
+}
+```
 
 **The rate.**
 - **Real URL hosts: 0 of 2,978 distinct change.**
-- **Affected tokens in their real position (a whole argument value): 0 of 687
-  change.** The macOS readings apply to URL hosts only.
-- **The same tokens forced into URL-host position** (a stress, not traffic):
-  335 of 687 gain a wrapped IP reading.
+- **Affected tokens in their real position (a whole argument value): 0 of
+  687 change.** The macOS readings apply to URL hosts only.
+- **The same tokens forced into URL-host position** (a stress test, not
+  traffic): 335 of 687 gain a wrapped IP reading.
 - **0 actions change, and 0 become link-local.** url_parse's class moves
   None→public (268) or None→private (67), both classify-only.
 
-**Every one of the 335 is named** in the evidence file. The most frequent
-sources are ChangeLog (111), lockstat.1 (32) and README.md (26). Under ENFORCE,
-a wrapped reading blocks only if it coincides with an untrusted ledger entry.
+**Every one of the 335 is named**, with its before/after, in the evidence file.
+The most frequent sources are ChangeLog (111), lockstat.1 (32) and README.md
+(26). Under ENFORCE, a wrapped reading blocks only if it coincides with an
+untrusted ledger entry.
 
 ## Before M8, item 3 — Q13, the value-origin block rate (circuit breaker NOT wired)
 
-A call "would block" when its wire is  under ENFORCE.
- is not wired, per the owner.
+A call "would block" when its wire is `untrusted_source` under ENFORCE.
+`should_block` is not wired, per the owner.
 
-
+```
+456-row shell corpus (buckets: ['attacks', 'benign', 'benign_prose', 'benign_templates'] ), ENFORCE, block mode:
+  P-flow-I                     calls=  494  would block=  26  rate= 5.26% | attacks: 20/302 | benign: 0/83 | benign_prose: 6/97 | benign_templates: 0/12
+  P-flow-R                     calls=  494  would block=  37  rate= 7.49% | attacks: 25/302 | benign: 5/83 | benign_prose: 7/97 | benign_templates: 0/12
+  P-seam                       calls=  494  would block=  37  rate= 7.49% | attacks: 25/302 | benign: 5/83 | benign_prose: 7/97 | benign_templates: 0/12
+adversarial / benign corpora, ENFORCE:
+  A-calls                      calls=  470  would block=  98  rate=20.85% (pass result parts: 3)
+  A-flow-I                     calls=  228  would block=   0  rate= 0.00% (pass result parts: 3)
+  A-flow-R                     calls=  228  would block=   0  rate= 0.00% (pass result parts: 3)
+  A-steps                      calls=   36  would block=   0  rate= 0.00% (pass result parts: 3)
+conformance flows (expected wire per config; designed cases, not traffic):
+  config A                     calls=  620  would block= 143  rate=23.06% 
+  config B                     calls=  620  would block=  80  rate=12.90% 
+  config C                     calls=  620  would block= 353  rate=56.94%
+```
 
 **What the numbers mean. This is the input for V-31.**
 - **With NO designations, ENFORCE blocks every call whose destination appeared
   in an undesignated tool result, benign or not.** P-flow-R and P-seam block
   5 of 83 benign rows and 7 of 97 benign_prose rows.
 - **A-calls' 20.85% is that share by construction.** Each benign_toolcalls /
-  asi call runs in its own flow, and its own arguments are first scanned as an
-  untrusted result. So exactly the destination-carrying calls block (98
-  untrusted plus 4 unresolved, against 368 with no destination).
-  **My first hypothesis was wrong.** I guessed cross-pass contamination of an
-  implicit ledger. A fresh-thread re-run and the harness code showed the
-  construction.
+  asi call runs in its own `begin_flow`, and the harness first scans the call's
+  own arguments as an untrusted `tool_result`. So exactly the
+  destination-carrying calls block (98 untrusted plus 4 unresolved, against
+  368 with no destination). **My first hypothesis was wrong.** I guessed
+  cross-pass contamination of an implicit ledger. A fresh-thread re-run and
+  the harness code showed the construction.
 - **A destination the principal named, or that no read named, is never
-  blocked.** It reads . P-flow-I's benign 0/83 shows this; the
+  blocked.** It reads `unresolved`. P-flow-I's benign 0/83 shows this; the
   benign_prose 6/97 are inputs L1 flagged, which V-9 makes untrusted.
 - **The conformance flows are designed cases, not traffic.** Config C's 57% is
   a property of that corpus.
 
-**Benign calls that would block, named:**
+**Benign calls that would block, named.** P-flow-I comes from flagged benign
+prose; P-flow-R from destinations named only by an undesignated read.
 
-
+```
+P-flow-I benign_prose[002] http_post -> http://evil.tld/x.sh
+P-flow-I benign_prose[004] http_post -> http://169.254.169.254/latest/meta-data/iam/security-credentials/`.
+P-flow-I benign_prose[034] http_post -> http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token
+P-flow-I benign_prose[041] http_post -> https://x.io/i.sh
+P-flow-I benign_prose[045] http_post -> http://x.io/i
+P-flow-I benign_prose[058] http_post -> http://169.254.169.254/latest/meta-data/iam/security-credentials/
+P-flow-R benign[034] http_post -> https://api.github.com/repos/org/repo
+P-flow-R benign[035] http_post -> https://api.example.com/health
+P-flow-R benign[066] http_post -> s3://our-public-assets/
+P-flow-R benign[067] http_post -> https://api.internal/health
+P-flow-R benign[068] http_post -> https://reports.internal/q3.pdf
+P-flow-R benign_prose[002] http_post -> http://evil.tld/x.sh
+P-flow-R benign_prose[004] http_post -> http://169.254.169.254/latest/meta-data/iam/security-credentials/`.
+P-flow-R benign_prose[034] http_post -> http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token
+P-flow-R benign_prose[041] http_post -> https://x.io/i.sh
+P-flow-R benign_prose[045] http_post -> http://x.io/i
+P-flow-R benign_prose[055] http_post -> s3://exfil-bucket
+P-flow-R benign_prose[058] http_post -> http://169.254.169.254/latest/meta-data/iam/security-credentials/
+```
 
 ## Before M8, item 4 — the wire-vocabulary inventory
 
-Written to ****. It is an inventory only;
+Written to **`docs/value-origin-wire-consumers.md`**. It is an inventory only;
 nothing outside this repo was changed.
-- **The Brain () hard-codes nine values and would
-  store  as NULL.**
+- **The Brain (delphi-sentinel `feat/value-origin-brain`) hard-codes nine
+  values and would store `input_truncated` as NULL.**
 - blank-canvas has nothing yet.
 - Paid (delphi-python-sdk) has no vendored copy yet.
 - The DB column has no CHECK, so no migration is needed for the value, only a
   corrected comment.
 - The order that avoids silent loss is: the Brain accepts it, then M9 emits.
-- 's docstring ("nine") is fixed. That is a pin byte change.
+- `verdict_of`'s docstring ("nine") is fixed. That is a pin byte change.
 
 ---
 
