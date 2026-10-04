@@ -64,6 +64,8 @@ import re
 from typing import NamedTuple, Optional
 from urllib.parse import urlsplit
 
+from ..value_origin._authority import ParseFailure, _host_authority, classify_value
+
 # Hard input ceiling. A URL longer than this is not something we can say anything
 # useful about, and the cap keeps the scan cost flat regardless of what a caller
 # passes. Real URLs are comfortably under it.
@@ -102,71 +104,20 @@ class UrlShape(NamedTuple):
     raw: str                  # the value, capped
 
 
-def _coerce_ip(host: str):
-    """The IP address ``host`` denotes, across every literal form, or None.
-
-    ``urlsplit`` hands back the authority verbatim, so the same address arrives as
-    ``169.254.169.254``, ``0xA9FEA9FE``, ``2852039166``, ``0251.0376.0251.0376``
-    or ``[::ffff:169.254.169.254]``. Every one of those is the SAME destination
-    and a string list can only ever know the first. Parsing them is what makes the
-    rule about the address instead of about its spelling.
-
-    Never raises: anything that is not an address is a name, and returns None.
-    """
-    if not host:
-        return None
-    h = host.strip().strip("[]")
-    try:
-        return ipaddress.ip_address(h)
-    except ValueError:
-        pass
-    # Integer forms. inet_aton accepts hex (0x…), octal (leading 0) and decimal,
-    # both dotted and packed; Python's ipaddress does not, so they are converted
-    # here rather than left as a gap a bypass lives in. Bounded: at most four
-    # dot-separated parts, each parsed with int(), no regex backtracking.
-    parts = h.split(".")
-    if len(parts) > 4 or not all(parts):
-        return None
-    try:
-        vals = []
-        for p in parts:
-            if p.lower().startswith("0x"):
-                vals.append(int(p, 16))
-            elif p.startswith("0") and len(p) > 1:
-                vals.append(int(p, 8))
-            elif p.isdigit():
-                vals.append(int(p, 10))
-            else:
-                return None
-        if len(vals) == 1:
-            packed = vals[0]
-        else:
-            # a.b.c.d style; the final part absorbs the remaining octets, which is
-            # what inet_aton does for the short forms (10.1 == 10.0.0.1).
-            if any(v > 0xFF for v in vals[:-1]):
-                return None
-            packed = 0
-            for v in vals[:-1]:
-                packed = (packed << 8) | v
-            packed = (packed << (8 * (4 - len(vals) + 1))) | vals[-1]
-        if not 0 <= packed <= 0xFFFFFFFF:
-            return None
-        return ipaddress.ip_address(packed)
-    except (ValueError, TypeError):
-        return None
+# When a URL's readings disagree, ``address`` is the MOST SEVERE class any of
+# them reaches (A2 Q4). A total order, so an equal rank is an equal class.
+_SEVERITY = (None, "public", "private", "loopback", "link_local")
 
 
-def _address_kind(host: str) -> Optional[str]:
-    """"link_local" | "private" | "loopback" | "public" for an IP literal, else
-    None (the host is a NAME, which no parse can classify — see the module note
-    on why that is not resolved here)."""
-    ip = _coerce_ip(host)
-    if ip is None:
+def _address_of(authority) -> Optional[str]:
+    """"link_local" | "private" | "loopback" | "public" for an ``ip:``
+    authority from the value-origin core, else None (a NAME, which no parse
+    can classify; see the module note on why that is not resolved here). The
+    core's ``ip_key`` has already unwrapped an IPv4-mapped IPv6 address
+    (::ffff:169.254.169.254 IS the address it wraps)."""
+    if authority is None or authority.scheme != "ip":
         return None
-    # An IPv4-mapped IPv6 address (::ffff:169.254.169.254) IS the IPv4 address it
-    # wraps, so classify the mapped form rather than the container.
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
+    ip = ipaddress.ip_address(authority.value)
     if ip.is_link_local:
         return "link_local"
     if ip.is_loopback:
@@ -174,6 +125,50 @@ def _address_kind(host: str) -> Optional[str]:
     if ip.is_private:
         return "private"
     return "public"
+
+
+def _address_kind(host: str) -> Optional[str]:
+    """The class of the address a URL HOST denotes, or None for a name.
+
+    The host goes through the value-origin core's WHOLE host pipeline
+    (``_host_authority``): percent-decode, then UTS-46, then every inet_aton
+    literal form, then the mapped-v6 unwrap. Not ``coerce_ip`` alone (A2 M3,
+    F3): that drops ``１６９.２５４.１６９.２５４``, which the resolver reaches
+    once Python's IDNA codec has mapped the fullwidth digits, and it never sees
+    ``169．254．169．254`` (httpx) or ``%31%36%39.254.169.254`` (urllib3) as
+    an address at all. The private copy this module used to carry read
+    Arabic-Indic digits and ``1.2.3.256`` (as 1.2.4.0), which no consumer
+    reaches."""
+    if not host:
+        return None
+    return _address_of(_host_authority(host, arg_fallback=False))
+
+
+def _url_address(value: str, split_host: str) -> Optional[str]:
+    """The most severe address class across EVERY reading of a URL's authority.
+
+    The readings are the core's (``classify_value``): WHATWG (a backslash is a
+    slash; urllib3 and ada agree), RFC 3986 as CPython 3.12.2's ``urlsplit``
+    reads it (httpx and urllib.parse agree), the authority of a value
+    ``urlsplit`` refuses (httpx, urllib3 and WHATWG still send it), and R4's
+    special scheme without ``//``. Plus this interpreter's own ``urlsplit``
+    host, which also covers ``file:``, a scheme the core never treats as a
+    destination. The transports disagree with each other (A2 F2), so reading
+    one of them is a bypass of the others: before M3, ``http://169.254.169.254\\x``
+    (WHATWG) and ``http://&a:foo(b]c@169.254.169.254/`` (httpx, urllib3,
+    WHATWG) reached the metadata service with ``address`` None."""
+    res = classify_value(value, arg_mode=True)
+    if isinstance(res, ParseFailure):
+        found = list(res.parsed)
+    elif isinstance(res, list):
+        found = res
+    elif res is None:
+        found = []
+    else:
+        found = [res]
+    kinds = [_address_of(a) for a in found]
+    kinds.append(_address_kind(split_host))
+    return max(kinds, key=_SEVERITY.index)
 
 
 def looks_like_url(text: str) -> bool:
@@ -207,21 +202,26 @@ def parse_url(text: str) -> Optional[UrlShape]:
             # every other scheme needs a host to be a fetchable destination.
             try:
                 parts = urlsplit(capped)
+                refused = False
             except ValueError:
-                # "Invalid IPv6 URL" — an unterminated bracket. No host.
-                return None
+                # urlsplit REFUSES it (an unbalanced or non-IPv6 bracket, an
+                # NFKC delimiter). That is not "no host": httpx, urllib3 and
+                # WHATWG send `http://&a:foo(b]c@169.254.169.254/` to the
+                # link-local address. The core's readings decide below.
+                parts, refused = None, True
             # The trailing root dot is stripped for the same reason the sensor's
             # `_extract_host` strips it: `metadata.google.internal.` is the
             # fully-qualified spelling of a name this ruleset enumerates, it
             # resolves to the same endpoint, and leaving the dot on would make
             # the root anchor a one-character bypass of every hostname rule.
-            host = (parts.hostname or "").lower().rstrip(".")
-            if not host and scheme not in NON_HTTP_LOCAL_SCHEMES:
+            host = "" if refused else (parts.hostname or "").lower().rstrip(".")
+            address = _url_address(capped, host)
+            if not host and address is None and (refused or scheme not in NON_HTTP_LOCAL_SCHEMES):
                 return None
             return UrlShape(
                 scheme=scheme,
                 host=host,
-                address=_address_kind(host),
+                address=address,
                 raw=capped,
             )
 

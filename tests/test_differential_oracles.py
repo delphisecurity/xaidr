@@ -377,11 +377,14 @@ def _url_parse_spellings():
         yield f"{s}{p}{h}{t}"
 
 
-# Under-reads that url_parse has TODAY, by class. Each class is a property of
-# the spelling, never a list of spellings, so a regenerated grid cannot hide
-# one; first match wins, in this order. Each is a strict xfail until M3 moves
-# url_parse onto the core's host pipeline and its two splits, and the
-# `unclassified` bucket is green throughout: a shape not named here is red.
+# The under-read classes url_parse had before M3, by class. Each class is a
+# property of the spelling, never a list of spellings, so a regenerated grid
+# cannot hide one; first match wins, in this order (urlsplit-refusal before
+# backslash since the M2 silent-failure review: a refused spelling that also
+# carries a backslash was being counted as a backslash defect). They were strict
+# xfails at M2 (f95f5df); M3 moved url_parse onto the core's readings and host
+# pipeline, and every bucket, `unclassified` included, must now be empty. The
+# classes stay as labels, so a regression names its mechanism.
 def _urlsplit_raises(u):
     from urllib.parse import urlsplit
     try:
@@ -399,13 +402,13 @@ _UP_UNDER_READ_CLASSES = (
     ("special-scheme-without-//",
      _special_without_slashes,
      "R4: WHATWG (ada) takes the authority after any run of / and \\; urlsplit finds none"),
-    ("backslash",
-     lambda u: "\\" in u,
-     "F1's shape for url_parse: WHATWG and urllib3 read a backslash as a slash"),
     ("urlsplit-refusal",
      lambda u: _urlsplit_raises(u),
      "this interpreter's urlsplit raises, url_parse returns None, and httpx, urllib3 "
      "and WHATWG send the request anyway (M0's WPT sibling, `http://&a:foo(b]c@d:2/`)"),
+    ("backslash",
+     lambda u: "\\" in u,
+     "F1's shape for url_parse: WHATWG and urllib3 read a backslash as a slash"),
     ("fullwidth",
      lambda u: any(0xFF00 <= ord(c) <= 0xFFEF for c in u),
      "F3: httpx IDNA-maps U+FF0E, and Python's IDNA codec maps it for the resolver"),
@@ -424,18 +427,19 @@ def _under_read_class(url):
 
 @pytest.fixture(scope="module")
 def url_parse_comparison(oracles):
-    under, over = collections.defaultdict(list), []
+    under, over = collections.defaultdict(list), collections.defaultdict(list)
     per_oracle, reached = collections.Counter(), collections.Counter()
     n = 0
     for url in _url_parse_spellings():
         n += 1
-        readings = {}
+        readings, hosts = {}, {}
         for name, fn in oracles.items():
             host = fn(url)
             if not host:
                 continue
             ip = _resolve(host)
             readings[name] = _kind(ip) if ip is not None else None
+            hosts[name] = (host, ip)
             per_oracle[name] += 1
         want = max(readings.values(), key=_rank, default=None)
         reached[want] += 1
@@ -444,7 +448,9 @@ def url_parse_comparison(oracles):
             who = sorted(name for name, c in readings.items() if c == want)
             under[_under_read_class(url)].append((url, got, want, who))
         elif _rank(got) > _rank(want):
-            over.append((url, got, readings))
+            cls = next((c for c, (pred, _) in _UP_OVER_READ_CLASSES.items()
+                        if pred(hosts)), None)
+            over[cls].append((url, got, readings))
     return {"n": n, "under": under, "over": over, "per_oracle": per_oracle,
             "reached": reached}
 
@@ -459,13 +465,8 @@ def test_the_url_parse_differential_is_not_vacuous(oracles, url_parse_comparison
     assert c["reached"]["link_local"] >= 3_000, c["reached"]
 
 
-_M3 = "url_parse reads one urlsplit host through _coerce_ip; fixed when M3 moves it onto the core"
-
-
 @pytest.mark.parametrize("cls", [
-    *(pytest.param(name, marks=pytest.mark.xfail(strict=True, raises=AssertionError,
-                                                 reason=f"{_M3} ({why})"))
-      for name, _, why in _UP_UNDER_READ_CLASSES),
+    *(name for name, _, _ in _UP_UNDER_READ_CLASSES),
     "unclassified",
 ])
 def test_url_parse_address_covers_every_consumer_reading(url_parse_comparison, cls):
@@ -480,14 +481,49 @@ def test_url_parse_address_covers_every_consumer_reading(url_parse_comparison, c
         + "; ".join(f"{u!r}: url_parse={g}, {', '.join(n)} reach {w}" for u, g, w, n in rows[:5]))
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "Arabic-Indic digits (int() takes Unicode digits) and inet_aton overflow "
-    "(1.2.3.256 -> 1.2.4.0) are addresses no consumer reaches; fixed at M3"))
+# Over-reads allowed in a named class whose reason is TRUE (§2.3 rule 2), each
+# pinned both ways below.
+_UP_OVER_READ_CLASSES = {
+    "q22-bsd-decimal-leading-zero": (
+        lambda hosts: any(_bsd_decimal_leading_zero(h, ip) for h, ip in hosts.values()),
+        "Q22's class, seen from the other side: url_parse reads a leading-zero quad "
+        "as OCTAL (0251.254.0251.254 -> 169.254.169.254, link_local), as WHATWG, "
+        "glibc and inet_aton do, and the macOS resolver reads it as DECIMAL "
+        "(251.254.251.254). Agents run on Linux, where glibc reaches the "
+        "link-local address."),
+    "one-host-pipeline-for-every-reading": (
+        lambda hosts: any(_decoded_only_by_the_core(h, ip) for h, ip in hosts.values()),
+        "The core canonicalises EVERY reading's host with one pipeline, WHATWG's: "
+        "percent-decode, then strip the root dot. Some hosts are split out only by "
+        "readings whose consumers do neither: httpx and urllib.parse behind a `\\@` "
+        "(`http://corp.example\\@%31%36%39.254.169.254`), or the opaque host of a "
+        "non-special scheme (`gopher://169.254.169.254.`). Those consumers keep the "
+        "literal, and no resolver reads the literal as an address. Over-read only: "
+        "it flags spellings nothing sends to the metadata service. url_parse "
+        "stripped the root dot before M3 as well (for parity with `_extract_host`); "
+        "the percent half is new with M3. M0's core gate cannot see this class by "
+        "construction, because it normalises each oracle's host with the core's own "
+        "pipeline."),
+}
+
+
+def _decoded_only_by_the_core(host, ip):
+    """A host an oracle split out, which the resolver does NOT read as an
+    address, and which the core's host pipeline turns into one by decoding a
+    percent-escape or stripping a root dot."""
+    if ip is not None or not ("%" in host or host.endswith(".")):
+        return False
+    from xaidr.value_origin._authority import _host_authority
+    a = _host_authority(host, arg_fallback=False)
+    return a is not None and a.scheme == "ip"
+
+
 def test_url_parse_over_reads_only_in_named_classes(url_parse_comparison):
     """§2.3 rule 2: url_parse may not report an address class no consumer
     reaches, outside a named class. Over-reading link_local blocks a call no
-    transport sends to the metadata service."""
-    over = url_parse_comparison["over"]
+    transport sends to the metadata service. (Strict xfail at M2: Arabic-Indic
+    digits and inet_aton overflow, gone with M3's move onto the core.)"""
+    over = url_parse_comparison["over"].get(None, [])
     assert not over, (
         f"{len(over)} spellings where url_parse reports a class no consumer reaches; "
         f"first five: " + "; ".join(f"{u!r}: url_parse={g}, readings={r}" for u, g, r in over[:5]))
@@ -495,10 +531,9 @@ def test_url_parse_over_reads_only_in_named_classes(url_parse_comparison):
 
 @pytest.mark.parametrize("url, consumer, form", [
     # F3 — url_parse misses these today; a transport reaches 169.254.169.254
-    pytest.param("http://169．254．169．254/latest", "httpx", "fullwidth dots",
-                 marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=_M3)),
-    pytest.param("http://%31%36%39.254.169.254/", "urllib3", "percent-encoded",
-                 marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=_M3)),
+    # (strict xfails at M2; M3 reads the host through the core's pipeline)
+    ("http://169．254．169．254/latest", "httpx", "fullwidth dots"),
+    ("http://%31%36%39.254.169.254/", "urllib3", "percent-encoded"),
     # caught TODAY (int() takes fullwidth digits) and the core's coerce_ip
     # ALONE drops it (F3's regression risk): it must stay caught through M3
     ("http://１６９.２５４.１６９.２５４/latest", "ada-url (WHATWG)", "fullwidth digits"),
@@ -576,9 +611,24 @@ def _platform_class(h, ip):
     return _bsd_decimal_leading_zero(h, ip) or _bsd_integer_wrap(h, ip)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "F3 fullwidth dots and the empty hex part: url_parse reads them with _coerce_ip; "
-    "fixed at M3"))
+def test_the_named_url_parse_over_read_class_stands_for_a_measured_platform(url_parse_comparison):
+    """Q22, both ways, for the over-read direction: present on darwin, EMPTY on
+    Linux, so the allowance cannot grow silently there."""
+    absorbed = url_parse_comparison["over"].get("q22-bsd-decimal-leading-zero", [])
+    if sys.platform == "darwin":
+        assert absorbed, ("Q22: on darwin the resolver was expected to read a "
+                          "leading-zero quad as decimal; the class absorbed nothing")
+    else:
+        assert not absorbed, (f"Q22's class absorbed {len(absorbed)} over-reads on "
+                              f"{sys.platform}, where it must be empty: {absorbed[:5]}")
+
+
+def test_the_pipeline_over_read_class_is_needed(url_parse_comparison):
+    """An allowance that absorbs nothing hides nothing and is red: delete it."""
+    assert url_parse_comparison["over"].get("one-host-pipeline-for-every-reading"), (
+        "the one-host-pipeline over-read class absorbed nothing; delete it")
+
+
 def test_ip_spellings_resolve_where_the_resolver_does_url_parse():
     """url_parse's class is at least the class of what the resolver reaches,
     for every literal form, except Q22's exemption."""
