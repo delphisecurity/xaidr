@@ -305,7 +305,8 @@ def _authority_host(url: str, *, whatwg: bool) -> Optional[str]:
         FIRST bracket, and 3.12.14 refuses it. urllib.parse is a covered
         consumer, and xaidr's own ``ProtectedHttpClient._extract_host`` decides
         destination policy with it. ``urllib.request``, by contrast, passes the
-        raw netloc on and reaches neither host.
+        netloc on, percent-decoded and userinfo
+        included, and reaches neither host (it DOES reach a percent-encoded host).
       * ``whatwg=True``, used only where ``urlsplit`` refused the WHATWG string:
         WHATWG's host rule. A ``[`` must open the host and enclose an IPv6
         literal. Any other bracket means no host, as WHATWG refuses

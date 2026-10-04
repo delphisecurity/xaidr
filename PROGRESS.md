@@ -36,7 +36,7 @@ has seen this. The build continues with C-11 (M1), which does not depend on it.
 WHATWG split (backslash is a slash: `corp.example`); httpx sends the request
 to `evil.test`, and `urllib.parse` reads `evil.test` as its host. (Corrected at
 review: an earlier draft said "httpx and urllib send". `urllib.request` passes
-the raw netloc on and reaches neither host.) This is the 1.15.0 userinfo bypass shape in new code.
+the netloc on (percent-DECODED, userinfo included; *M2 review: "raw" was false, it decodes `%31%36%39…` and reaches 169.254.169.254*) and reaches neither host.) This is the 1.15.0 userinfo bypass shape in new code.
 
 **The fix (Q1, amends V-23).** Every reading of the authority split that a real
 consumer performs is a finding, and the weakest decides. That is R1's shape.
@@ -316,7 +316,7 @@ the A2 build (M0)":
   cores side by side, the refusal, the outside driver's refusal and the
   `convert.py` byte-identity. It found:
   1. **False:** "httpx and urllib send it to evil.test". urllib.request
-     passes the raw netloc; only urllib.parse reads evil.test. **Retracted in
+     passes the netloc on, percent-decoded (*M2 review: not "raw"*); only urllib.parse reads evil.test. **Retracted in
      place** in `docs/value-origin-rulings.md` and the ARCHITECTURE.md F1 row
      and §2.3, and corrected in every test message, docstring and conformance
      rule text that said it. The grep comes back clean.

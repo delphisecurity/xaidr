@@ -248,7 +248,7 @@ finding 1, the 1.15.0 userinfo-bypass shape in new code. Choosing one reading
 is choosing which transport may be bypassed.
 
 *[Corrected 2026-10-03, M0 milestone review: "httpx and urllib sent it" was
-false for urllib. `urllib.request` passes the raw netloc
+false for urllib. `urllib.request` passes the netloc, percent-decoded (*M2 review: not "raw"*),
 (`corp.example\@evil.test`) to http.client and reaches neither host. It is
 `urllib.parse`'s `urlsplit(...).hostname` that reads `evil.test`, and xaidr's
 own `ProtectedHttpClient._extract_host` decides destination policy with it.

@@ -170,7 +170,8 @@ _OVER_READ_CLASSES = {
         "validation backported to later patch releases (measured: 3.10.21, "
         "3.12.14) refuses them. urllib.parse is a covered consumer, and xaidr's "
         "own ProtectedHttpClient._extract_host decides destination policy with it. "
-        "urllib.request does NOT send there: it passes the raw netloc on."),
+        "urllib.request does NOT send there: it passes the netloc on, percent-decoded "
+        "and userinfo included, as one host string."),
 }
 
 
@@ -448,8 +449,12 @@ def url_parse_comparison(oracles):
             who = sorted(name for name, c in readings.items() if c == want)
             under[_under_read_class(url)].append((url, got, want, who))
         elif _rank(got) > _rank(want):
+            # the mechanism-specific classes first; M0's bracket predicate is
+            # true of ANY `]` that urlsplit refuses, so it goes last
             cls = next((c for c, (pred, _) in _UP_OVER_READ_CLASSES.items()
                         if pred(hosts)), None)
+            if cls is None and _urlsplit_refuses_a_bracketed_host(url):
+                cls = "urlsplit-bracket-validation"      # M0's class, same reason
             over[cls].append((url, got, readings))
     return {"n": n, "under": under, "over": over, "per_oracle": per_oracle,
             "reached": reached}
@@ -494,11 +499,13 @@ _UP_OVER_READ_CLASSES = {
     "one-host-pipeline-for-every-reading": (
         lambda hosts: any(_decoded_only_by_the_core(h, ip) for h, ip in hosts.values()),
         "The core canonicalises EVERY reading's host with one pipeline, WHATWG's: "
-        "percent-decode, then strip the root dot. Some hosts are split out only by "
+        "percent-decode, strip the root dot, and WHATWG's IPv4 number parser (an "
+        "empty hex part is 0, M3a). Some hosts are split out only by "
         "readings whose consumers do neither: httpx and urllib.parse behind a `\\@` "
         "(`http://corp.example\\@%31%36%39.254.169.254`), or the opaque host of a "
         "non-special scheme (`gopher://169.254.169.254.`). Those consumers keep the "
-        "literal, and no resolver reads the literal as an address. Over-read only: "
+        "literal, and the resolver does not read it as an address (glibc refuses "
+        "`0x.0x.0`; the macOS resolver reads it). Over-read only: "
         "it flags spellings nothing sends to the metadata service. url_parse "
         "stripped the root dot before M3 as well (for parity with `_extract_host`); "
         "the percent half is new with M3. M0's core gate cannot see this class by "
@@ -510,8 +517,9 @@ _UP_OVER_READ_CLASSES = {
 def _decoded_only_by_the_core(host, ip):
     """A host an oracle split out, which the resolver does NOT read as an
     address, and which the core's host pipeline turns into one by decoding a
-    percent-escape or stripping a root dot."""
-    if ip is not None or not ("%" in host or host.endswith(".")):
+    percent-escape, stripping a root dot, or reading an empty hex part as 0."""
+    if ip is not None or not ("%" in host or host.endswith(".")
+                              or any(p.lower() == "0x" for p in host.split("."))):
         return False
     from xaidr.value_origin._authority import _host_authority
     a = _host_authority(host, arg_fallback=False)
@@ -569,7 +577,9 @@ def _ip_forms():
               "１６９.２５４.１６９.２５４", "١٦٩.٢٥٤.١٦٩.٢٥٤", "169．254．169．254", "0x",
               "0x.1.1.1", "0x.0x.0", "08.1.1.1", "4294967296", "4294967295", "127.1", "0",
               "[::ffff:169.254.169.254]", "[::ffff:a9fe:a9fe]", "[::1]", "1e2.1.1.1",
-              "169.254.169.254.", "0177.1", "017700000001", "0x7f.1", "0x7f000001"}
+              "169.254.169.254.", "0177.1", "017700000001", "0x7f.1", "0x7f000001",
+              # the M2 review's: read as 169.254.169.254 by the macOS resolver
+              "000169.254.000169.254", "169.000254.169.000254"}
     return sorted(forms)
 
 
@@ -623,6 +633,20 @@ def test_the_named_url_parse_over_read_class_stands_for_a_measured_platform(url_
                               f"{sys.platform}, where it must be empty: {absorbed[:5]}")
 
 
+def test_the_bracket_validation_over_read_class_stands_for_a_measured_interpreter(
+        url_parse_comparison):
+    """M0's class (_OVER_READ_CLASSES, same reason), now for url_parse too:
+    url_parse reads what CPython 3.12.2's urlsplit reads, through the core's RFC
+    reading. It absorbs NOTHING where urlsplit reads like 3.12.2, and must be
+    needed on a post-backport interpreter (measured: 3.10.21, 3.11.16, 3.12.14)."""
+    absorbed = url_parse_comparison["over"].get("urlsplit-bracket-validation", [])
+    if _urlsplit_reads_like_3_12_2():
+        assert not absorbed, (f"{len(absorbed)} over-reads absorbed where urllib.parse "
+                              f"should read them: {absorbed[:5]}")
+    else:
+        assert absorbed, "the class absorbed nothing on a post-backport interpreter"
+
+
 def test_the_pipeline_over_read_class_is_needed(url_parse_comparison):
     """An allowance that absorbs nothing hides nothing and is red: delete it."""
     assert url_parse_comparison["over"].get("one-host-pipeline-for-every-reading"), (
@@ -664,6 +688,23 @@ def test_bsd_libc_integer_wrap_is_an_unruled_platform_class():
     assert not wrapped, (
         f"{len(wrapped)} decimal integers above 2**32-1 that the resolver wraps to an "
         f"address neither url_parse nor the core reads: {wrapped}")
+
+
+@pytest.mark.xfail(sys.platform == "darwin", strict=True, raises=AssertionError, reason=(
+    "FOR THE OWNER (found by the M2 milestone review): Q22's exemption was ruled on "
+    "the premise that the decimal reading lands in reserved space (251.254.251.254). "
+    "It also covers 000169.254.000169.254, which the macOS resolver reads as "
+    "169.254.169.254, LINK-LOCAL, while url_parse and the core read octal "
+    "121.254.121.254. Held for a re-ruling; behaviour unchanged."))
+def test_q22_exemption_hides_no_link_local_reach():
+    """The exemption may absorb a platform divergence, never a reach of the
+    metadata service. Green on Linux (the class is empty there); a strict xfail
+    on darwin until the owner re-rules Q22 on the true premise."""
+    hidden = [(h, str(ip)) for h, ip, _, _ in _ip_comparison()
+              if _bsd_decimal_leading_zero(h, ip) and _kind(ip) == "link_local"]
+    assert not hidden, (
+        f"Q22's exemption hides {len(hidden)} spellings the resolver sends to a "
+        f"LINK-LOCAL address that neither url_parse nor the core reads: {hidden}")
 
 
 def test_q22_bsd_libc_decimal_leading_zero_class_is_present_on_darwin_and_empty_on_linux():
