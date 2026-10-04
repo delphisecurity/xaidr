@@ -54,6 +54,7 @@ from .failclosed import (
 )
 from .extensions import DestinationView, ScanRequest, SensorExtension
 from . import value_origin as _vo
+from . import _vo_seams
 from .reporters import Reporter, safe_fault
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
 from .scanner.command_parse import reconstruct as _reconstruct_command
@@ -397,6 +398,9 @@ _BIND_FAILURES: set = set()
 
 # A2 M6: the principal input value origin records, capped like a tool-result leaf.
 _VO_INPUT_CAP = 65_536
+# Q18: a raw result from these modules may hold an unread stream; recording it
+# would consume it under default RECORD, a host-behaviour change no verdict sees.
+_IO_BACKED_MODULES = frozenset({"httpx", "requests", "urllib3", "aiohttp"})
 
 
 def _cap_principal_input(text, spans):
@@ -787,6 +791,7 @@ class DelphiSensor:
         self._vo_attach_fault_logged = False
         self._vo_spans_warned = False            # M6: spans= on a non-input direction
         self._vo_record_fault_logged = False     # M6: input recording fault, logged once
+        self._vo_result_fault_logged = False     # M7: result recording fault, logged once
         self._vo_lock = threading.Lock()
         if self._value_origin is _vo.Mode.ENFORCE:
             # ONE warning, and only for ENFORCE. Two facts an operator must not
@@ -1851,6 +1856,55 @@ class DelphiSensor:
                                          origin_context, parent_context, held)
         finally:
             self._vo_record_input(prompt, spans, direction, held["clean"])
+            if direction == "tool_result":
+                # V-26: the PUBLIC tool_result seam has no tool identity, so its
+                # read is recorded nameless and untrusted. Scanned seams that know
+                # the tool use _scan_tool_result, which never reaches this record.
+                self._vo_record_result("", None, prompt, None)
+
+    def _scan_tool_result(self, text, *, tool, arguments, raw_result) -> ScanResult:
+        """A2 M7 (§1.2): scan a tool's RESULT exactly as scan(direction=
+        "tool_result") does (same body, telemetry and refusal), then record the
+        RAW result with the tool's identity, its arguments and the PRE-mode
+        verdict (V-2). It never reaches the public seam's nameless V-26 record:
+        that untrusted entry, landing first, would pin a designated read at
+        untrusted (C-18). Recording never raises into the host."""
+        held = {"clean": None}
+        try:
+            return self._scan_unrecorded(text, "tool_result", None, None, None, None, held)
+        finally:
+            self._vo_record_result(tool, arguments, raw_result, held.get("true"))
+
+    def _vo_record_result(self, tool, arguments, raw, true) -> None:
+        """Record one tool read (§1.2). ``true`` is the PRE-mode result scan, or
+        None when the result was not scanned (then the read is untrusted, Q10).
+        Never raises: a fault is logged once per sensor (owner, M7: the safety
+        layer must not crash what it protects)."""
+        try:
+            if self._value_origin is _vo.Mode.OFF:
+                return
+            if type(raw).__module__.split(".")[0] in _IO_BACKED_MODULES:
+                return    # Q18: reading .content would consume an unread stream
+            if isinstance(raw, (bytes, bytearray)):
+                raw = _coerce_scannable(raw)
+            blocked = None
+            if true is not None:
+                blocked = (true.action in ("blocked", "approval_required")
+                           or (true.action == "flagged"
+                               and true.score >= self._scanner.block_threshold))
+            if isinstance(arguments, dict):
+                args = arguments
+            else:
+                args = {} if arguments is None else {"input": arguments}
+            name = tool if isinstance(tool, str) else ""
+            _vo.record_tool_result(name, args, raw,
+                                   designations=self._value_origin_sources if name else (),
+                                   result_blocked=blocked)
+        except Exception:
+            if not self._vo_result_fault_logged:
+                self._vo_result_fault_logged = True
+                logger.exception("xaidr: value origin's tool-result recording faulted; the "
+                                 "verdict and the tool's result are unaffected")
 
     def _vo_record_input(self, prompt, spans, direction, clean) -> None:
         """The value-origin input seam (§1.1). Never raises: a fault here is
@@ -1954,6 +2008,7 @@ class DelphiSensor:
         # the scanner's PRE-mode verdict (monitor softening never yields
         # "allowed"; an S6 transform runs after it), and no post-scan gate change
         held["clean"] = bool(true) and true[0].action == "allowed" and final is result
+        held["true"] = true[0] if true else None      # A2 M7: the pre-mode result verdict
         return final
 
     def _scan_impl(
@@ -3377,6 +3432,19 @@ class DelphiSensor:
                     )
                 return None
 
+            def record_unscanned(orig_func, tname, args, kwargs, out):
+                """A2 M7, protect_tools' RESULT POSITION (owed since M1). This
+                seam scans no result, so its read is untrusted (Q10). It records
+                only when no scanned seam encloses the call: that outer seam
+                records the same invocation with its verdict (§1.2 item 3, F7)."""
+                if _vo_seams.RESULT_SEAM.get():
+                    return
+                try:
+                    arguments = bind_arguments(orig_func, tname, args, kwargs)
+                except Exception:
+                    arguments = {}
+                self._vo_record_result(tname, arguments, out, None)
+
             def make_wrapper(orig_func, tname):
                 """Wrap one callable, MATCHING ITS SYNC/ASYNC-NESS.
 
@@ -3403,14 +3471,18 @@ class DelphiSensor:
                         refusal = tool_verdict(orig_func, tname, args, kwargs)
                         if refusal is not None:
                             return refusal
-                        return await orig_func(*args, **kwargs)
+                        out = await orig_func(*args, **kwargs)
+                        record_unscanned(orig_func, tname, args, kwargs, out)
+                        return out
                 else:
                     def wrapper(*args, **kwargs):
                         refusal = tool_verdict(orig_func, tname, args, kwargs)
                         if refusal is not None:
                             return refusal
                         if orig_func is not None:
-                            return orig_func(*args, **kwargs)
+                            out = orig_func(*args, **kwargs)
+                        record_unscanned(orig_func, tname, args, kwargs, out)
+                        return out
                         return None
                 return wrapper
 

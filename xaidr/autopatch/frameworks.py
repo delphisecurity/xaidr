@@ -22,6 +22,8 @@ with the concrete reason, not omitted.
 from __future__ import annotations
 
 import contextvars
+
+from .. import _vo_seams
 import json
 import sys
 from dataclasses import dataclass
@@ -290,6 +292,16 @@ def _langchain_refusal(text: str, name: str, kwargs: dict) -> Any:
         return text
 
 
+def _scan_result(sensor, text, tool, arguments, raw):
+    """A2 M7: a scanned result seam scans through the sensor's internal result
+    method, which records the RAW result with the tool's identity and the
+    pre-mode verdict (§1.2). A sensor without it falls back to the public seam."""
+    fn = getattr(sensor, "_scan_tool_result", None)
+    if fn is None:
+        return sensor.scan(text, direction="tool_result")
+    return fn(text, tool=tool, arguments=arguments, raw_result=raw)
+
+
 def _langchain_result_text(result: Any) -> Optional[str]:
     """The scannable text a ``BaseTool.run`` return value carries, or None.
 
@@ -364,7 +376,10 @@ def _patch_langchain_core(ctx: PatchContext) -> None:
                 return result
             tool = args[0] if args else None
             name = getattr(tool, "name", None) or "unknown_tool"
-            verdict = ctx.sensor.scan(text, direction="tool_result")
+            tool_input = kwargs.get("tool_input")
+            if tool_input is None and len(args) > 1:
+                tool_input = args[1]
+            verdict = _scan_result(ctx.sensor, text, name, tool_input, result)
             if not verdict.must_halt:
                 return result
             message = (
@@ -379,7 +394,9 @@ def _patch_langchain_core(ctx: PatchContext) -> None:
             # `tool_call_id` here exactly as it does on the way in.
             return _langchain_refusal(message, name, kwargs)
 
-        return make_wrapper(orig, before=before, after=after)
+        # A2 M7: the scanned result seam encloses the tool, so an inner
+        # protect_tools leaves the read to this seam (one recorder, F7)
+        return _vo_seams.enclosing_result_seam(make_wrapper(orig, before=before, after=after))
 
     ctx.install(
         "langchain_core.tools", "BaseTool.run", "tool", factory,
@@ -1052,10 +1069,13 @@ def _patch_mcp(ctx: PatchContext) -> None:
             text = _mcp_result_text(result)
             if not text:
                 return result
-            verdict = ctx.sensor.scan(text, direction="tool_result")
+            name = kwargs.get("name") or (args[1] if len(args) > 1 else "unknown_tool")
+            arguments = kwargs.get("arguments")
+            if arguments is None and len(args) > 2:
+                arguments = args[2]
+            verdict = _scan_result(ctx.sensor, text, name, arguments, result)
             if not verdict.must_halt:
                 return result
-            name = kwargs.get("name") or (args[1] if len(args) > 1 else "unknown_tool")
             message = (
                 f"[BLOCKED] The result returned by MCP tool '{name}' was blocked "
                 f"by security policy ({verdict.category or 'policy'})."
@@ -1065,7 +1085,7 @@ def _patch_mcp(ctx: PatchContext) -> None:
                 raise DelphiBlockedError(verdict)
             return error
 
-        return make_wrapper(orig, before=before, after=after)
+        return _vo_seams.enclosing_result_seam(make_wrapper(orig, before=before, after=after))
 
     ctx.install(
         "mcp", "ClientSession.call_tool", "tool", factory,

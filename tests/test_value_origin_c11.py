@@ -161,11 +161,17 @@ def test_4a_I_record_reports_untrusted_source_on_input_derived_calls(runs):
 # One assertion PER PASS (the M1 review): the public scan(direction=
 # "tool_result") records by itself at M7, so a pooled count would flip on
 # P-flow-R alone and prove nothing about the protect_tools seam.
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="not wired: RECORD records no tool result until M7")
+# Strict xfails until M7 (their unexpected passes are in PROGRESS.md). K_R measured
+# at M7 on the 456-row corpus, PER PASS: P-flow-R through the public
+# scan(direction="tool_result") seam (V-26), P-seam through protect_tools' result
+# position, which C-11 could not check from M1 until M7 built it.
+K_R = {"P-flow-R": 37, "P-seam": 37}
+
+
 @pytest.mark.parametrize("p", ("P-flow-R", "P-seam"))
 def test_4a_R_record_reports_untrusted_source_on_result_derived_calls(runs, p):
     wires = runs("record", "block")[p][2]
-    assert wires.count("untrusted_source") >= 1, collections.Counter(wires)
+    assert wires.count("untrusted_source") >= K_R[p], collections.Counter(wires)
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason="not wired: nothing can block until M8 (ENFORCE)")

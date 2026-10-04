@@ -1624,6 +1624,135 @@ provenance suites, and the M5 and M6 wheel tests.
 
 ---
 
+## Truncation made visible (owner, after M6), `e1b27c0`
+
+A destination past the 65,536-char input cap used to read a silent
+`unresolved`. Now:
+- If the flow's principal input was capped and a lookup misses, the wire is
+  **`input_truncated`**, a TENTH wire value.
+- Its verdict is NOT_EVALUATED, so it never blocks, like `ledger_saturated`.
+- It has its own §3.4 row, and an untrusted finding still outranks it.
+
+Red first:
+
+```
+E  AssertionError: M6 principal input: input_cap: got [True, 'unresolved'], want [True, 'input_truncated'] -- a destination past the input cap read silently unresolved instead of input_truncated
+```
+
+Green: `406 passed, 12 xfailed` (conformance, M6, M4, C-11).
+
+**A declared vocabulary and interface change.** `WireValue`, `row_text.json`
+(which the Brain's copy is checked against) and
+`record_principal_input(..., truncated=False)` all changed. The exact interface
+pins were updated on purpose. Paid's re-vendor and the Brain/blank-canvas row
+tables must learn the value before M9 emits the field.
+
+**S25** gets a note in the rulings doc. Its agreement with paid's reference is
+accidental, and paid's semantics were NOT verified from this repo. Confirm
+when paid re-vendors.
+
+---
+
+## M7 — tool-result recording. **Green. STOP AND REPORT.**
+
+**Build (§1.2).**
+- `_scan_tool_result` runs `scan(direction="tool_result")`'s exact body (same
+  detection, telemetry and refusal). It then records the RAW result with the
+  tool's identity, its arguments and the PRE-mode verdict
+  (`blocked`/`approval_required`, or `flagged` at or above the scanner's block
+  threshold: V-2).
+- It never reaches the public seam's nameless record.
+- The public `scan(direction="tool_result")` records nameless and untrusted
+  (V-26).
+- The LangChain `BaseTool.run`/`.arun` and MCP `call_tool` after-hooks scan
+  through `_scan_tool_result`, and are wrapped in an enclosing marker
+  (`xaidr/_vo_seams.py`).
+- **`protect_tools` has a RESULT POSITION** (owed since M1). It records the raw
+  result as untrusted (`result_blocked=None`, Q10), and only when no scanned
+  seam encloses it. So exactly one seam records each invocation (§1.2 item 3,
+  F7).
+- Q18: a raw result from httpx, requests, urllib3 or aiohttp is not read, so
+  an unread stream is not consumed.
+- **Every new recording path is fault-isolated** (owner). A recorder fault is
+  logged once per sensor, and the verdict and the tool's result are returned
+  unchanged.
+
+**Red first.**
+
+```
+E  AssertionError: M7 tool results: public_tool_result_v26: got 'unresolved', want 'untrusted_source' -- public scan(direction='tool_result') recorded nothing (V-26); internal_result_seam: got 'no internal result method'; s23_designated_trusted: got 'no internal result method'; protect_tools_result_position: got 'unresolved', want 'untrusted_source' -- protect_tools has no result position (owed since M1); s24: ... 'no internal result method'
+```
+
+My first red run was a driver bug (`sensor(value_origin="off")` passed the
+keyword twice). The red above came after that was fixed.
+
+**Green.** The suites are M7, M6, M5, M4, C-11, the 456-row oracle, the
+LangChain result-scan suite, conformance, and the M6/M7 wheel tests:
+
+```
+== macOS 3.12.2    434 passed, 10 xfailed, 1 warning
+== linux 3.10.21   434 passed, 10 xfailed
+== linux 3.11.16   434 passed, 10 xfailed
+== linux 3.12.14   434 passed, 10 xfailed      (Docker was responsive this time: 29.4.1)
+```
+
+**Acceptance, in-tree and from the built wheel** (`test_m7_from_the_wheel`):
+- the public `tool_result` seam gives `untrusted_source`;
+- the internal result seam gives `untrusted_source`;
+- **S23:** a designated, principal-keyed, clean read gives `trusted_source`;
+- **S24, in monitor:** a designated read whose result is block-worthy gives
+  `untrusted_source`;
+- **protect_tools' result position** gives `untrusted_source`;
+- **Q18:** an I/O-backed object is returned unread (0 reads);
+- **fault isolation:** a raising recorder on the public, internal and
+  protect_tools paths never reaches the host.
+
+In-tree only (fake `langchain_core`):
+- **F7 end to end.** A designated tool whose implementation is a
+  `protect_tools` wrapper runs through the PATCHED `BaseTool.run`, and gives
+  `trusted_source`.
+- The same at sensor level, through the enclosing marker.
+
+**C-11: the protect_tools pass is non-vacuous.** 4a-R flipped for both passes
+(strict xfails turned into unexpected passes). **K_R = 37 for P-flow-R and 37
+for P-seam**, measured and pinned per pass. RECORD == OFF. Across commits
+(`e1b27c0` against M7, from wheels): **all 18 identical**.
+
+**Sabotage.** Each restore is cmp-confirmed, under `PYTHONDONTWRITEBYTECODE=1`.
+
+```
+=== 1: the one-recorder guard removed
+E  AssertionError: trusted_source expected, 'untrusted_source': the inner protect_tools recorded first (F7)
+E  AssertionError: 'untrusted_source': the patched hook did not record the designated read with its identity, or the inner protect_tools recorded first (F7)
+   (1 passed: the LangChain-only designated case stays green -- discriminating)
+=== 2: the internal method routed through PUBLIC scan()
+E  AssertionError: ... s23_designated_trusted: got 'untrusted_source', want 'trusted_source'
+E  AssertionError: 'untrusted_source': the patched hook did not record ...
+=== 3: the record dropped from the internal result method
+E  AssertionError: ... internal_result_seam: got 'unresolved' ...; s23_designated_trusted: got 'unresolved' ...
+--- same sabotage, the LangChain result-SCAN suite: 12 passed   (discriminating: it checks the scan, not the record)
+=== 4: the recording fault guard removed
+E  AssertionError: ... fault_isolation: got {'public': 'RAISED RuntimeError: m7 injected recorder fault', 'internal': 'RAISED ...', 'protect_tools': 'RAISED ...'}
+```
+
+All four went red where predicted. Sabotage 4 shows M6's shape on every new
+path: without its guard, a recorder fault RAISES into the host. That is why
+each path has the guard and a test for it.
+
+**Not built in M7, named:**
+- **Q12, LangChain argument binding.** A STRING `tool_input` is recorded as
+  `{"input": v}`, so a designation's `key_args` cannot match it. That is the
+  safe direction (the read is untrusted). Dict inputs bind by name.
+- **An MCP end-to-end test.** The MCP after-hook is routed through
+  `_scan_tool_result` and wrapped in the marker. Only the shared code path is
+  tested, not a stub `ClientSession`.
+- **A real streaming `httpx.Response`.** Q18 is tested with a stand-in class
+  from the `httpx` module namespace.
+- **The C-11 P-seam pass through the langchain_core and MCP after-hooks.** It
+  still drives only protect_tools.
+
+---
+
 ## Status (updated after M3), and what is waiting on the owner
 
 | milestone | state | commit |
