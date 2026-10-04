@@ -1910,6 +1910,84 @@ site that I had not listed:** `url_parse._r4_host` called the core's
 
 ---
 
+## Before M8, item 2 — the macOS-widening false-positive cost, on an outside corpus
+
+**The corpus.** It is drawn from **24,466 files outside this project and the
+Delphi repos**:
+- system config ();
+- Homebrew package docs, configs and man pages;
+- Python package manifests in site-packages.
+
+Excluded: test suites (adversarial by design) and personal system logs, which
+would put local IPs into a pushed PR. It holds **80,114 URL hosts (2,978
+distinct)** and **1,339 affected-shape tokens**, saved with their sources in
+. **Real-world text held ZERO
+leading-zero dotted quads and ZERO leading-zero embedded IPv4.** Every affected
+token was a number above 2**32-1: dates, sequence bounds, ids, hex
+fingerprints.
+
+**The measurement.** Each case runs through the current core and through the
+same core with the macOS readings switched off. A change is any difference in
+the destination readings, url_parse's class, or the  action.
+
+
+
+**The rate.**
+- **Real URL hosts: 0 of 2,978 distinct change.**
+- **Affected tokens in their real position (a whole argument value): 0 of 687
+  change.** The macOS readings apply to URL hosts only.
+- **The same tokens forced into URL-host position** (a stress, not traffic):
+  335 of 687 gain a wrapped IP reading.
+- **0 actions change, and 0 become link-local.** url_parse's class moves
+  None→public (268) or None→private (67), both classify-only.
+
+**Every one of the 335 is named** in the evidence file. The most frequent
+sources are ChangeLog (111), lockstat.1 (32) and README.md (26). Under ENFORCE,
+a wrapped reading blocks only if it coincides with an untrusted ledger entry.
+
+## Before M8, item 3 — Q13, the value-origin block rate (circuit breaker NOT wired)
+
+A call "would block" when its wire is  under ENFORCE.
+ is not wired, per the owner.
+
+
+
+**What the numbers mean. This is the input for V-31.**
+- **With NO designations, ENFORCE blocks every call whose destination appeared
+  in an undesignated tool result, benign or not.** P-flow-R and P-seam block
+  5 of 83 benign rows and 7 of 97 benign_prose rows.
+- **A-calls' 20.85% is that share by construction.** Each benign_toolcalls /
+  asi call runs in its own flow, and its own arguments are first scanned as an
+  untrusted result. So exactly the destination-carrying calls block (98
+  untrusted plus 4 unresolved, against 368 with no destination).
+  **My first hypothesis was wrong.** I guessed cross-pass contamination of an
+  implicit ledger. A fresh-thread re-run and the harness code showed the
+  construction.
+- **A destination the principal named, or that no read named, is never
+  blocked.** It reads . P-flow-I's benign 0/83 shows this; the
+  benign_prose 6/97 are inputs L1 flagged, which V-9 makes untrusted.
+- **The conformance flows are designed cases, not traffic.** Config C's 57% is
+  a property of that corpus.
+
+**Benign calls that would block, named:**
+
+
+
+## Before M8, item 4 — the wire-vocabulary inventory
+
+Written to ****. It is an inventory only;
+nothing outside this repo was changed.
+- **The Brain () hard-codes nine values and would
+  store  as NULL.**
+- blank-canvas has nothing yet.
+- Paid (delphi-python-sdk) has no vendored copy yet.
+- The DB column has no CHECK, so no migration is needed for the value, only a
+  corrected comment.
+- The order that avoids silent loss is: the Brain accepts it, then M9 emits.
+- 's docstring ("nine") is fixed. That is a pin byte change.
+
+---
+
 ## Status (updated after M3), and what is waiting on the owner
 
 | milestone | state | commit |

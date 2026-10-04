@@ -35,7 +35,7 @@ _VERDICT = {
 
 
 def verdict_of(wire: WireValue) -> Verdict:
-    """Total over the nine wire values (V-3). ``CallVerdict.verdict`` is always
+    """Total over the ten wire values (V-3; input_truncated added after A2 M6). ``CallVerdict.verdict`` is always
     ``verdict_of(wire)``; paid's L2 driver and the Brain derive the verdict
     from the wire value only through this function. Never raises: a string
     outside the nine is NOT_EVALUATED, matching ``row_text``'s not_recorded row
