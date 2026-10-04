@@ -514,3 +514,73 @@ The six strict xfails say so. What M1 establishes is:
 
 CI did not run. It triggers on `pull_request` and on pushes to `main`, the
 instruction is to push the branch only, and no PR was opened.
+
+### M1 outside the process, across commits, pinned to SHAs
+
+Wheels were built from `git archive 25dc9de` (base) and `git archive a4df0e6`
+(the M1 commit), each in a fresh venv, using the committed harness and driver:
+
+```
+$ git archive a4df0e6 | tar -x -C m1-tree    # and base-tree from git archive 25dc9de
+$ python -I m1-tree/tests/outside/harness.py base-tree c11-base c11_oracle.py -- --base > c11_base.json
+  exit 0
+$ python -I m1-tree/tests/outside/harness.py m1-tree c11-head c11_oracle.py > c11_head.json
+  exit 0
+$ python m1-tree/tests/outside/drivers/c11_oracle.py --compare c11_base.json c11_head.json
+base xaidr: c11-base/venv/lib/python3.12/site-packages/xaidr/__init__.py | py 3.12.2
+head xaidr: c11-head/venv/lib/python3.12/site-packages/xaidr/__init__.py | py 3.12.2
+  block   A-calls    base=da99beb148b8 off=da99beb148b8 record=da99beb148b8 enforce=da99beb148b8  IDENTICAL
+  block   A-flow-I   base=b8088580c868 off=b8088580c868 record=b8088580c868 enforce=b8088580c868  IDENTICAL
+  block   A-flow-R   base=e30d17b1bbbc off=e30d17b1bbbc record=e30d17b1bbbc enforce=e30d17b1bbbc  IDENTICAL
+  block   A-steps    base=bb062c8e336d off=bb062c8e336d record=bb062c8e336d enforce=bb062c8e336d  IDENTICAL
+  block   P-fault    base=0cab68adc932 off=0cab68adc932 record=0cab68adc932 enforce=0cab68adc932  IDENTICAL
+  block   P-flow-I   base=0d89307249ea off=0d89307249ea record=0d89307249ea enforce=0d89307249ea  IDENTICAL
+  block   P-flow-R   base=bc8f93094a59 off=bc8f93094a59 record=bc8f93094a59 enforce=bc8f93094a59  IDENTICAL
+  block   P-input    base=80f31ff0b5d5 off=80f31ff0b5d5 record=80f31ff0b5d5 enforce=80f31ff0b5d5  IDENTICAL
+  block   P-seam     base=c0c7b885462b off=c0c7b885462b record=c0c7b885462b enforce=c0c7b885462b  IDENTICAL
+  monitor A-calls    base=bc96eee1be21 off=bc96eee1be21 record=bc96eee1be21 enforce=bc96eee1be21  IDENTICAL
+  monitor A-flow-I   base=b8088580c868 off=b8088580c868 record=b8088580c868 enforce=b8088580c868  IDENTICAL
+  monitor A-flow-R   base=e30d17b1bbbc off=e30d17b1bbbc record=e30d17b1bbbc enforce=e30d17b1bbbc  IDENTICAL
+  monitor A-steps    base=8cc17aa1d456 off=8cc17aa1d456 record=8cc17aa1d456 enforce=8cc17aa1d456  IDENTICAL
+  monitor P-fault    base=f5a1cdb40a4f off=f5a1cdb40a4f record=f5a1cdb40a4f enforce=f5a1cdb40a4f  IDENTICAL
+  monitor P-flow-I   base=dfc965d823fd off=dfc965d823fd record=dfc965d823fd enforce=dfc965d823fd  IDENTICAL
+  monitor P-flow-R   base=f7a15b56474d off=f7a15b56474d record=f7a15b56474d enforce=f7a15b56474d  IDENTICAL
+  monitor P-input    base=51e3814f8b8d off=51e3814f8b8d record=51e3814f8b8d enforce=51e3814f8b8d  IDENTICAL
+  monitor P-seam     base=b48742e05acc off=b48742e05acc record=b48742e05acc enforce=b48742e05acc  IDENTICAL
+cross-commit: all identical
+  exit 0
+--- construction checks from the a4df0e6 wheel:
+  enforec_rejected: value_origin mode: expected one of ['off', 'record', 'enforce'], got 'enforec'
+  warnings: {'default': 0, 'enforce': 1, 'enforce+designation': 1, 'off': 0, 'record': 0}
+```
+
+`80f31ff0…` (P-input, block) is the oracle digest `docs/enterprise-seams-design.md`
+recorded for earlier seams.
+
+---
+
+## Status after M1, and what is waiting on the owner
+
+| milestone | state | commit |
+|---|---|---|
+| M0: finding 1 (Q1) | green, **STOP AND REPORT** | `77ee2f8` (the new paid pin, SEMANTIC) |
+| M1: the C-11 gate | green, **STOP AND REPORT** | `a4df0e6` |
+| M2 / M3: url_parse differential + move | next; does not depend on either STOP | — |
+| M4–M7: seam wiring | **held**: the BRIEF STOPs before any seam wiring until the owner has seen C-11 | — |
+| M8: ENFORCE | **held**: needs the owner's review of M0, plus STOP 3 (vocabulary) | — |
+| M9: wire field | held at STOP 4 (wire format) | — |
+| M10 / M11 | after the above | — |
+
+**Waiting on the owner:**
+1. Review M0, which unblocks ENFORCE (M8).
+2. Review C-11 (M1), which unblocks the seam wiring (M4–M7).
+3. Rule on the four M0 build decisions in `docs/value-origin-rulings.md`
+   ("Decisions made in the A2 build (M0) that still need a ruling").
+4. M0 changed `expected.jsonl`. It is a semantic change for paid (P4), and pin
+   `77ee2f8` vendors only once it is on `main`.
+
+**Not verified:**
+- CI has not run on this branch. It triggers on `pull_request` and on pushes to
+  `main`, and no PR was opened.
+- The `ci.yml` marker change was exercised locally in `python:3.12-slim`, not on
+  GitHub runners.
