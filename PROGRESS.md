@@ -2115,6 +2115,10 @@ real URL hosts with an affected shape: 0 []
 Q13 P-flow-I: benign_a2a: would block 0/64 calls ([('no_destination', 58), ('principal_undeclared_span', 4), ('unresolved', 2)]) | benign_longform: would block 0/24 calls ([('unresolved', 24)])
 Q13 P-flow-R: benign_a2a: would block 4/64 calls ([('no_destination', 58), ('untrusted_source', 4), ('unresolved', 2)]) | benign_longform: would block 0/24 calls ([('unresolved', 24)])
    ```
+   **benign_longform's 24 calls read `unresolved` even when result-derived.** I
+   did NOT find out why: one hypothesis is the 65,536-char result-leaf cap
+   against how `calls_for` tokenises. It is reported as measured and
+   unexplained.
 4. **Inventory.** `origin/main` WAS readable, and the Brain files are
    identical there: the Brain code is merged. Corrected in place. Whether the
    migration is applied live is still unverified.
