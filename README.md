@@ -956,6 +956,12 @@ honest boundary, not an oversight.
 
 ## API reference
 
+> **A warning you may see once per sensor:** `value origin saw a tool call with NO flow active`.
+> It means value origin, which traces whether a tool call's destination came from the user or
+> from untrusted content, had no request scope to trace in, so that call was not evaluated.
+> `xaidr.begin_flow()` opens that scope for one agent request (close it with `xaidr.clear_flow()`);
+> with LangGraph / `create_agent`, call it outside the graph, around `invoke`.
+
 ```python
 from xaidr import Sensor, ScanResult, DelphiBlockedError, CircuitBreaker
 

@@ -369,7 +369,8 @@ _UP_HOSTS = ("169.254.169.254", "0xA9FEA9FE", "2852039166", "0251.0376.0251.0376
              "[::ffff:a9fe:a9fe]", "%31%36%39.254.169.254", "１６９.２５４.１６９.２５４",
              "169．254．169．254", "169。254。169。254", "169｡254｡169｡254", "169.254.169.254.", "١٦٩.٢٥٤.١٦٩.٢٥٤", "1.2.3.256",
              "1.2.65536", "0x.0x.0", "10.0.0.5", "127.1", "0x7f.1", "[::1]",
-             "[2001:db8::1]", "8.8.8.8", "evil.test", "ev%69l.test", "EVIL.test", "corp.example")
+             "[2001:db8::1]", "8.8.8.8", "010.0.0.1", "0127.0.0.1", "000169.254.000169.254",
+             "0x1A9FEA9FE", "4311810312", "evil.test", "ev%69l.test", "EVIL.test", "corp.example")
 _UP_TAILS = ("", "/latest", ":80/x", "?q", "#f", "\\x", "\\@corp.example", "/@corp.example")
 
 
@@ -454,6 +455,8 @@ def url_parse_comparison(oracles):
             # true of ANY `]` that urlsplit refuses, so it goes last
             cls = next((c for c, (pred, _) in _UP_OVER_READ_CLASSES.items()
                         if pred(hosts)), None)
+            if cls is None and _names_a_macos_host(url):
+                cls = "macos-reading-read-everywhere"    # answer 3, see MACOS_EVERYWHERE
             if cls is None and _urlsplit_refuses_a_bracketed_host(url):
                 cls = "urlsplit-bracket-validation"      # M0's class, same reason
             over[cls].append((url, got, readings))
@@ -650,11 +653,43 @@ _SENSITIVE = {"link_local", "loopback", "private"}
 
 
 def _platform_class(h, ip):
-    """Q22 AS RE-RULED 2026-10-04: a darwin-only resolver reading is exempt ONLY
-    when it reaches no sensitive address. One that reaches link-local, loopback
-    or private space is read and classified, never exempted."""
-    return ((_bsd_decimal_leading_zero(h, ip) or _bsd_integer_wrap(h, ip)
-             or _bsd_embedded_v4(h, ip)) and _kind(ip) not in _SENSITIVE)
+    """Q22, re-ruled a SECOND time (owner, 2026-10-04): NO darwin exemption
+    remains. Every macOS-resolver reading is read, public ones included: a
+    destination named by untrusted content is a finding, and exfiltration goes
+    to PUBLIC addresses (4311810312 reaches 1.1.1.8 on macOS). Kept as a
+    function so every caller states that it exempts nothing."""
+    return False
+
+
+def _macos_reading(host):
+    """The address the macOS resolver reads ``host`` as where it differs from
+    inet_aton / WHATWG, computed HERE, independently of the core (measured
+    2026-10-04): a leading-zero dotted quad is decimal, so is an IPv6 literal's
+    IPv4 tail, and one number above 2**32-1 wraps modulo 2**32."""
+    h = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    h = h.lower().rstrip(".")
+
+    def quad(parts):
+        if (len(parts) == 4 and all(p.isascii() and p.isdigit() for p in parts)
+                and any(len(p) > 1 and p[0] == "0" for p in parts)
+                and all(int(p) <= 255 for p in parts)):
+            return ".".join(str(int(p)) for p in parts)
+        return None
+    try:
+        if ":" in h:
+            head, _, tail = h.rpartition(":")
+            q = quad(tail.split(".")) if head else None
+            return ipaddress.ip_address(head + ":" + q) if q else None
+        q = quad(h.split("."))
+        if q:
+            return ipaddress.ip_address(q)
+        if "." not in h and h:
+            n = _int_literal(h)
+            if n is not None and n > 0xFFFFFFFF:
+                return ipaddress.ip_address(n % (1 << 32))
+    except ValueError:
+        return None
+    return None
 
 
 def test_the_named_url_parse_over_read_class_stands_for_a_measured_platform(url_parse_comparison):
@@ -681,6 +716,43 @@ def test_the_bracket_validation_over_read_class_stands_for_a_measured_interprete
                               f"should read them: {absorbed[:5]}")
     else:
         assert absorbed, "the class absorbed nothing on a post-backport interpreter"
+
+
+MACOS_EVERYWHERE = (
+    "Q22 re-ruled (answer 3): the core reads what the macOS resolver reaches, on EVERY "
+    "platform and on every split's host, so a verdict does not depend on where the agent "
+    "runs. On Linux glibc reads `010.0.0.1` as octal (public 8.0.0.1) and url_parse "
+    "reports the macOS reading (private 10.0.0.1). On darwin too, where only a WHATWG split "
+    "names the host (`http://\\@010.0.0.1\\x`): Node parses it itself, as octal. Bounded "
+    "to URLs naming a host the macOS resolver reads differently (`_names_a_macos_host`).")
+
+
+def _names_a_macos_host(url):
+    """True iff some split of ``url`` names a host string the macOS resolver
+    reads differently (independent of the core: `_macos_reading`)."""
+    for tok in re.split(r"[/\\@?#]", url):
+        if tok.startswith("["):
+            cand = tok[1:].partition("]")[0]
+            if cand and _macos_reading(cand) is not None:
+                return True
+            continue
+        # `host:port`, R4's `http:host`, or both: an unbracketed URL host has no
+        # colon (IPv6 must be bracketed), so every colon-separated part is a candidate
+        cands = (tok, *tok.split(":"))
+        if any(c and _macos_reading(c) is not None for c in cands):
+            return True
+    return False
+
+
+def test_the_macos_everywhere_over_read_class_is_bounded_and_platform_split(url_parse_comparison):
+    """Answer 3, pinned both ways on the discriminating spelling: plain
+    `http://010.0.0.1/latest` is an over-read on Linux (glibc: public 8.0.0.1)
+    and is NOT one on darwin (its resolver reaches private 10.0.0.1)."""
+    absorbed = {u for u, _, _ in url_parse_comparison["over"].get("macos-reading-read-everywhere", [])}
+    assert absorbed, "the macOS-reading over-read class absorbed nothing; delete it"
+    plain = "http://010.0.0.1/latest"
+    assert (plain in absorbed) == (sys.platform != "darwin"), (
+        f"{plain!r} absorbed={plain in absorbed} on {sys.platform}: " + MACOS_EVERYWHERE)
 
 
 def test_the_pipeline_over_read_class_is_needed(url_parse_comparison):
@@ -725,6 +797,11 @@ _MACOS_SENSITIVE_READINGS = [
     ("0x1A9FEA9FE", "169.254.169.254"),
     ("[::ffff:169.254.0169.254]", "169.254.169.254"),  # embedded leading-zero IPv4
     ("[::ffff:0169.254.169.254]", "169.254.169.254"),
+    # public readings, read since the second re-ruling (answer 2)
+    ("4311810312", "1.1.1.8"),
+    ("09.2.3.4", "9.2.3.4"),
+    ("0177.0.0.01", "177.0.0.1"),
+    ("[0:1:2:3:4:5:192.0.02.1]", "0:1:2:3:4:5:c000:201"),
 ]
 
 
@@ -739,19 +816,20 @@ def test_q22_rerule_a_macos_reading_of_sensitive_space_is_read(host, want):
     core = sorted(f.destination.key() for f in found if f.destination is not None)
     got = _url_parse_address(url)
     cls = _kind(ipaddress.ip_address(want))
-    assert f"ip:{want}" in core and _rank(got) >= _rank(cls), (
+    key = "ip:" + ipaddress.ip_address(want).compressed
+    assert key in core and _rank(got) >= _rank(cls), (
         f"the macOS resolver sends {url!r} to {want} ({cls}); the core reads {core} "
         f"and url_parse reports {got!r}")
 
 
-def test_q22_rerule_the_embedded_v4_public_class_is_named_and_stays_exempt():
-    """The owner's ruling: `[0:1:2:3:4:5:192.0.02.1]` reaches PUBLIC space on
-    macOS (0:1:2:3:4:5:c000:201); a named class, exempt, no fix. Asserted both
-    ways: present on darwin, absent (glibc refuses it) on Linux."""
+def test_q22_the_embedded_v4_public_class_is_read_not_exempt():
+    """`[0:1:2:3:4:5:192.0.02.1]` reaches PUBLIC space on macOS. The first
+    re-ruling named it exempt; the second reads it. Both ways: darwin's resolver
+    reaches it and the core reads it; glibc refuses it."""
     h = "[0:1:2:3:4:5:192.0.02.1]"
     ip = _resolve(h)
     if sys.platform == "darwin":
-        assert ip is not None and _bsd_embedded_v4(h, ip) and _platform_class(h, ip), ip
+        assert ip is not None and _bsd_embedded_v4(h, ip) and not _platform_class(h, ip), ip
     else:
         assert ip is None, f"glibc read {h} as {ip}; the class was darwin-only"
 
@@ -762,12 +840,13 @@ def test_q22_bsd_libc_decimal_leading_zero_class_is_present_on_darwin_and_empty_
     divergence). On Linux it is EMPTY: glibc reads those quads as octal, the
     exemption absorbs nothing, and so it cannot grow silently."""
     exempt = [(h, str(ip)) for h, ip, _, _ in _ip_comparison()
-              if _bsd_decimal_leading_zero(h, ip) and _platform_class(h, ip)]
+              if _bsd_decimal_leading_zero(h, ip)]                 # the divergence itself
+    assert not any(_platform_class(h, ipaddress.ip_address(i)) for h, i in exempt)
     if sys.platform == "darwin":
         assert exempt, ("Q22: on darwin the resolver was expected to read a leading-zero "
                         "quad as decimal (0251.254.0251.254 -> 251.254.251.254); it read "
                         "none that way, so the exemption is stale")
-        assert ("09.2.3.4", "9.2.3.4") in exempt, exempt     # public: still exempt
+        assert ("09.2.3.4", "9.2.3.4") in exempt, exempt     # public, and READ (answer 2)
     else:
         assert not exempt, (f"Q22: the BSD-decimal class absorbed {len(exempt)} forms on "
                             f"{sys.platform}, where it must be empty: {exempt[:8]}")

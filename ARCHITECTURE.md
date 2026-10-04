@@ -533,6 +533,17 @@ the PR body. Only affected tests run while iterating, never the full suite.
 ⛔ marks a STOP. **A STOP is unconditional.** An answer in §6 tells the build
 what to do once the STOP is lifted. It never lifts the STOP in advance.
 
+**Standing rule, every sabotage (owner, 2026-10-04, after M4).**
+- Every sabotage and restore run uses `PYTHONDONTWRITEBYTECODE=1` and starts
+  with no `__pycache__`.
+- The restore is confirmed with `cmp` against a snapshot, not only by a green
+  run.
+- `tests/conftest.py` sets `sys.dont_write_bytecode = True` for every test run.
+
+A same-length edit restored within one second survived in a stale `.pyc` at
+M4: the "restored" run still executed the sabotage. A sabotage can then report
+red for the wrong reason, or green while the fix is still removed.
+
 ⛔ **STOP 0. Done 2026-10-03.** The owner answered §6; see Decided, below.
 
 **M0. The F1 core fix (Q1, decided YES; gates ENFORCE). STOP AND REPORT after it.**

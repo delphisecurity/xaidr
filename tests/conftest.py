@@ -117,3 +117,9 @@ def pytest_make_parametrize_id(config, val, argname):
     if isinstance(val, (str, bytes)) and len(val) > 32:
         return "{}_{}chars".format(argname, len(val))
     return None
+
+
+# Standing rule (ARCHITECTURE.md §5): no test run writes bytecode, so a sabotage
+# edit restored within one second cannot survive in a stale .pyc (seen at A2 M4).
+import sys as _sys
+_sys.dont_write_bytecode = True

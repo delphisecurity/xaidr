@@ -392,12 +392,6 @@ def _macos_resolver_ip(host: str):
     return None
 
 
-def _sensitive(ip) -> bool:
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    return ip.is_link_local or ip.is_loopback or ip.is_private
-
-
 def _raw_split_host(url: str) -> Optional[str]:
     """The authority's host with NO validation: after the last `@`, inside the
     brackets or before the port. Used only to find macOS readings, which a
@@ -413,11 +407,12 @@ def _raw_split_host(url: str) -> Optional[str]:
     return hostinfo.partition(":")[0].lower() or None
 
 
-def _macos_sensitive_readings(raw_host: Optional[str]) -> List[Authority]:
-    """Q22 as RE-RULED: a macOS-resolver reading that reaches link-local,
-    loopback or private space is READ, on every platform (a verdict must not
-    depend on where the agent runs). One that reaches public space stays the
-    named darwin exemption. Developers run macOS: that is where an agent runs
+def _macos_readings(raw_host: Optional[str]) -> List[Authority]:
+    """Q22 as RE-RULED (twice, 2026-10-04): EVERY macOS-resolver reading is
+    READ, on every platform (a verdict must not depend on where the agent
+    runs), public ones included: a destination named by untrusted content is a
+    finding, and exfiltration goes to public addresses (4311810312 reaches
+    1.1.1.8 on macOS). The first re-ruling read only sensitive space. Developers run macOS: that is where an agent runs
     before anyone is watching. The old premise, that the decimal reading lands
     in reserved space, was wrong: it reaches 169.254.169.254."""
     if not raw_host:
@@ -434,7 +429,7 @@ def _macos_sensitive_readings(raw_host: Optional[str]) -> List[Authority]:
         ip = _macos_resolver_ip(h) if h else None
     except ValueError:
         return []
-    if ip is None or not _sensitive(ip):
+    if ip is None:
         return []
     return [Authority(scheme="ip", value=ip_key(ip))]
 
@@ -483,7 +478,7 @@ def url_authority(value: str, *, arg_mode: bool, written: Optional[str] = None):
         if a is not None and a != primary and a not in extra:
             extra.append(a)
     for raw in (_raw_split_host(whatwg), _raw_split_host(value if written is None else written)):
-        for a in _macos_sensitive_readings(raw):     # Q22, re-ruled 2026-10-04
+        for a in _macos_readings(raw):               # Q22, re-ruled 2026-10-04
             if a != primary and a not in extra:
                 extra.append(a)
     if not extra:
