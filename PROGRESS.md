@@ -2132,6 +2132,104 @@ run.
 
 ---
 
+## The benign_longform anomaly, explained before M8 (owner condition 3)
+
+**Not a recording failure.** Each long document's result recorded up to 67
+destinations. The harness built ONE call per document: `run_command` with the
+whole document as its argument (`calls_for` builds calls only from `scheme://`
+URLs and mailboxes). That argument exceeds the core's 4,000-char argument-leaf
+bound (S16), which gives `walk_bound` with `truncated=True` and wire
+`unresolved`.
+
+**The same bound is an ENFORCE evasion,** measured:
+- `https://evil.test/collect` reads `untrusted_source`, and should_block is
+  True;
+- the same URL padded with 5,000 chars reads `unresolved`, and should_block is
+  False.
+
+Detection flagged that padded case only because the padding was a repeat
+(LLM04); varied padding would evade detection too. It is pinned as a strict
+xfail for the owner's ruling (block on a bound hit under ENFORCE, or a visible
+state like `input_truncated`). Per the owner's stop rule (stop only if
+RECORDING silently failed), M8 was built.
+
+---
+
+## M8 — ENFORCE (V-31 as ruled). **Green. STOP AND REPORT.**
+
+**Build.**
+- `scan_tool_call` runs `should_block` right after `evaluate_call`, before the
+  circuit check, the gates and detection (V-18). It is fault-guarded, and the
+  sweep's structural test covers it.
+- A block is `ScanResult(action="blocked", category="untrusted_destination",
+  rules=["ORIGIN_UNTRUSTED_DESTINATION", "intent.value_origin_untrusted"])`
+  through `_apply_mode` (monitor gives `flagged`) and the existing gate emitter.
+- It is not counted by `_breaker_observe` (Q13).
+- The construction warning drops "NOT YET WIRED". With zero designations it
+  names what will be blocked (owner condition 2). Both pins (in-tree and from
+  the wheel) were updated in this commit, as §5 M8 requires.
+- ENFORCE is off by default (V-31).
+- `docs/value-origin-enforce.md` documents the rule, the costs, the 18-row
+  designation analysis (owner condition 1), the unmeasured leading-zero false
+  positives, the padded-URL evasion, the anomaly, and the rule-name
+  discrepancy.
+
+**Red first.**
+
+```
+E  AssertionError: M8 ENFORCE: A-enforce-block: {'action': 'allowed', 'category': None, 'rules': [], 'wire': 'untrusted_source'}; A-enforce-monitor: {'action': 'allowed', ...}; the tool EXECUTED under ENFORCE+block: {'executed': True, 'returned': 'ok'}; value-origin block lost on the fail-open scan-error path (V-18): {'action': 'allowed', 'category': 'scan_error', 'rules': ['SCAN_FAILED_OPEN'], 'wire': 'untrusted_source'}; zero-designation ...
+E  AssertionError: assert '0d89307249ea...' != '0d89307249ea...'     (C-11 4b: ENFORCE moved no action before M8)
+```
+
+**Green.** The M8 driver ran in-tree and from the built wheel.
+- A-enforce-block: blocked, with category and both rules, and the tool NOT
+  executed.
+- A-enforce-monitor: flagged, and the tool executed.
+- B-designated-twin: allowed, `trusted_source`.
+- RECORD's action equals OFF's.
+- V-18 holds on the scan-error path.
+- One zero-designation warning.
+- **C-11 4b is un-xfailed:** ENFORCE moves actions that OFF and RECORD do not.
+
+Every seam suite (61 files, plus conformance and the M1/M7/M8 wheel tests):
+
+```
+== macOS 3.12.2    7295 passed, 95 skipped, 12 xfailed
+== linux 3.10.21   7295 passed, 95 skipped, 12 xfailed      (Docker available)
+== linux 3.12.14   7295 passed, 95 skipped, 12 xfailed
+```
+
+**Sabotage.** Each restore is cmp-confirmed.
+
+```
+=== 1: should_block ignores the mode (RECORD blocks)
+E  AssertionError: M8 ENFORCE: RECORD changed an action: OFF=allowed RECORD=blocked
+E  AssertionError: C-11: RECORD moved a verdict, score or rule in P-flow-R (block mode) ... RECORD='attacks[030] R1 http_post blocked 1.0000 untrusted_destination ORIGIN_UNTRUSTED_DESTINAT...
+=== 2: the block moved after detection, classify faulting (V-18)
+E  AssertionError: M8 ENFORCE: value-origin block lost on the fail-open scan-error path (V-18): {'action': 'allowed', 'category': 'scan_error', ...}
+=== 3: the should_block guard removed
+E  AssertionError: ... xaidr/sensor.py:2429 should_block()
+```
+
+All three went red where §5 M8 predicted. Sabotage 3 is the fault sweep doing
+its job on the first M8 path.
+
+**Owner condition 1, the 18 benign blocks** (full table in
+`docs/value-origin-enforce.md`):
+- **13 are harness-built calls to attack URLs quoted in benign prose.**
+  Blocking them is correct, and no designation should prevent it.
+- **The 5 legitimate ones were read through the PUBLIC nameless
+  `scan(direction="tool_result")` seam, which NO designation can ever match
+  (V-26): a design gap.** Through a named seam, a designation on the reading
+  tool would prevent each.
+- **A second design gap:** a benign principal input that L1 flags makes every
+  destination it names block (V-9), with no designation-shaped remedy.
+
+**Not built:** "the keyed variant" of the rule. The settled spec defines none,
+and inventing one was refused.
+
+---
+
 ## Status (updated after M3), and what is waiting on the owner
 
 | milestone | state | commit |

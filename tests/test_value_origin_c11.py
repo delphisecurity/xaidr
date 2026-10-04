@@ -95,7 +95,8 @@ def test_construction_warns_only_for_enforce_and_says_what_is_true(caplog, kwarg
     hits = [r.getMessage() for r in caplog.records if "value_origin" in r.getMessage()]
     assert len(hits) == want, hits
     if want:
-        assert "NOT YET WIRED" in hits[0] and "changes no action" in hits[0], hits[0]
+        # A2 M8 wired ENFORCE: the "NOT YET WIRED" clause is gone, the warning says it blocks
+        assert "ENFORCES" in hits[0] and "blocked" in hits[0] and "NOT YET WIRED" not in hits[0], hits[0]
         assert ("designation" in hits[0]) is not bool(kwargs.get("value_origin_sources"))
 
 
@@ -174,7 +175,8 @@ def test_4a_R_record_reports_untrusted_source_on_result_derived_calls(runs, p):
     assert wires.count("untrusted_source") >= K_R[p], collections.Counter(wires)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="not wired: nothing can block until M8 (ENFORCE)")
+# Strict xfail until M8 (its unexpected pass is in PROGRESS.md): the discriminating
+# case, proving the instrument sees the axis RECORD must not move.
 @pytest.mark.parametrize("p", FLOW_PASSES)
 def test_4b_enforce_moves_an_action_that_off_and_record_do_not(runs, p):
     assert runs("enforce", "block")[p][0] != runs("off", "block")[p][0]

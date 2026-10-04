@@ -398,6 +398,14 @@ _BIND_FAILURES: set = set()
 
 # A2 M6: the principal input value origin records, capped like a tool-result leaf.
 _VO_INPUT_CAP = 65_536
+# V-31 as ruled by the owner (2026-10-04): a value-origin block's category and rule.
+_VO_BLOCK_CATEGORY = "untrusted_destination"
+_VO_BLOCK_RULE = "ORIGIN_UNTRUSTED_DESTINATION"
+# The spec's V-31 audit key (delphi-sentinel docs/value-origin-architecture.md
+# V-31/C-19): the waterfall renders the intent stage `decided` iff findings carry
+# it. Carried beside the owner's rule so the cross-repo contract is not broken
+# while the two namings are reconciled (M8 report).
+_VO_AUDIT_RULE = "intent.value_origin_untrusted"
 # Q18: a raw result from these modules may hold an unread stream; recording it
 # would consume it under default RECORD, a host-behaviour change no verdict sees.
 _IO_BACKED_MODULES = frozenset({"httpx", "requests", "urllib3", "aiohttp"})
@@ -797,19 +805,19 @@ class DelphiSensor:
             # ONE warning, and only for ENFORCE. Two facts an operator must not
             # learn from an incident (the owner's Q6 principle: a configuration
             # that silently does nothing is a defect):
-            #   * value origin is NOT YET WIRED in this build, so 'enforce'
-            #     changes no action today. This clause is removed by the
-            #     milestone that wires ENFORCE (A2 M8), which a test pins.
-            #   * C-11: with no designations no read is ever trusted, so once it
-            #     enforces, every destination any tool result names is blocked.
+            #   * A2 M8 wired ENFORCE: an untrusted destination BLOCKS (V-31).
+            #   * C-11: with no designations no read is ever trusted, so every
+            #     destination any tool result names is blocked. The owner ruled
+            #     ENFORCE off by default until designations exist (V-31).
             logger.warning(
                 "xaidr: Sensor(agent_id=%r, value_origin='enforce'): value origin "
-                "is NOT YET WIRED in this build, so 'enforce' changes no action "
-                "today.%s", self.agent_id,
+                "ENFORCES: a tool call whose destination traces to an untrusted "
+                "source is blocked (category untrusted_destination).%s", self.agent_id,
                 "" if self._value_origin_sources else
-                " With no value_origin_sources designations, once it enforces no "
-                "tool result can be a trusted source and every destination a tool "
-                "result names will be blocked.")
+                " With NO value_origin_sources designations, no tool result can be "
+                "a trusted source, so EVERY tool call whose destination came from a "
+                "tool result will be blocked. Measured on benign corpora: 5/83, "
+                "4/64 and 7/97 of calls. Turn ENFORCE on once designations exist.")
 
         # ── S1 · attach, part 2 of 2: on_attach ──────────────────────────
         # LAST in the constructor, deliberately: on_attach receives a fully
@@ -2388,6 +2396,9 @@ class DelphiSensor:
         autopatch.tool_verdict does (M4 review). RECORD and
         ENFORCE evaluate; nothing acts on the verdict until M8."""
         cv = self._value_origin_verdict(tool_name, arguments)
+        blocked = self._value_origin_block(tool_name, cv)
+        if blocked is not None:
+            return blocked
         result = self._scan_tool_call_unattached(
             tool_name, arguments, mcp_server, origin_context, server_name)
         if cv is None:
@@ -2404,6 +2415,40 @@ class DelphiSensor:
                 logger.exception("xaidr: value origin could not attach its verdict to a "
                                  "%s result; the field is omitted", type(result).__name__)
             return result
+
+    def _value_origin_block(self, tool_name, cv):
+        """A2 M8, ENFORCE (V-18, V-31). Runs right after evaluate_call and returns
+        BEFORE the circuit check, the gates and detection, so a value-origin block
+        holds on open's fail-open paths too. It goes through the existing emit
+        path and _apply_mode, so monitor gives `flagged`. It is NOT counted by the
+        circuit breaker (Q13, owner): if this layer could trip the breaker, an
+        open breaker would disable detection generally. Never raises into the
+        host; a should_block fault means no value-origin block, logged."""
+        if cv is None or self._value_origin is not _vo.Mode.ENFORCE:
+            return None
+        try:
+            fire = _vo.should_block(cv, mode=self._value_origin)
+        except Exception:
+            logger.exception("xaidr: value origin's should_block faulted; value origin "
+                             "does not block this call")
+            return None
+        if not fire:
+            return None
+        name = tool_name if isinstance(tool_name, str) else None
+        result = ScanResult(action="blocked", score=1.0, category=_VO_BLOCK_CATEGORY,
+                            rules=[_VO_BLOCK_RULE, _VO_AUDIT_RULE])
+        try:
+            result = self._apply_mode(result, "tool_call", lambda: {"tool_name": name})
+        except (DelphiBlockedError, _ExtensionContractError):
+            raise
+        except Exception:
+            logger.exception("xaidr: _apply_mode faulted on a value-origin block; the "
+                             "block stands")
+        try:
+            self._emit_gate_verdict(result, "value_origin", "tool_call", toolName=name)
+        except Exception:
+            pass                                 # telemetry never decides a verdict
+        return replace(result, value_origin=cv)
 
     def _value_origin_verdict(self, tool_name, arguments):
         """``evaluate_call`` for this call, or None (OFF, or a fault: the field

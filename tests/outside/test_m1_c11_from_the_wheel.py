@@ -52,7 +52,9 @@ def test_the_installed_wheel_warns_only_for_enforce(installed):
     w = installed["construction"]["warnings"]
     assert {k: len(v) for k, v in w.items()} == {
         "default": 0, "off": 0, "record": 0, "enforce": 1, "enforce+designation": 1}, w
-    assert "NOT YET WIRED" in w["enforce"][0] and "designation" in w["enforce"][0]
+    # A2 M8 wired ENFORCE: the clause is gone, and the zero-designation warning names what blocks
+    assert "NOT YET WIRED" not in w["enforce"][0] and "ENFORCES" in w["enforce"][0]
+    assert "designation" in w["enforce"][0] and "blocked" in w["enforce"][0]
     assert "designation" not in w["enforce+designation"][0]
 
 
