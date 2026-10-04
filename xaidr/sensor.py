@@ -9,6 +9,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import threading
 import time
 from dataclasses import replace
 from typing import Mapping, Optional, Sequence
@@ -760,6 +761,8 @@ class DelphiSensor:
         # let construct OFF and RECORD sensors side by side.
         self._value_origin = _vo.validate_mode(value_origin)
         self._value_origin_sources = _vo.validate_designations(value_origin_sources)
+        self._vo_no_flow_warned = False          # Q6: one no_flow warning per sensor
+        self._vo_lock = threading.Lock()
         if self._value_origin is _vo.Mode.ENFORCE:
             # ONE warning, and only for ENFORCE. Two facts an operator must not
             # learn from an incident (the owner's Q6 principle: a configuration
@@ -2193,6 +2196,51 @@ class DelphiSensor:
         return n
 
     def scan_tool_call(
+        self,
+        tool_name: str,
+        arguments: dict | None = None,
+        mcp_server: Optional[str] = None,
+        origin_context: dict | None = None,
+        server_name: Optional[str] = None,
+    ) -> ScanResult:
+        """Scan a tool call. Value origin is evaluated FIRST (A2 M4, V-7a):
+        before the gates, the breaker and ``_resolve_provenance``, which can
+        start a flow. Its verdict is attached to whatever comes back, so every
+        exit carries it (C-13): the main path, the circuit-open, gate,
+        fail-closed, scan-error and not-scannable ones. Attaching it once,
+        here, means a new exit path cannot be added without it. RECORD and
+        ENFORCE evaluate; nothing acts on the verdict until M8."""
+        cv = self._value_origin_verdict(tool_name, arguments)
+        result = self._scan_tool_call_unattached(
+            tool_name, arguments, mcp_server, origin_context, server_name)
+        return result if cv is None else replace(result, value_origin=cv)
+
+    def _value_origin_verdict(self, tool_name, arguments):
+        """``evaluate_call`` for this call, or None (OFF, or a fault: the field
+        is then omitted, never null). Q6 as the owner ruled it: the FIRST call
+        this sensor sees under ``no_flow`` logs ONE warning naming the fix."""
+        if self._value_origin is _vo.Mode.OFF:
+            return None
+        try:
+            cv = _vo.evaluate_call(tool_name if isinstance(tool_name, str) else "",
+                                   arguments, flow_active=_chain.is_flow_active())
+        except Exception:                       # evaluate_call never raises; belt and braces
+            logger.exception("xaidr: value origin evaluate_call faulted")
+            return None
+        if cv is not None and cv.wire is _vo.WireValue.NO_FLOW and not self._vo_no_flow_warned:
+            with self._vo_lock:
+                first, self._vo_no_flow_warned = not self._vo_no_flow_warned, True
+            if first:
+                logger.warning(
+                    "xaidr: Sensor(agent_id=%r): value origin saw a tool call with NO flow "
+                    "active (wire no_flow), so it can trace no destination and, under "
+                    "ENFORCE, can never block. Start a flow per agent request: wrap it in "
+                    "xaidr.begin_flow() ... xaidr.clear_flow(), or call extract_context() on "
+                    "an inbound A2A request. In LangGraph/create_agent, begin_flow() must run "
+                    "OUTSIDE the graph. Logged once per sensor.", self.agent_id)
+        return cv
+
+    def _scan_tool_call_unattached(
         self,
         tool_name: str,
         arguments: dict | None = None,

@@ -978,6 +978,127 @@ M3 url_parse,     linux 3.12.14: 0 under-reads, 0 over-reads
 
 ---
 
+## Q22 re-ruled, and R4 applied to url_parse (before M4), `75f5a2a`
+
+**Q22, re-ruled by the owner on 2026-10-04.** The old premise, that the
+decimal reading lands in reserved space, was wrong.
+`000169.254.000169.254` reaches 169.254.169.254.
+
+**Measured on macOS before writing the tests.** The resolver differs from
+inet_aton and WHATWG in three ways:
+1. A leading-zero dotted quad is read as DECIMAL.
+2. So is the IPv4 tail of an IPv6 literal.
+3. A single number above 2**32-1 wraps modulo 2**32, in decimal, hex and
+   octal. For example, `0x1A9FEA9FE` → 169.254.169.254.
+
+**Two facts the ruling did not anticipate**, both applied by its general rule
+(STOP item):
+- The embedded class is not always public. `[::ffff:169.254.0169.254]`
+  resolves to the mapped link-local address, so it is READ.
+- Q22's own example, 251.254.251.254, is `is_private` to `ipaddress`.
+
+**Red first:** 14 named failures, including:
+
+```
+E  AssertionError: the macOS resolver sends 'http://000169.254.000169.254/latest' to 169.254.169.254 (link_local); the core reads ['dns:000169.254'] and url_parse reports None
+E  AssertionError: the macOS resolver sends 'http://0x1A9FEA9FE/latest' to 169.254.169.254 (link_local); the core reads ['dns:0x1a9fea9fe'] and url_parse reports None
+E  AssertionError: the macOS resolver sends 'http://[::ffff:169.254.0169.254]/latest' to 169.254.169.254 (link_local); the core reads [] and url_parse reports None
+E  AssertionError: WHATWG reaches metadata.google.internal for 'http:metadata.google.internal/computeMetadata/v1/'; url_parse gives None
+14 failed, 2 passed
+```
+
+**Green:**
+- macOS 3.12.2, and Linux 3.10.21, 3.11.16 and 3.12.14: 617 passed, 17
+  xfailed each.
+- `expected.jsonl` gains the `Q22-rerule-macos-decimal-quad` row. SEMANTIC.
+
+**Sabotage.** Dropping the core's macOS readings and url_parse's R4 host
+turns the same 14 red. The pre-existing gates (`test_url_classes` and the M0
+core differential) stay green: `105 passed`.
+
+**R4: I ruled the M3 xfail a contradiction, and fixed it.** It is the same
+consumer fact as R4 and the same superset obligation; the reasons are in the
+rulings doc. The hostname MIRROR shape (`metadata.google.internal\@corp.example`)
+is named open.
+
+---
+
+## M4 — tool-call evaluation, RECORD only. **Green. STOP AND REPORT.**
+
+**Build.**
+- `scan_tool_call` evaluates `evaluate_call` FIRST: before the gates, the
+  breaker and `_resolve_provenance` (V-7a).
+- It attaches `ScanResult.value_origin` once, around the whole body, so every
+  exit carries it (C-13). This replaces the plan's attach-at-each-exit, and a
+  new exit path cannot be added without it.
+- OFF evaluates nothing.
+- `autopatch.tool_verdict`'s fresh `TOOL_BLOCKED` result keeps the verdict.
+- Q6, as ruled: the first `no_flow` call per sensor logs ONE warning naming
+  `begin_flow()` and `extract_context()`.
+
+**Red first.** The first red run hit a driver bug of mine: an open circuit
+gates only in `block` mode. The path precondition caught it, which is what it
+is for. After fixing that, the red against the unchanged sensor was:
+
+```
+E  AssertionError: [record] the scan_error call never reached its path: allowed scan_error SCAN_FAILED_OPEN   (my marker was wrong; fixed)
+E  AssertionError: None                                             (no value_origin: no_flow expected)
+E  AssertionError: Q6: three no_flow calls on one sensor logged 0 begin_flow() warnings; the owner's ruling is exactly one
+3 failed
+```
+
+**Green** on the M4 suites, C-11, the 456-row oracle, `tests/outside`
+(including `test_m4_from_the_wheel`), url_classes, conformance and the
+differentials:
+
+```
+== macOS 3.12.2      593 passed, 13 xfailed
+== linux 3.10.21     593 passed, 13 xfailed
+== linux 3.11.16     593 passed, 13 xfailed
+== linux 3.12.14     593 passed, 13 xfailed
+```
+
+The seven test files that inspect logs around tool calls: 150 passed, 79
+skipped. The skips are the real-framework tests, which CI's dedicated job
+runs.
+
+**Sabotage, each a named red.**
+
+```
+=== A: attach skipped on the circuit-open exit
+E  AssertionError: C-13: every tool-call exit carries the verdict, and these do not: [record] circuit exit (_emit_circuit_open_verdict): value_origin wire=None, want 'no_flow'; [enforce] circuit exit (_emit_circuit_open_verdict): ...
+--- same sabotage, the C-11 gate: 20 passed   (discriminating: C-11's digests cannot see the attach)
+=== B: the once-guard dropped
+E  AssertionError: Q6: three no_flow calls on one sensor logged 3 begin_flow() warnings; the owner's ruling is exactly one
+=== C: the warning dropped
+E  AssertionError: Q6: three no_flow calls on one sensor logged 0 begin_flow() warnings; the owner's ruling is exactly one
+```
+
+**A sabotage-procedure finding.** The first run after restoring gave
+`1 failed`.
+- Sabotage C (`if first:` → `if False:`) is the same byte length as the
+  original: 220,520 bytes both ways.
+- The restore landed within the bytecode's mtime resolution.
+- So CPython kept the sabotaged `.pyc`.
+- With `__pycache__` cleared: `3 passed`.
+
+A same-length sabotage can therefore leak past its own restore. From now on,
+sabotage runs use `PYTHONDONTWRITEBYTECODE=1`.
+
+**From outside the process.** `tests/outside/test_m4_from_the_wheel.py` runs
+the same driver from the built wheel in a fresh venv. It checks:
+- every exit's marker, then its wire;
+- `no_flow`, then `ledger_absent` after `begin_flow()`;
+- one Q6 warning.
+
+**C-11 across commits.** Base `75f5a2a` OFF against M4's OFF, RECORD and
+ENFORCE, from wheels: **all 18 identical**, P-input block `80f31ff0b5d5`.
+
+**Still strict xfails, as planned:** 4a-I (M6), 4a-R (M7) and 4b (M8).
+`no_destination` and `truncated` are unreachable until M5 binds a ledger.
+
+---
+
 ## Status (updated after M3), and what is waiting on the owner
 
 | milestone | state | commit |

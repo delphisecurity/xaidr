@@ -6,7 +6,7 @@ import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 #: Wire format for every timestamp this SDK emits: RFC 3339, UTC, microseconds.
 #:
@@ -160,6 +160,13 @@ class ScanResult:
     # opt-in and only ever sees inputs the rules layer scored exactly 0.0.
     nano_score: Optional[float] = None
     nano_raw: Optional[float] = None
+
+    # ── value origin (A2 M4) — None unless the sensor's value_origin mode is ──
+    # RECORD or ENFORCE. A ``value_origin.CallVerdict`` on EVERY tool-call exit
+    # (C-13), attached after ``_post_scan_gate``, so an S6 transform_verdict
+    # never sees it (C-28). Not part of the C-11 digest: RECORD reports, it
+    # never moves an action. None on every other direction.
+    value_origin: Optional[Any] = None
 
     @property
     def is_blocked(self) -> bool:
