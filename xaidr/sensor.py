@@ -3479,11 +3479,14 @@ class DelphiSensor:
                         refusal = tool_verdict(orig_func, tname, args, kwargs)
                         if refusal is not None:
                             return refusal
-                        if orig_func is not None:
-                            out = orig_func(*args, **kwargs)
+                        if orig_func is None:
+                            # the no-implementation shape: scan, enforce, return
+                            # None (M7 review: the result position read an
+                            # unassigned result here and crashed the host)
+                            return None
+                        out = orig_func(*args, **kwargs)
                         record_unscanned(orig_func, tname, args, kwargs, out)
                         return out
-                        return None
                 return wrapper
 
             def mark(fn, orig):

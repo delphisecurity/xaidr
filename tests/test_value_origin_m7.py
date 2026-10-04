@@ -145,3 +145,74 @@ def test_the_patched_langchain_hook_records_the_read_and_protect_tools_inside_de
         if callable(undo):
             undo()
         fakes.uninstall(("langchain_core", "langchain"))
+
+
+def test_a_tool_with_no_implementation_still_returns_none_through_protect_tools():
+    """M7 silent-failure review (CRITICAL): make_wrapper(None, ...) is a
+    documented shape, "a wrapper that scans, enforces, and returns None". M7's
+    result position read an unassigned result there and raised
+    UnboundLocalError into the host on every unrefused call."""
+    import warnings
+    from xaidr import provenance_chain as pc
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = xaidr.Sensor(agent_id="m7-none", value_origin="record", reporter=m7._Null())
+
+    class ToolWithNoImpl:                  # a tool object with no callable implementation
+        name = "noop_tool"
+        description = "does nothing"
+    wrapped = s.protect_tools([ToolWithNoImpl()])[0]
+    call = getattr(wrapped, "func", None) or getattr(wrapped, "_run", None) or wrapped
+    pc.clear_flow()
+    assert call() is None
+
+
+def test_an_empty_result_through_the_patched_hook_is_still_recorded_untrusted():
+    """M7 silent-failure review (HIGH): the LangChain/MCP hooks return early on an
+    empty or non-text result WITHOUT recording, while the enclosing marker tells
+    an inner protect_tools not to record. The read must still land, untrusted
+    (Q10), instead of vanishing. Here a non-text result that names a host."""
+    import sys
+    import warnings
+    from concurrent.futures import ThreadPoolExecutor
+    import fake_frameworks as fakes
+    from xaidr import provenance_chain as pc
+    from xaidr.autopatch.manifest import XaidrProtectionWarning
+    fakes.install_langchain_core()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", XaidrProtectionWarning)
+            warnings.simplefilter("ignore")
+            p = xaidr.protect(targets=["langchain_core"], quiet=True, reporter=m7._Null(),
+                              agent_id="m7-empty", value_origin="record")
+        sensor = getattr(p, "sensor", None) or getattr(p, "_sensor", None)
+
+        class Blob:                        # no text the result scan reads; V-15 reads model_dump()
+            def model_dump(self):
+                return {"endpoint": m7.EVIL}
+
+        from xaidr.autopatch.frameworks import _langchain_result_text
+        if _langchain_result_text(Blob()):
+            pytest.fail("precondition: the hook found text in Blob, so the early-return "
+                        "branch this test exists for would not run", pytrace=False)
+
+        def fetch_blob(url: str):
+            return Blob()
+        inner = sensor.protect_tools([fetch_blob])[0]
+        tool = sys.modules["langchain_core.tools"].BaseTool("fetch_blob", inner)
+
+        def run():
+            pc.begin_flow(principal="alice")
+            try:
+                sensor.scan(m7.NEUTRAL, direction="input")
+                tool.run({"url": "https://news.example/blob"})
+                return sensor.scan_tool_call("http_post", {"url": m7.EVIL}).value_origin.wire.value
+            finally:
+                pc.clear_flow()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            w = pool.submit(run).result()
+        assert w == "untrusted_source", (
+            f"{w!r}: an unscannable tool result vanished from the ledger (the outer seam "
+            "returned early and the inner protect_tools deferred to it)")
+    finally:
+        fakes.uninstall(("langchain_core", "langchain"))

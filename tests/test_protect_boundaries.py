@@ -429,7 +429,10 @@ def test_with_enforcement_neutered_the_same_attack_goes_through(b, cap, monkeypa
     from xaidr.types import ScanResult
 
     sensor = xaidr.Sensor(agent_id="neutered", enforcement_mode="block", reporter=cap)
-    for name in ("scan", "scan_output", "scan_a2a", "scan_tool_call"):
+    # `_scan_tool_result` since A2 M7: the LangChain and MCP result seams take
+    # their verdict from it (it records the read with the tool's identity), so it
+    # is a verdict entry point like the public four and must be disarmed with them.
+    for name in ("scan", "scan_output", "scan_a2a", "scan_tool_call", "_scan_tool_result"):
         monkeypatch.setattr(
             sensor, name, lambda *a, **k: ScanResult(action="allowed", score=0.0)
         )

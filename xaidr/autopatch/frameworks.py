@@ -292,6 +292,16 @@ def _langchain_refusal(text: str, name: str, kwargs: dict) -> Any:
         return text
 
 
+def _record_unscanned(sensor, tool, arguments, raw):
+    """A scanned result seam that found no text to scan still records the read,
+    untrusted (Q10). Its enclosing marker told any inner protect_tools to leave
+    the read to it, so returning early here made the read vanish (M7 review).
+    The sensor's recorder never raises."""
+    fn = getattr(sensor, "_vo_record_result", None)
+    if fn is not None:
+        fn(tool, arguments, raw, None)
+
+
 def _scan_result(sensor, text, tool, arguments, raw):
     """A2 M7: a scanned result seam scans through the sensor's internal result
     method, which records the RAW result with the tool's identity and the
@@ -371,14 +381,15 @@ def _patch_langchain_core(ctx: PatchContext) -> None:
             # unscanned. Pinned by
             # tests/test_langchain_tool_result_scan.py::
             # test_the_middleware_guard_suppresses_the_argument_scan_and_not_the_result_scan
-            text = _langchain_result_text(result)
-            if not text or not text.strip():
-                return result
             tool = args[0] if args else None
             name = getattr(tool, "name", None) or "unknown_tool"
             tool_input = kwargs.get("tool_input")
             if tool_input is None and len(args) > 1:
                 tool_input = args[1]
+            text = _langchain_result_text(result)
+            if not text or not text.strip():
+                _record_unscanned(ctx.sensor, name, tool_input, result)
+                return result
             verdict = _scan_result(ctx.sensor, text, name, tool_input, result)
             if not verdict.must_halt:
                 return result
@@ -1066,13 +1077,14 @@ def _patch_mcp(ctx: PatchContext) -> None:
             # scanner/local.py keeps the two labels one pipeline); what changes
             # is that telemetry, and any extension's `ScanRequest`, can now tell
             # them apart.
-            text = _mcp_result_text(result)
-            if not text:
-                return result
             name = kwargs.get("name") or (args[1] if len(args) > 1 else "unknown_tool")
             arguments = kwargs.get("arguments")
             if arguments is None and len(args) > 2:
                 arguments = args[2]
+            text = _mcp_result_text(result)
+            if not text:
+                _record_unscanned(ctx.sensor, name, arguments, result)
+                return result
             verdict = _scan_result(ctx.sensor, text, name, arguments, result)
             if not verdict.must_halt:
                 return result

@@ -1753,6 +1753,57 @@ each path has the guard and a test for it.
 
 ---
 
+## M7: CI failure and silent-failure review, and what changed after them
+
+**CI on `38ee845`: FAILED**, all six `pytest` jobs, 3 tests each:
+`test_protect_boundaries::test_with_enforcement_neutered_the_same_attack_goes_through`
+for langchain_core (sync and async) and mcp,
+`... blocked with enforcement disarmed — the block is not coming from the scan verdict`.
+
+- M7 moved the result seams' verdict source to `_scan_tool_result`.
+- The test disarms the verdict entry points by name, and it did not know the
+  new one.
+- It did its job: it caught a verdict coming from somewhere it does not
+  control.
+- **Fixed** by disarming `_scan_tool_result` with the public four. The
+  mutation keeps its meaning (the wrapper runs, only the verdict is disarmed):
+  `80 passed`.
+- My affected-only runs did not include that suite. They do now: every suite
+  that touches `protect_tools`, `_patch_langchain_core` or `call_tool`.
+
+**silent-failure-hunter.**
+1. **CRITICAL, my defect.** `protect_tools`' sync wrapper CRASHED THE HOST for
+   the documented no-implementation shape (`make_wrapper(None, ...)`): the
+   result position read an unassigned result (`UnboundLocalError`) on every
+   unrefused call. This is the owner's standing concern, the safety layer
+   crashing what it protects, a third time. **Fixed:** that shape returns
+   `None` before the result position. Red first:
+   `E  UnboundLocalError: cannot access local variable 'out' where it is not associated with a value`.
+2. **HIGH.** An empty or non-text tool result made the LangChain/MCP hook
+   return early WITHOUT recording, while its enclosing marker told an inner
+   `protect_tools` not to record either. The read vanished. **Fixed:** the
+   early-return branches record the read, untrusted (Q10). Red first, with a
+   precondition that the hook really found no text:
+   `E  AssertionError: 'unresolved': an unscannable tool result vanished from the ledger`.
+3. **Medium, documented as intended.** `input_truncated` stays set on an
+   EXPLICIT ledger for the rest of the flow, as `ledger_saturated` does. Once
+   the flow's principal input was cut, no later miss in that flow can be called
+   novel. An implicit ledger is replaced per input, so this does not cross
+   requests.
+
+**After the fixes**, every suite touching the seams plus M4–M7, C-11 and
+conformance:
+
+```
+== linux 3.10.21   811 passed, 13 skipped, 11 xfailed
+== linux 3.11.16   811 passed, 13 skipped, 11 xfailed
+== linux 3.12.14   811 passed, 13 skipped, 11 xfailed, 1 warning
+```
+
+The macOS figure is in the commit message.
+
+---
+
 ## Status (updated after M3), and what is waiting on the owner
 
 | milestone | state | commit |
