@@ -590,9 +590,6 @@ def test_ip_spellings_resolve_where_the_resolver_does_url_parse():
                      f"class than url_parse reports: {bad[:8]}")
 
 
-@pytest.mark.xfail(sys.platform == "darwin", strict=True, raises=AssertionError, reason=(
-    "the empty hex part (0x.1.1.1 -> 0.1.1.1), which the macOS resolver reads and "
-    "glibc refuses; the core's coerce_ip raises on int('0x', 16). Fixed at M3"))
 def test_ip_spellings_resolve_where_the_resolver_does_core():
     """The core names the address the resolver reaches, for every literal
     form, except Q22's exemption."""

@@ -263,15 +263,21 @@ def test_v19_residual_a_name_with_a_port_and_no_scheme():
         f"'evil.test:8080/x': urllib.parse finds {want}; the core finds no destination")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "found, not fixed (2026-10-03, the WPT adversarial run for Q1): an EMPTY hex "
-    "part. WHATWG (ada) reads https://0x.0x.0/ as 0.0.0.0 and so does the macOS "
-    "libc resolver httpx and urllib3 hand the name to; glibc does not. coerce_ip "
-    "raises on int('0x', 16) and reads dns:0x.0. IP canonicalisation, the "
-    "integer-spelling family; fixed where coerce_ip is shared (the url_parse "
-    "milestone), not by Q1's split readings."))
 def test_residual_empty_hex_part_is_the_zero_address():
+    """Found by the WPT adversarial run for Q1, fixed at A2 M3: an EMPTY hex part
+    is 0, as WHATWG's IPv4 number parser reads it. ada reads https://0x.0x.0/ as
+    0.0.0.0, and so does the macOS libc resolver httpx and urllib3 hand the name
+    to; glibc does not, which makes this a superset reading on Linux, not an
+    over-read (WHATWG reaches it everywhere). coerce_ip raised on int('0x', 16)
+    and read dns:0x.0."""
     assert authority_of("https://0x.0x.0/") == A("ip:0.0.0.0")
+    assert authority_of("http://0x.1.1.1/") == A("ip:0.1.1.1")
+    assert authority_of("http://0x/") == A("ip:0.0.0.0")
+    # one empty part, not an empty host and not a name that merely starts 0x
+    assert authority_of("https://0x.example/") == A("dns:0x.example")
+    # int() takes `_` separators; inet_aton and WHATWG do not
+    assert authority_of("http://0x_1.1.1.1/").scheme == "dns"
+    assert authority_of("http://0_7.1.1.1/").scheme == "dns"
 
 
 @pytest.mark.xfail(strict=True, reason=(

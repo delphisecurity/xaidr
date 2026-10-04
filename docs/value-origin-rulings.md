@@ -333,6 +333,25 @@ Each is listed so it can be overruled, not so it can pass unnoticed.
    netloc on and reaches neither host, and the count was from an earlier grid
    and an earlier split.]*
 
+## Decisions made in the A2 build (M3) that still need a ruling
+
+1. **An empty hex part is 0** (`coerce_ip`). `https://0x.0x.0/` is `ip:0.0.0.0`,
+   `http://0x.1.1.1/` is `ip:0.1.1.1`, `http://0x/` is `ip:0.0.0.0`: WHATWG's
+   IPv4 number parser reads an empty hex part as 0, and so does the macOS
+   resolver httpx and urllib3 hand the name to. glibc refuses all three. That
+   makes this a superset reading on Linux, not an over-read, because WHATWG
+   reaches it everywhere. Found by the M0 WPT run, pinned by the
+   `M3-empty-hex-part` supplementary row. SEMANTIC for paid (P4).
+2. **Integer parts are digit-checked, not left to `int()`.** `int()` accepts `_`
+   separators, so the core read `0x_1.1.1.1` as `ip:1.1.1.1` and `0_7.1.1.1` as
+   `ip:7.1.1.1`. inet_aton and WHATWG read neither, so both were over-reads. Both
+   are now names. Found while writing decision 1's pin.
+3. **Not decided here: the macOS resolver wraps a decimal integer modulo
+   2**32** (`4294967296` -> `0.0.0.0`; glibc and WHATWG refuse it). Q22 exempted
+   exactly one darwin class. This is a second one. It is pinned as a strict xfail
+   on darwin (`test_bsd_libc_integer_wrap_is_an_unruled_platform_class`), and it
+   is neither exempted nor read.
+
 ## What A1 does not do
 
 It adds no seams, sends nothing anywhere, and changes neither paid nor the Brain.

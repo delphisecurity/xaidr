@@ -72,6 +72,10 @@ def bare_host_tld_ok(ascii_host: str) -> bool:
 
 
 # ── IP ───────────────────────────────────────────────────────────────────────
+_HEX_DIGITS = frozenset("0123456789abcdef")
+_OCT_DIGITS = frozenset("01234567")
+
+
 def coerce_ip(host: str):
     """The IP address ``host`` denotes across every literal form, or None.
 
@@ -93,9 +97,19 @@ def coerce_ip(host: str):
     try:
         vals = []
         for p in parts:
-            if p.lower().startswith("0x"):
-                vals.append(int(p, 16))
+            lp = p.lower()
+            if lp.startswith("0x"):
+                # A2 M3: an EMPTY hex part is 0, as WHATWG's IPv4 number parser
+                # reads it (`0x.0x.0` is 0.0.0.0 to ada and to the macOS
+                # resolver); int() raised on it. Digits are checked, not left to
+                # int(), which also takes `_` separators no resolver reads.
+                digits = lp[2:]
+                if not set(digits) <= _HEX_DIGITS:
+                    return None
+                vals.append(int(digits, 16) if digits else 0)
             elif p.startswith("0") and len(p) > 1:
+                if not set(p) <= _OCT_DIGITS:
+                    return None
                 vals.append(int(p, 8))
             elif p.isdigit() and p.isascii():
                 vals.append(int(p, 10))
