@@ -491,3 +491,14 @@ It adds no seams, sends nothing anywhere, and changes neither paid nor the Brain
 the core is `_authority.coerce_ip` / `ip_key`, and moving `url_parse` onto it is
 A2. The 456-row oracle is untouched by A1 because nothing calls the core yet.
 Showing that RECORD mode leaves it byte-identical is A2's obligation (C-11).
+
+
+## 2026-10-04 — after M8: bounds, seam identity, names (owner)
+
+- **RULING 1+2.** Every bound emits a visible state, and under ENFORCE it blocks.
+  - New wire values: `argument_bound` (this call's argument walk hit a bound) and `result_truncated` (a recorded result was cut AND the lookup missed). Twelve values in all.
+  - Supersedes S16's expected `unresolved` on a walk bound, V-15's silent 64 KiB drop, and, as an extension the owner is asked to confirm, the M6 rule that `input_truncated` never blocks. `ledger_saturated` blocks too.
+  - Cap numbers unchanged.
+- **RULING 3a.** `scan(..., direction="tool_result", tool=, arguments=)` amends V-26.
+- **RULING 3b.** A flagged benign input is a documented limitation (docs/value-origin-enforce.md), not patched.
+- **RULING 4.** Category `untrusted_destination`; rule `ORIGIN_UNTRUSTED_DESTINATION`. `ORIGIN_UNTRUSTED_DESTINATION_KEYED` is emitted nowhere and is defined in no document found. `value_origin_unauthorized` is not carried.

@@ -2324,3 +2324,177 @@ The milestone review confirmed:
   `main`, and no PR was opened.
 - The `ci.yml` marker change was exercised locally in `python:3.12-slim`, not on
   GitHub runners.
+
+
+## RULING 1+2, 3a, 3b, 4 (after M8), 2026-10-04
+
+### Bounds: failing tests first. The red, before any core change (14 assertions)
+```
+E   AssertionError: depth_over_6: a call whose arguments value origin did not finish reading gave 'unresolved' -- padding evades ENFORCE
+tests/test_value_origin_bounds.py:82: AssertionError: depth_over_6: a call whose arguments value origin did not finish reading gave 'unresolved' -- padding evades ENFORCE
+E   AssertionError: leaf_over_4000: a call whose arguments value origin did not finish reading gave 'unresolved' -- padding evades ENFORCE
+tests/test_value_origin_bounds.py:82: AssertionError: leaf_over_4000: a call whose arguments value origin did not finish reading gave 'unresolved' -- padding evades ENFORCE
+E   AssertionError: over_64_leaves: a call whose arguments value origin did not finish reading gave 'unresolved' -- padding evades ENFORCE
+tests/test_value_origin_bounds.py:82: AssertionError: over_64_leaves: a call whose arguments value origin did not finish reading gave 'unresolved' -- padding evades ENFORCE
+E   AssertionError: depth_over_6: the destination sat in the part of a tool result value origin did not record, and the call read 'unresolved' -- exactly like a destination never seen, so ENFORCE allowed it
+tests/test_value_origin_bounds.py:93: AssertionError: depth_over_6: the destination sat in the part of a tool result value origin did not record, and the call read 'unresolved' -- exactly like a destination never seen, so ENFORCE allowed it
+E   AssertionError: leaf_over_64k: the destination sat in the part of a tool result value origin did not record, and the call read 'unresolved' -- exactly like a destination never seen, so ENFORCE allowed it
+tests/test_value_origin_bounds.py:93: AssertionError: leaf_over_64k: the destination sat in the part of a tool result value origin did not record, and the call read 'unresolved' -- exactly like a destination never seen, so ENFORCE allowed it
+E   AssertionError: over_64_leaves: the destination sat in the part of a tool result value origin did not record, and the call read 'unresolved' -- exactly like a destination never seen, so ENFORCE allowed it
+tests/test_value_origin_bounds.py:93: AssertionError: over_64_leaves: the destination sat in the part of a tool result value origin did not record, and the call read 'unresolved' -- exactly like a destination never seen, so ENFORCE allowed it
+E   AssertionError: input_truncated is a bound: a destination past the 65,536-char input cap is allowed under ENFORCE
+tests/test_value_origin_bounds.py:128: AssertionError: input_truncated is a bound: a destination past the 65,536-char input cap is allowed under ENFORCE
+E   AssertionError: a result with enough distinct URLs saturates the ledger, its poison is dropped, and the call to it is allowed under ENFORCE
+tests/test_value_origin_bounds.py:150: AssertionError: a result with enough distinct URLs saturates the ledger, its poison is dropped, and the call to it is allowed under ENFORCE
+E   AssertionError: arg:depth_over_6: ENFORCE gave ('allowed', 'unresolved')
+tests/test_value_origin_bounds.py:191: AssertionError: arg:depth_over_6: ENFORCE gave ('allowed', 'unresolved')
+E   AssertionError: arg:leaf_over_4000: ENFORCE gave ('flagged', 'unresolved')
+tests/test_value_origin_bounds.py:191: AssertionError: arg:leaf_over_4000: ENFORCE gave ('flagged', 'unresolved')
+E   AssertionError: arg:over_64_leaves: ENFORCE gave ('flagged', 'unresolved')
+tests/test_value_origin_bounds.py:191: AssertionError: arg:over_64_leaves: ENFORCE gave ('flagged', 'unresolved')
+E   AssertionError: result:depth_over_6: ENFORCE gave ('allowed', 'unresolved')
+tests/test_value_origin_bounds.py:191: AssertionError: result:depth_over_6: ENFORCE gave ('allowed', 'unresolved')
+E   AssertionError: result:leaf_over_64k: ENFORCE gave ('allowed', 'unresolved')
+tests/test_value_origin_bounds.py:191: AssertionError: result:leaf_over_64k: ENFORCE gave ('allowed', 'unresolved')
+E   AssertionError: result:over_64_leaves: ENFORCE gave ('allowed', 'unresolved')
+tests/test_value_origin_bounds.py:191: AssertionError: result:over_64_leaves: ENFORCE gave ('allowed', 'unresolved')
+```
+
+### Sabotage: each part of the fix removed in turn, then restored
+```
+== S1 argument_bound not named: 6 failed, 13 passed in 0.96s
+   red: test_an_argument_bound_is_its_own_state_and_blocks_under_enforce[depth_over_6]
+   red: test_an_argument_bound_is_its_own_state_and_blocks_under_enforce[leaf_over_4000]
+   red: test_an_argument_bound_is_its_own_state_and_blocks_under_enforce[over_64_leaves]
+   red: test_the_installed_seam_blocks_every_bound_under_enforce_and_record_does_not[arg:depth_over_6]
+   red: test_the_installed_seam_blocks_every_bound_under_enforce_and_record_does_not[arg:leaf_over_4000]
+   red: test_the_installed_seam_blocks_every_bound_under_enforce_and_record_does_not[arg:over_64_leaves]
+   msg: depth_over_6: a call whose arguments value origin did not finish reading gave 'unresolved' -- padding evades ENFORCE
+   msg: leaf_over_4000: a call whose arguments value origin did not finish reading gave 'unresolved' -- padding evades ENFORCE
+   msg: over_64_leaves: a call whose arguments value origin did not finish reading gave 'unresolved' -- padding evades ENFORCE
+== S2 cut result not marked on the ledger: 6 failed, 13 passed in 0.95s
+   red: test_a_cut_tool_result_is_its_own_state_and_blocks_under_enforce[depth_over_6]
+   red: test_a_cut_tool_result_is_its_own_state_and_blocks_under_enforce[leaf_over_64k]
+   red: test_a_cut_tool_result_is_its_own_state_and_blocks_under_enforce[over_64_leaves]
+   red: test_the_installed_seam_blocks_every_bound_under_enforce_and_record_does_not[result:depth_over_6]
+   red: test_the_installed_seam_blocks_every_bound_under_enforce_and_record_does_not[result:leaf_over_64k]
+   red: test_the_installed_seam_blocks_every_bound_under_enforce_and_record_does_not[result:over_64_leaves]
+   msg: depth_over_6: the destination sat in the part of a tool result value origin did not record, and the call read 'unresolved' -- exactly like a destination never seen, so ENFORCE allowed it
+   msg: leaf_over_64k: the destination sat in the part of a tool result value origin did not record, and the call read 'unresolved' -- exactly like a destination never seen, so ENFORCE allowed it
+   msg: over_64_leaves: the destination sat in the part of a tool result value origin did not record, and the call read 'unresolved' -- exactly like a destination never seen, so ENFORCE allowed it
+== S3 a cut RESULT leaf is not a bound hit (64 KiB only): 2 failed, 17 passed in 0.97s
+   red: test_a_cut_tool_result_is_its_own_state_and_blocks_under_enforce[leaf_over_64k]
+   red: test_the_installed_seam_blocks_every_bound_under_enforce_and_record_does_not[result:leaf_over_64k]
+   msg: leaf_over_64k: the destination sat in the part of a tool result value origin did not record, and the call read 'unresolved' -- exactly like a destination never seen, so ENFORCE allowed it
+   msg: result:leaf_over_64k: ENFORCE gave ('allowed', 'unresolved')
+== S4 should_block ignores the bound states: 14 failed, 5 passed in 0.96s
+   red: test_a_cut_tool_result_is_its_own_state_and_blocks_under_enforce[depth_over_6]
+   red: test_a_cut_tool_result_is_its_own_state_and_blocks_under_enforce[leaf_over_64k]
+   red: test_a_cut_tool_result_is_its_own_state_and_blocks_under_enforce[over_64_leaves]
+   red: test_a_saturating_result_does_not_launder_its_poison
+   red: test_an_argument_bound_is_its_own_state_and_blocks_under_enforce[depth_over_6]
+   red: test_an_argument_bound_is_its_own_state_and_blocks_under_enforce[leaf_over_4000]
+   red: test_an_argument_bound_is_its_own_state_and_blocks_under_enforce[over_64_leaves]
+   red: test_input_truncated_blocks_under_enforce
+   red: test_the_installed_seam_blocks_every_bound_under_enforce_and_record_does_not[arg:depth_over_6]
+   red: test_the_installed_seam_blocks_every_bound_under_enforce_and_record_does_not[arg:leaf_over_4000]
+   red: test_the_installed_seam_blocks_every_bound_under_enforce_and_record_does_not[arg:over_64_leaves]
+   red: test_the_installed_seam_blocks_every_bound_under_enforce_and_record_does_not[result:depth_over_6]
+   red: test_the_installed_seam_blocks_every_bound_under_enforce_and_record_does_not[result:leaf_over_64k]
+   red: test_the_installed_seam_blocks_every_bound_under_enforce_and_record_does_not[result:over_64_leaves]
+   msg: depth_over_6: argument_bound does not block
+   msg: leaf_over_4000: argument_bound does not block
+   msg: over_64_leaves: argument_bound does not block
+== S5 input/ledger caps dropped from the block set: 2 failed, 17 passed in 0.99s
+   red: test_a_saturating_result_does_not_launder_its_poison
+   red: test_input_truncated_blocks_under_enforce
+   msg: input_truncated is a bound: a destination past the 65,536-char input cap is allowed under ENFORCE
+   msg: a result with enough distinct URLs saturates the ledger, its poison is dropped, and the call to it is allowed under ENFORCE
+== restored:  4 files changed, 86 insertions(+), 28 deletions(-)
+```
+
+### Seam identity (RULING 3a)
+The first red was a TypeError from my own test (`SourceDesignation` needs `label=`), **not** the missing identity, so it does not count. The real red, from removing the identity branch in `scan()`:
+```
+E   AssertionError: a designated directory read through the PUBLIC seam, with tool= and arguments=, gave ('blocked', 'untrusted_source'): the identity did not reach the recorder
+tests/test_value_origin_m8.py:220: AssertionError: a designated directory read through the PUBLIC seam, with tool= and arguments=, gave ('blocked', 'untrusted_source'): the identity did not reach the recorder
+1 failed in 0.02s
+```
+The warning pins, red before the wording change:
+```
+E   AssertionError: xaidr: Sensor(agent_id='c11', value_origin='enforce'): value origin ENFORCES: a tool call whose destination traces to an untrusted source is blocked (category untrusted_destination). With NO value_origin_sources designations, no tool result can be a trusted source, so EVERY tool 
+tests/test_value_origin_c11.py:102: AssertionError: xaidr: Sensor(agent_id='c11', value_origin='enforce'): value origin ENFORCES: a tool call whose destination traces to an untrusted source is blocked (category untrusted_destination). With NO value_origin_sources designations, no tool result can be 
+E   AssertionError: xaidr: Sensor(agent_id='c11', value_origin='enforce'): value origin ENFORCES: a tool call whose destination traces to an untrusted source is blocked (category untrusted_destination).
+tests/test_value_origin_c11.py:102: AssertionError: xaidr: Sensor(agent_id='c11', value_origin='enforce'): value origin ENFORCES: a tool call whose destination traces to an untrusted source is blocked (category untrusted_destination).
+E   TypeError: SourceDesignation.__init__() missing 1 required keyword-only argument: 'label'
+tests/test_value_origin_m8.py:193: TypeError: SourceDesignation.__init__() missing 1 required keyword-only argument: 'label'
+E   TypeError: DelphiSensor.scan() got an unexpected keyword argument 'tool'
+tests/test_value_origin_m8.py:233: TypeError: DelphiSensor.scan() got an unexpected keyword argument 'tool'
+4 failed, 3 passed in 0.03s
+```
+
+### From outside the process: built wheel, fresh venv, `python -I`
+```
+xaidr from: /private/tmp/claude-501/-Users-anirudhkotaru-worktrees-opena2a-value-origin-seams/6301db76-17be-46be-a61b-4209b9e21bb6/scratchpad/tmpee9vqg2d/venv/lib/python3.12/site-packages/xaidr/__init__.py
+PASS arg:leaf_over_4000                               enforce=['blocked', 'argument_bound'] record=['flagged', 'argument_bound'] off=['flagged', None]
+PASS arg:over_64_leaves                               enforce=['blocked', 'argument_bound'] record=['flagged', 'argument_bound'] off=['flagged', None]
+PASS arg:depth_over_6                                 enforce=['blocked', 'argument_bound'] record=['allowed', 'argument_bound'] off=['allowed', None]
+PASS result:leaf_over_64k[public scan, tool=]         enforce=['blocked', 'result_truncated'] record=['allowed', 'result_truncated'] off=['allowed', None]
+PASS result:over_64_leaves[private _scan_tool_result] enforce=['blocked', 'result_truncated'] record=['allowed', 'result_truncated'] off=['allowed', None]
+PASS result:depth_over_6[private _scan_tool_result]   enforce=['blocked', 'result_truncated'] record=['allowed', 'result_truncated'] off=['allowed', None]
+PASS seam identity: {'with tool=': ['allowed', 'principal_undeclared_span'], 'without': ['blocked', 'untrusted_source']}
+```
+Two of the result cases use the private `_scan_tool_result`, because the public seam takes a string and cannot carry a list or dict result. That is labelled in the case names.
+
+### Block rate, re-measured (`q13_block_rate.py`, HEAD 255a4b3 in a worktree vs this tree)
+BEFORE:
+```
+456-row shell corpus (buckets: ['attacks', 'benign', 'benign_prose', 'benign_templates'] ), ENFORCE, block mode:
+  P-flow-I                     calls=  494  would block=  26  rate= 5.26% | attacks: 20/302 | benign: 0/83 | benign_prose: 6/97 | benign_templates: 0/12
+  P-flow-R                     calls=  494  would block=  37  rate= 7.49% | attacks: 25/302 | benign: 5/83 | benign_prose: 7/97 | benign_templates: 0/12
+  P-seam                       calls=  494  would block=  37  rate= 7.49% | attacks: 25/302 | benign: 5/83 | benign_prose: 7/97 | benign_templates: 0/12
+adversarial / benign corpora, ENFORCE:
+  A-calls                      calls=  470  would block=  98  rate=20.85% (pass result parts: 3)
+  A-flow-I                     calls=  228  would block=   0  rate= 0.00% (pass result parts: 3)
+  A-flow-R                     calls=  228  would block=   0  rate= 0.00% (pass result parts: 3)
+  A-steps                      calls=   36  would block=   0  rate= 0.00% (pass result parts: 3)
+conformance flows (expected wire per config; designed cases, not traffic):
+  config A                     calls=  620  would block= 143  rate=23.06% 
+  config B                     calls=  620  would block=  80  rate=12.90% 
+  config C                     calls=  620  would block= 353  rate=56.94%
+```
+AFTER:
+```
+456-row shell corpus (buckets: ['attacks', 'benign', 'benign_prose', 'benign_templates'] ), ENFORCE, block mode:
+  P-flow-I                     calls=  494  would block=  26  rate= 5.26% | attacks: 20/302 | benign: 0/83 | benign_prose: 6/97 | benign_templates: 0/12
+  P-flow-R                     calls=  494  would block=  37  rate= 7.49% | attacks: 25/302 | benign: 5/83 | benign_prose: 7/97 | benign_templates: 0/12
+  P-seam                       calls=  494  would block=  37  rate= 7.49% | attacks: 25/302 | benign: 5/83 | benign_prose: 7/97 | benign_templates: 0/12
+adversarial / benign corpora, ENFORCE:
+  A-calls                      calls=  470  would block=  98  rate=20.85% (pass result parts: 3)
+  A-flow-I                     calls=  228  would block=   0  rate= 0.00% (pass result parts: 3)
+  A-flow-R                     calls=  228  would block=   0  rate= 0.00% (pass result parts: 3)
+  A-steps                      calls=   36  would block=   0  rate= 0.00% (pass result parts: 3)
+conformance flows (expected wire per config; designed cases, not traffic):
+  config A                     calls=  620  would block= 143  rate=23.06% 
+  config B                     calls=  620  would block=  80  rate=12.90% 
+  config C                     calls=  620  would block= 353  rate=56.94%
+```
+These are identical: no call in these corpora hits a bound. **benign_a2a and benign_longform are NOT re-measured.** The script does not cover them, and the method behind 4/64 and 0/24 was not re-run in this round's budget. **Owed.**
+
+### The three substituted §4 acceptance cases, labelled (not run as written)
+1. **LangChain driver: SUBSTITUTED.** The tests drive the private `_scan_tool_result`, which is the method the LangChain after-hook calls, not a LangChain agent driver.
+2. **`[BLOCKED]` ToolMessage: NOT CHECKED.** No test asserts what the LangChain ToolMessage contains on a value-origin block.
+3. **`MatchKind.EXACT`: SUBSTITUTED by `MatchKind.ANY`** in every designated-directory case, including this round's seam-identity test.
+
+### Pins changed because they encoded the silent behaviour (each marked at its site)
+- S16, S16-overlength and S16-depth: `unresolved` → `argument_bound` (supplementary.jsonl; expected.jsonl regenerated at --rev 01450c7).
+- test_procedural V-15: a destination past 64 KiB, `UNRESOLVED` → `RESULT_TRUNCATED`.
+- test_value_origin_m5 `truncated`.
+- test_value_origin_m7 `input_truncated never blocks` → `blocks under enforce`.
+- M8's 64 KiB strict xfail was wrong twice. It asserted `("blocked", "untrusted_source")` on a sensor in the DEFAULT monitor mode, where a block is returned as `flagged`. It now asserts `("flagged", "result_truncated")`.
+
+### Not done in this round (30-call budget)
+- Fresh-context silent-failure-hunter and milestone-reviewer reviews: **not run.**
+- Docker matrix: **not run.** This round changes no differential (url_parse and `_authority` are untouched).
+- benign_a2a / benign_longform re-measure: **not run.**
+- M9: not started.

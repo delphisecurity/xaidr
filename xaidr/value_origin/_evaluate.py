@@ -31,11 +31,20 @@ _VERDICT = {
     WireValue.LEDGER_ABSENT: Verdict.NOT_EVALUATED,
     WireValue.LEDGER_SATURATED: Verdict.NOT_EVALUATED,
     WireValue.INPUT_TRUNCATED: Verdict.NOT_EVALUATED,
+    WireValue.ARGUMENT_BOUND: Verdict.UNRESOLVED,          # S16's verdict, now a named wire
+    WireValue.RESULT_TRUNCATED: Verdict.NOT_EVALUATED,
 }
+
+# Owner, RULING 1+2 after M8: "every bound emits a visible state, and under
+# ENFORCE a truncated or bounded value BLOCKS". These four are every bound value
+# origin has; a plain UNRESOLVED (seen nowhere, nothing cut) is not among them.
+_BOUND_WIRES = frozenset({WireValue.ARGUMENT_BOUND, WireValue.RESULT_TRUNCATED,
+                          WireValue.INPUT_TRUNCATED, WireValue.LEDGER_SATURATED})
 
 
 def verdict_of(wire: WireValue) -> Verdict:
-    """Total over the ten wire values (V-3; input_truncated added after A2 M6). ``CallVerdict.verdict`` is always
+    """Total over the twelve wire values (V-3; input_truncated added after A2 M6,
+    argument_bound and result_truncated by RULING 1+2 after M8). ``CallVerdict.verdict`` is always
     ``verdict_of(wire)``; paid's L2 driver and the Brain derive the verdict
     from the wire value only through this function. Never raises: a string
     outside the nine is NOT_EVALUATED, matching ``row_text``'s not_recorded row
@@ -47,10 +56,14 @@ def verdict_of(wire: WireValue) -> Verdict:
 
 
 def should_block(verdict: CallVerdict, *, mode: Mode) -> bool:
-    """True iff ``mode is Mode.ENFORCE`` and the verdict is UNAUTHORIZED.
+    """True iff ``mode is Mode.ENFORCE`` and either the verdict is UNAUTHORIZED
+    or the wire is a bound state (argument_bound, result_truncated,
+    input_truncated, ledger_saturated: RULING 1+2 after M8 -- a bound that
+    allowed would be an evasion that needs padding, not skill). A plain
     UNRESOLVED never blocks. The only effect value origin has on an action."""
     try:
-        return mode is Mode.ENFORCE and verdict.verdict is Verdict.UNAUTHORIZED
+        return mode is Mode.ENFORCE and (verdict.verdict is Verdict.UNAUTHORIZED
+                                         or verdict.wire in _BOUND_WIRES)
     except Exception:
         return False
 
@@ -71,6 +84,16 @@ _ROWS = {
                         "Intent: not evaluated — the principal's input was longer than "
                         "value origin records; a destination past that point cannot be "
                         "traced."),
+    "result_truncated": (RowState.NOT_RECORDED,
+                         "Intent: not evaluated — a tool result in this flow was larger "
+                         "than value origin records (a value over 65,536 characters, more "
+                         "than 64 values, or nesting deeper than 6); a destination in the "
+                         "part not recorded cannot be traced."),
+    "argument_bound": (RowState.RAN_EVIDENCE,
+                       "Intent: destination not fully examined — this call's arguments "
+                       "exceed what value origin reads (a value over 4,000 characters, "
+                       "more than 64 values, or nesting deeper than 6); an unread value "
+                       "may be the destination."),
     "no_destination": (RowState.NOT_APPLICABLE,
                        "Intent: not applicable — this call carries no "
                        "destination-shaped value."),
@@ -146,9 +169,12 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
       4. each finding's origin is the ledger's entry; a miss is UNRESOLVED
          (LEDGER_SATURATED if the ledger has dropped an emission); a finding
          with no destination (walk bound / parse failure) is UNRESOLVED
-      5. wire = the weakest per-finding wire by WIRE_STRENGTH, except that a
-         saturated miss makes it LEDGER_SATURATED unless some destination is
-         UNTRUSTED_SOURCE (a positive finding outranks a blind spot)
+      5. wire = the weakest per-finding wire by WIRE_STRENGTH; unless it is
+         UNTRUSTED_SOURCE (a positive finding outranks a blind spot), a bound
+         names itself, first match wins: a walk bound on this call's arguments
+         -> ARGUMENT_BOUND; a miss on a ledger holding a cut tool result ->
+         RESULT_TRUNCATED; a cut principal input -> INPUT_TRUNCATED; a saturated
+         ledger -> LEDGER_SATURATED (RULING 1+2 after M8)
     """
     try:
         lg = _ledger._current()
@@ -159,11 +185,12 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
         if not found:
             return _verdict(WireValue.NO_DESTINATION, (), truncated)
         auths = [f.destination for f in found if f.destination is not None]
-        entries, saturated, input_truncated = _ledger.lookup(lg, auths)
+        entries, saturated, input_truncated, result_truncated = _ledger.lookup(lg, auths)
         it = iter(entries)
         out: List[DestinationFinding] = []
         saturated_miss = False
         truncated_miss = False
+        result_miss = False
         for f in found:
             if f.destination is None:
                 out.append(DestinationFinding(path=f.path, destination=None, reason=f.reason,
@@ -174,6 +201,7 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
             if e is None:
                 saturated_miss = saturated_miss or saturated
                 truncated_miss = truncated_miss or input_truncated
+                result_miss = result_miss or result_truncated
                 out.append(DestinationFinding(path=f.path, destination=f.destination,
                                               reason=None, origin=Origin.UNRESOLVED,
                                               span_declared=None, source_label=None))
@@ -187,10 +215,15 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
         findings = tuple(out)
         wires = [_finding_wire(f) for f in findings]
         wire = min(wires, key=WIRE_STRENGTH.__getitem__)
-        if truncated_miss and WireValue.UNTRUSTED_SOURCE not in wires:
-            wire = WireValue.INPUT_TRUNCATED      # owner, after M6: never a silent unresolved
-        elif saturated_miss and WireValue.UNTRUSTED_SOURCE not in wires:
-            wire = WireValue.LEDGER_SATURATED
+        if wire is not WireValue.UNTRUSTED_SOURCE:
+            if truncated:
+                wire = WireValue.ARGUMENT_BOUND       # RULING 1+2: never a silent unresolved
+            elif result_miss:
+                wire = WireValue.RESULT_TRUNCATED     # RULING 1+2
+            elif truncated_miss:
+                wire = WireValue.INPUT_TRUNCATED      # owner, after M6
+            elif saturated_miss:
+                wire = WireValue.LEDGER_SATURATED
         return _verdict(wire, findings, truncated)
     except Exception:
         _log.exception("value origin: evaluate_call faulted")

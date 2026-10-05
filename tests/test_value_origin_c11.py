@@ -97,6 +97,9 @@ def test_construction_warns_only_for_enforce_and_says_what_is_true(caplog, kwarg
     if want:
         # A2 M8 wired ENFORCE: the "NOT YET WIRED" clause is gone, the warning says it blocks
         assert "ENFORCES" in hits[0] and "blocked" in hits[0] and "NOT YET WIRED" not in hits[0], hits[0]
+        # A2 M8 review: under the DEFAULT monitor mode the call is returned "flagged",
+        # so a warning that says only "blocked" is false for most readers.
+        assert "'flagged'" in hits[0] and "'monitor'" in hits[0], hits[0]
         assert ("designation" in hits[0]) is not bool(kwargs.get("value_origin_sources"))
 
 

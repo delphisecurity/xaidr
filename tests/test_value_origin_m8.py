@@ -57,12 +57,6 @@ def test_m8_enforce(seen):
     check(seen)
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "FOR THE OWNER (found while explaining the benign_longform anomaly): the core never "
-    "examines an argument string longer than 4,000 chars (S16: a walk_bound finding, "
-    "wire unresolved), and unresolved never blocks. An untrusted URL padded past 4,000 "
-    "chars therefore evades ENFORCE. Needs a ruling: block on a bound hit under ENFORCE, "
-    "or a visible state like input_truncated"))
 def test_a_padded_untrusted_url_still_blocks_under_enforce():
     import warnings
     from concurrent.futures import ThreadPoolExecutor
@@ -136,10 +130,6 @@ def test_telemetry_records_the_true_value_origin_block(enforcement, softener, wa
         f"(returned {returned!r}): the block left no trace")
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "FOR THE OWNER, the same family as the padded URL (M8 silent-failure review): "
-    "more than 64 argument leaves (or depth > 6) is a walk_bound, wire unresolved, "
-    "never blocks; an untrusted destination among 71 arguments evades ENFORCE"))
 def test_an_untrusted_destination_among_many_arguments_still_blocks():
     import warnings
     from concurrent.futures import ThreadPoolExecutor
@@ -164,13 +154,11 @@ def test_an_untrusted_destination_among_many_arguments_still_blocks():
         f"an untrusted destination among 71 arguments read {v.wire.value!r} (truncated={v.truncated})")
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "THE OWNER'S STOP CONDITION (found by the M8 milestone review): recording SILENTLY "
-    "drops every destination more than 65,536 chars into one tool result (V-15's "
-    "result-leaf cap). A call to it reads exactly like a destination never seen "
-    "(unresolved), and ENFORCE allows it. Principal input has a visible "
-    "input_truncated state; results have nothing. Held for the owner's ruling on the cap"))
-def test_a_destination_past_64k_in_one_tool_result_is_still_recorded():
+def test_a_destination_past_64k_in_one_tool_result_reads_result_truncated_and_blocks():
+    """Was a strict xfail asserting ("blocked", "untrusted_source"): wrong twice --
+    the cap stays (owner: keep the numbers), so the tail is still not recorded,
+    and this sensor is in the DEFAULT monitor mode, where a block is returned as
+    "flagged". RULING 1+2: the cut result is a visible state, and it blocks."""
     import warnings
     from concurrent.futures import ThreadPoolExecutor
     from xaidr import provenance_chain as pc
@@ -192,6 +180,58 @@ def test_a_destination_past_64k_in_one_tool_result_is_still_recorded():
     with ThreadPoolExecutor(max_workers=1) as pool:
         got = pool.submit(run).result()
     assert len(filler) > 65_536
-    assert got == ("blocked", "untrusted_source"), (
+    assert got == ("flagged", "result_truncated"), (
         f"an untrusted destination {len(filler):,} chars into one tool result gave {got}: "
-        "recording dropped it silently")
+        "the cut result is silent and ENFORCE allows the call")
+
+
+def _directory_flow(with_identity):
+    import warnings
+    from concurrent.futures import ThreadPoolExecutor
+    from xaidr import provenance_chain as pc
+    from xaidr.value_origin import MatchKind, SourceDesignation
+    d = SourceDesignation(tool="directory_lookup", match=MatchKind.ANY, key_args=("query",),
+                          label="corp directory")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = xaidr.Sensor(agent_id="m8-identity", value_origin="enforce", enforcement_mode="block",
+                         value_origin_sources=[d], reporter=m8._Null())
+
+    def run():
+        pc.begin_flow(principal="alice")
+        try:
+            s.scan("Look up Jordan in the directory and email them the agenda.", direction="input")
+            kw = {"tool": "directory_lookup", "arguments": {"query": "Jordan"}} if with_identity else {}
+            s.scan("jordan@corp.example", direction="tool_result", **kw)
+            r = s.scan_tool_call("send_email", {"to": "jordan@corp.example"})
+            return r.action, r.value_origin.wire.value
+        finally:
+            pc.clear_flow()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(run).result()
+
+
+def test_the_public_tool_result_seam_takes_an_identity_so_a_designation_can_match():
+    """Owner RULING 3a after M8: scan(direction="tool_result", tool=, arguments=).
+    V-26 recorded every public tool_result read nameless and untrusted, so no
+    designation could ever match it and ENFORCE blocked the legitimate directory
+    lookup. With the identity the designated read is trusted and the call runs."""
+    named = _directory_flow(True)
+    assert named[0] != "blocked" and named[1] in ("trusted_source", "principal_undeclared_span"), (
+        f"a designated directory read through the PUBLIC seam, with tool= and arguments=, "
+        f"gave {named}: the identity did not reach the recorder")
+    assert _directory_flow(False) == ("blocked", "untrusted_source"), (
+        "without tool= the public read must stay nameless and untrusted (V-26)")
+
+
+def test_tool_identity_on_a_non_result_direction_is_named_not_silently_dropped(caplog):
+    import logging
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = xaidr.Sensor(agent_id="m8-identity-off", value_origin="record", reporter=m8._Null())
+    with caplog.at_level(logging.WARNING, logger="xaidr"):
+        s.scan("hello", direction="input", tool="directory_lookup")
+        s.scan("hello", direction="input", tool="directory_lookup")
+    hits = [r.getMessage() for r in caplog.records if "tool=" in r.getMessage()]
+    assert len(hits) == 1 and "ignored" in hits[0], hits

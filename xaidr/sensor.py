@@ -812,12 +812,17 @@ class DelphiSensor:
             logger.warning(
                 "xaidr: Sensor(agent_id=%r, value_origin='enforce'): value origin "
                 "ENFORCES: a tool call whose destination traces to an untrusted "
-                "source is blocked (category untrusted_destination).%s", self.agent_id,
+                "source, or that one of value origin's bounds cut (argument_bound, "
+                "result_truncated, input_truncated, ledger_saturated), gets a block "
+                "verdict (category untrusted_destination): returned as 'blocked' "
+                "under enforcement_mode='block' and as 'flagged' under the default "
+                "'monitor'.%s", self.agent_id,
                 "" if self._value_origin_sources else
                 " With NO value_origin_sources designations, no tool result can be "
                 "a trusted source, so EVERY tool call whose destination came from a "
-                "tool result will be blocked. Measured on benign corpora: 5/83, "
-                "4/64 and 7/97 of calls. Turn ENFORCE on once designations exist.")
+                "tool result gets that verdict; measured block rates on benign "
+                "corpora are in docs/value-origin-enforce.md. Turn ENFORCE on once "
+                "designations exist.")
 
         # ── S1 · attach, part 2 of 2: on_attach ──────────────────────────
         # LAST in the constructor, deliberately: on_attach receives a fully
@@ -1831,8 +1836,18 @@ class DelphiSensor:
         parent_context: Optional[ParentContext] = None,
         *,
         spans=None,
+        tool: Optional[str] = None,
+        arguments: Optional[Mapping[str, object]] = None,
     ) -> ScanResult:
         """Synchronous scan — used by LangChain middleware and direct calls.
+
+        ``tool=`` / ``arguments=`` (keyword-only; ``direction="tool_result"``
+        only; owner RULING 3a after M8): which tool produced this result and the
+        arguments it was called with. With them the read can match a
+        ``value_origin_sources`` designation and be a trusted source, decided by
+        this scan's own pre-mode verdict; without them it is recorded nameless
+        and untrusted (V-26). On any other direction they are ignored, and
+        a warning says so once.
 
         A2 M6 (§1.1): with value origin on, EVERY ``direction="input"`` exit
         records the principal input (``record_principal_input``): the normal
@@ -1865,10 +1880,21 @@ class DelphiSensor:
         finally:
             self._vo_record_input(prompt, spans, direction, held["clean"])
             if direction == "tool_result":
-                # V-26: the PUBLIC tool_result seam has no tool identity, so its
-                # read is recorded nameless and untrusted. Scanned seams that know
-                # the tool use _scan_tool_result, which never reaches this record.
-                self._vo_record_result("", None, prompt, None)
+                # V-26, amended by owner RULING 3a after M8: with tool= the public
+                # seam has an identity, so a designation can match and the clean
+                # PRE-mode scan decides trust, exactly as _scan_tool_result does.
+                # With no tool= the read stays nameless and untrusted.
+                if tool:
+                    self._vo_record_result(tool, arguments, prompt, held.get("true"))
+                else:
+                    self._vo_record_result("", None, prompt, None)
+            elif (tool is not None or arguments is not None) and not getattr(
+                    self, "_vo_identity_warned", False):
+                self._vo_identity_warned = True
+                logger.warning(
+                    "xaidr: scan(direction=%r, tool=...): tool= and arguments= name the "
+                    "tool behind a tool RESULT and are ignored on any other direction.",
+                    direction)
 
     def _scan_tool_result(self, text, *, tool, arguments, raw_result) -> ScanResult:
         """A2 M7 (§1.2): scan a tool's RESULT exactly as scan(direction=

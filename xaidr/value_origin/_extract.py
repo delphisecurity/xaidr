@@ -73,11 +73,10 @@ def _walk(root: Any, *, leaf_cap: int, char_cap: int, truncate_long: bool,
                 truncated = True
                 break
             if len(node) > char_cap:
-                if truncate_long:
+                truncated = True           # a bound hit, cut or not (RULING 1+2 after M8)
+                if truncate_long:          # results: the first 64 KiB are still recorded
                     leaves.append((path, node[:char_cap]))
-                else:
-                    truncated = True       # an over-length leaf is not examined
-                continue
+                continue                   # arguments: an over-length leaf is not examined
             leaves.append((path, node))
             continue
         if normalise is not None:
@@ -170,9 +169,17 @@ def result_leaves(result: Any) -> List[str]:
     """The string leaves of a raw tool result, each capped at 65,536 chars,
     walked with the C-8 leaf and depth bounds. Raises only on a host fault
     (e.g. a ``model_dump`` that raises); the caller reports FAULT."""
-    leaves, _ = _walk(result, leaf_cap=MAX_ARG_LEAVES, char_cap=MAX_RESULT_LEAF_CHARS,
-                      truncate_long=True, normalise=_normalise_result_node)
-    return [s for _, s in leaves]
+    return result_leaves_bounded(result)[0]
+
+
+def result_leaves_bounded(result: Any) -> Tuple[List[str], bool]:
+    """``result_leaves`` plus whether any bound was hit (a leaf cut at 65,536
+    chars, more than 64 leaves, nesting deeper than 6). The recorder marks the
+    ledger, so a later miss reads result_truncated, never a silent unresolved
+    (owner, RULING 1+2 after M8)."""
+    leaves, truncated = _walk(result, leaf_cap=MAX_ARG_LEAVES, char_cap=MAX_RESULT_LEAF_CHARS,
+                              truncate_long=True, normalise=_normalise_result_node)
+    return [s for _, s in leaves], truncated
 
 
 def argument_value(arguments: Mapping[str, object] | None, name: str):

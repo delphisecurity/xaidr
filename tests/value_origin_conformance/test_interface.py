@@ -69,7 +69,8 @@ ENUMS = {
     "Verdict": ["authorized", "unauthorized", "unresolved", "not_evaluated"],
     "WireValue": ["principal", "principal_undeclared_span", "trusted_source",
                   "untrusted_source", "unresolved", "no_destination", "no_flow",
-                  "ledger_absent", "ledger_saturated", "input_truncated"],
+                  "ledger_absent", "ledger_saturated", "input_truncated",
+                  "argument_bound", "result_truncated"],       # RULING 1+2 after M8
     "RowState": ["decided", "ran_evidence", "ran_clean", "not_reached", "not_applicable",
                  "not_recorded"],
     "Writer": ["principal", "untrusted"],

@@ -70,7 +70,8 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ._authority import classify_value, prose_candidates
 from ._designations import source_matches
-from ._extract import argument_value, key_authority, key_ngram, result_leaves, span_ngrams
+from ._extract import (argument_value, key_authority, key_ngram, result_leaves_bounded,
+                       span_ngrams)
 from ._types import (
     LEDGER_MAX_ENTRIES,
     Authority,
@@ -104,7 +105,7 @@ def _digest_ngram(g: str) -> bytes:
 
 class _Ledger:
     __slots__ = ("lock", "pid", "explicit", "entries", "ngrams", "saturated", "sat_logged",
-                 "input_truncated")
+                 "input_truncated", "result_truncated")
 
     def __init__(self, *, explicit: bool) -> None:
         self.lock = _new_lock()
@@ -114,6 +115,7 @@ class _Ledger:
         self.ngrams: Dict[bytes, bool] = {}
         self.saturated = False
         self.input_truncated = False     # a principal input was capped before recording
+        self.result_truncated = False    # a tool result hit a bound before recording (RULING 1+2)
         self.sat_logged = False
 
     def __repr__(self) -> str:                  # discloses nothing (C-12)
@@ -342,9 +344,15 @@ def _read_trust(lg: _Ledger, plans: List[Tuple[SourceDesignation, List[_KeyPlan]
 def result_authorities(result: Any) -> List[Authority]:
     """Every destination candidate in a raw result: each leaf tried whole, and
     scanned as prose (C-7). May run host code (V-15)."""
+    return _result_authorities(result)[0]
+
+
+def _result_authorities(result: Any) -> Tuple[List[Authority], bool]:
+    """(candidates, whether the result walk hit a bound)."""
     out: List[Authority] = []
     seen = set()
-    for leaf in result_leaves(result):
+    leaves, truncated = result_leaves_bounded(result)
+    for leaf in leaves:
         found: List[Authority] = []
         whole = classify_value(leaf, arg_mode=False)
         if isinstance(whole, Authority):
@@ -356,7 +364,7 @@ def result_authorities(result: Any) -> List[Authority]:
             if a not in seen:
                 seen.add(a)
                 out.append(a)
-    return out
+    return out, truncated
 
 
 def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
@@ -371,7 +379,7 @@ def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
         if lg is None:
             return RecordOutcome.NO_LEDGER
         # Everything that can run host code, BEFORE the lock (C-15).
-        auths = result_authorities(result)
+        auths, cut = _result_authorities(result)
         plans = []
         for d in designations:
             if source_matches(d, tool_name, arguments):
@@ -381,6 +389,8 @@ def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
         if lg.pid != os.getpid():
             return RecordOutcome.NO_LEDGER
         with lg.lock:
+            if cut:
+                lg.result_truncated = True   # RULING 1+2: a miss here is result_truncated
             entry = _read_trust(lg, plans, result_blocked)
             ok = _apply_unit(lg, [(d, entry) for d in digests], [])
         _log_saturation_once(lg)
@@ -391,9 +401,12 @@ def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
 
 
 # ── lookup (for evaluate_call) ───────────────────────────────────────────────
-def lookup(lg: _Ledger, auths: List[Authority]) -> Tuple[List[Optional[Entry]], bool, bool]:
+def lookup(lg: _Ledger, auths: List[Authority]
+           ) -> Tuple[List[Optional[Entry]], bool, bool, bool]:
     """Entries for ``auths`` in one lock acquisition, plus whether the ledger
-    is saturated — a read racing a multi-entry write sees all or none of it."""
+    is saturated, whether a principal input was cut, and whether a tool result
+    was cut — a read racing a multi-entry write sees all or none of it."""
     digests = [_digest_authority(a) for a in auths]
     with lg.lock:
-        return [lg.entries.get(d) for d in digests], lg.saturated, lg.input_truncated
+        return ([lg.entries.get(d) for d in digests], lg.saturated, lg.input_truncated,
+                lg.result_truncated)

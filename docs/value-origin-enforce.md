@@ -37,7 +37,7 @@ blocked, benign or not:
 |---|---|---|
 | input-derived, benign_prose 002, 004, 034, 041, 045, 058 | `evil.tld/x.sh`, 169.254.169.254 credentials (×2), `metadata.google.internal` token, `x.io/i.sh`, `x.io/i` | **Nothing should.** These are attack URLs that benign prose quotes; the harness builds a call to every URL in the text, and blocking a POST to them is correct. **But the property behind it is a DESIGN GAP:** these destinations come from a PRINCIPAL input that L1 flagged, which V-9 makes untrusted. Designations cover tool reads only, so a benign input that L1 flags (a detection false positive) makes every destination it names block. There is no designation-shaped remedy, ~~only spans, or~~ only fixing the detection false positive. *[Corrected, M8 review: declaring the whole input as a PRINCIPAL span still blocks, because a flagged input carries no principal authority (V-9).]* |
 | result-derived, benign_prose 002, 004, 034, 041, 045, 055 (`s3://exfil-bucket`), 058 | the same attack URLs, plus `s3://exfil-bucket` | **Nothing should.** These are attack URLs quoted in prose, so a correct block. |
-| result-derived, benign 034 | `https://api.github.com/repos/org/repo` | **Through a NAMED seam:** designate the tool that returned it (e.g. a GitHub API tool, `MatchKind.ANY`). **Through the public seam the harness used: nothing can.** |
+| result-derived, benign 034 | `https://api.github.com/repos/org/repo` | **Through a NAMED seam:** designate the tool that returned it (e.g. a GitHub API tool, `MatchKind.ANY`). **Through the public seam the harness used: nothing can.** **[RULING 3a, 2026-10-04: false as of the commit carrying this mark — the public seam now takes `scan(text, direction="tool_result", tool=..., arguments=...)`; designate the tool and pass them.]** |
 | result-derived, benign 035 | `https://api.example.com/health` | the same: designate the runbook/docs reader that returned it (`MatchKind.ANY`), or a `URL_PREFIX` designation on the docs host. Not through the public seam. |
 | result-derived, benign 066 | `s3://our-public-assets/` | the same: designate the reading tool. Not through the public seam. |
 | result-derived, benign 067 | `https://api.internal/health` | the same. |
@@ -98,7 +98,7 @@ and defines **no keyed variant**. This build:
 - uses the owner's category and rule;
 - carries the spec's audit rule beside them, because the waterfall's `decided`
   keys on it;
-- implements no ~~keyed variant, since nothing defines it~~ separately named keyed variant. *[M8 review: C-19 says the waterfall keys `decided` "on the rule id because that is the AUDIT EVIDENCE", so "the keyed variant, as designed" most likely MEANS `intent.value_origin_untrusted`, which this build already emits. The spec's category `value_origin_unauthorized` is NOT carried. Owner to confirm.]*
+- implements no ~~keyed variant, since nothing defines it~~ separately named keyed variant. *[M8 review: C-19 says the waterfall keys `decided` "on the rule id because that is the AUDIT EVIDENCE", so "the keyed variant, as designed" most likely MEANS `intent.value_origin_untrusted`, which this build already emits. The spec's category `value_origin_unauthorized` is NOT carried. Owner to confirm.]* **[RULING 4, 2026-10-04: wrong — the keyed variant is `ORIGIN_UNTRUSTED_DESTINATION_KEYED`, which nothing emits; `intent.value_origin_untrusted` is the spec's C-19 audit id, not the keyed variant.]**
 
 All three names are constants in `xaidr/sensor.py`.
 
@@ -115,3 +115,54 @@ All three names are constants in `xaidr/sensor.py`.
   `enforcement_mode="monitor"` these calls are FLAGGED, not blocked. It also
   omits destinations from a flagged principal input, which block whatever the
   designations are.
+
+
+## Every bound blocks under ENFORCE (owner RULING 1+2, 2026-10-04)
+
+The owner: *"Every bound in this system fails open and silently ... An attacker needs padding, not skill."*
+The cap numbers are unchanged. What exceeding one MEANS is new: each bound is a visible wire value, and under ENFORCE it blocks.
+
+| bound | before | now |
+|---|---|---|
+| argument leaf over 4,000 chars, more than 64 argument leaves, argument nesting deeper than 6 | `walk_bound` finding, wire `unresolved`, allowed | wire **`argument_bound`** (verdict `unresolved`, row `ran_evidence`), blocks |
+| tool-result leaf over 65,536 chars, more than 64 result leaves, result nesting deeper than 6 | the cut part SILENTLY unrecorded; a destination in it read `unresolved`, allowed | the ledger is marked; a later miss reads **`result_truncated`** (verdict `not_evaluated`, row `not_recorded`), blocks |
+| principal input over 65,536 chars | `input_truncated`, allowed | `input_truncated`, **blocks** |
+| ledger full (LEDGER_MAX_ENTRIES) | `ledger_saturated`, allowed | `ledger_saturated`, **blocks** |
+
+**Why two new states, not one.** `argument_bound` is a fact about THIS CALL: some of its arguments were never read, so it holds with no lookup at all. `result_truncated` is a fact about the LEDGER: an earlier result was cut, and it matters only when this call's destination misses. A call can be both. One state would have to say "one of two things happened", and an operator could not tell which.
+
+**Extended past the four bounds the owner named, for the owner to confirm or reverse.** `input_truncated` and `ledger_saturated` already had visible states but still ALLOWED. Both are padding routes:
+- A single result with enough distinct URLs saturates the ledger, and the poison in it is dropped (`test_a_saturating_result_does_not_launder_its_poison`).
+- A declared-span input padded past the cap hides whatever follows.
+
+This reverses the M6 pin "input_truncated never blocks". The test that held it is renamed at its site.
+
+**An untrusted finding still outranks every bound.** A positive finding is not downgraded to a blind spot.
+
+**Cost.** False positives on legitimate large results are accepted (the owner).
+- The 456-row, adversarial and conformance passes of `q13_block_rate.py` are byte-identical before and after (PROGRESS.md, RULING 1+2). None of their calls hits a bound.
+- **benign_a2a and benign_longform were NOT re-measured in this round.** The method that produced 4/64 and 0/24 above is not in `q13_block_rate.py` or the report scripts.
+- The prediction for benign_longform is that most or all of its 24 calls now block, because every document is over 64 KiB and each `run_command` argument is over 4,000 chars. **That is a prediction, not a measurement.** The 0/24 in the table above is stale as of this commit.
+
+## Known limitation: a flagged benign input poisons its own destinations (owner RULING 3b)
+
+V-9: when the input scan flags the principal's input, every destination candidate in that input is recorded `untrusted_source`.
+- A benign input that the scanner misreads (prose that quotes attack URLs, a security write-up, an incident report) therefore marks the user's OWN destinations untrusted, and ENFORCE blocks them.
+- **No designation can prevent this.** Designations cover tool results, never the principal's input.
+- The six input-derived benign_prose rows above are this shape.
+
+This is not papered over. It is recorded here as a known limitation, and it is an argument for **ENFORCE staying off by default**: the scanner's false-positive rate on inputs becomes value origin's block rate on the user's own destinations.
+
+## The public tool_result seam has an identity (owner RULING 3a)
+
+`sensor.scan(text, direction="tool_result", tool="directory_lookup", arguments={"query": "Jordan"})`
+- Both keywords are keyword-only. With `tool=`, the read can match a `value_origin_sources` designation, and the scan's own pre-mode verdict decides whether it is clean, exactly as the named seams do.
+- Without `tool=`, the read is nameless and untrusted (V-26, unchanged).
+- On any other direction the keywords are ignored, and one warning says so.
+
+## Rule names (owner RULING 4)
+
+- Category `untrusted_destination`; rule `ORIGIN_UNTRUSTED_DESTINATION`. A bound block carries the same category and rule; the wire value says which bound.
+- **`ORIGIN_UNTRUSTED_DESTINATION_KEYED` is not emitted anywhere.** It is in no tree I searched: this repo, delphi-sentinel's docs, and delphi-sentinel's full history (`git log --all -S ORIGIN_UNTRUSTED_DESTINATION` finds nothing). No document I can read defines its trigger, so none was invented.
+- `intent.value_origin_untrusted` is still emitted. It is the spec's C-19 audit id (the waterfall keys `decided` on it), NOT the keyed variant. Dropping it is the owner's call.
+- `value_origin_unauthorized` is not carried.

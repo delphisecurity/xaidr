@@ -26,7 +26,7 @@ EXPECT = {
     "no_flow": "no_flow",
     "s5_after_begin_flow": "unresolved",
     "no_destination": "no_destination",
-    "truncated": ["unresolved", True, ["walk_bound"]],
+    "truncated": ["argument_bound", True, ["walk_bound"]],   # RULING 1+2 after M8: was "unresolved"
     "s9_bare_thread": "no_flow",
     "s9_propagate_context": "unresolved",
     "after_clear_flow": ["no_flow", False],

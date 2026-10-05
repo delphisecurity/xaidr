@@ -265,7 +265,10 @@ def test_v15_result_leaf_cap_is_64k_not_the_argument_cap():
     bind_fresh_ledger()
     record_tool_result("web_fetch", {}, "z" * 70_000 + " late@x.example", designations=(),
                        result_blocked=False)
-    assert _wire("late@x.example") is WireValue.UNRESOLVED      # past 65,536
+    # Past 65,536: still not recorded (the owner kept the cap), but no longer
+    # silent. This line pinned UNRESOLVED -- the silent drop ENFORCE allowed --
+    # until RULING 1+2 after M8 named the state.
+    assert _wire("late@x.example") is WireValue.RESULT_TRUNCATED
 
 
 # ── never raises into the host (§1.4) ────────────────────────────────────────
