@@ -2134,8 +2134,11 @@ run.
 
 ## The benign_longform anomaly, explained before M8 (owner condition 3)
 
-**Not a recording failure.** Each long document's result recorded up to 67
-destinations. The harness built ONE call per document: `run_command` with the
+~~**Not a recording failure.**~~ *[RETRACTED by the M8 milestone review: recording
+SILENTLY drops every destination past 65,536 chars into one tool result (V-15),
+and ENFORCE then allows the call. See the M8 STOP below. This is the owner's stop
+condition.]* Each long document's result recorded up to 67 destinations, from its
+first 64 KiB. The harness built ONE call per document: `run_command` with the
 whole document as its argument (`calls_for` builds calls only from `scheme://`
 URLs and mailboxes). That argument exceeds the core's 4,000-char argument-leaf
 bound (S16), which gives `walk_bound` with `truncated=True` and wire
@@ -2227,6 +2230,59 @@ its job on the first M8 path.
 
 **Not built:** "the keyed variant" of the rule. The settled spec defines none,
 and inventing one was refused.
+
+---
+
+## M8 STOP: the owner's stop condition was reached, found by the fresh-context review
+
+**Recording silently fails on long tool results.** Every destination more than
+65,536 chars into ONE tool result is never recorded (V-15's result-leaf cap). A
+call to it is indistinguishable from a destination never seen (`unresolved`),
+and **ENFORCE in block mode allows it.** Principal input has a visible
+`input_truncated` state (after M6); results have none. My explanation of the
+anomaly said "recording was not failing". That was TOO BROAD, and it is
+retracted in place above and in `docs/value-origin-enforce.md`. Pinned as a
+strict xfail; its red:
+
+```
+E       AssertionError: an untrusted destination 103,889 chars into one tool result gave ('allowed', 'unresolved'): recording dropped it silently
+1 failed, 5 deselected in 0.67s
+```
+
+**Fixed before stopping. The silent-failure review found this one, rated
+CRITICAL.** Telemetry recorded the SOFTENED verdict (monitor's `flagged`, or an
+S6 transform's `allowed`), so a value-origin block left no trace anywhere.
+Every other gate emits the true verdict before `_apply_mode`, and now this one
+does too. Red first:
+
+```
+E  AssertionError: the value-origin event says ['flagged'] while the true verdict was 'blocked' (returned 'flagged'): the block left no trace
+E  AssertionError: the value-origin event says ['allowed'] while the true verdict was 'blocked' (returned 'allowed'): the block left no trace
+```
+
+The same test now also holds the emit, which the milestone review found
+untested.
+
+**Also pinned:** a second evasion of the bound family. An untrusted
+destination among more than 64 arguments (or nested deeper than 6) reads
+`unresolved` and never blocks.
+
+**Review gaps recorded and not fixed (the STOP):**
+- benign_a2a's 4 blocks have no designation line;
+- §4's acceptance cases were substituted without a label at the time (private
+  `_scan_tool_result`, no ToolMessage check, `MatchKind.ANY` instead of
+  EXACT);
+- the zero-designation warning says "blocked" under the default monitor mode;
+- the keyed-variant reading. The milestone review's reading is that it MEANS
+  `intent.value_origin_untrusted`, which is emitted. The spec category
+  `value_origin_unauthorized` is not carried.
+
+The milestone review confirmed:
+- the reds and sabotages;
+- the outside test;
+- Linux 3.10/3.12 (78 passed each);
+- ENFORCE off by default everywhere (no env or config path);
+- the 18-row table (apart from the spans line, now corrected).
 
 ---
 

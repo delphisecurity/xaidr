@@ -84,3 +84,114 @@ def test_a_padded_untrusted_url_still_blocks_under_enforce():
         v = pool.submit(run).result()
     assert xaidr.value_origin.should_block(v, mode=xaidr.value_origin.Mode.ENFORCE), (
         f"a padded untrusted URL read {v.wire.value!r} (truncated={v.truncated}) and does not block")
+
+
+def _telemetry_of_a_value_origin_block(enforcement, extensions=()):
+    import warnings
+    from concurrent.futures import ThreadPoolExecutor
+    from xaidr import provenance_chain as pc
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = xaidr.Sensor(agent_id="m8-tel", value_origin="enforce", enforcement_mode=enforcement,
+                         reporter=m8._Null(), extensions=list(extensions))
+    events = []
+    real = s._telemetry.enqueue
+    s._telemetry.enqueue = lambda ev: (events.append(ev), real(ev))[1]
+
+    def run():
+        pc.begin_flow(principal="alice")
+        try:
+            s.scan(m8.NEUTRAL, direction="input")
+            s._scan_tool_result(m8.POISON, tool="web_fetch", arguments={}, raw_result=m8.POISON)
+            return s.scan_tool_call("http_post", {"url": m8.EVIL}).action
+        finally:
+            pc.clear_flow()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        returned = pool.submit(run).result()
+    vo_events = [e["data"]["action"] for e in events
+                 if e.get("data", {}).get("gate") == "value_origin"]
+    return returned, vo_events
+
+
+@pytest.mark.parametrize("enforcement, softener, want_returned", [
+    ("monitor", False, "flagged"), ("block", True, "allowed")])
+def test_telemetry_records_the_true_value_origin_block(enforcement, softener, want_returned):
+    """M8 silent-failure review (CRITICAL): telemetry recorded the SOFTENED
+    verdict (monitor's `flagged`, or an S6 transform's `allowed`), so nothing
+    anywhere showed that value origin had blocked. Every other gate emits the
+    TRUE verdict before _apply_mode (the S6 contract: telemetry and the breaker
+    have already seen it)."""
+    from dataclasses import replace
+    from xaidr import SensorExtension
+
+    class Soften(SensorExtension):
+        name = "m8-soften"
+
+        def transform_verdict(self, req, result):
+            return replace(result, action="allowed", score=0.0) if result.action in ("blocked", "flagged") else result
+    returned, events = _telemetry_of_a_value_origin_block(enforcement, [Soften()] if softener else [])
+    assert returned == want_returned, returned
+    assert events == ["blocked"], (
+        f"the value-origin event says {events!r} while the true verdict was 'blocked' "
+        f"(returned {returned!r}): the block left no trace")
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    "FOR THE OWNER, the same family as the padded URL (M8 silent-failure review): "
+    "more than 64 argument leaves (or depth > 6) is a walk_bound, wire unresolved, "
+    "never blocks; an untrusted destination among 71 arguments evades ENFORCE"))
+def test_an_untrusted_destination_among_many_arguments_still_blocks():
+    import warnings
+    from concurrent.futures import ThreadPoolExecutor
+    from xaidr import provenance_chain as pc
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = xaidr.Sensor(agent_id="m8-leaves", value_origin="enforce", reporter=m8._Null())
+
+    def run():
+        pc.begin_flow(principal="alice")
+        try:
+            s.scan(m8.NEUTRAL, direction="input")
+            s._scan_tool_result(m8.POISON, tool="web_fetch", arguments={}, raw_result=m8.POISON)
+            args = {f"k{i}": "v" for i in range(70)}
+            args["url"] = m8.EVIL
+            return s.scan_tool_call("http_post", args).value_origin
+        finally:
+            pc.clear_flow()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        v = pool.submit(run).result()
+    assert xaidr.value_origin.should_block(v, mode=xaidr.value_origin.Mode.ENFORCE), (
+        f"an untrusted destination among 71 arguments read {v.wire.value!r} (truncated={v.truncated})")
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    "THE OWNER'S STOP CONDITION (found by the M8 milestone review): recording SILENTLY "
+    "drops every destination more than 65,536 chars into one tool result (V-15's "
+    "result-leaf cap). A call to it reads exactly like a destination never seen "
+    "(unresolved), and ENFORCE allows it. Principal input has a visible "
+    "input_truncated state; results have nothing. Held for the owner's ruling on the cap"))
+def test_a_destination_past_64k_in_one_tool_result_is_still_recorded():
+    import warnings
+    from concurrent.futures import ThreadPoolExecutor
+    from xaidr import provenance_chain as pc
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = xaidr.Sensor(agent_id="m8-tail", value_origin="enforce", reporter=m8._Null())
+    filler = " ".join(f"line {i} of the quarterly report." for i in range(3000))   # > 65,536 chars
+    result = filler + " " + m8.POISON
+
+    def run():
+        pc.begin_flow(principal="alice")
+        try:
+            s.scan(m8.NEUTRAL, direction="input")
+            s._scan_tool_result(result, tool="web_fetch", arguments={}, raw_result=result)
+            r = s.scan_tool_call("http_post", {"url": m8.EVIL})
+            return r.action, r.value_origin.wire.value
+        finally:
+            pc.clear_flow()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        got = pool.submit(run).result()
+    assert len(filler) > 65_536
+    assert got == ("blocked", "untrusted_source"), (
+        f"an untrusted destination {len(filler):,} chars into one tool result gave {got}: "
+        "recording dropped it silently")

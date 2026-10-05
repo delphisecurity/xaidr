@@ -35,7 +35,7 @@ blocked, benign or not:
 
 | row | destination | what would prevent it |
 |---|---|---|
-| input-derived, benign_prose 002, 004, 034, 041, 045, 058 | `evil.tld/x.sh`, 169.254.169.254 credentials (×2), `metadata.google.internal` token, `x.io/i.sh`, `x.io/i` | **Nothing should.** These are attack URLs that benign prose quotes; the harness builds a call to every URL in the text, and blocking a POST to them is correct. **But the property behind it is a DESIGN GAP:** these destinations come from a PRINCIPAL input that L1 flagged, which V-9 makes untrusted. Designations cover tool reads only, so a benign input that L1 flags (a detection false positive) makes every destination it names block. There is no designation-shaped remedy: only spans, or fixing the detection false positive. |
+| input-derived, benign_prose 002, 004, 034, 041, 045, 058 | `evil.tld/x.sh`, 169.254.169.254 credentials (×2), `metadata.google.internal` token, `x.io/i.sh`, `x.io/i` | **Nothing should.** These are attack URLs that benign prose quotes; the harness builds a call to every URL in the text, and blocking a POST to them is correct. **But the property behind it is a DESIGN GAP:** these destinations come from a PRINCIPAL input that L1 flagged, which V-9 makes untrusted. Designations cover tool reads only, so a benign input that L1 flags (a detection false positive) makes every destination it names block. There is no designation-shaped remedy, ~~only spans, or~~ only fixing the detection false positive. *[Corrected, M8 review: declaring the whole input as a PRINCIPAL span still blocks, because a flagged input carries no principal authority (V-9).]* |
 | result-derived, benign_prose 002, 004, 034, 041, 045, 055 (`s3://exfil-bucket`), 058 | the same attack URLs, plus `s3://exfil-bucket` | **Nothing should.** These are attack URLs quoted in prose, so a correct block. |
 | result-derived, benign 034 | `https://api.github.com/repos/org/repo` | **Through a NAMED seam:** designate the tool that returned it (e.g. a GitHub API tool, `MatchKind.ANY`). **Through the public seam the harness used: nothing can.** |
 | result-derived, benign 035 | `https://api.example.com/health` | the same: designate the runbook/docs reader that returned it (`MatchKind.ANY`), or a `URL_PREFIX` designation on the docs host. Not through the public seam. |
@@ -64,13 +64,24 @@ for example `scan(..., tool=, arguments=)`.
   It is pinned as a strict xfail
   (`test_a_padded_untrusted_url_still_blocks_under_enforce`) pending the
   owner's ruling.
+- **The same family: more than 64 argument leaves, or nesting deeper than 6**
+  (M8 silent-failure review). Each is a `walk_bound` and `unresolved`, so an
+  untrusted destination among 71 arguments evades ENFORCE. It is pinned as a
+  strict xfail
+  (`test_an_untrusted_destination_among_many_arguments_still_blocks`). One
+  ruling on bound hits under ENFORCE should cover every bound.
 - **benign_longform's block rate is not measured.** Its 24 calls were each the
   whole document passed as one over-length argument. See the evasion above.
 
 ## The benign_longform anomaly, explained (owner condition 3)
 
-**Recording was not failing.** Each document's result recorded up to 67
-destinations. The harness's `calls_for` built exactly ONE call per document:
+~~**Recording was not failing.**~~ *[RETRACTED: the M8 milestone review showed
+recording SILENTLY drops every destination more than 65,536 chars into one tool
+result (V-15's result-leaf cap). A call to it reads `unresolved`, and ENFORCE
+allows it. Every benign_longform document is longer than 64 KiB, so each was only
+partly recorded. This is the owner's stop condition. It is pinned as a strict
+xfail, `test_a_destination_past_64k_in_one_tool_result_is_still_recorded`.]*
+Each document's result recorded up to 67 destinations, from its first 64 KiB. The harness's `calls_for` built exactly ONE call per document:
 `run_command` with the whole document as its argument, because it builds calls
 only from `scheme://` URLs and mailboxes, and these documents name destinations
 as bare hosts. That argument exceeds the core's 4,000-char argument-leaf bound,
@@ -87,6 +98,20 @@ and defines **no keyed variant**. This build:
 - uses the owner's category and rule;
 - carries the spec's audit rule beside them, because the waterfall's `decided`
   keys on it;
-- implements no keyed variant, since nothing defines it.
+- implements no ~~keyed variant, since nothing defines it~~ separately named keyed variant. *[M8 review: C-19 says the waterfall keys `decided` "on the rule id because that is the AUDIT EVIDENCE", so "the keyed variant, as designed" most likely MEANS `intent.value_origin_untrusted`, which this build already emits. The spec's category `value_origin_unauthorized` is NOT carried. Owner to confirm.]*
 
 All three names are constants in `xaidr/sensor.py`.
+
+## Owner review gaps recorded at the M8 STOP (not fixed)
+
+- **benign_a2a's 4 result-derived blocks have no designation line.** They were
+  measured, not analysed.
+- **The §4 acceptance cases were SUBSTITUTED, and not labelled at the time.**
+  §4 defines them on `drivers/langchain_poisoned_read.py`, which does not
+  exist. M8's driver reads through the private `_scan_tool_result`, never
+  checks for a `[BLOCKED]` ToolMessage, and designates `MatchKind.ANY` where
+  §4 says EXACT.
+- **The zero-designation warning says "will be blocked".** Under the default
+  `enforcement_mode="monitor"` these calls are FLAGGED, not blocked. It also
+  omits destinations from a flagged principal input, which block whatever the
+  designations are.

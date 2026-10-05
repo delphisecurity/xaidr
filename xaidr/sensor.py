@@ -2437,6 +2437,15 @@ class DelphiSensor:
         name = tool_name if isinstance(tool_name, str) else None
         result = ScanResult(action="blocked", score=1.0, category=_VO_BLOCK_CATEGORY,
                             rules=[_VO_BLOCK_RULE, _VO_AUDIT_RULE])
+        # Telemetry records the TRUE verdict FIRST, then _apply_mode may soften it
+        # (monitor, an S6 transform), as every other gate in this file does: the
+        # S6 contract is that telemetry has already seen the original verdict.
+        # (M8 silent-failure review: emitting after _apply_mode left a softened
+        # value-origin block with no trace anywhere.)
+        try:
+            self._emit_gate_verdict(result, "value_origin", "tool_call", toolName=name)
+        except Exception:
+            pass                                 # telemetry never decides a verdict
         try:
             result = self._apply_mode(result, "tool_call", lambda: {"tool_name": name})
         except (DelphiBlockedError, _ExtensionContractError):
@@ -2444,10 +2453,6 @@ class DelphiSensor:
         except Exception:
             logger.exception("xaidr: _apply_mode faulted on a value-origin block; the "
                              "block stands")
-        try:
-            self._emit_gate_verdict(result, "value_origin", "tool_call", toolName=name)
-        except Exception:
-            pass                                 # telemetry never decides a verdict
         return replace(result, value_origin=cv)
 
     def _value_origin_verdict(self, tool_name, arguments):
