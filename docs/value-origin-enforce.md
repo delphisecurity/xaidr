@@ -188,3 +188,19 @@ This is not papered over. It is recorded here as a known limitation, and it is a
 - A benign principal prompt of 17,481 chars saturates the ledger. That is well under the 65,536-char input cap; the prompt's n-grams count toward LEDGER_MAX_ENTRIES.
 - From then on, EVERY destination miss in that flow blocks under ENFORCE.
 - This extension was made without a ruling, is live in the code, and is listed for the owner to confirm. Reversing it is one line: remove `LEDGER_SATURATED` from `_BOUND_WIRES`.
+
+## Q18 under the bounds ruling: `result_unread` (2026-10-05)
+
+**The Q18 skip itself works.** A result from httpx, requests, urllib3 or aiohttp is not read, so recording never consumes its stream. Until now the skip set no flag: a destination inside such a response was never recorded, and a later call to it read plain `unresolved` and was ALLOWED under ENFORCE. That is the same silent fail-open as the 64 KiB cap.
+
+It was reproduced with REAL unread objects, not stand-ins: an `httpx.Response` on a stream, a `urllib3.HTTPResponse(preload_content=False)` and a `requests.Response`. Each was tested top-level and nested in a dict. In every case the ledger recorded nothing, the call read `unresolved` and was allowed, and nothing was consumed.
+
+**The manifest half of Q18 was never built.** Q18 said to "report them `not_recorded` in the manifest". `ProtectionManifest` (`xaidr/autopatch/manifest.py`) has no value-origin field, and it is returned once by `protect()`, so it cannot carry a per-read state. The visible state is therefore a wire value.
+
+**Now:**
+- The skip stays, still unread.
+- The core marks the ledger, and a later miss reads **`result_unread`** (verdict `not_evaluated`, row `not_recorded`). It blocks under ENFORCE.
+- The sensor's own early return, which never reached the core, is removed. The core's normaliser is the single place that refuses to read.
+- An untrusted finding outranks it. Precedence: argument_bound, result_truncated, result_unread, input_truncated, ledger_saturated.
+
+**Cost:** under ENFORCE, a tool that returns a raw response object makes every later destination miss in that flow block. The fix on the host side is to return the read body (`response.text`), which value origin then reads normally.

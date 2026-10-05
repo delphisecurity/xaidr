@@ -70,7 +70,8 @@ ENUMS = {
     "WireValue": ["principal", "principal_undeclared_span", "trusted_source",
                   "untrusted_source", "unresolved", "no_destination", "no_flow",
                   "ledger_absent", "ledger_saturated", "input_truncated",
-                  "argument_bound", "result_truncated"],       # RULING 1+2 after M8
+                  "argument_bound", "result_truncated",        # RULING 1+2 after M8
+                  "result_unread"],                            # Q18, same ruling
     "RowState": ["decided", "ran_evidence", "ran_clean", "not_reached", "not_applicable",
                  "not_recorded"],
     "Writer": ["principal", "untrusted"],
@@ -155,7 +156,8 @@ _VERDICT_CASES = [
     ("unresolved", "unresolved"), ("no_destination", "not_evaluated"),
     ("no_flow", "not_evaluated"), ("ledger_absent", "not_evaluated"),
     ("ledger_saturated", "not_evaluated"), ("input_truncated", "not_evaluated"),
-    ("argument_bound", "unresolved"), ("result_truncated", "not_evaluated")]
+    ("argument_bound", "unresolved"), ("result_truncated", "not_evaluated"),
+    ("result_unread", "not_evaluated")]
 
 
 def test_the_verdict_table_covers_every_wire_value():

@@ -79,3 +79,5 @@ M9 is held at STOP 4 regardless.
 ## 2026-10-04: two more wire values
 
 `argument_bound` and `result_truncated` were added (RULING 1+2). Every consumer above that lists the vocabulary, such as the Brain's nine-value list, is now short by more than one value; an unknown value takes the `not_recorded` row there. This is an inventory only: nothing outside this repo was changed.
+
+`result_unread` was added on 2026-10-05 (Q18 under the bounds ruling), making thirteen values. The same inventory applies: nothing outside this repo was changed.

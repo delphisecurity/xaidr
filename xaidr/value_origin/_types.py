@@ -28,12 +28,13 @@ class Verdict(str, enum.Enum):
 
 
 class WireValue(str, enum.Enum):
-    """The complete value set of ``valueOrigin`` (§2). Twelve, case-sensitive
+    """The complete value set of ``valueOrigin`` (§2). Thirteen, case-sensitive
     (INPUT_TRUNCATED added by the owner, A2 after M6: truncation is its own
     state, never a silent unresolved; ARGUMENT_BOUND and RESULT_TRUNCATED added
     by the owner's RULING 1+2 after M8: every bound is a visible state, and under
     ENFORCE a bounded value blocks. Two, not one: argument_bound is a fact about
-    THIS CALL, result_truncated a fact about the LEDGER)."""
+    THIS CALL, result_truncated a fact about the LEDGER; RESULT_UNREAD under the
+    same ruling, 2026-10-05: Q18's unread I/O-backed result is a bound too)."""
 
     PRINCIPAL = "principal"                                   # a DECLARED principal span
     PRINCIPAL_UNDECLARED_SPAN = "principal_undeclared_span"   # rests on C-1's default
@@ -47,6 +48,7 @@ class WireValue(str, enum.Enum):
     INPUT_TRUNCATED = "input_truncated"    # principal input was capped AND lookup missed
     ARGUMENT_BOUND = "argument_bound"      # this call's argument walk hit a bound (C-8, V-11)
     RESULT_TRUNCATED = "result_truncated"  # a recorded tool result was cut AND lookup missed
+    RESULT_UNREAD = "result_unread"        # an I/O-backed result was skipped unread (Q18) AND lookup missed
 
 
 class RowState(str, enum.Enum):

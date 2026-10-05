@@ -2595,3 +2595,46 @@ E   AssertionError: leaf_at_64k: a result exactly AT the bound, nothing cut, fla
 
 Docker matrix: **not run, and not needed this round**, since no URL-parsing or differential code changed (owner, 2026-10-05).
 == commit A suites: 563 passed, 7 xfailed, 1 warning in 53.10s
+
+### Item 4: Q18 under the bounds ruling (`result_unread`)
+**Verified against the real code first,** with REAL unread objects (requests and aiohttp were pip-installed into the scratch venv only, not the dev extra), against the tree before the fix:
+```
+control str: builtins.str              nested=False ledger 0->1  blocked  wire=untrusted_source   | -
+httpx.Response         nested=False ledger 0->0  allowed  wire=unresolved         | is_stream_consumed=False
+httpx.Response         nested=True  ledger 0->0  allowed  wire=unresolved         | is_stream_consumed=False
+urllib3.response.HTTPResponse     nested=False ledger 0->0  allowed  wire=unresolved         | body bytes read=0
+urllib3.response.HTTPResponse     nested=True  ledger 0->0  allowed  wire=unresolved         | body bytes read=0
+requests.models.Response         nested=False ledger 0->0  allowed  wire=unresolved         | _content=False raw bytes read=0
+requests.models.Response         nested=True  ledger 0->0  allowed  wire=unresolved         | _content=False raw bytes read=0
+```
+- **aiohttp was NOT reproduced with a real object.** Constructing a real `ClientResponse` failed: its constructor rejected the arguments I passed, and my script's error handler had a bug of its own. aiohttp is covered by a stand-in in its module namespace, which is what the guard keys on.
+- **Manifest:** Q18's "report them `not_recorded` in the manifest" was **never built**. `xaidr/autopatch/manifest.py` has no value-origin field. So the visible-state work was not smaller than it looked.
+
+**Red first** (12 of 13; the 13th is the untrusted-outranks guard, which already held):
+```
+12 failed, 1 passed, 19 deselected in 0.11s
+AssertionError: aiohttp.ClientResponse[stand-in: aiohttp is not in the dev extra]: a destination inside an unread response was never recorded, nothing said so, and the call to it read 'unresolved' -- ENFORCE allowed it
+AssertionError: aiohttp.ClientResponse[stand-in: aiohttp is not in the dev extra]: through the sensor's result seam, ENFORCE gave ('allowed', 'unresolved')
+AssertionError: httpx.Response[real, unread stream]: a destination inside an unread response was never recorded, nothing said so, and the call to it read 'unresolved' -- ENFORCE allowed it
+AssertionError: httpx.Response[real, unread stream]: through the sensor's result seam, ENFORCE gave ('allowed', 'unresolved')
+AssertionError: requests.Response[stand-in: requests is not in the dev extra]: a destination inside an unread response was never recorded, nothing said so, and the call to it read 'unresolved' -- ENFORCE allowed it
+AssertionError: requests.Response[stand-in: requests is not in the dev extra]: through the sensor's result seam, ENFORCE gave ('allowed', 'unresolved')
+AssertionError: urllib3.HTTPResponse[real, preload_content=False]: a destination inside an unread response was never recorded, nothing said so, and the call to it read 'unresolved' -- ENFORCE allowed it
+AssertionError: urllib3.HTTPResponse[real, preload_content=False]: through the sensor's result seam, ENFORCE gave ('allowed', 'unresolved')
+```
+**Green:** 581 passed, 7 xfailed, 1 warning in 57.34s (the affected suites, the Q18 tests, the wheel test with the Q18 cases, and test_m7_from_the_wheel).
+
+**Sabotage:** SQ2 is the discriminating case. With the core fix alone (the sensor's old early return restored), the core tests pass and the sensor seam stays red:
+```
+== SQ1 core: the unread node is dropped silently again (the pre-fix normaliser): 12 failed, 1 passed, 20 deselected in 0.12s
+   red: 12 tests, e.g. test_an_unread_io_backed_result_is_a_visible_state_and_blocks[kind_35chars-nested-in-a-dict]
+   msg: aiohttp.ClientResponse[stand-in: aiohttp is not in the dev extra]: a destination inside an unread response was never recorded, nothing said so, and the call to it read 'unresolved' -- ENFORCE allowed it
+== SQ2 sensor: the Q18 early return restored (the core fix alone): 4 failed, 9 passed, 20 deselected in 0.11s
+   red: 4 tests, e.g. test_the_sensor_seam_blocks_after_an_unread_io_backed_result[kind_35chars]
+   msg: aiohttp.ClientResponse[stand-in: aiohttp is not in the dev extra]: through the sensor's result seam, ENFORCE gave ('allowed', 'unresolved')
+== SQ3 ledger: the skip is not marked: 12 failed, 1 passed, 20 deselected in 0.11s
+   red: 12 tests, e.g. test_an_unread_io_backed_result_is_a_visible_state_and_blocks[kind_35chars-nested-in-a-dict]
+   msg: aiohttp.ClientResponse[stand-in: aiohttp is not in the dev extra]: a destination inside an unread response was never recorded, nothing said so, and the call to it read 'unresolved' -- ENFORCE allowed it
+== restored: True
+```
+**From outside the process:** `tests/outside/test_bounds_from_the_wheel.py` now also runs the four I/O modules (stand-ins, because the fresh venv holds only the wheel). Each gives `["blocked", "result_unread"]` under ENFORCE, RECORD reports the state with the same action as OFF, and `.content` is never read.

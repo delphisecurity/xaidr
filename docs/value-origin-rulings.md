@@ -502,3 +502,4 @@ Showing that RECORD mode leaves it byte-identical is A2's obligation (C-11).
 - **RULING 3a.** `scan(..., direction="tool_result", tool=, arguments=)` amends V-26.
 - **RULING 3b.** A flagged benign input is a documented limitation (docs/value-origin-enforce.md), not patched.
 - **RULING 4.** Category `untrusted_destination`; rule `ORIGIN_UNTRUSTED_DESTINATION`. `ORIGIN_UNTRUSTED_DESTINATION_KEYED` is emitted nowhere and is defined in no document found. `value_origin_unauthorized` is not carried.
+- **Q18 under RULING 1+2 (2026-10-05, owner).** An unread I/O-backed result is a bound. It gets the wire value `result_unread`, thirteen in all, and blocks under ENFORCE. Q18's "report them `not_recorded` in the manifest" was never built and is superseded: the manifest has no per-read field.

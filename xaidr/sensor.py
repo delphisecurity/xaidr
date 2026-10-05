@@ -1917,8 +1917,10 @@ class DelphiSensor:
         try:
             if self._value_origin is _vo.Mode.OFF:
                 return
-            if type(raw).__module__.split(".")[0] in _IO_BACKED_MODULES:
-                return    # Q18: reading .content would consume an unread stream
+            # Q18: an I/O-backed result is passed on UNREAD. The core never reads
+            # it either (_extract._normalise_result_node), but marks the ledger,
+            # so a later miss reads result_unread and blocks under ENFORCE. This
+            # early-returned until 2026-10-05: the read vanished silently.
             if isinstance(raw, (bytes, bytearray)):
                 raw = _coerce_scannable(raw)
             blocked = None

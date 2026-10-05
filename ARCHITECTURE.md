@@ -962,7 +962,7 @@ A `requests` or `httpx` response with an unread stream would be consumed by
 recording under default RECORD.
 *Recommend:* yes, as a seam-side guard. Skip recording for I/O-backed response
 objects, report them `not_recorded` in the manifest, and pin it with a
-streaming-response test. The core is unchanged.
+streaming-response test. The core is unchanged. **[2026-10-05: the manifest half was never built, and the core DID change (M7 review). Superseded by the `result_unread` wire value under the bounds ruling; see docs/value-origin-enforce.md.]**
 
 **Q19. Adversarial corpora.**
 *Recommend:*

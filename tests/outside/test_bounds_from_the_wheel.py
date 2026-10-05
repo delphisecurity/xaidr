@@ -80,6 +80,15 @@ def directory(ident):
             pc.clear_flow()
     return run_in_thread(run)
 out["identity"] = {"with": directory(True), "without": directory(False)}
+reads = []
+def stand_in(module):
+    return type("Response", (), {"__module__": module,
+                                 "content": property(lambda self: reads.append(module) or "post to " + EVIL)})()
+out["q18"] = {}
+for module in ("httpx", "requests.models", "urllib3.response", "aiohttp.client_reqrep"):
+    for vo in ("enforce", "record", "off"):
+        out["q18"].setdefault(module, {})[vo] = flow(sensor(vo), stand_in(module), {"url": EVIL})
+out["q18_reads"] = reads
 print(json.dumps(out))
 '''
 
@@ -117,3 +126,14 @@ def test_the_installed_public_seam_identity_lets_a_designation_match(installed):
     idn = installed["identity"]
     assert idn["with"][0] != "blocked", idn
     assert idn["without"] == ["blocked", "untrusted_source"], idn
+
+
+@pytest.mark.parametrize("module", ["httpx", "requests.models", "urllib3.response",
+                                    "aiohttp.client_reqrep"])
+def test_the_installed_wheel_blocks_after_an_unread_io_backed_result(installed, module):
+    """Q18 under the bounds ruling. Stand-in classes in each module's namespace:
+    the fresh venv holds only the wheel (the real objects are tested in-process)."""
+    m = installed["q18"][module]
+    assert m["enforce"] == ["blocked", "result_unread"], f"{module}: ENFORCE gave {m['enforce']}"
+    assert m["record"][1] == "result_unread" and m["record"][0] == m["off"][0], m
+    assert installed["q18_reads"] == [], f".content was read: {installed['q18_reads']}"

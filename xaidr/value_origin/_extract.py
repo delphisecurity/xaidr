@@ -57,12 +57,19 @@ def _children(node: Any):
     return False, iter(())
 
 
+# A result node value origin must NOT read (Q18), returned by the normaliser so the
+# walk can say a read was skipped instead of dropping it silently (bounds ruling).
+_UNREAD = object()
+
+
 def _walk(root: Any, *, leaf_cap: int, char_cap: int, truncate_long: bool,
-          normalise=None) -> Tuple[List[Tuple[Path, str]], bool]:
-    """Bounded DFS. Returns (leaves, truncated). ``normalise`` maps a non-container,
-    non-str node to something walkable (V-15, results only)."""
+          normalise=None) -> Tuple[List[Tuple[Path, str]], bool, bool]:
+    """Bounded DFS. Returns (leaves, truncated, unread). ``normalise`` maps a
+    non-container, non-str node to something walkable (V-15, results only); a
+    node it returns as ``_UNREAD`` sets ``unread`` and is not walked."""
     leaves: List[Tuple[Path, str]] = []
     truncated = False
+    unread = False
     count = 0
     # Explicit stack: (path, node, depth_of_node_if_container)
     stack: List[Tuple[Path, Any, int]] = [((), root, 1)]
@@ -82,6 +89,9 @@ def _walk(root: Any, *, leaf_cap: int, char_cap: int, truncate_long: bool,
             continue
         if normalise is not None:
             node = normalise(node)
+            if node is _UNREAD:
+                unread = True
+                continue
             if isinstance(node, str):
                 stack.append((path, node, depth))
                 continue
@@ -93,7 +103,7 @@ def _walk(root: Any, *, leaf_cap: int, char_cap: int, truncate_long: bool,
             continue
         batch = [(path + (step,), child, depth + 1) for step, child, _ in kids]
         stack.extend(reversed(batch))
-    return leaves, truncated
+    return leaves, truncated, unread
 
 
 def extract_destinations(arguments: Mapping[str, object] | None
@@ -113,7 +123,7 @@ def extract_destinations(arguments: Mapping[str, object] | None
     try:
         if arguments is None:
             return (), False
-        leaves, truncated = _walk(arguments, leaf_cap=MAX_ARG_LEAVES,
+        leaves, truncated, _ = _walk(arguments, leaf_cap=MAX_ARG_LEAVES,
                                   char_cap=MAX_LEAF_CHARS, truncate_long=False)
         out: List[Finding] = []
         for path, leaf in leaves:
@@ -154,7 +164,7 @@ def _normalise_result_node(node: Any) -> Any:
     if isinstance(node, (bytes, bytearray, int, float, bool)) or node is None:
         return None
     if type(node).__module__.split(".")[0] in _IO_BACKED_MODULES:
-        return None    # Q18 (A2 M7 review): reading .content would consume a stream
+        return _UNREAD   # Q18: never read (it would consume a stream), never silent either
     content = getattr(node, "content", None)
     if isinstance(content, str):
         return content
@@ -173,14 +183,16 @@ def result_leaves(result: Any) -> List[str]:
     return result_leaves_bounded(result)[0]
 
 
-def result_leaves_bounded(result: Any) -> Tuple[List[str], bool]:
+def result_leaves_bounded(result: Any) -> Tuple[List[str], bool, bool]:
     """``result_leaves`` plus whether any bound was hit (a leaf cut at 65,536
     chars, more than 64 leaves, nesting deeper than 6). The recorder marks the
     ledger, so a later miss reads result_truncated, never a silent unresolved
-    (owner, RULING 1+2 after M8)."""
-    leaves, truncated = _walk(result, leaf_cap=MAX_ARG_LEAVES, char_cap=MAX_RESULT_LEAF_CHARS,
-                              truncate_long=True, normalise=_normalise_result_node)
-    return [s for _, s in leaves], truncated
+    (owner, RULING 1+2 after M8). The third value: an I/O-backed node was
+    skipped unread (Q18), so a later miss reads result_unread."""
+    leaves, truncated, unread = _walk(result, leaf_cap=MAX_ARG_LEAVES,
+                                      char_cap=MAX_RESULT_LEAF_CHARS, truncate_long=True,
+                                      normalise=_normalise_result_node)
+    return [s for _, s in leaves], truncated, unread
 
 
 def argument_value(arguments: Mapping[str, object] | None, name: str):
