@@ -2804,3 +2804,59 @@ conformance flows (expected wire per config; designed cases, not traffic):
 - m6 `input_cap`, m7 `input_truncated`, and m8's 64 KiB test (now recorded: `untrusted_source`).
 - test_procedural V-15 (`UNTRUSTED_SOURCE`).
 - S16, S16-overlength and S16-depth now carry the extracted atom (expected.jsonl regenerated at --rev 01450c7).
+
+### The two reviews of 58d7f64 (fresh context), and what was fixed
+**milestone-reviewer:**
+- **HIGH: `result_unread` lost its block** whenever argument_bound or result_truncated was also present. The precedence checked the non-blocking states first. Fixed: a blocking state outranks every non-blocking one, and saturation is reported before truncation.
+- **HIGH, a regression: junk atoms past a bound could saturate the all-or-nothing ledger write** and drop the poison the examined part had found. Fixed: past-the-bound atoms go in their OWN write, after the examined part and after the key n-grams. Inputs and results both.
+- **MEDIUM: CI claims.** 58d7f64's CI was still queued. 3daf41f's re-run had no test result.
+- **MEDIUM: cost labels.** The cost figures were mislabelled and left out the worst case. Corrected in place; the script is committed.
+- **MEDIUM: row texts.** They still said a destination past the cut "cannot be traced". Reworded for argument_bound, result_truncated and input_truncated, and row_text.json regenerated. This is a cross-repo consequence: the Brain's and the waterfall's tables are checked against that JSON. Inventory only; nothing outside this repo was changed.
+- **MEDIUM: the audit id.** Dropping `intent.value_origin_untrusted` on an unexaminable block was presented as the owner's ruling. It was MY decision. It is now stated that way, with its C-19 consequence: the waterfall may show no deciding stage.
+- **LOW:** stale claims retracted in place; the benign_longform explanation corrected (3 of 7 are oversized_input, and what uncovered the blocks is atom extraction on the over-4,000-char ARGUMENT, not the input cut); `_cap_principal_input` (dead) removed.
+- **LOW, test gaps:** a REAL saturation test, and a sensor-level CLEAN long input whose destination past 64 KiB reads `principal_undeclared_span`. That test first failed because I scanned the same text twice: the second scan of the identical input was not `allowed`. The test now scans once, inside the flow. **Scanner statefulness across identical inputs: observed, not investigated.**
+
+**silent-failure-hunter:**
+- **SEVERE, a regression:** the unbounded atom walk ran host code (`model_dump`, `.content`) on nodes past the bound that were never touched before. One raise faulted the WHOLE result's record. Fixed: a fault past the bound is confined to its node and made visible. A result gets `result_unread`, which blocks, since such a node genuinely cannot be examined. An argument gets a PARSE_FAILURE finding, and its examined findings and walk_bound are kept.
+- **MINOR:** the saturation warning is once per flow. Accepted.
+
+Red first, for the three regressions:
+```
+2 failed, 20 deselected in 0.41s
+E   AssertionError: a 4,001-char body in the call: a destination that may sit in an unread response read 'argument_bound' and was allowed
+E   AssertionError: result: the poison in leaf 0 was examined, then dropped with the junk past the bound; the call read 'result_truncated'
+tests/test_value_origin_atoms.py:247: AssertionError: a 4,001-char body in the call: a destination that may sit in an unread response read 'argument_bound' and was allowed
+tests/test_value_origin_atoms.py:264: AssertionError: result: the poison in leaf 0 was examined, then dropped with the junk past the bound; the call read 'result_truncated'
+```
+```
+    raise RuntimeError("host bug")
+2 failed, 24 deselected in 0.02s
+E   AssertionError: a hostile mapping past the argument bound erased the examined findings: 'unresolved', truncated=False
+E   AssertionError: one raising object past the bound dropped the whole result: 'unresolved'
+RuntimeError: host bug
+tests/test_value_origin_atoms.py:326: AssertionError: one raising object past the bound dropped the whole result: 'unresolved'
+tests/test_value_origin_atoms.py:337: AssertionError: a hostile mapping past the argument bound erased the examined findings: 'unresolved', truncated=False
+```
+Sabotage of each fix:
+```
+== SR1 the old precedence (non-blocking bounds checked first): 1 failed, 1 passed, 22 deselected in 0.77s
+   msg: a 4,001-char body in the call: a destination that may sit in an unread response read 'argument_bound' and was allowed
+== SR2 result: past-the-bound atoms in the SAME write: 1 failed, 1 passed, 22 deselected in 0.41s
+   msg: result: the poison in leaf 0 was examined, then dropped with the junk past the bound; the call read 'ledger_saturated'
+== SR3 input: past-the-window atoms in the SAME write: 1 failed, 1 passed, 22 deselected in 0.76s
+   msg: input: the flagged input's own destination, at its start, was dropped with the junk past 64 KiB; the call read 'ledger_saturated'
+== restored: True
+```
+```
+2 failed, 24 deselected in 0.02s
+E   AssertionError: a hostile mapping past the argument bound erased the examined findings: 'unresolved', truncated=False
+E   AssertionError: one raising object past the bound dropped the whole result: 'unresolved'
+tests/test_value_origin_atoms.py:326: AssertionError: one raising object past the bound dropped the whole result: 'unresolved'
+tests/test_value_origin_atoms.py:337: AssertionError: a hostile mapping past the argument bound erased the examined findings: 'unresolved', truncated=False
+```
+The Q13 block rate is identical before and after these fixes (benign_longform 7/24 and 8/24, all `untrusted_source`).
+
+### CI, by full SHA
+- **`58d7f649247ea31bed0adbe15f181001c178773a`, run 37365500142:** all three **base** jobs and full 3.12 **passed**, confirming the Q18 base fix on CI. Full 3.10, full 3.11 and real-frameworks were **cancelled**.
+- **`3daf41fde51d79b785dc2424aece1cc80b3b2e0e`, run 37355329885 attempt 2:** cancelled before any tests ran.
+- **Cause (likely), my own:** re-running an old commit's run on the same branch puts both runs in one concurrency group, and they cancelled each other. **Re-run an old commit only when no run is in progress on the branch.**

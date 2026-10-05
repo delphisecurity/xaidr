@@ -120,7 +120,10 @@ def _walk(root: Any, *, leaf_cap: int, char_cap: int, truncate_long: bool,
 
 def _all_strings(items, normalise=None) -> Tuple[List[Tuple[Path, str]], bool]:
     """Every string under ``items`` ((path, node) pairs) with NO leaf, length or
-    depth bound; cycle-safe. (strings, whether an unread I/O node was met)."""
+    depth bound; cycle-safe. (strings, whether a node could not be examined: an
+    unread I/O node, or host code that RAISED -- a fault here is confined to its
+    node and made visible, never allowed to drop what the bounded walk examined:
+    silent-failure review, 2026-10-05)."""
     out: List[Tuple[Path, str]] = []
     unread = False
     seen = set()
@@ -130,19 +133,24 @@ def _all_strings(items, normalise=None) -> Tuple[List[Tuple[Path, str]], bool]:
         if isinstance(node, str):
             out.append((path, node))
             continue
-        if normalise is not None:
-            node = normalise(node)
-            if node is _UNREAD:
-                unread = True
+        try:
+            if normalise is not None:
+                node = normalise(node)
+                if node is _UNREAD:
+                    unread = True
+                    continue
+                if isinstance(node, str):
+                    out.append((path, node))
+                    continue
+            is_container, kids = _children(node)
+            if not is_container or id(node) in seen:
                 continue
-            if isinstance(node, str):
-                out.append((path, node))
-                continue
-        is_container, kids = _children(node)
-        if not is_container or id(node) in seen:
+            seen.add(id(node))
+            batch = [(path + (step,), child) for step, child, _ in kids]
+        except Exception:
+            unread = True
             continue
-        seen.add(id(node))
-        stack.extend(reversed([(path + (step,), child) for step, child, _ in kids]))
+        stack.extend(reversed(batch))
     return out, unread
 
 
@@ -192,10 +200,14 @@ def extract_destinations(arguments: Mapping[str, object] | None
             # Owner, 2026-10-05: what the bound kept from examination is still
             # searched for destination ATOMS, so a padded destination is found.
             seen = {f.destination for f in out if f.destination is not None}
-            for path, a in _atoms(_all_strings(skipped)[0]):
+            strings, faulted = _all_strings(skipped)
+            for path, a in _atoms(strings):
                 if a not in seen:
                     seen.add(a)
                     out.append(Finding(path=path, destination=a, reason=None))
+            if faulted:     # a node past the bound could not be examined: visible
+                out.append(Finding(path=(), destination=None,
+                                   reason=UnresolvedReason.PARSE_FAILURE))
             out.append(Finding(path=(), destination=None,
                                reason=UnresolvedReason.WALK_BOUND))
         return tuple(out), truncated

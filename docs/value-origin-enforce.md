@@ -60,13 +60,13 @@ for example `scan(..., tool=, arguments=)`. **[CLOSED for the public seam by RUL
   has real data (0 action changes). See PROGRESS.md "Before M8, item 2".
 - **A destination in an argument longer than 4,000 characters is never
   examined.** S16 gives it a `walk_bound` finding and wire `unresolved`, which
-  never blocks, so **an untrusted URL padded past 4,000 chars evades ENFORCE.** **[FIXED, RULING 1+2 (f93e873): `argument_bound`, which blocks; the xfail is now a passing test.]**
+  never blocks, so **an untrusted URL padded past 4,000 chars evades ENFORCE.** **[FIXED, RULING 1+2 (f93e873): `argument_bound`, which blocks; the xfail is now a passing test.]** **[Narrowed 2026-10-05: argument_bound no longer blocks; the padded destination is found by atom extraction and blocks as `untrusted_source`.]**
   It is pinned as a strict xfail
   (`test_a_padded_untrusted_url_still_blocks_under_enforce`) pending the
   owner's ruling.
 - **The same family: more than 64 argument leaves, or nesting deeper than 6**
-  (M8 silent-failure review). Each is a `walk_bound` and `unresolved`, so an
-  untrusted destination among 71 arguments evades ENFORCE. It is pinned as a **[FIXED, RULING 1+2 (f93e873): `argument_bound`, which blocks; the xfail is now a passing test.]**
+  (M8 silent-failure review). Each is a `walk_bound` and `unresolved`, so an **[Narrowed 2026-10-05: no longer blocks; 7/24 and 8/24 remain, all `untrusted_source` — see the end of this file.]**
+  untrusted destination among 71 arguments evades ENFORCE. It is pinned as a **[FIXED, RULING 1+2 (f93e873): `argument_bound`, which blocks; the xfail is now a passing test.]** **[Narrowed 2026-10-05: argument_bound no longer blocks; the padded destination is found by atom extraction and blocks as `untrusted_source`.]**
   strict xfail
   (`test_an_untrusted_destination_among_many_arguments_still_blocks`). One
   ruling on bound hits under ENFORCE should cover every bound.
@@ -80,12 +80,12 @@ recording SILENTLY drops every destination more than 65,536 chars into one tool
 result (V-15's result-leaf cap). A call to it reads `unresolved`, and ENFORCE
 allows it. Every benign_longform document is longer than 64 KiB, so each was only
 partly recorded. This is the owner's stop condition. It is pinned as a strict
-xfail, `test_a_destination_past_64k_in_one_tool_result_is_still_recorded`.]* **[f93e873: renamed `..._reads_result_truncated_and_blocks`; no longer an xfail.]**
+xfail, `test_a_destination_past_64k_in_one_tool_result_is_still_recorded`.]* **[f93e873: renamed `..._reads_result_truncated_and_blocks`; no longer an xfail.]** **[Renamed again 2026-10-05: `..._is_recorded_and_blocks`.]**
 Each document's result recorded up to 67 destinations, from its first 64 KiB. The harness's `calls_for` built exactly ONE call per document:
 `run_command` with the whole document as its argument, because it builds calls
 only from `scheme://` URLs and mailboxes, and these documents name destinations
 as bare hosts. That argument exceeds the core's 4,000-char argument-leaf bound,
-which gives `walk_bound` and `unresolved`. So the 0/24 is an artefact, not a **[As of f93e873 it is `argument_bound` and blocks: measured 24/24, 2026-10-05.]**
+which gives `walk_bound` and `unresolved`. So the 0/24 is an artefact, not a **[As of f93e873 it is `argument_bound` and blocks: measured 24/24, 2026-10-05.]** **[Narrowed 2026-10-05: no longer blocks; 7/24 and 8/24 remain, all `untrusted_source` — see the end of this file.]**
 clean rate, and the bound behind it is the ENFORCE evasion above.
 
 ## Rule names: one point needs the owner
@@ -165,9 +165,9 @@ This is not papered over. It is recorded here as a known limitation, and it is a
 
 ## Rule names (owner RULING 4)
 
-- Category `untrusted_destination`; rule `ORIGIN_UNTRUSTED_DESTINATION`. A bound block carries the same category and rule; the wire value says which bound. **[Milestone review, 2026-10-05: that was true only of the in-process `ScanResult`. Telemetry had no wire value, so a call with too many arguments was audited as an untrusted destination, `intent.value_origin_untrusted` included. The block event now carries `valueOrigin`. The rule ids still SAY "untrusted" for a bound block: a separate rule id for bound blocks is the owner's naming call.]**
-- **`ORIGIN_UNTRUSTED_DESTINATION_KEYED` is not emitted anywhere.** It is in no tree I searched: this repo, delphi-sentinel's docs, and delphi-sentinel's full history (`git log --all -S ORIGIN_UNTRUSTED_DESTINATION` finds nothing). No document I can read defines its trigger, so none was invented.
-- `intent.value_origin_untrusted` is still emitted. It is the spec's C-19 audit id (the waterfall keys `decided` on it), NOT the keyed variant. Dropping it is the owner's call.
+- Category `untrusted_destination`; rule `ORIGIN_UNTRUSTED_DESTINATION`. A bound block carries the same category and rule; the wire value says which bound. **[Milestone review, 2026-10-05: that was true only of the in-process `ScanResult`. Telemetry had no wire value, so a call with too many arguments was audited as an untrusted destination, `intent.value_origin_untrusted` included. The block event now carries `valueOrigin`. The rule ids still SAY "untrusted" for a bound block: a separate rule id for bound blocks is the owner's naming call.]** **[Answered 2026-10-05: `ORIGIN_UNEXAMINABLE_SOURCE` for the only bound that still blocks.]**
+- **`ORIGIN_UNTRUSTED_DESTINATION_KEYED` is not emitted anywhere.** It is in no tree I searched: this repo, delphi-sentinel's docs, and delphi-sentinel's full history (`git log --all -S ORIGIN_UNTRUSTED_DESTINATION` finds nothing). No document I can read defines its trigger, so none was invented. **[Corrected 2026-10-05, owner: it comes from the original value-origin design as the Tier 2 keyed variant and was never built — DESIGNED, NOT IMPLEMENTED (docs/value-origin-rulings.md).]**
+- `intent.value_origin_untrusted` is still emitted. It is the spec's C-19 audit id (the waterfall keys `decided` on it), NOT the keyed variant. Dropping it is the owner's call. **[2026-10-05: on a `result_unread` block it IS now dropped. That was MY decision, not the owner's ruling (the owner named only the rule id). Consequence (C-19, PLAUSIBLE): the waterfall marks the intent stage `decided` on that id, so an unexaminable block may show no deciding stage. For the owner.]**
 - `value_origin_unauthorized` is not carried.
 
 ## Re-measured after RULING 1+2 (2026-10-05)
@@ -207,7 +207,7 @@ It was reproduced with REAL unread objects, not stand-ins: an `httpx.Response` o
 - The skip stays, still unread.
 - The core marks the ledger, and a later miss reads **`result_unread`** (verdict `not_evaluated`, row `not_recorded`). It blocks under ENFORCE.
 - The sensor's own early return, which never reached the core, is removed. The core's normaliser is the single place that refuses to read.
-- An untrusted finding outranks it. Precedence: argument_bound, result_truncated, result_unread, input_truncated, ledger_saturated.
+- An untrusted finding outranks it. Precedence: argument_bound, result_truncated, result_unread, input_truncated, ledger_saturated. **[Corrected 2026-10-05 (milestone review): that order let a non-blocking state hide result_unread. Now: result_unread, argument_bound, ledger_saturated, result_truncated, input_truncated.]**
 
 **Cost:** under ENFORCE, a tool that returns a raw response object makes every later destination miss in that flow block. The fix on the host side is to return the read body (`response.text`), which value origin then reads normally.
 
@@ -260,8 +260,8 @@ benign_longform, 24 docs, 10,100,008 chars (core value-origin cost, summed):
   record_tool_result               total     1685 ms     70.2 ms/doc   largest doc 162 ms
   evaluate_call(run_command=doc)   total     1486 ms     61.9 ms/doc   largest doc 158 ms
 ```
-- **Atoms cost about 110 ns per char of prose (about 45 on non-prose), linear in the value's size, with no bound.**
-- The 5 MB case through the sensor gains **+216 ms** per input scan on a ~1 s scan.
+- **Atoms cost about 110 ns per char of prose (about 45 on non-prose), linear in the value's size, with no bound.** **[Corrected 2026-10-05 (milestone review): ADDRESS-DENSE text costs ~1.45–1.70 µs/char — 7–8.5 s per 5 MB on EACH path, and an attacker controls it. See "What it costs, corrected" below.]**
+- The 5 MB case through the sensor gains **+216 ms** per input scan on a ~1 s scan. **[Corrected: that row used 5 MB of 'A', not test_truncation_bypass's own input; on its input the gain is +510 ms (1.37 → 1.88 s).]**
 - 5 MB of real prose costs **about 0.55 s on each path** (input, result, argument).
 - **benign_longform:** 94 ms/doc on input, 70 on result, 62 on argument; the 1.4 MB doc costs about 160–170 ms per path.
 - `test_truncation_bypass` still passes.
@@ -274,7 +274,7 @@ benign_longform, 24 docs, 10,100,008 chars (core value-origin cost, summed):
 | **benign_longform** | **7/24** (was 24/24, and 0/24 before RULING 1+2) | **8/24** (likewise) |
 
 **None of these is a bound block. All are `untrusted_source`.** The cause is measured per document (the input scan's own verdict, and whether the document contains a URL): `  (input scan, has atoms): {('allowed', False): 3, ('flagged', False): 13, ('flagged', True): 7, ('allowed', True): 1}`.
-- **Input-derived:** the 7 blocks are exactly the 7 documents that the input scan FLAGS (mostly `oversized_input`, which fires at ~150K chars) AND that contain URLs. V-9 makes every candidate of a flagged input untrusted, and atom extraction now finds those URLs in the call. This is RULING 3b's flagged-benign-input limitation. The 64 KiB cut had been hiding it.
+- **Input-derived:** the 7 blocks are exactly the 7 documents that the input scan FLAGS (mostly `oversized_input`, which fires at ~150K chars) AND that contain URLs. V-9 makes every candidate of a flagged input untrusted, and atom extraction now finds those URLs in the call. This is RULING 3b's flagged-benign-input limitation. The 64 KiB cut had been hiding it. **[Corrected 2026-10-05 (milestone review): wrong twice. Only 3 of the 7 are `oversized_input` (thread_dump); 4 are kubectl_dump, flagged `pii_detected` / `data_exfiltration`. And the URLs were recorded before too (thread_dump's atoms sit inside the first 64 KiB): what uncovered these blocks is atom extraction on the over-4,000-char ARGUMENT, which used to be unexamined.]**
 - **Result-derived:** the 8 blocks are the 8 documents with URLs. Read as a tool result with no designations, every URL in one is untrusted, and the harness passes the whole document back as one argument.
 
 **An asymmetry for the owner.** C-8 makes an argument leaf a destination only if its WHOLE value is one, so a 3,999-char email body quoting an untrusted URL does not block. Over 4,000 chars, the same body's URL is found as an atom and does block. Long arguments are now STRICTER than short ones. The options:
@@ -286,3 +286,21 @@ benign_longform, 24 docs, 10,100,008 chars (core value-origin cost, summed):
 - **Measured:** a 17,481-char prompt yields 13,134 key n-grams, and a full 64 KiB prompt yields 49,262. All of them share the 10,000-entry cap with destinations. An entry costs ~117 bytes.
 - **Recommendation: give the principal's key n-grams their OWN budget,** sized to the 64 KiB n-gram window (65,536 entries, ≤ ~7.7 MB per flow at 117 B), and keep destinations at their own 10,000. Then n-grams can never starve destination recording. A single shared cap would need ≥ ~60,000 to hold one full input plus its destinations.
 - **Known gap, either way:** an attacker-controlled result with more distinct URLs than the cap still saturates the ledger, and the poison in it is dropped. Saturation no longer blocks, so that call is allowed. This is pinned as a strict xfail (`test_a_saturating_result_does_not_launder_its_poison`). Closing it means treating a dropped unit like an unexaminable read, which is the owner's call.
+
+### What it costs, corrected (milestone review, 2026-10-05)
+Rerunnable: `scripts/value_origin_measurements/atom_cost.py`.
+```
+xaidr from: ./xaidr
+5 MB (5,000,000 chars), core value-origin cost per path:
+  test_truncation_bypass's own input ('(a|a)' x n/5)     input     617 ms (   123 ns/char) | result     522 ms (   104 ns/char) | argument     497 ms (    99 ns/char)
+  real prose (benign_longform's largest doc, repeated)   input     574 ms (   115 ns/char) | result     568 ms (   114 ns/char) | argument     561 ms (   112 ns/char)
+  ADDRESS-DENSE ('x.co ' repeated): the worst case       input    8520 ms (  1704 ns/char) | result    7245 ms (  1449 ns/char) | argument    7309 ms (  1462 ns/char)
+END TO END sensor.scan(test_truncation_bypass's 5 MB input): off 1374 ms, record 1883 ms, delta +510 ms
+benign_longform (24 docs, 10,100,008 chars): input 2400 ms total, 100 ms/doc | result 1698 ms total, 71 ms/doc | argument 1485 ms total, 62 ms/doc
+```
+**The number the owner asked for:**
+- On ordinary text, atom extraction is about 100–120 ns/char, so about +0.5 s on a 5 MB value per path.
+- **On address-dense text it is ~1.5 µs/char, about 7–8.5 s per 5 MB on each of input, result and argument, with no bound.** An attacker chooses that text.
+- `test_truncation_bypass`'s own input gains +510 ms end to end. That test still passes locally and on CI's base jobs.
+
+Whether to bound the atom pass, with a cap that would fail visibly, is the owner's ruling. Nothing here works around it.

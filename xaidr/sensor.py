@@ -397,7 +397,7 @@ _BIND_FAILURES: set = set()
 
 
 # A2 M6: the principal input value origin records, capped like a tool-result leaf.
-_VO_INPUT_CAP = 65_536
+_VO_INPUT_CAP = 65_536   # the core's key n-gram window (MAX_INPUT_NGRAM_CHARS); the input is no longer cut at it
 # V-31 as ruled by the owner (2026-10-04): a value-origin block's category and rule.
 _VO_BLOCK_CATEGORY = "untrusted_destination"
 _VO_BLOCK_RULE = "ORIGIN_UNTRUSTED_DESTINATION"
@@ -416,19 +416,6 @@ _VO_UNEXAMINABLE_RULE = "ORIGIN_UNEXAMINABLE_SOURCE"
 _IO_BACKED_MODULES = frozenset({"httpx", "requests", "urllib3", "aiohttp"})
 
 
-def _cap_principal_input(text, spans):
-    """``text[:_VO_INPUT_CAP]``, with declared spans cut to match so they still
-    concatenate to it (a mismatch would drop the whole record)."""
-    if spans is None:
-        return text[:_VO_INPUT_CAP], None
-    out, n = [], 0
-    for sp in spans:
-        if n >= _VO_INPUT_CAP:
-            break
-        t = sp.text[:_VO_INPUT_CAP - n]
-        out.append(_vo.Span(text=t, writer=sp.writer))
-        n += len(t)
-    return text[:_VO_INPUT_CAP], out
 
 
 def _resolve_provenance(
@@ -1964,9 +1951,11 @@ class DelphiSensor:
             spans = list(spans) if spans is not None else None
             truncated = text is not None and len(text) > _VO_INPUT_CAP
             if truncated:
-                # Capped like a tool-result leaf (the core's MAX_RESULT_LEAF_CHARS):
-                # the input seam's cost must not scale with the prompt (F8: 0.8 ms/KB;
-                # CI caught a 5MB input crossing test_truncation_bypass's bound).
+                # NOT cut any more (owner, 2026-10-05). It used to be cut here because
+                # the input seam's cost scaled with the prompt (F8: 0.8 ms/KB; CI caught
+                # a 5MB input crossing test_truncation_bypass's bound). The core now
+                # bounds the expensive part (key n-grams, first 64 KiB) and runs only
+                # the cheap atom pass over the rest: linear, ~110 ns/char of prose.
                 # Past 64 KiB the core records destination ATOMS but no key n-grams;
                 # a miss reads input_truncated, which does not block (owner,
                 # 2026-10-05; until then the text was cut here and a destination

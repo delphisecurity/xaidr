@@ -115,7 +115,7 @@ class _Ledger:
         self.entries: Dict[bytes, Entry] = {}
         self.ngrams: Dict[bytes, bool] = {}
         self.saturated = False
-        self.input_truncated = False     # a principal input was capped before recording
+        self.input_truncated = False     # a principal input exceeded the 64 KiB key n-gram window
         self.result_truncated = False    # a tool result hit a bound before recording (RULING 1+2)
         self.result_unread = False       # an I/O-backed result was skipped unread (Q18)
         self.sat_logged = False
@@ -268,14 +268,18 @@ def record_principal_input(text: str, spans: Sequence[Span] | None = None, *,
         clean = _principal_clean(input_clean)
         dests: List[Tuple[bytes, Entry]] = []
         grams: List[Tuple[bytes, bool]] = []
+        late: List[Tuple[bytes, Entry]] = []   # atoms past the examined window
         budget = MAX_INPUT_NGRAM_CHARS   # owner, 2026-10-05: keys are bounded, atoms are not
         if lg is not None and len(text) > MAX_INPUT_NGRAM_CHARS:
             lg.input_truncated = True     # visible; it no longer blocks
         for span_text, writer in span_list:            # left to right (V-24)
             is_principal = writer is Writer.PRINCIPAL and clean
             origin = Origin.PRINCIPAL if is_principal else Origin.UNTRUSTED_SOURCE
-            for _, a in prose_candidates(span_text):   # per span: no straddling; WHOLE span
-                dests.append((_digest_authority(a), (origin, declared, None)))
+            for pos, a in prose_candidates(span_text):   # per span: no straddling; WHOLE span
+                # Past the examined window, atoms go in their OWN write, last:
+                # junk there must never drop what the window recorded (review).
+                (dests if pos < budget else late).append(
+                    (_digest_authority(a), (origin, declared, None)))
             if is_principal and budget > 0:
                 for g in span_ngrams(span_text[:budget]):
                     grams.append((_digest_ngram(g), declared))
@@ -285,8 +289,10 @@ def record_principal_input(text: str, spans: Sequence[Span] | None = None, *,
         with lg.lock:
             ok_dest = _apply_unit(lg, dests, [])
             ok_gram = _apply_unit(lg, [], grams) if grams else True
+            ok_late = _apply_unit(lg, late, []) if late else True
         _log_saturation_once(lg)
-        return RecordOutcome.RECORDED if (ok_dest and ok_gram) else RecordOutcome.SATURATED
+        return (RecordOutcome.RECORDED if (ok_dest and ok_gram and ok_late)
+                else RecordOutcome.SATURATED)
     except Exception:
         _log.exception("value origin: record_principal_input faulted")
         return RecordOutcome.FAULT
@@ -353,12 +359,14 @@ def _read_trust(lg: _Ledger, plans: List[Tuple[SourceDesignation, List[_KeyPlan]
 def result_authorities(result: Any) -> List[Authority]:
     """Every destination candidate in a raw result: each leaf tried whole, and
     scanned as prose (C-7). May run host code (V-15)."""
-    return _result_authorities(result)[0]
+    out, _, _, late = _result_authorities(result)
+    return out + late
 
 
 def _result_authorities(result: Any) -> Tuple[List[Authority], bool]:
-    """(candidates, whether the result walk hit a bound, whether it skipped an
-    I/O-backed node unread)."""
+    """(examined candidates, whether the result walk hit a bound, whether it
+    skipped an I/O-backed node unread, atoms from past the bound). The last are
+    kept apart so the recorder writes them separately (milestone review)."""
     out: List[Authority] = []
     seen = set()
     leaves, truncated, unread, extra = result_leaves_bounded(result)
@@ -374,12 +382,13 @@ def _result_authorities(result: Any) -> Tuple[List[Authority], bool]:
             if a not in seen:
                 seen.add(a)
                 out.append(a)
+    late: List[Authority] = []
     for leaf in extra:                       # owner, 2026-10-05: atoms past the bound
         for _, a in prose_candidates(leaf):
             if a not in seen:
                 seen.add(a)
-                out.append(a)
-    return out, truncated, unread
+                late.append(a)
+    return out, truncated, unread, late
 
 
 def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
@@ -394,13 +403,14 @@ def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
         if lg is None:
             return RecordOutcome.NO_LEDGER
         # Everything that can run host code, BEFORE the lock (C-15).
-        auths, cut, unread = _result_authorities(result)
+        auths, cut, unread, late = _result_authorities(result)
         plans = []
         for d in designations:
             if source_matches(d, tool_name, arguments):
                 keys = [_KeyPlan(*argument_value(arguments, k)) for k in d.key_args]
                 plans.append((d, keys))
         digests = [_digest_authority(a) for a in auths]
+        late_digests = [_digest_authority(a) for a in late]
         if lg.pid != os.getpid():
             return RecordOutcome.NO_LEDGER
         with lg.lock:
@@ -410,8 +420,12 @@ def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
                 lg.result_unread = True      # Q18 under the bounds ruling: never silent
             entry = _read_trust(lg, plans, result_blocked)
             ok = _apply_unit(lg, [(d, entry) for d in digests], [])
+            # Past-the-bound atoms in their OWN write, after the examined part, so
+            # they can never drop it (milestone review, 2026-10-05).
+            ok_late = (_apply_unit(lg, [(d, entry) for d in late_digests], [])
+                       if late_digests else True)
         _log_saturation_once(lg)
-        return RecordOutcome.RECORDED if ok else RecordOutcome.SATURATED
+        return RecordOutcome.RECORDED if (ok and ok_late) else RecordOutcome.SATURATED
     except Exception:
         _log.exception("value origin: record_tool_result faulted")
         return RecordOutcome.FAULT

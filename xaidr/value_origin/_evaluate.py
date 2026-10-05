@@ -83,24 +83,24 @@ _ROWS = {
                          "Intent: not evaluated — this flow's ledger was full; an "
                          "unmatched destination cannot be called novel."),
     "input_truncated": (RowState.NOT_RECORDED,
-                        "Intent: not evaluated — the principal's input was longer than "
-                        "value origin records; a destination past that point cannot be "
-                        "traced."),
+                        "Intent: not evaluated — this destination traces to no recorded source; the "
+                        "principal's input was longer than value origin examines whole (64 KiB), and "
+                        "the part past that point was scanned only for destination addresses."),
     "result_truncated": (RowState.NOT_RECORDED,
-                         "Intent: not evaluated — a tool result in this flow was larger "
-                         "than value origin records (a value over 65,536 characters, more "
-                         "than 64 values, or nesting deeper than 6); a destination in the "
-                         "part not recorded cannot be traced."),
+                         "Intent: not evaluated — this destination traces to no recorded source; a tool "
+                         "result in this flow exceeded what value origin examines whole (a value over "
+                         "65,536 characters, more than 64 values, or nesting deeper than 6), and the "
+                         "part past that point was scanned only for destination addresses."),
     "result_unread": (RowState.NOT_RECORDED,
                       "Intent: not evaluated — a tool result in this flow was an unread "
                       "network response (httpx, requests, urllib3 or aiohttp), which value "
                       "origin does not read so as not to consume it; a destination in it "
                       "cannot be traced."),
     "argument_bound": (RowState.RAN_EVIDENCE,
-                       "Intent: destination not fully examined — this call's arguments "
-                       "exceed what value origin reads (a value over 4,000 characters, "
-                       "more than 64 values, or nesting deeper than 6); an unread value "
-                       "may be the destination."),
+                       "Intent: destination not fully examined — this call's arguments exceed what "
+                       "value origin examines whole (a value over 4,000 characters, more than 64 "
+                       "values, or nesting deeper than 6); past that point they were scanned only "
+                       "for destination addresses."),
     "no_destination": (RowState.NOT_APPLICABLE,
                        "Intent: not applicable — this call carries no "
                        "destination-shaped value."),
@@ -178,11 +178,11 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
          with no destination (walk bound / parse failure) is UNRESOLVED
       5. wire = the weakest per-finding wire by WIRE_STRENGTH; unless it is
          UNTRUSTED_SOURCE (a positive finding outranks a blind spot), a bound
-         names itself, first match wins: a walk bound on this call's arguments
-         -> ARGUMENT_BOUND; a miss on a ledger holding a cut tool result ->
-         RESULT_TRUNCATED; a miss on a ledger holding an unread I/O-backed result
-         -> RESULT_UNREAD (Q18); a cut principal input -> INPUT_TRUNCATED; a saturated
-         ledger -> LEDGER_SATURATED (RULING 1+2 after M8)
+         names itself, first match wins: a miss on a ledger holding an unread
+         I/O-backed result -> RESULT_UNREAD (it blocks, so it outranks the rest);
+         a walk bound on this call's arguments -> ARGUMENT_BOUND; a miss on a
+         saturated ledger -> LEDGER_SATURATED; a miss on a ledger holding a cut
+         tool result -> RESULT_TRUNCATED; a cut principal input -> INPUT_TRUNCATED
     """
     try:
         lg = _ledger._current()
@@ -227,16 +227,20 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
         wires = [_finding_wire(f) for f in findings]
         wire = min(wires, key=WIRE_STRENGTH.__getitem__)
         if wire is not WireValue.UNTRUSTED_SOURCE:
-            if truncated:
-                wire = WireValue.ARGUMENT_BOUND       # RULING 1+2: never a silent unresolved
-            elif result_miss:
-                wire = WireValue.RESULT_TRUNCATED     # RULING 1+2
-            elif unread_miss:
-                wire = WireValue.RESULT_UNREAD        # Q18 under the bounds ruling
-            elif truncated_miss:
-                wire = WireValue.INPUT_TRUNCATED      # owner, after M6
+            # A state that BLOCKS outranks every state that does not (milestone
+            # review, 2026-10-05: with argument_bound checked first, a 4,001-char
+            # body hid result_unread). Then saturation before truncation: a
+            # dropped write explains a miss better than a cut.
+            if unread_miss:
+                wire = WireValue.RESULT_UNREAD        # Q18: the one bound that blocks
+            elif truncated:
+                wire = WireValue.ARGUMENT_BOUND
             elif saturated_miss:
                 wire = WireValue.LEDGER_SATURATED
+            elif result_miss:
+                wire = WireValue.RESULT_TRUNCATED
+            elif truncated_miss:
+                wire = WireValue.INPUT_TRUNCATED
         return _verdict(wire, findings, truncated)
     except Exception:
         _log.exception("value origin: evaluate_call faulted")

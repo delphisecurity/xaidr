@@ -32,7 +32,9 @@ class WireValue(str, enum.Enum):
     (INPUT_TRUNCATED added by the owner, A2 after M6: truncation is its own
     state, never a silent unresolved; ARGUMENT_BOUND and RESULT_TRUNCATED added
     by the owner's RULING 1+2 after M8: every bound is a visible state, and under
-    ENFORCE a bounded value blocks. Two, not one: argument_bound is a fact about
+    ENFORCE a bounded value blocks -- NARROWED 2026-10-05: only RESULT_UNREAD
+    blocks; the rest are visible states, and atom extraction finds what a bound
+    used to hide. Two, not one: argument_bound is a fact about
     THIS CALL, result_truncated a fact about the LEDGER; RESULT_UNREAD under the
     same ruling, 2026-10-05: Q18's unread I/O-backed result is a bound too)."""
 

@@ -464,11 +464,11 @@ lifetime.
 
 ## Decided 2026-10-04 (A2, after M6): truncation is a verdict state; S25 needs paid's confirmation
 
-**Truncation (owner).** The recorded principal input stays capped at 65,536
+**Truncation (owner).** The recorded principal input stays capped at 65,536 **[Narrowed 2026-10-05: input_truncated and ledger_saturated do not block; the input is no longer cut, the core reads atoms from all of it.]**
 chars (M6), but a destination past the cap no longer reads a silent
 `unresolved`. If the flow's principal input was capped and a lookup misses, the
 wire is **`input_truncated`**, a TENTH wire value. Its verdict is NOT_EVALUATED,
-so it never blocks, like `ledger_saturated`. **[Superseded by RULING 1+2 (2026-10-04): both block under ENFORCE.]** Its own §3.4 row reads: "the
+so it never blocks, like `ledger_saturated`. **[Superseded by RULING 1+2 (2026-10-04): both block under ENFORCE.]** Its own §3.4 row reads: "the **[Narrowed 2026-10-05: input_truncated and ledger_saturated do not block; the input is no longer cut, the core reads atoms from all of it.]**
 principal's input was longer than value origin records; a destination past that
 point cannot be traced." An untrusted finding still outranks it. Absence is a
 row, never a missing row. **This is a vocabulary and interface change:**
@@ -495,14 +495,14 @@ Showing that RECORD mode leaves it byte-identical is A2's obligation (C-11).
 
 ## 2026-10-04 — after M8: bounds, seam identity, names (owner)
 
-- **RULING 1+2.** Every bound emits a visible state, and under ENFORCE it blocks.
+- **RULING 1+2.** Every bound emits a visible state, and under ENFORCE it blocks. **[Narrowed 2026-10-05: only result_unread blocks; see the 2026-10-05 section.]**
   - New wire values: `argument_bound` (this call's argument walk hit a bound) and `result_truncated` (a recorded result was cut AND the lookup missed). Twelve values in all.
   - Supersedes S16's expected `unresolved` on a walk bound, V-15's silent 64 KiB drop, and, as an extension the owner is asked to confirm, the M6 rule that `input_truncated` never blocks. `ledger_saturated` blocks too.
   - Cap numbers unchanged.
 - **RULING 3a.** `scan(..., direction="tool_result", tool=, arguments=)` amends V-26.
 - **RULING 3b.** A flagged benign input is a documented limitation (docs/value-origin-enforce.md), not patched.
-- **RULING 4.** Category `untrusted_destination`; rule `ORIGIN_UNTRUSTED_DESTINATION`. `ORIGIN_UNTRUSTED_DESTINATION_KEYED` is emitted nowhere and is defined in no document found. `value_origin_unauthorized` is not carried.
-- **Q18 under RULING 1+2 (2026-10-05, owner).** An unread I/O-backed result is a bound. It gets the wire value `result_unread`, thirteen in all, and blocks under ENFORCE. Q18's "report them `not_recorded` in the manifest" was never built and is superseded: the manifest has no per-read field.
+- **RULING 4.** Category `untrusted_destination`; rule `ORIGIN_UNTRUSTED_DESTINATION`. `ORIGIN_UNTRUSTED_DESTINATION_KEYED` is emitted nowhere and is defined in no document found. `value_origin_unauthorized` is not carried. **[Corrected 2026-10-05, owner: designed (Tier 2 keyed variant), not implemented.]**
+- **Q18 under RULING 1+2 (2026-10-05, owner).** An unread I/O-backed result is a bound. It gets the wire value `result_unread`, thirteen in all, and blocks under ENFORCE. Q18's "report them `not_recorded` in the manifest" was never built and is superseded: the manifest has no per-read field. **[Still blocks after the 2026-10-05 narrowing, under `ORIGIN_UNEXAMINABLE_SOURCE`.]**
 
 ## 2026-10-05 — the bounds ruling narrowed; names; the keyed variant (owner)
 
@@ -511,6 +511,6 @@ Showing that RECORD mode leaves it byte-identical is A2's obligation (C-11).
   - `ledger_saturated` stops blocking, with a visible state and a loud warning. The owner asked for a recommended cap; it is in docs/value-origin-enforce.md.
   - `result_unread` (Q18) KEEPS BLOCKING.
   - Supersedes the "blocks" half of RULING 1+2 (2026-10-04) and its extension to input_truncated / ledger_saturated.
-- **A separate rule id for a block on a source that could not be examined:** `ORIGIN_UNEXAMINABLE_SOURCE`. Its category is `unexaminable_source` (category not named by the owner; for confirmation). It never carries `ORIGIN_UNTRUSTED_DESTINATION` or `intent.value_origin_untrusted`, because that would be a false statement in the audit record.
+- **A separate rule id for a block on a source that could not be examined:** `ORIGIN_UNEXAMINABLE_SOURCE`. Its category is `unexaminable_source` (category not named by the owner; for confirmation). It never carries `ORIGIN_UNTRUSTED_DESTINATION` (ruled) or `intent.value_origin_untrusted` (MY decision, not ruled; C-19's waterfall keys `decided` on that id, so an unexaminable block may show no deciding stage — for the owner).
 - **`ORIGIN_UNTRUSTED_DESTINATION_KEYED`: DESIGNED, NOT IMPLEMENTED.** It comes from the original value-origin design as the Tier 2 keyed variant and was never built. Nothing emits it, and no emission is invented for it (owner, 2026-10-05: "my error").
 - **Left open on purpose:** the silent-failure review's MEDIUM. `frameworks._scan_result`'s fallback, for a sensor without `_scan_tool_result`, passes no tool identity. It fails safe, and the owner would rather it stay visible than be quietly patched.
