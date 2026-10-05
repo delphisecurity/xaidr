@@ -1,4 +1,8 @@
-"""RULING 1+2 and 3a from OUTSIDE the process: the built wheel, a fresh venv,
+"""[Narrowed by the owner, 2026-10-05: an argument bound is visible and does not
+block; a destination past a result bound is RECORDED by atom extraction; only an
+unread I/O-backed result blocks, under ORIGIN_UNEXAMINABLE_SOURCE.]
+
+RULING 1+2 and 3a from OUTSIDE the process: the built wheel, a fresh venv,
 ``python -I``. Every bound blocks under ENFORCE with its own state, RECORD
 reports it without changing the action, and the public tool_result seam's
 identity lets a designation match (milestone review: this evidence lived only
@@ -89,6 +93,19 @@ for module in ("httpx", "requests.models", "urllib3.response", "aiohttp.client_r
     for vo in ("enforce", "record", "off"):
         out["q18"].setdefault(module, {})[vo] = flow(sensor(vo), stand_in(module), {"url": EVIL})
 out["q18_reads"] = reads
+def q18_rules():
+    s = sensor("enforce")
+    def run():
+        pc.begin_flow(principal="alice")
+        try:
+            s.scan("Summarise the quarterly report for me.", direction="input")
+            s._scan_tool_result("fetched", tool="web_fetch", arguments={}, raw_result=stand_in("httpx"))
+            r = s.scan_tool_call("http_post", {"url": EVIL})
+            return [r.category, list(r.rules)]
+        finally:
+            pc.clear_flow()
+    return run_in_thread(run)
+out["q18_names"] = q18_rules()
 print(json.dumps(out))
 '''
 
@@ -114,11 +131,13 @@ def installed(tmp_path_factory):
                                   "result:leaf_over_64k[public scan, tool=]",
                                   "result:over_64_leaves[private _scan_tool_result]",
                                   "result:depth_over_6[private _scan_tool_result]"])
-def test_the_installed_wheel_blocks_every_bound_with_its_own_state(installed, case):
+def test_the_installed_wheel_after_every_bound(installed, case):
     m = installed["cases"][case]
-    state = "argument_bound" if case.startswith("arg") else "result_truncated"
-    assert m["enforce"] == ["blocked", state], f"{case}: ENFORCE gave {m['enforce']}"
-    assert m["record"][1] == state, f"{case}: RECORD gave {m['record']}"
+    if case.startswith("arg"):     # visible, and no longer a reason to block
+        assert m["enforce"] == [m["off"][0], "argument_bound"], f"{case}: ENFORCE {m['enforce']}, OFF {m['off']}"
+    else:                          # recorded past the bound by atom extraction
+        assert m["enforce"] == ["blocked", "untrusted_source"], f"{case}: ENFORCE gave {m['enforce']}"
+    assert m["record"][1] == m["enforce"][1], f"{case}: RECORD gave {m['record']}"
     assert m["record"][0] == m["off"][0], f"{case}: C-11, RECORD {m['record']} vs OFF {m['off']}"
 
 
@@ -137,3 +156,8 @@ def test_the_installed_wheel_blocks_after_an_unread_io_backed_result(installed, 
     assert m["enforce"] == ["blocked", "result_unread"], f"{module}: ENFORCE gave {m['enforce']}"
     assert m["record"][1] == "result_unread" and m["record"][0] == m["off"][0], m
     assert installed["q18_reads"] == [], f".content was read: {installed['q18_reads']}"
+
+
+def test_the_installed_wheel_names_an_unexaminable_block_truthfully(installed):
+    assert installed["q18_names"] == ["unexaminable_source", ["ORIGIN_UNEXAMINABLE_SOURCE"]], (
+        installed["q18_names"])

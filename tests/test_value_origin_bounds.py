@@ -1,4 +1,9 @@
-"""Every bound emits a visible state, and under ENFORCE a bounded value BLOCKS
+"""[NARROWED by the owner, 2026-10-05 -- see tests/test_value_origin_atoms.py: only
+result_unread still blocks; the other bound states are visible and do not block,
+and atom extraction finds what a bound used to hide. The assertions below are
+updated where they pinned "blocks".]
+
+Every bound emits a visible state, and under ENFORCE a bounded value BLOCKS
 (owner, RULING 1+2, A2 after M8: "Every bound in this system fails open and
 silently ... An attacker needs padding, not skill").
 
@@ -79,25 +84,24 @@ def _call_after(result=None, arguments=None, *, input_truncated=False):
 
 
 @pytest.mark.parametrize("shape", sorted(ARG_BOUNDS))
-def test_an_argument_bound_is_its_own_state_and_blocks_under_enforce(shape):
+def test_an_argument_bound_is_its_own_state_and_does_not_block(shape):
     v = _call_after(arguments=ARG_BOUNDS[shape])
     assert v.wire.value == "argument_bound", (
         f"{shape}: a call whose arguments value origin did not finish reading gave "
         f"{v.wire.value!r} -- padding evades ENFORCE")
     assert v.truncated is True
-    assert should_block(v, mode=Mode.ENFORCE), f"{shape}: argument_bound does not block"
-    assert not should_block(v, mode=Mode.RECORD), "C-11: RECORD never changes an action"
+    assert not should_block(v, mode=Mode.ENFORCE), (
+        f"{shape}: argument_bound blocks -- a cost control is not a reason to block (owner, 2026-10-05)")
 
 
 @pytest.mark.parametrize("shape", sorted(RESULT_BOUNDS))
-def test_a_cut_tool_result_is_its_own_state_and_blocks_under_enforce(shape):
+def test_a_destination_past_a_result_bound_is_recorded(shape):
     v = _call_after(result=RESULT_BOUNDS[shape])
-    assert v.wire.value == "result_truncated", (
+    assert v.wire.value == "untrusted_source", (
         f"{shape}: the destination sat in the part of a tool result value origin did "
         f"not record, and the call read {v.wire.value!r} -- exactly like a destination "
         "never seen, so ENFORCE allowed it")
-    assert should_block(v, mode=Mode.ENFORCE), f"{shape}: result_truncated does not block"
-    assert not should_block(v, mode=Mode.RECORD)
+    assert should_block(v, mode=Mode.ENFORCE)
 
 
 @pytest.mark.parametrize("shape", sorted(RESULT_OK))
@@ -130,14 +134,19 @@ def test_a_miss_with_no_bound_hit_stays_unresolved():
     assert not should_block(v, mode=Mode.ENFORCE), "a plain miss is not a bound"
 
 
-def test_input_truncated_blocks_under_enforce():
+def test_input_truncated_is_visible_and_does_not_block():
     v = _call_after(arguments={"url": "https://never-recorded.example/"}, input_truncated=True)
     assert v.wire.value == "input_truncated"
-    assert should_block(v, mode=Mode.ENFORCE), (
-        "input_truncated is a bound: a destination past the 65,536-char input cap is "
-        "allowed under ENFORCE")
+    assert not should_block(v, mode=Mode.ENFORCE), "owner, 2026-10-05: it no longer blocks"
 
 
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    "KNOWN GAP under the owner's 2026-10-05 ruling (ledger_saturated does not block): "
+    "a result with enough distinct URLs saturates the 10,000-entry ledger, the whole "
+    "unit -- poison included -- is dropped, and the call to it reads ledger_saturated "
+    "and is ALLOWED. A ~17 KB benign principal prompt saturates it too, after which no "
+    "tool result is recorded at all. The owner asked what the cap should be: "
+    "docs/value-origin-enforce.md"))
 def test_a_saturating_result_does_not_launder_its_poison():
     def run():
         vo.bind_fresh_ledger()
@@ -187,18 +196,23 @@ def _sensor_action(value_origin, result, arguments):
 
 
 SENSOR_CASES = ([(f"arg:{k}", None, a, "argument_bound") for k, a in sorted(ARG_BOUNDS.items())]
-                + [(f"result:{k}", r, {"url": EVIL}, "result_truncated")
+                + [(f"result:{k}", r, {"url": EVIL}, "untrusted_source")
                    for k, r in sorted(RESULT_BOUNDS.items())])
 
 
 @pytest.mark.parametrize("case, result, arguments, state", SENSOR_CASES,
                          ids=[c[0] for c in SENSOR_CASES])
-def test_the_installed_seam_blocks_every_bound_under_enforce_and_record_does_not(
-        case, result, arguments, state):
+def test_the_installed_seam_after_each_bound(case, result, arguments, state):
+    """Owner, 2026-10-05: an argument bound is visible and does not block (the
+    destination is a miss here: nothing recorded it); a destination past a result
+    bound is RECORDED, so the call to it is untrusted and blocks."""
     got = _sensor_action("enforce", result, arguments)
-    assert got == ("blocked", state), f"{case}: ENFORCE gave {got}"
     rec = _sensor_action("record", result, arguments)
     off = _sensor_action("off", result, arguments)
+    if state == "untrusted_source":
+        assert got == ("blocked", state), f"{case}: ENFORCE gave {got}"
+    else:
+        assert got == (off[0], state), f"{case}: ENFORCE gave {got}; OFF gave {off}"
     assert rec[1] == state, f"{case}: RECORD must report the state too, gave {rec}"
     assert rec[0] == off[0], f"{case}: C-11, RECORD changed the action {off[0]!r} -> {rec[0]!r}"
 
@@ -244,6 +258,10 @@ def _stand_in(module):
     return cls(), lambda: bool(reads)
 
 
+# The REAL objects need httpx/urllib3, which only the dev extra installs: those
+# cases are requires_dev_extra (the base CI job deselects them). Unmarked, they
+# REFUSED on every base job of 77d9b4a (run 37355899015: 7 failed per job).
+_DEV = pytest.mark.requires_dev_extra
 IO_RESULTS = {
     "httpx.Response[real, unread stream]": _httpx_unread,
     "urllib3.HTTPResponse[real, preload_content=False]": _urllib3_unread,
@@ -254,8 +272,12 @@ IO_RESULTS = {
 }
 
 
+def _kinds():
+    return [pytest.param(k, marks=_DEV) if "[real" in k else k for k in sorted(IO_RESULTS)]
+
+
 @pytest.mark.parametrize("nested", [False, True], ids=["top-level", "nested-in-a-dict"])
-@pytest.mark.parametrize("kind", sorted(IO_RESULTS))
+@pytest.mark.parametrize("kind", _kinds())
 def test_an_unread_io_backed_result_is_a_visible_state_and_blocks(kind, nested):
     obj, consumed = IO_RESULTS[kind]()
     v = _call_after(result={"response": obj} if nested else obj)
@@ -267,7 +289,7 @@ def test_an_unread_io_backed_result_is_a_visible_state_and_blocks(kind, nested):
     assert not should_block(v, mode=Mode.RECORD)
 
 
-@pytest.mark.parametrize("kind", sorted(IO_RESULTS))
+@pytest.mark.parametrize("kind", _kinds())
 def test_the_sensor_seam_blocks_after_an_unread_io_backed_result(kind):
     obj, consumed = IO_RESULTS[kind]()
     got = _sensor_action("enforce", obj, {"url": EVIL})
@@ -281,7 +303,7 @@ def test_the_sensor_seam_blocks_after_an_unread_io_backed_result(kind):
 
 
 def test_an_untrusted_finding_outranks_an_unread_result():
-    obj, _ = _httpx_unread()
+    obj, _ = _stand_in("httpx")      # the precedence needs no real stream
 
     def run():
         vo.bind_fresh_ledger()
@@ -311,12 +333,14 @@ def test_a_bound_block_tells_telemetry_which_bound():
         pc.begin_flow(principal="alice")
         try:
             s.scan(NEUTRAL, direction="input")
-            return s.scan_tool_call("http_post", ARG_BOUNDS["over_64_leaves"]).action
+            stand_in = type("Response", (), {"__module__": "httpx"})()   # the one bound that blocks
+            s._scan_tool_result("fetched", tool="web_fetch", arguments={}, raw_result=stand_in)
+            return s.scan_tool_call("http_post", {"url": EVIL}).action
         finally:
             pc.clear_flow()
     with ThreadPoolExecutor(max_workers=1) as pool:
         assert pool.submit(run).result() == "blocked"
     vo_events = [e["data"] for e in events if e.get("data", {}).get("gate") == "value_origin"]
     assert len(vo_events) == 1, vo_events
-    assert vo_events[0].get("valueOrigin") == "argument_bound", (
+    assert vo_events[0].get("valueOrigin") == "result_unread", (
         f"the block event does not say which state blocked it: {vo_events[0]}")

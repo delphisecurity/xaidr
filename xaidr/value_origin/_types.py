@@ -191,5 +191,7 @@ MAX_ARG_LEAVES: int = 64      # same bound as open's strings_in(..., limit=64)
 MAX_ARG_DEPTH: int = 6
 MAX_LEAF_CHARS: int = 4_000   # same ceiling as url_parse.MAX_URL_CHARS
 MAX_KEY_TOKENS: int = 4       # §6 C-3
+MAX_INPUT_NGRAM_CHARS: int = 65_536   # key n-grams from the first 64 KiB of principal input;
+                                      # destination atoms from ALL of it (owner, 2026-10-05)
 MAX_RESULT_LEAF_CHARS: int = 65_536   # V-15: candidates from the first 64 KiB of a result leaf
 PSL_SNAPSHOT_DATE: str = _PSL_SNAPSHOT_DATE

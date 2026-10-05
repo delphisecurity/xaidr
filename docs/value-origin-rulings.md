@@ -503,3 +503,14 @@ Showing that RECORD mode leaves it byte-identical is A2's obligation (C-11).
 - **RULING 3b.** A flagged benign input is a documented limitation (docs/value-origin-enforce.md), not patched.
 - **RULING 4.** Category `untrusted_destination`; rule `ORIGIN_UNTRUSTED_DESTINATION`. `ORIGIN_UNTRUSTED_DESTINATION_KEYED` is emitted nowhere and is defined in no document found. `value_origin_unauthorized` is not carried.
 - **Q18 under RULING 1+2 (2026-10-05, owner).** An unread I/O-backed result is a bound. It gets the wire value `result_unread`, thirteen in all, and blocks under ENFORCE. Q18's "report them `not_recorded` in the manifest" was never built and is superseded: the manifest has no per-read field.
+
+## 2026-10-05 — the bounds ruling narrowed; names; the keyed variant (owner)
+
+- **Narrowed.** *"The goal was never that: it was don't lose the destination. Blocking is the fallback for a value that genuinely cannot be examined, not the answer to a cost control."*
+  - `argument_bound`, `input_truncated` and result truncation STOP BLOCKING. Cheap destination-atom extraction runs over the whole value; only the expensive examination stays bounded.
+  - `ledger_saturated` stops blocking, with a visible state and a loud warning. The owner asked for a recommended cap; it is in docs/value-origin-enforce.md.
+  - `result_unread` (Q18) KEEPS BLOCKING.
+  - Supersedes the "blocks" half of RULING 1+2 (2026-10-04) and its extension to input_truncated / ledger_saturated.
+- **A separate rule id for a block on a source that could not be examined:** `ORIGIN_UNEXAMINABLE_SOURCE`. Its category is `unexaminable_source` (category not named by the owner; for confirmation). It never carries `ORIGIN_UNTRUSTED_DESTINATION` or `intent.value_origin_untrusted`, because that would be a false statement in the audit record.
+- **`ORIGIN_UNTRUSTED_DESTINATION_KEYED`: DESIGNED, NOT IMPLEMENTED.** It comes from the original value-origin design as the Tier 2 keyed variant and was never built. Nothing emits it, and no emission is invented for it (owner, 2026-10-05: "my error").
+- **Left open on purpose:** the silent-failure review's MEDIUM. `frameworks._scan_result`'s fallback, for a sensor without `_scan_tool_result`, passes no tool identity. It fails safe, and the owner would rather it stay visible than be quietly patched.

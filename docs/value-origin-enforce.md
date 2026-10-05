@@ -119,6 +119,8 @@ All three names are constants in `xaidr/sensor.py`.
 
 ## Every bound blocks under ENFORCE (owner RULING 1+2, 2026-10-04)
 
+**[NARROWED by the owner, 2026-10-05: only `result_unread` still blocks. argument_bound, result_truncated, input_truncated and ledger_saturated are visible states that do not block, and atom extraction finds what a bound used to hide. See "The bounds ruling, narrowed" at the end.]**
+
 The owner: *"Every bound in this system fails open and silently ... An attacker needs padding, not skill."*
 The cap numbers are unchanged. What exceeding one MEANS is new: each bound is a visible wire value, and under ENFORCE it blocks.
 
@@ -170,6 +172,8 @@ This is not papered over. It is recorded here as a known limitation, and it is a
 
 ## Re-measured after RULING 1+2 (2026-10-05)
 
+**[Superseded the same day: these 24/24 were `argument_bound` blocks, which no longer block. Current numbers are under "The bounds ruling, narrowed".]**
+
 `q13_block_rate.py` now counts a block with the tree's own `should_block`. The same instrument was run on 255a4b3 and on f93e873, and it reproduces the one surviving output of the uncommitted script behind the 4/64 and 0/24 figures exactly.
 
 | corpus | input-derived, before → after | result-derived, before → after |
@@ -185,6 +189,8 @@ This is not papered over. It is recorded here as a known limitation, and it is a
 **What this means beyond the corpus: a cost the ruling did not name.** The owner accepted false positives on legitimate large RESULTS. The 4,000-char bound is on ARGUMENTS, and it fires whether or not the long value is destination-shaped. Under ENFORCE, any tool call carrying one string over 4,000 chars now blocks, whatever its destination: an email body, a file write, a long query. Measured here as 24/24 on the one corpus with long arguments.
 
 **A cost the extension to `ledger_saturated` did not state** (milestone review, 2026-10-05, CONFIRMED):
+
+**[Resolved by the owner, 2026-10-05: ledger_saturated no longer blocks. The cap question is answered below.]**
 - A benign principal prompt of 17,481 chars saturates the ledger. That is well under the 65,536-char input cap; the prompt's n-grams count toward LEDGER_MAX_ENTRIES.
 - From then on, EVERY destination miss in that flow blocks under ENFORCE.
 - This extension was made without a ruling, is live in the code, and is listed for the owner to confirm. Reversing it is one line: remove `LEDGER_SATURATED` from `_BOUND_WIRES`.
@@ -204,3 +210,79 @@ It was reproduced with REAL unread objects, not stand-ins: an `httpx.Response` o
 - An untrusted finding outranks it. Precedence: argument_bound, result_truncated, result_unread, input_truncated, ledger_saturated.
 
 **Cost:** under ENFORCE, a tool that returns a raw response object makes every later destination miss in that flow block. The fix on the host side is to return the read body (`response.text`), which value origin then reads normally.
+
+## The bounds ruling, narrowed (owner, 2026-10-05)
+
+> "The goal was never that: it was **don't lose the destination**. Blocking is the fallback for a value that genuinely cannot be examined, not the answer to a cost control."
+
+| state | blocks under ENFORCE? | what happens past the bound |
+|---|---|---|
+| `argument_bound` | **no** (visible) | the parts the walk skipped (the whole over-length leaf, leaves past the 64th, containers deeper than 6) are searched for destination ATOMS, and each atom is evaluated |
+| `result_truncated` | **no** (visible) | the same parts of a result are searched for atoms, and each is RECORDED with the result's origin |
+| `input_truncated` | **no** (visible) | the sensor no longer cuts the input; the core records atoms from ALL of it and key n-grams from the first 64 KiB |
+| `ledger_saturated` | **no** (visible, loud warning) | unchanged: the cap is the question (below) |
+| `result_unread` (Q18) | **yes** | a stream cannot be read without consuming it. Category `unexaminable_source`, rule `ORIGIN_UNEXAMINABLE_SOURCE`, never `ORIGIN_UNTRUSTED_DESTINATION` / `intent.value_origin_untrusted` |
+
+"Atoms" are C-7's prose pass (`prose_candidates`) over the WHOLE string, with no leaf, length or depth bound; the walk is cycle-safe. Only the expensive whole-value examination stays bounded. An over-length leaf is handed on whole, so a destination straddling the 64 KiB cut is found (sabotage SA3: handing on only the tail loses it).
+
+**The rule id, and a category the ruling did not name.** The owner ruled a separate rule id for a block on a source that could not be examined. The category `untrusted_destination` would be the same false statement, so it changed too, to `unexaminable_source`. **For the owner to confirm.**
+
+### What it costs (measured, not assumed)
+Value origin's own cost, called directly on the core so the scanner's time is excluded. Before is 77d9b4a, after is this commit:
+```
+BEFORE (77d9b4a)
+xaidr from: ./xaidr
+the 5 MB case (core value-origin cost only, best of 3):
+  record_principal_input  5 MB of 'A' (test_truncation_bypass shape)      241.3 ms
+  record_tool_result      5 MB of 'A' (test_truncation_bypass shape)        3.0 ms
+  evaluate_call(arg)      5 MB of 'A' (test_truncation_bypass shape)        0.0 ms
+  record_principal_input  5 MB of real prose                             1571.7 ms
+  record_tool_result      5 MB of real prose                                7.2 ms
+  evaluate_call(arg)      5 MB of real prose                                0.0 ms
+  END TO END sensor.scan(5 MB 'A', input): value_origin=off 1013 ms, record 1026 ms, delta +13 ms
+benign_longform, 24 docs, 10,100,008 chars (core value-origin cost, summed):
+  record_principal_input           total     5877 ms    244.9 ms/doc   largest doc 439 ms
+  record_tool_result               total      230 ms      9.6 ms/doc   largest doc 7 ms
+  evaluate_call(run_command=doc)   total        0 ms      0.0 ms/doc   largest doc 0 ms
+
+AFTER
+xaidr from: ./xaidr
+the 5 MB case (core value-origin cost only, best of 3):
+  record_principal_input  5 MB of 'A' (test_truncation_bypass shape)      219.8 ms
+  record_tool_result      5 MB of 'A' (test_truncation_bypass shape)      222.8 ms
+  evaluate_call(arg)      5 MB of 'A' (test_truncation_bypass shape)      217.7 ms
+  record_principal_input  5 MB of real prose                              565.6 ms
+  record_tool_result      5 MB of real prose                              554.9 ms
+  evaluate_call(arg)      5 MB of real prose                              550.1 ms
+  END TO END sensor.scan(5 MB 'A', input): value_origin=off 1019 ms, record 1234 ms, delta +216 ms
+benign_longform, 24 docs, 10,100,008 chars (core value-origin cost, summed):
+  record_principal_input           total     2244 ms     93.5 ms/doc   largest doc 172 ms
+  record_tool_result               total     1685 ms     70.2 ms/doc   largest doc 162 ms
+  evaluate_call(run_command=doc)   total     1486 ms     61.9 ms/doc   largest doc 158 ms
+```
+- **Atoms cost about 110 ns per char of prose (about 45 on non-prose), linear in the value's size, with no bound.**
+- The 5 MB case through the sensor gains **+216 ms** per input scan on a ~1 s scan.
+- 5 MB of real prose costs **about 0.55 s on each path** (input, result, argument).
+- **benign_longform:** 94 ms/doc on input, 70 on result, 62 on argument; the 1.4 MB doc costs about 160–170 ms per path.
+- `test_truncation_bypass` still passes.
+- Whether this counts as "cheap" is the owner's call. These are the numbers.
+
+### Block rate after the narrowing: benign_longform is NOT back near 0
+| corpus | input-derived | result-derived |
+|---|---|---|
+| benign / benign_prose / benign_templates / benign_a2a | unchanged: 0/83, 6/97, 0/12, 0/64 | unchanged: 5/83, 7/97, 0/12, 4/64 |
+| **benign_longform** | **7/24** (was 24/24, and 0/24 before RULING 1+2) | **8/24** (likewise) |
+
+**None of these is a bound block. All are `untrusted_source`.** The cause is measured per document (the input scan's own verdict, and whether the document contains a URL): `  (input scan, has atoms): {('allowed', False): 3, ('flagged', False): 13, ('flagged', True): 7, ('allowed', True): 1}`.
+- **Input-derived:** the 7 blocks are exactly the 7 documents that the input scan FLAGS (mostly `oversized_input`, which fires at ~150K chars) AND that contain URLs. V-9 makes every candidate of a flagged input untrusted, and atom extraction now finds those URLs in the call. This is RULING 3b's flagged-benign-input limitation. The 64 KiB cut had been hiding it.
+- **Result-derived:** the 8 blocks are the 8 documents with URLs. Read as a tool result with no designations, every URL in one is untrusted, and the harness passes the whole document back as one argument.
+
+**An asymmetry for the owner.** C-8 makes an argument leaf a destination only if its WHOLE value is one, so a 3,999-char email body quoting an untrusted URL does not block. Over 4,000 chars, the same body's URL is found as an atom and does block. Long arguments are now STRICTER than short ones. The options:
+- (a) accept it;
+- (b) past the bound, take only atoms that make up the whole value. The padding threat, `https://evil/?q=aaaa…`, is that shape;
+- (c) extract atoms from short leaves too, which is stricter everywhere.
+
+### What the ledger cap should be (asked by the owner)
+- **Measured:** a 17,481-char prompt yields 13,134 key n-grams, and a full 64 KiB prompt yields 49,262. All of them share the 10,000-entry cap with destinations. An entry costs ~117 bytes.
+- **Recommendation: give the principal's key n-grams their OWN budget,** sized to the 64 KiB n-gram window (65,536 entries, ≤ ~7.7 MB per flow at 117 B), and keep destinations at their own 10,000. Then n-grams can never starve destination recording. A single shared cap would need ≥ ~60,000 to hold one full input plus its destinations.
+- **Known gap, either way:** an attacker-controlled result with more distinct URLs than the cap still saturates the ledger, and the poison in it is dropped. Saturation no longer blocks, so that call is allowed. This is pinned as a strict xfail (`test_a_saturating_result_does_not_launder_its_poison`). Closing it means treating a dropped unit like an unexaminable read, which is the owner's call.

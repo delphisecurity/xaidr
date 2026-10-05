@@ -27,7 +27,10 @@ EXPECT = {
     "a2a_inbound_ends_implicit": "unresolved",
     "a2a_inbound_keeps_explicit": "principal_undeclared_span",
     "spans_mismatch_warnings": 1,
-    "input_cap": [True, "input_truncated"],
+    # Owner, 2026-10-05: past the cap the destination is RECORDED (atoms over the whole
+    # input). Its origin is the input's own (V-9): this filler is flagged, so untrusted
+    # -- the same as the head. Was "input_truncated" (lost), the pin until this ruling.
+    "input_cap": [True, "untrusted_source"],
 }
 WHY = {
     "undeclared": "the input seam recorded nothing",
@@ -40,7 +43,7 @@ WHY = {
     "a2a_inbound_ends_implicit": "an inbound A2A message kept the previous request's implicit ledger (Q21)",
     "a2a_inbound_keeps_explicit": "an inbound A2A message dropped begin_flow's explicit ledger (ruling 3.1)",
     "spans_mismatch_warnings": "a spans/text mismatch dropped the record silently (M6 silent-failure review)",
-    "input_cap": "a destination past the input cap read silently unresolved instead of input_truncated (owner, after M6: truncation is its own state, never a missing row)",
+    "input_cap": "a destination past the input cap was lost instead of recorded with the input's own V-9 origin (owner, 2026-10-05: don't lose the destination)",
 }
 
 

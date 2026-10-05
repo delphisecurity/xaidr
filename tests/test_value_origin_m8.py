@@ -154,7 +154,7 @@ def test_an_untrusted_destination_among_many_arguments_still_blocks():
         f"an untrusted destination among 71 arguments read {v.wire.value!r} (truncated={v.truncated})")
 
 
-def test_a_destination_past_64k_in_one_tool_result_reads_result_truncated_and_blocks():
+def test_a_destination_past_64k_in_one_tool_result_is_recorded_and_blocks():
     """Was a strict xfail asserting ("blocked", "untrusted_source"): wrong twice --
     the cap stays (owner: keep the numbers), so the tail is still not recorded,
     and this sensor is in the DEFAULT monitor mode, where a block is returned as
@@ -180,9 +180,12 @@ def test_a_destination_past_64k_in_one_tool_result_reads_result_truncated_and_bl
     with ThreadPoolExecutor(max_workers=1) as pool:
         got = pool.submit(run).result()
     assert len(filler) > 65_536
-    assert got == ("flagged", "result_truncated"), (
+    # Owner, 2026-10-05: atom extraction over the whole leaf RECORDS it (this
+    # asserted ("flagged", "result_truncated") under RULING 1+2, which blocked
+    # without recording). Monitor mode returns a block as "flagged".
+    assert got == ("flagged", "untrusted_source"), (
         f"an untrusted destination {len(filler):,} chars into one tool result gave {got}: "
-        "the cut result is silent and ENFORCE allows the call")
+        "the destination past the cap was lost")
 
 
 def _directory_flow(with_identity):

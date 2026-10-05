@@ -74,6 +74,7 @@ from ._extract import (argument_value, key_authority, key_ngram, result_leaves_b
                        span_ngrams)
 from ._types import (
     LEDGER_MAX_ENTRIES,
+    MAX_INPUT_NGRAM_CHARS,
     Authority,
     Origin,
     RecordOutcome,
@@ -217,9 +218,12 @@ def _log_saturation_once(lg: _Ledger) -> None:
     """Called OUTSIDE the lock."""
     if lg.saturated and not lg.sat_logged:
         lg.sat_logged = True
-        _log.warning("value origin: this flow's ledger reached %d digests and "
-                     "dropped an emission; unmatched destinations now report "
-                     "ledger_saturated, not unresolved", LEDGER_MAX_ENTRIES)
+        _log.warning("value origin: this flow's ledger is FULL at %d entries (destinations "
+                     "and the principal's key n-grams share it; a ~17 KB prompt fills it). "
+                     "Every emission after this is DROPPED, untrusted tool results "
+                     "included, and an unmatched destination reports ledger_saturated, "
+                     "which does not block (owner, 2026-10-05). The cap is too small: see "
+                     "docs/value-origin-enforce.md.", LEDGER_MAX_ENTRIES)
 
 
 # ── principal input ──────────────────────────────────────────────────────────
@@ -264,14 +268,18 @@ def record_principal_input(text: str, spans: Sequence[Span] | None = None, *,
         clean = _principal_clean(input_clean)
         dests: List[Tuple[bytes, Entry]] = []
         grams: List[Tuple[bytes, bool]] = []
+        budget = MAX_INPUT_NGRAM_CHARS   # owner, 2026-10-05: keys are bounded, atoms are not
+        if lg is not None and len(text) > MAX_INPUT_NGRAM_CHARS:
+            lg.input_truncated = True     # visible; it no longer blocks
         for span_text, writer in span_list:            # left to right (V-24)
             is_principal = writer is Writer.PRINCIPAL and clean
             origin = Origin.PRINCIPAL if is_principal else Origin.UNTRUSTED_SOURCE
-            for _, a in prose_candidates(span_text):   # per span: no straddling
+            for _, a in prose_candidates(span_text):   # per span: no straddling; WHOLE span
                 dests.append((_digest_authority(a), (origin, declared, None)))
-            if is_principal:
-                for g in span_ngrams(span_text):
+            if is_principal and budget > 0:
+                for g in span_ngrams(span_text[:budget]):
                     grams.append((_digest_ngram(g), declared))
+            budget -= len(span_text)
         if lg.pid != os.getpid():
             return RecordOutcome.NO_LEDGER
         with lg.lock:
@@ -353,7 +361,7 @@ def _result_authorities(result: Any) -> Tuple[List[Authority], bool]:
     I/O-backed node unread)."""
     out: List[Authority] = []
     seen = set()
-    leaves, truncated, unread = result_leaves_bounded(result)
+    leaves, truncated, unread, extra = result_leaves_bounded(result)
     for leaf in leaves:
         found: List[Authority] = []
         whole = classify_value(leaf, arg_mode=False)
@@ -363,6 +371,11 @@ def _result_authorities(result: Any) -> Tuple[List[Authority], bool]:
             found.extend(whole)
         found.extend(a for _, a in prose_candidates(leaf))
         for a in found:
+            if a not in seen:
+                seen.add(a)
+                out.append(a)
+    for leaf in extra:                       # owner, 2026-10-05: atoms past the bound
+        for _, a in prose_candidates(leaf):
             if a not in seen:
                 seen.add(a)
                 out.append(a)

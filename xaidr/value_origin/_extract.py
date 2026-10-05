@@ -63,10 +63,15 @@ _UNREAD = object()
 
 
 def _walk(root: Any, *, leaf_cap: int, char_cap: int, truncate_long: bool,
-          normalise=None) -> Tuple[List[Tuple[Path, str]], bool, bool]:
+          normalise=None, skipped: list | None = None
+          ) -> Tuple[List[Tuple[Path, str]], bool, bool]:
     """Bounded DFS. Returns (leaves, truncated, unread). ``normalise`` maps a
     non-container, non-str node to something walkable (V-15, results only); a
-    node it returns as ``_UNREAD`` sets ``unread`` and is not walked."""
+    node it returns as ``_UNREAD`` sets ``unread`` and is not walked. Given a
+    ``skipped`` list, every node a bound kept from examination is appended to it
+    as (path, node) -- an over-length leaf WHOLE, so a destination straddling the
+    cut is still whole -- for ``_all_strings`` and atom extraction (owner,
+    2026-10-05: the expensive examination stays bounded; extraction does not)."""
     leaves: List[Tuple[Path, str]] = []
     truncated = False
     unread = False
@@ -79,9 +84,14 @@ def _walk(root: Any, *, leaf_cap: int, char_cap: int, truncate_long: bool,
             count += 1
             if count > leaf_cap:
                 truncated = True
+                if skipped is not None:
+                    skipped.append((path, node))
+                    skipped.extend((p, n) for p, n, _ in stack)
                 break
             if len(node) > char_cap:
                 truncated = True           # a bound hit, cut or not (RULING 1+2 after M8)
+                if skipped is not None:
+                    skipped.append((path, node))
                 if truncate_long:          # results: the first 64 KiB are still recorded
                     leaves.append((path, node[:char_cap]))
                 continue                   # arguments: an over-length leaf is not examined
@@ -100,10 +110,48 @@ def _walk(root: Any, *, leaf_cap: int, char_cap: int, truncate_long: bool,
             continue
         if depth > MAX_ARG_DEPTH:
             truncated = True
+            if skipped is not None:
+                skipped.append((path, node))
             continue
         batch = [(path + (step,), child, depth + 1) for step, child, _ in kids]
         stack.extend(reversed(batch))
     return leaves, truncated, unread
+
+
+def _all_strings(items, normalise=None) -> Tuple[List[Tuple[Path, str]], bool]:
+    """Every string under ``items`` ((path, node) pairs) with NO leaf, length or
+    depth bound; cycle-safe. (strings, whether an unread I/O node was met)."""
+    out: List[Tuple[Path, str]] = []
+    unread = False
+    seen = set()
+    stack = list(reversed(items))
+    while stack:
+        path, node = stack.pop()
+        if isinstance(node, str):
+            out.append((path, node))
+            continue
+        if normalise is not None:
+            node = normalise(node)
+            if node is _UNREAD:
+                unread = True
+                continue
+            if isinstance(node, str):
+                out.append((path, node))
+                continue
+        is_container, kids = _children(node)
+        if not is_container or id(node) in seen:
+            continue
+        seen.add(id(node))
+        stack.extend(reversed([(path + (step,), child) for step, child, _ in kids]))
+    return out, unread
+
+
+def _atoms(strings):
+    """Cheap destination-atom extraction (C-7's prose pass) over whole strings."""
+    from ._authority import prose_candidates
+    for path, s in strings:
+        for _, a in prose_candidates(s):
+            yield path, a
 
 
 def extract_destinations(arguments: Mapping[str, object] | None
@@ -123,8 +171,9 @@ def extract_destinations(arguments: Mapping[str, object] | None
     try:
         if arguments is None:
             return (), False
+        skipped: list = []
         leaves, truncated, _ = _walk(arguments, leaf_cap=MAX_ARG_LEAVES,
-                                  char_cap=MAX_LEAF_CHARS, truncate_long=False)
+                                  char_cap=MAX_LEAF_CHARS, truncate_long=False, skipped=skipped)
         out: List[Finding] = []
         for path, leaf in leaves:
             res = classify_value(leaf, arg_mode=True)
@@ -140,6 +189,13 @@ def extract_destinations(arguments: Mapping[str, object] | None
             else:
                 out.append(Finding(path=path, destination=res, reason=None))
         if truncated:
+            # Owner, 2026-10-05: what the bound kept from examination is still
+            # searched for destination ATOMS, so a padded destination is found.
+            seen = {f.destination for f in out if f.destination is not None}
+            for path, a in _atoms(_all_strings(skipped)[0]):
+                if a not in seen:
+                    seen.add(a)
+                    out.append(Finding(path=path, destination=a, reason=None))
             out.append(Finding(path=(), destination=None,
                                reason=UnresolvedReason.WALK_BOUND))
         return tuple(out), truncated
@@ -183,16 +239,20 @@ def result_leaves(result: Any) -> List[str]:
     return result_leaves_bounded(result)[0]
 
 
-def result_leaves_bounded(result: Any) -> Tuple[List[str], bool, bool]:
+def result_leaves_bounded(result: Any) -> Tuple[List[str], bool, bool, List[str]]:
     """``result_leaves`` plus whether any bound was hit (a leaf cut at 65,536
     chars, more than 64 leaves, nesting deeper than 6). The recorder marks the
     ledger, so a later miss reads result_truncated, never a silent unresolved
     (owner, RULING 1+2 after M8). The third value: an I/O-backed node was
     skipped unread (Q18), so a later miss reads result_unread."""
+    skipped: list = []
     leaves, truncated, unread = _walk(result, leaf_cap=MAX_ARG_LEAVES,
                                       char_cap=MAX_RESULT_LEAF_CHARS, truncate_long=True,
-                                      normalise=_normalise_result_node)
-    return [s for _, s in leaves], truncated, unread
+                                      normalise=_normalise_result_node, skipped=skipped)
+    extra, unread_extra = _all_strings(skipped, normalise=_normalise_result_node)
+    # Fourth value (owner, 2026-10-05): the WHOLE strings the bound kept from
+    # examination, for atom extraction only.
+    return [s for _, s in leaves], truncated, unread or unread_extra, [s for _, s in extra]
 
 
 def argument_value(arguments: Mapping[str, object] | None, name: str):

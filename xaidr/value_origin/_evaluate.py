@@ -36,12 +36,11 @@ _VERDICT = {
     WireValue.RESULT_UNREAD: Verdict.NOT_EVALUATED,
 }
 
-# Owner, RULING 1+2 after M8: "every bound emits a visible state, and under
-# ENFORCE a truncated or bounded value BLOCKS". These four are every bound value
-# origin has; a plain UNRESOLVED (seen nowhere, nothing cut) is not among them.
-_BOUND_WIRES = frozenset({WireValue.ARGUMENT_BOUND, WireValue.RESULT_TRUNCATED,
-                          WireValue.RESULT_UNREAD,
-                          WireValue.INPUT_TRUNCATED, WireValue.LEDGER_SATURATED})
+# Owner, 2026-10-05, narrowing RULING 1+2: "Blocking is the fallback for a value
+# that genuinely cannot be examined, not the answer to a cost control." Only an
+# unread I/O-backed result (Q18) is such a value; argument_bound, result_truncated,
+# input_truncated and ledger_saturated are visible states that do not block.
+_UNEXAMINABLE_WIRES = frozenset({WireValue.RESULT_UNREAD})
 
 
 def verdict_of(wire: WireValue) -> Verdict:
@@ -60,13 +59,13 @@ def verdict_of(wire: WireValue) -> Verdict:
 
 def should_block(verdict: CallVerdict, *, mode: Mode) -> bool:
     """True iff ``mode is Mode.ENFORCE`` and either the verdict is UNAUTHORIZED
-    or the wire is a bound state (argument_bound, result_truncated, result_unread,
-    input_truncated, ledger_saturated: RULING 1+2 after M8 -- a bound that
-    allowed would be an evasion that needs padding, not skill). A plain
-    UNRESOLVED never blocks. The only effect value origin has on an action."""
+    or the wire names a source value origin could not examine (result_unread).
+    The other bound states (argument_bound, result_truncated, input_truncated,
+    ledger_saturated) and a plain UNRESOLVED never block (owner, 2026-10-05).
+    The only effect value origin has on an action."""
     try:
         return mode is Mode.ENFORCE and (verdict.verdict is Verdict.UNAUTHORIZED
-                                         or verdict.wire in _BOUND_WIRES)
+                                         or verdict.wire in _UNEXAMINABLE_WIRES)
     except Exception:
         return False
 

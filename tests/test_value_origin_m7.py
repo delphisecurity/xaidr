@@ -242,11 +242,12 @@ def test_q18_a_nested_io_backed_object_is_not_consumed():
     assert io.reads == 0, f"recording read a nested I/O-backed object's .content {io.reads} time(s)"
 
 
-def test_input_truncated_blocks_under_enforce_and_untrusted_outranks_it():
+def test_input_truncated_does_not_block_and_untrusted_outranks_it():
     """M7 review: both truncation claims were unpinned. An untrusted finding in
     the same call must still decide the wire. This test pinned "input_truncated
-    must never block" (the M6 ruling) until RULING 1+2 after M8: under ENFORCE a
-    truncated value blocks, and the input cap is a bound like the others."""
+    must never block" (the M6 ruling), then "blocks" (RULING 1+2 after M8), and is
+    back to "does not block" (owner, 2026-10-05: blocking is for a value that
+    cannot be examined, not for a cost control)."""
     from concurrent.futures import ThreadPoolExecutor
     from xaidr import value_origin as vo
 
@@ -263,7 +264,7 @@ def test_input_truncated_blocks_under_enforce_and_untrusted_outranks_it():
                 both.wire.value, vo.should_block(both, mode=vo.Mode.ENFORCE))
     with ThreadPoolExecutor(max_workers=1) as pool:
         got = pool.submit(run).result()
-    assert got == ("input_truncated", True, "untrusted_source", True), got
+    assert got == ("input_truncated", False, "untrusted_source", True), got
 
 
 def test_a_poisoned_read_through_the_patched_langchain_hook_is_untrusted():

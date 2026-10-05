@@ -406,6 +406,11 @@ _VO_BLOCK_RULE = "ORIGIN_UNTRUSTED_DESTINATION"
 # it. Carried beside the owner's rule so the cross-repo contract is not broken
 # while the two namings are reconciled (M8 report).
 _VO_AUDIT_RULE = "intent.value_origin_untrusted"
+# Owner, 2026-10-05: a call blocked because a source could not be examined
+# (result_unread) is NOT an untrusted destination; saying so would be a false
+# statement in the audit record. Its own names:
+_VO_UNEXAMINABLE_CATEGORY = "unexaminable_source"
+_VO_UNEXAMINABLE_RULE = "ORIGIN_UNEXAMINABLE_SOURCE"
 # Q18: a raw result from these modules may hold an unread stream; recording it
 # would consume it under default RECORD, a host-behaviour change no verdict sees.
 _IO_BACKED_MODULES = frozenset({"httpx", "requests", "urllib3", "aiohttp"})
@@ -1962,10 +1967,11 @@ class DelphiSensor:
                 # Capped like a tool-result leaf (the core's MAX_RESULT_LEAF_CHARS):
                 # the input seam's cost must not scale with the prompt (F8: 0.8 ms/KB;
                 # CI caught a 5MB input crossing test_truncation_bypass's bound).
-                # A destination past the cap is not principal: a miss reads
-                # input_truncated, which blocks under ENFORCE (RULING 1+2; this said
-                # "reads unresolved, which never blocks" -- wrong twice).
-                text, spans = _cap_principal_input(text, spans)
+                # Past 64 KiB the core records destination ATOMS but no key n-grams;
+                # a miss reads input_truncated, which does not block (owner,
+                # 2026-10-05; until then the text was cut here and a destination
+                # past the cap was lost).
+                pass   # owner, 2026-10-05: NOT cut here; the core reads atoms from all of it
             out = _vo.record_principal_input(text if text is not None else prompt,
                                              spans, input_clean=clean, truncated=truncated)
             # A FAULT on a scannable input means the record was dropped (a spans
@@ -2464,8 +2470,10 @@ class DelphiSensor:
         if not fire:
             return None
         name = tool_name if isinstance(tool_name, str) else None
-        result = ScanResult(action="blocked", score=1.0, category=_VO_BLOCK_CATEGORY,
-                            rules=[_VO_BLOCK_RULE, _VO_AUDIT_RULE])
+        untrusted = getattr(cv, "verdict", None) is _vo.Verdict.UNAUTHORIZED
+        result = ScanResult(action="blocked", score=1.0, category=(_VO_BLOCK_CATEGORY if untrusted else _VO_UNEXAMINABLE_CATEGORY),
+                            rules=([_VO_BLOCK_RULE, _VO_AUDIT_RULE] if untrusted
+                   else [_VO_UNEXAMINABLE_RULE]))
         # Telemetry records the TRUE verdict FIRST, then _apply_mode may soften it
         # (monitor, an S6 transform), as every other gate in this file does: the
         # S6 contract is that telemetry has already seen the original verdict.

@@ -2638,3 +2638,169 @@ AssertionError: urllib3.HTTPResponse[real, preload_content=False]: through the s
 == restored: True
 ```
 **From outside the process:** `tests/outside/test_bounds_from_the_wheel.py` now also runs the four I/O modules (stand-ins, because the fresh venv holds only the wheel). Each gives `["blocked", "result_unread"]` under ENFORCE, RECORD reports the state with the same action as OFF, and `.content` is never read.
+
+
+## Round: CI fix, the bounds ruling narrowed, rule ids, KEYED (owner, 2026-10-05)
+
+### 1. The red base jobs: cause confirmed from the log, then fixed
+`gh run view 37355899015 --log-failed`: every base job had **7 failed, 9084 passed**. All 7 are my Q18 tests, `REFUSING: httpx (dev extra) is not installed` (and the same for urllib3). The base job runs `-m "not requires_dev_extra"` and installs no extras, and the real-object cases were unmarked. Reproduced locally by shadowing httpx/urllib3 with modules that raise ImportError:
+```
+BEFORE the fix, base selection: 7 failed, 26 passed in 1.03s
+AFTER, base selection:          27 passed, 6 deselected in 1.05s
+```
+The real-object cases are now `requires_dev_extra`; the stand-ins and the precedence test run everywhere. `3daf41f` had no CI result because its run was cancelled by the 77d9b4a push. It was re-run on its own SHA (run 37355329885).
+
+### 2. The narrowed bounds ruling
+**Red first** (16 of 19; the 3 passing are guards):
+```
+16 failed, 3 passed in 0.83s
+AssertionError: ('blocked', 'input_truncated')
+AssertionError: a cost control must not block
+AssertionError: a full ledger means the cap is wrong
+AssertionError: depth_over_6: a long benign argument blocks under ENFORCE (benign_longform's 24/24)
+AssertionError: depth_over_6: the destination past the argument bound was not extracted, so the call read 'argument_bound' instead of the untrusted source it is
+AssertionError: depth_over_6: the destination past the result bound was never recorded; the call read 'result_truncated'
+AssertionError: email_body_over_4000: a long benign argument blocks under ENFORCE (benign_longform's 24/24)
+AssertionError: file_write_over_4000: a long benign argument blocks under ENFORCE (benign_longform's 24/24)
+AssertionError: leaf_over_4000: the destination past the argument bound was not extracted, so the call read 'argument_bound' instead of the untrusted source it is
+AssertionError: leaf_over_64k: the destination past the result bound was never recorded; the call read 'result_truncated'
+AssertionError: over_64_leaves: a long benign argument blocks under ENFORCE (benign_longform's 24/24)
+AssertionError: over_64_leaves: the destination past the argument bound was not extracted, so the call read 'argument_bound' instead of the untrusted source it is
+AssertionError: over_64_leaves: the destination past the result bound was never recorded; the call read 'result_truncated'
+AssertionError: returned: a call blocked because a source could not be examined is recorded as an untrusted destination: rules=['ORIGIN_UNTRUSTED_DESTINATION', 'intent.value_origin_untrusted'], category='untrusted_destination'
+AssertionError: straddling_the_64k_cut: the destination past the result bound was never recorded; the call read 'result_truncated'
+AssertionError: the principal typed bob@corp.example 74,996 chars in, past the 64 KiB cap, and the call gave ('blocked', 'input_truncated')
+```
+The loud saturation warning, red first:
+```
+E   AssertionError: a full ledger drops every later emission, untrusted tool results included, and the warning does not say so: ["value origin: this flow's ledger reached 10000 digests and dropped an emission; unmatched destinations now report ledger_saturated, not unresolved"]
+```
+**Sabotage, one per change** (SA3 is the discriminating one: handing on only the tail of a cut leaf loses a straddling destination):
+```
+== SA1 arguments: no atom extraction past the bound: 3 failed, 17 passed in 1.27s
+   red: test_a_padded_untrusted_destination_is_found_and_blocks_as_untrusted[depth_over_6]
+   red: test_a_padded_untrusted_destination_is_found_and_blocks_as_untrusted[leaf_over_4000]
+   red: test_a_padded_untrusted_destination_is_found_and_blocks_as_untrusted[over_64_leaves]
+   msg: depth_over_6: the destination past the argument bound was not extracted, so the call read 'argument_bound' instead of the untrusted source it is
+== SA2 results: no atom extraction past the bound: 4 failed, 16 passed in 1.27s
+   red: test_a_destination_past_a_result_bound_is_recorded_and_blocks_as_untrusted[depth_over_6]
+   red: test_a_destination_past_a_result_bound_is_recorded_and_blocks_as_untrusted[leaf_over_64k]
+   red: test_a_destination_past_a_result_bound_is_recorded_and_blocks_as_untrusted[over_64_leaves]
+   red: test_a_destination_past_a_result_bound_is_recorded_and_blocks_as_untrusted[straddling_the_64k_cut]
+   msg: depth_over_6: the destination past the result bound was never recorded; the call read 'result_truncated'
+== SA3 an over-length result leaf hands on only its TAIL (the straddle): 2 failed, 18 passed in 1.27s
+   red: test_a_destination_past_a_result_bound_is_recorded_and_blocks_as_untrusted[straddling_the_64k_cut]
+   red: test_a_padded_untrusted_destination_is_found_and_blocks_as_untrusted[leaf_over_4000]
+   msg: leaf_over_4000: the destination past the argument bound was not extracted, so the call read 'argument_bound' instead of the untrusted source it is
+== SA4 the sensor cuts the input again: 1 failed, 19 passed in 1.29s
+   red: test_through_the_sensor_a_destination_past_the_input_cap_is_the_principals
+   msg: the principal typed bob@corp.example 74,996 chars in, past the 64 KiB cap, and the call gave ('allowed', 'input_truncated') (the input scan was flagged; V-9 gives untrusted_source)
+== SA5 the bound states block again (the previous ruling): 7 failed, 13 passed in 1.29s
+   red: test_a_cut_result_with_nothing_past_the_cut_is_visible_but_does_not_block
+   red: test_a_long_benign_argument_is_visible_but_does_not_block[depth_over_6]
+   red: test_a_long_benign_argument_is_visible_but_does_not_block[email_body_over_4000]
+   red: test_a_long_benign_argument_is_visible_but_does_not_block[file_write_over_4000]
+   msg: depth_over_6: a long benign argument blocks under ENFORCE (benign_longform's 24/24)
+== SA6 a result_unread block named as an untrusted destination: 1 failed, 19 passed in 1.28s
+   red: test_result_unread_still_blocks_under_its_own_rule_id_and_category
+   msg: returned: a call blocked because a source could not be examined is recorded as an untrusted destination: rules=['ORIGIN_UNTRUSTED_DESTINATION', 'intent.value_origin_untrusted'], category='untrusted_destination'
+== SA7 the quiet saturation warning: 1 failed, 19 passed in 1.27s
+   red: test_a_full_ledger_warns_loudly_that_it_drops_and_does_not_block
+   msg: a full ledger drops every later emission, untrusted tool results included, and the warning does not say so: ["value origin: this flow's ledger is FULL at 10000 entries (destinations and the principal's key n-grams share it; a ~17 
+== restored: True
+```
+**Cost** (value origin only, core-level; before is 77d9b4a):
+```
+BEFORE
+xaidr from: ./xaidr
+the 5 MB case (core value-origin cost only, best of 3):
+  record_principal_input  5 MB of 'A' (test_truncation_bypass shape)      241.3 ms
+  record_tool_result      5 MB of 'A' (test_truncation_bypass shape)        3.0 ms
+  evaluate_call(arg)      5 MB of 'A' (test_truncation_bypass shape)        0.0 ms
+  record_principal_input  5 MB of real prose                             1571.7 ms
+  record_tool_result      5 MB of real prose                                7.2 ms
+  evaluate_call(arg)      5 MB of real prose                                0.0 ms
+  END TO END sensor.scan(5 MB 'A', input): value_origin=off 1013 ms, record 1026 ms, delta +13 ms
+benign_longform, 24 docs, 10,100,008 chars (core value-origin cost, summed):
+  record_principal_input           total     5877 ms    244.9 ms/doc   largest doc 439 ms
+  record_tool_result               total      230 ms      9.6 ms/doc   largest doc 7 ms
+  evaluate_call(run_command=doc)   total        0 ms      0.0 ms/doc   largest doc 0 ms
+
+AFTER
+xaidr from: ./xaidr
+the 5 MB case (core value-origin cost only, best of 3):
+  record_principal_input  5 MB of 'A' (test_truncation_bypass shape)      219.8 ms
+  record_tool_result      5 MB of 'A' (test_truncation_bypass shape)      222.8 ms
+  evaluate_call(arg)      5 MB of 'A' (test_truncation_bypass shape)      217.7 ms
+  record_principal_input  5 MB of real prose                              565.6 ms
+  record_tool_result      5 MB of real prose                              554.9 ms
+  evaluate_call(arg)      5 MB of real prose                              550.1 ms
+  END TO END sensor.scan(5 MB 'A', input): value_origin=off 1019 ms, record 1234 ms, delta +216 ms
+benign_longform, 24 docs, 10,100,008 chars (core value-origin cost, summed):
+  record_principal_input           total     2244 ms     93.5 ms/doc   largest doc 172 ms
+  record_tool_result               total     1685 ms     70.2 ms/doc   largest doc 162 ms
+  evaluate_call(run_command=doc)   total     1486 ms     61.9 ms/doc   largest doc 158 ms
+```
+**Block rate after.** benign_longform is **7/24 input-derived and 8/24 result-derived, NOT near 0.** All are `untrusted_source`, none is a bound block. The cause is measured per document below, and explained in docs/value-origin-enforce.md.
+```
+xaidr from: ./xaidr
+xaidr    : ./xaidr/__init__.py
+version  : 1.19.0
+measuring: THE WORKING TREE at . — not an installed wheel. Set XAIDR_FROM_INSTALL=1 (neutral cwd, python -I) to measure a published artifact instead.
+
+456-row shell corpus, ENFORCE, block mode:
+  P-flow-I                     calls=  494  would block=  26  rate= 5.26% | attacks: 20/302 | benign: 0/83 | benign_prose: 6/97 | benign_templates: 0/12
+  P-flow-R                     calls=  494  would block=  37  rate= 7.49% | attacks: 25/302 | benign: 5/83 | benign_prose: 7/97 | benign_templates: 0/12
+  P-seam                       calls=  494  would block=  37  rate= 7.49% | attacks: 25/302 | benign: 5/83 | benign_prose: 7/97 | benign_templates: 0/12
+benign_a2a (60 A2A JSON-RPC bodies), ENFORCE, block mode:
+  P-flow-I                     calls=   64  would block=   0  rate= 0.00% | benign_a2a: 0/64 [('no_destination', 58), ('principal_undeclared_span', 4), ('unresolved', 2)]
+  P-flow-R                     calls=   64  would block=   4  rate= 6.25% | benign_a2a: 4/64 [('no_destination', 58), ('unresolved', 2), ('untrusted_source', 4)]
+  P-seam                       calls=   64  would block=   4  rate= 6.25% | benign_a2a: 4/64 [('no_destination', 58), ('unresolved', 2), ('untrusted_source', 4)]
+benign_longform (24 generated documents, 90k..1.4M chars), ENFORCE, block mode:
+  P-flow-I                     calls=   24  would block=   7  rate=29.17% | benign_longform: 7/24 [('argument_bound', 17), ('untrusted_source', 7)]
+  P-flow-R                     calls=   24  would block=   8  rate=33.33% | benign_longform: 8/24 [('argument_bound', 16), ('untrusted_source', 8)]
+  P-seam                       calls=   24  would block=   8  rate=33.33% | benign_longform: 8/24 [('argument_bound', 16), ('untrusted_source', 8)]
+adversarial / benign corpora, ENFORCE:
+  A-calls                      calls=  470  would block=  98  rate=20.85% [('no_destination', 368), ('unresolved', 4), ('untrusted_source', 98)]
+  A-flow-I                     calls=  228  would block=   0  rate= 0.00% [('no_destination', 228)]
+  A-flow-R                     calls=  228  would block=   0  rate= 0.00% [('no_destination', 228)]
+  A-steps                      calls=   36  would block=   0  rate= 0.00% [('no_destination', 28), ('unresolved', 8)]
+conformance flows (expected wire per config; designed cases, not traffic):
+  config A                     calls=  620  would block= 143  rate=23.06% 
+  config B                     calls=  620  would block=  80  rate=12.90% 
+  config C                     calls=  620  would block= 353  rate=56.94%
+```
+```
+  LF-policy_document-90k          91,378 chars  input scan=allowed  None               atoms=0
+  LF-policy_document-150k        152,091 chars  input scan=flagged  oversized_input    atoms=0
+  LF-policy_document-400k        400,034 chars  input scan=flagged  oversized_input    atoms=0
+  LF-policy_document-900k        900,602 chars  input scan=flagged  oversized_input    atoms=0
+  LF-kubectl_dump-90k            140,024 chars  input scan=flagged  pii_detected       atoms=143
+  LF-kubectl_dump-150k           233,055 chars  input scan=flagged  pii_detected       atoms=238
+  LF-kubectl_dump-400k           621,326 chars  input scan=flagged  pii_detected       atoms=635
+  LF-kubectl_dump-900k         1,397,574 chars  input scan=flagged  data_exfiltration  atoms=1428
+  LF-thread_dump-90k              90,181 chars  input scan=allowed  None               atoms=1046
+  LF-thread_dump-150k            150,251 chars  input scan=flagged  oversized_input    atoms=1754
+  LF-thread_dump-400k            401,698 chars  input scan=flagged  oversized_input    atoms=4647
+  LF-thread_dump-900k            900,886 chars  input scan=flagged  oversized_input    atoms=10453
+  LF-support_transcript-90k       90,178 chars  input scan=allowed  data_exfiltration  atoms=0
+  LF-support_transcript-150k     150,091 chars  input scan=flagged  dos_attempt        atoms=0
+  LF-support_transcript-400k     400,066 chars  input scan=flagged  data_exfiltration  atoms=0
+  LF-support_transcript-900k     900,030 chars  input scan=flagged  dos_attempt        atoms=0
+  LF-csv_export-90k               90,085 chars  input scan=allowed  None               atoms=0
+  LF-csv_export-150k             150,013 chars  input scan=flagged  oversized_input    atoms=0
+  LF-csv_export-400k             400,099 chars  input scan=flagged  oversized_input    atoms=0
+  LF-csv_export-900k             900,028 chars  input scan=flagged  oversized_input    atoms=0
+  LF-log_tail-90k                 90,060 chars  input scan=flagged  data_exfiltration  atoms=0
+  LF-log_tail-150k               150,127 chars  input scan=flagged  data_exfiltration  atoms=0
+  LF-log_tail-400k               400,118 chars  input scan=flagged  data_exfiltration  atoms=0
+  LF-log_tail-900k               900,013 chars  input scan=flagged  data_exfiltration  atoms=0
+  (input scan, has atoms): {('allowed', False): 3, ('flagged', False): 13, ('flagged', True): 7, ('allowed', True): 1}
+```
+**From outside the process:** 38 passed in 43.46s (test_bounds_from_the_wheel, m6, m7, m8 and m1_c11 from the wheel).
+
+**Pins changed because they encoded the previous ruling** (each noted at its site):
+- in test_value_origin_bounds, the argument-bound and cut-result "blocks" tests, the input_truncated test, the sensor cases, and the telemetry test (now on result_unread). The saturation-laundering test is now a strict xfail: a KNOWN GAP under this ruling.
+- m6 `input_cap`, m7 `input_truncated`, and m8's 64 KiB test (now recorded: `untrusted_source`).
+- test_procedural V-15 (`UNTRUSTED_SOURCE`).
+- S16, S16-overlength and S16-depth now carry the extracted atom (expected.jsonl regenerated at --rev 01450c7).
