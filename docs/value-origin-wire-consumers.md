@@ -30,7 +30,7 @@ comment.
 | 10 | **paid = delphi-python-sdk** (main + 3 worktrees): `xaidr/authz/policy.py:48` `EVALUATOR_GENERATION = 1`; `scripts/ci_guards.py:50-52` on `ci/test-workflow` mentions a future pin | no vendored `xaidr/value_origin`, no `vendor_value_origin.py`, no pin json, no P1-P4 tests (designed in sentinel `docs/value-origin-architecture.md:581-621`) | nothing reads it | on re-vendor the tree arrives byte-identical; P4 bumps the generation only if `expected.jsonl`'s sha moved (it has, several times in A2); any paid code consuming `wire` (the M9 emitter) must handle ten |
 | 11 | blank-canvas (main + 18 worktrees): `src/lib/waterfallCore.ts:166-172` `StageState` | the six `RowState` spellings match; no `value_origin` in types, no intent stage, no migration | not selected, not rendered | build the intent stage (V-28) with a ten-value table checked against `row_text.json` |
 | 12 | `~/delphi` monorepo (not in the CLAUDE.md repo list), `feat/layers-spec`: `docs/port/layers-spec.md:909-912, 918-923, 991` | port spec citing nine values | documentation | update before the port is built |
-| — | xaidr itself | `verdict_of`'s docstring said "nine" | — | **fixed in this commit** (docstring only; a paid pin byte change) |
+| — | xaidr itself | `verdict_of`'s docstring said "nine" | — | **fixed in this commit** (docstring only; a paid pin byte change) **[Incomplete: the same docstring still said "outside the nine" until 2026-10-05; now "twelve".]** |
 
 **Effective rule for `ai_guard_logs.value_origin`.** Its only definition is the
 sentinel migration (on `origin/main` too, so it is merged, though whether it is APPLIED to the live

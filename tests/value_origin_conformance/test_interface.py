@@ -149,17 +149,28 @@ def test_no_ledger_accessor_is_exported():
             assert not any("correlation" in p or p == "origin" for p in params), name
 
 
-@pytest.mark.parametrize("wire,verdict", [
+_VERDICT_CASES = [
     ("principal", "authorized"), ("principal_undeclared_span", "authorized"),
     ("trusted_source", "authorized"), ("untrusted_source", "unauthorized"),
     ("unresolved", "unresolved"), ("no_destination", "not_evaluated"),
     ("no_flow", "not_evaluated"), ("ledger_absent", "not_evaluated"),
-    ("ledger_saturated", "not_evaluated")])
+    ("ledger_saturated", "not_evaluated"), ("input_truncated", "not_evaluated"),
+    ("argument_bound", "unresolved"), ("result_truncated", "not_evaluated")]
+
+
+def test_the_verdict_table_covers_every_wire_value():
+    """Milestone review: the table covered 9 of 12 and nothing noticed."""
+    assert {w for w, _ in _VERDICT_CASES} == {w.value for w in vo.WireValue}
+
+
+@pytest.mark.parametrize("wire,verdict", _VERDICT_CASES)
 def test_verdict_of_is_total(wire, verdict):
     assert vo.verdict_of(vo.WireValue(wire)) is vo.Verdict(verdict)
 
 
-def test_should_block_only_on_enforce_unauthorized():
+def test_should_block_only_under_enforce_on_unauthorized_or_a_bound():
+    # Renamed after RULING 1+2 (was ..._only_on_enforce_unauthorized): the bound
+    # states block too (tests/test_value_origin_bounds.py); a plain unresolved does not.
     vo.bind_fresh_ledger()
     try:
         vo.record_tool_result("t", {}, "evil@x.example", designations=(), result_blocked=False)

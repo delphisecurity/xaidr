@@ -47,7 +47,7 @@ def verdict_of(wire: WireValue) -> Verdict:
     argument_bound and result_truncated by RULING 1+2 after M8). ``CallVerdict.verdict`` is always
     ``verdict_of(wire)``; paid's L2 driver and the Brain derive the verdict
     from the wire value only through this function. Never raises: a string
-    outside the nine is NOT_EVALUATED, matching ``row_text``'s not_recorded row
+    outside the twelve is NOT_EVALUATED, matching ``row_text``'s not_recorded row
     for an unrecognised value."""
     try:
         return _VERDICT[WireValue(wire)]

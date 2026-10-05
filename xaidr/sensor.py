@@ -1960,8 +1960,9 @@ class DelphiSensor:
                 # Capped like a tool-result leaf (the core's MAX_RESULT_LEAF_CHARS):
                 # the input seam's cost must not scale with the prompt (F8: 0.8 ms/KB;
                 # CI caught a 5MB input crossing test_truncation_bypass's bound).
-                # Fail-safe: a destination past the cap is not principal, so it
-                # reads unresolved, which never blocks.
+                # A destination past the cap is not principal: a miss reads
+                # input_truncated, which blocks under ENFORCE (RULING 1+2; this said
+                # "reads unresolved, which never blocks" -- wrong twice).
                 text, spans = _cap_principal_input(text, spans)
             out = _vo.record_principal_input(text if text is not None else prompt,
                                              spans, input_clean=clean, truncated=truncated)
@@ -2469,7 +2470,10 @@ class DelphiSensor:
         # (M8 silent-failure review: emitting after _apply_mode left a softened
         # value-origin block with no trace anywhere.)
         try:
-            self._emit_gate_verdict(result, "value_origin", "tool_call", toolName=name)
+            # valueOrigin: which state blocked (milestone review: a bound block was
+            # audited as an untrusted destination, with no wire value at all).
+            self._emit_gate_verdict(result, "value_origin", "tool_call", toolName=name,
+                                    valueOrigin=getattr(getattr(cv, "wire", None), "value", None))
         except Exception:
             pass                                 # telemetry never decides a verdict
         try:

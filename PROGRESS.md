@@ -1630,7 +1630,7 @@ A destination past the 65,536-char input cap used to read a silent
 `unresolved`. Now:
 - If the flow's principal input was capped and a lookup misses, the wire is
   **`input_truncated`**, a TENTH wire value.
-- Its verdict is NOT_EVALUATED, so it never blocks, like `ledger_saturated`.
+- Its verdict is NOT_EVALUATED, so it never blocks, like `ledger_saturated`. **[Superseded by RULING 1+2 (f93e873): input_truncated and ledger_saturated block under ENFORCE.]**
 - It has its own §3.4 row, and an untrusted finding still outranks it.
 
 Red first:
@@ -1827,7 +1827,7 @@ Its gaps:
    Red first:
    `E  AssertionError: recording read a nested I/O-backed object's .content 1 time(s)`.
 3. **Two truncation claims had no test.** Now pinned: under ENFORCE,
-   `input_truncated` does not block, and an untrusted finding in the same call
+   `input_truncated` does not block, and an untrusted finding in the same call **[Superseded by RULING 1+2 (f93e873): it blocks; the test is renamed.]**
    decides. The pin catches the reviewer's mutation:
    `E  AssertionError: ('input_truncated', False, 'input_truncated', False)`.
 4. **`row_text.json` lacked the new value's input and None rows.** Added: 36
@@ -2265,7 +2265,7 @@ untested.
 
 **Also pinned:** a second evasion of the bound family. An untrusted
 destination among more than 64 arguments (or nested deeper than 6) reads
-`unresolved` and never blocks.
+`unresolved` and never blocks. **[Superseded by RULING 1+2 (f93e873): a walk bound is `argument_bound`, which blocks.]**
 
 **Review gaps recorded and not fixed (the STOP):**
 - benign_a2a's 4 blocks have no designation line;
@@ -2479,7 +2479,7 @@ conformance flows (expected wire per config; designed cases, not traffic):
   config B                     calls=  620  would block=  80  rate=12.90% 
   config C                     calls=  620  would block= 353  rate=56.94%
 ```
-These are identical: no call in these corpora hits a bound. **benign_a2a and benign_longform are NOT re-measured.** The script does not cover them, and the method behind 4/64 and 0/24 was not re-run in this round's budget. **Owed.**
+These are identical: no call in these corpora hits a bound. **benign_a2a and benign_longform are NOT re-measured.** The script does not cover them, and the method behind 4/64 and 0/24 was not re-run in this round's budget. **Owed.** **[RETRACTED 2026-10-05: vacuous. `q13_block_rate.py` counted `untrusted_source` only, so it could not see a bound state and was identical by construction. Re-measured with each tree's own `should_block`: see "Re-measured after RULING 1+2" below.]**
 
 ### The three substituted §4 acceptance cases, labelled (not run as written)
 1. **LangChain driver: SUBSTITUTED.** The tests drive the private `_scan_tool_result`, which is the method the LangChain after-hook calls, not a LangChain agent driver.
@@ -2496,5 +2496,102 @@ These are identical: no call in these corpora hits a bound. **benign_a2a and ben
 ### Not done in this round (30-call budget)
 - Fresh-context silent-failure-hunter and milestone-reviewer reviews: **not run.**
 - Docker matrix: **not run.** This round changes no differential (url_parse and `_authority` are untouched).
-- benign_a2a / benign_longform re-measure: **not run.**
+- benign_a2a / benign_longform re-measure: **not run.** **[Done 2026-10-05; see "Round close" below.]**
 - M9: not started.
+
+
+## Round close: reviews, re-measure, PR, then Q18 (owner, 2026-10-05)
+
+### The vacuous re-measure, retracted
+Last round's "byte-identical before and after: no call in these corpora hits a bound" was vacuous. `q13_block_rate.py` counted `wires.count("untrusted_source")`, so no bound state could ever register. It is retracted in place in docs/value-origin-enforce.md and above in this file. The script now counts with the tree's own `should_block` and prints each pass's wire distribution.
+
+### Re-measured: benign_a2a and benign_longform included, same instrument on both trees
+The script behind the original 4/64 and 0/24 was never committed. It is rebuilt inside `q13_block_rate.py` and validated against its one surviving output (lines above: benign_a2a P-flow-I 0/64 [no_destination 58, principal_undeclared_span 4, unresolved 2], P-flow-R 4/64; benign_longform 0/24 [unresolved 24]). On 255a4b3 it reproduces that output exactly.
+
+BEFORE (255a4b3 in a detached worktree, PYTHONPATH = that tree):
+```
+xaidr from: $S/base/xaidr
+xaidr    : $S/base/xaidr/__init__.py
+version  : 1.19.0
+measuring: THE WORKING TREE at $S/base — not an installed wheel. Set XAIDR_FROM_INSTALL=1 (neutral cwd, python -I) to measure a published artifact instead.
+
+456-row shell corpus, ENFORCE, block mode:
+  P-flow-I                     calls=  494  would block=  26  rate= 5.26% | attacks: 20/302 | benign: 0/83 | benign_prose: 6/97 | benign_templates: 0/12
+  P-flow-R                     calls=  494  would block=  37  rate= 7.49% | attacks: 25/302 | benign: 5/83 | benign_prose: 7/97 | benign_templates: 0/12
+  P-seam                       calls=  494  would block=  37  rate= 7.49% | attacks: 25/302 | benign: 5/83 | benign_prose: 7/97 | benign_templates: 0/12
+benign_a2a (60 A2A JSON-RPC bodies), ENFORCE, block mode:
+  P-flow-I                     calls=   64  would block=   0  rate= 0.00% | benign_a2a: 0/64 [('no_destination', 58), ('principal_undeclared_span', 4), ('unresolved', 2)]
+  P-flow-R                     calls=   64  would block=   4  rate= 6.25% | benign_a2a: 4/64 [('no_destination', 58), ('unresolved', 2), ('untrusted_source', 4)]
+  P-seam                       calls=   64  would block=   4  rate= 6.25% | benign_a2a: 4/64 [('no_destination', 58), ('unresolved', 2), ('untrusted_source', 4)]
+benign_longform (24 generated documents, 90k..1.4M chars), ENFORCE, block mode:
+  P-flow-I                     calls=   24  would block=   0  rate= 0.00% | benign_longform: 0/24 [('unresolved', 24)]
+  P-flow-R                     calls=   24  would block=   0  rate= 0.00% | benign_longform: 0/24 [('unresolved', 24)]
+  P-seam                       calls=   24  would block=   0  rate= 0.00% | benign_longform: 0/24 [('unresolved', 24)]
+adversarial / benign corpora, ENFORCE:
+  A-calls                      calls=  470  would block=  98  rate=20.85% [('no_destination', 368), ('unresolved', 4), ('untrusted_source', 98)]
+  A-flow-I                     calls=  228  would block=   0  rate= 0.00% [('no_destination', 228)]
+  A-flow-R                     calls=  228  would block=   0  rate= 0.00% [('no_destination', 228)]
+  A-steps                      calls=   36  would block=   0  rate= 0.00% [('no_destination', 28), ('unresolved', 8)]
+conformance flows (expected wire per config; designed cases, not traffic):
+  config A                     calls=  620  would block= 143  rate=23.06% 
+  config B                     calls=  620  would block=  80  rate=12.90% 
+  config C                     calls=  620  would block= 353  rate=56.94% 
+[59 lines of '[xaidr] Warning: L1 scan budget exceeded (0.5s)' removed]
+```
+AFTER (f93e873):
+```
+xaidr from: ./xaidr
+xaidr    : ./xaidr/__init__.py
+version  : 1.19.0
+measuring: THE WORKING TREE at . — not an installed wheel. Set XAIDR_FROM_INSTALL=1 (neutral cwd, python -I) to measure a published artifact instead.
+
+456-row shell corpus, ENFORCE, block mode:
+  P-flow-I                     calls=  494  would block=  26  rate= 5.26% | attacks: 20/302 | benign: 0/83 | benign_prose: 6/97 | benign_templates: 0/12
+  P-flow-R                     calls=  494  would block=  37  rate= 7.49% | attacks: 25/302 | benign: 5/83 | benign_prose: 7/97 | benign_templates: 0/12
+  P-seam                       calls=  494  would block=  37  rate= 7.49% | attacks: 25/302 | benign: 5/83 | benign_prose: 7/97 | benign_templates: 0/12
+benign_a2a (60 A2A JSON-RPC bodies), ENFORCE, block mode:
+  P-flow-I                     calls=   64  would block=   0  rate= 0.00% | benign_a2a: 0/64 [('no_destination', 58), ('principal_undeclared_span', 4), ('unresolved', 2)]
+  P-flow-R                     calls=   64  would block=   4  rate= 6.25% | benign_a2a: 4/64 [('no_destination', 58), ('unresolved', 2), ('untrusted_source', 4)]
+  P-seam                       calls=   64  would block=   4  rate= 6.25% | benign_a2a: 4/64 [('no_destination', 58), ('unresolved', 2), ('untrusted_source', 4)]
+benign_longform (24 generated documents, 90k..1.4M chars), ENFORCE, block mode:
+  P-flow-I                     calls=   24  would block=  24  rate=100.00% | benign_longform: 24/24 [('argument_bound', 24)]
+  P-flow-R                     calls=   24  would block=  24  rate=100.00% | benign_longform: 24/24 [('argument_bound', 24)]
+  P-seam                       calls=   24  would block=  24  rate=100.00% | benign_longform: 24/24 [('argument_bound', 24)]
+adversarial / benign corpora, ENFORCE:
+  A-calls                      calls=  470  would block=  98  rate=20.85% [('no_destination', 368), ('unresolved', 4), ('untrusted_source', 98)]
+  A-flow-I                     calls=  228  would block=   0  rate= 0.00% [('no_destination', 228)]
+  A-flow-R                     calls=  228  would block=   0  rate= 0.00% [('no_destination', 228)]
+  A-steps                      calls=   36  would block=   0  rate= 0.00% [('no_destination', 28), ('unresolved', 8)]
+conformance flows (expected wire per config; designed cases, not traffic):
+  config A                     calls=  620  would block= 143  rate=23.06% 
+  config B                     calls=  620  would block=  80  rate=12.90% 
+  config C                     calls=  620  would block= 353  rate=56.94% 
+[91 lines of '[xaidr] Warning: L1 scan budget exceeded (0.5s)' removed]
+```
+**benign_longform goes from 0/24 to 24/24 blocked, all `argument_bound`.** Nothing else moves. The cost this exposes, on long ARGUMENTS rather than long results, is in docs/value-origin-enforce.md.
+
+### The CI watcher lost a round to a short hash
+Last round's watcher ran `gh run list --commit f93e873`. With the 7-character hash it returned no run (observed; the runs list `headSha` as the full 40-character SHA), and the loop then polled `gh run view ""` until it was stopped. **Pass `$(git rev-parse HEAD)` and exit with an error on an empty id.**
+
+### The two reviews (fresh context, run on f93e873's diff without the build's notes)
+**silent-failure-hunter:** found no fail-open regression in the bound logic. It checked whether the `result_truncated` flag can be lost (no: it is set inside the lock before any partial-failure point), whether `should_block` can swallow a bound state, whether `held["true"]` can be missing and yield a false trust (no: it yields untrusted), and whether the tests are vacuous. Two findings:
+- **MEDIUM, not fixed (owner's attention):** `frameworks._scan_result`'s fallback, for a sensor WITHOUT `_scan_tool_result`, calls `sensor.scan(text, direction="tool_result")` without `tool=`/`arguments=`. It fails safe, not open: the read stays untrusted. Passing the new keywords to a duck-typed sensor's unknown `scan()` signature would risk a TypeError on every result.
+- **LOW, fixed (doc):** `tool=` is trusted as given. It must come from the host's own dispatch, never from content.
+
+**milestone-reviewer:** six findings, all addressed in this commit.
+1. HIGH, the vacuous re-measure. Retracted in place, re-measured above (the reviewer's independent benign_longform count, 24/24 `argument_bound`, agrees).
+2. MEDIUM-HIGH, a bound block was audited as an untrusted destination. Telemetry had no wire value. The block event now carries `valueOrigin`. Red first:
+```
+E   AssertionError: the block event does not say which state blocked it: {'timestamp': '2026-10-05T18:18:32.938428Z', 'scanId': 'e64dadfec124', 'agentId': 'bounds-tel', 'action': 'blocked', 'score': 1.0, 'category': 'untrusted_destination', 'rules': ['ORIGIN_UNTRUSTED_DESTINATION', 'intent.value_ori
+```
+   The rule ids still say "untrusted" for a bound block. A bound-specific rule id is the owner's naming call.
+3. MEDIUM, the cost of `ledger_saturated` blocking was unstated. A benign 17,481-char prompt saturates the ledger, after which every miss blocks. Now stated in docs/value-origin-enforce.md, for the owner to confirm or reverse.
+4. MEDIUM, about fifteen earlier claims were not retracted where they stand. Each is now marked in place: docs/value-origin-enforce.md (the public-seam rows, the design-gap paragraph, both evasion bullets, the renamed xfail, the anomaly line, the warning line, the "wire value says which bound" line), docs/value-origin-rulings.md, PROGRESS.md (three lines), docs/value-origin-wire-consumers.md, the sensor's input-cap comment, `_extract`'s docstring, and `_evaluate`'s "outside the nine". In test_interface, `test_should_block_only_on_enforce_unauthorized` is renamed, and `test_verdict_of_is_total` now covers all 12 values. A new test fails if the table ever misses one.
+5. LOW, the at-limit test could not see over-application. It now also requires an UNRELATED miss to stay `unresolved`. The reviewer's own sabotage (a leaf of exactly 65,536 chars flags the ledger) now goes red:
+```
+E   AssertionError: leaf_at_64k: a result exactly AT the bound, nothing cut, flagged the ledger: an unrelated miss read 'result_truncated' and would block
+```
+6. LOW, the wheel evidence was a scratch script. It is now `tests/outside/test_bounds_from_the_wheel.py`.
+
+Docker matrix: **not run, and not needed this round**, since no URL-parsing or differential code changed (owner, 2026-10-05).
+== commit A suites: 563 passed, 7 xfailed, 1 warning in 53.10s

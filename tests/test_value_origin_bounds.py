@@ -102,6 +102,12 @@ def test_a_cut_tool_result_is_its_own_state_and_blocks_under_enforce(shape):
 def test_a_result_exactly_at_each_bound_is_recorded_whole(shape):
     v = _call_after(result=RESULT_OK[shape])
     assert v.wire.value == "untrusted_source", (shape, v.wire.value)
+    # untrusted_source outranks the flag, so the line above cannot see the state
+    # being over-applied (milestone review): an UNRELATED miss must stay unresolved.
+    miss = _call_after(result=RESULT_OK[shape], arguments={"url": "https://unrelated.example/"})
+    assert miss.wire.value == "unresolved", (
+        f"{shape}: a result exactly AT the bound, nothing cut, flagged the ledger: an "
+        f"unrelated miss read {miss.wire.value!r} and would block")
 
 
 def test_an_untrusted_finding_outranks_a_cut_result():
@@ -193,3 +199,33 @@ def test_the_installed_seam_blocks_every_bound_under_enforce_and_record_does_not
     off = _sensor_action("off", result, arguments)
     assert rec[1] == state, f"{case}: RECORD must report the state too, gave {rec}"
     assert rec[0] == off[0], f"{case}: C-11, RECORD changed the action {off[0]!r} -> {rec[0]!r}"
+
+
+
+def test_a_bound_block_tells_telemetry_which_bound():
+    """Milestone review: a bound block reached telemetry as category
+    untrusted_destination with rule intent.value_origin_untrusted and NO wire
+    value, so a call with too many arguments was audited as untrusted."""
+    from concurrent.futures import ThreadPoolExecutor
+    from xaidr import provenance_chain as pc
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = xaidr.Sensor(agent_id="bounds-tel", value_origin="enforce", enforcement_mode="block",
+                         reporter=type("N", (), {"report": lambda *a, **k: None})())
+    events = []
+    real = s._telemetry.enqueue
+    s._telemetry.enqueue = lambda ev: (events.append(ev), real(ev))[1]
+
+    def run():
+        pc.begin_flow(principal="alice")
+        try:
+            s.scan(NEUTRAL, direction="input")
+            return s.scan_tool_call("http_post", ARG_BOUNDS["over_64_leaves"]).action
+        finally:
+            pc.clear_flow()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        assert pool.submit(run).result() == "blocked"
+    vo_events = [e["data"] for e in events if e.get("data", {}).get("gate") == "value_origin"]
+    assert len(vo_events) == 1, vo_events
+    assert vo_events[0].get("valueOrigin") == "argument_bound", (
+        f"the block event does not say which state blocked it: {vo_events[0]}")

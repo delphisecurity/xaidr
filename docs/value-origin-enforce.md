@@ -29,7 +29,7 @@ blocked, benign or not:
 | benign_prose | 6/97 | 7/97 |
 | benign_a2a | 0/64 | 4/64 |
 | benign_templates | 0/12 | 0/12 |
-| benign_longform | 0/24 | 0/24 (*see the anomaly below: not a clean result*) |
+| benign_longform | 0/24 | 0/24 (*see the anomaly below: not a clean result*) **[after RULING 1+2, measured 2026-10-05: 24/24 and 24/24, all `argument_bound`]** |
 
 ## The 18 named benign blocks, and which designation would prevent each
 
@@ -38,10 +38,10 @@ blocked, benign or not:
 | input-derived, benign_prose 002, 004, 034, 041, 045, 058 | `evil.tld/x.sh`, 169.254.169.254 credentials (×2), `metadata.google.internal` token, `x.io/i.sh`, `x.io/i` | **Nothing should.** These are attack URLs that benign prose quotes; the harness builds a call to every URL in the text, and blocking a POST to them is correct. **But the property behind it is a DESIGN GAP:** these destinations come from a PRINCIPAL input that L1 flagged, which V-9 makes untrusted. Designations cover tool reads only, so a benign input that L1 flags (a detection false positive) makes every destination it names block. There is no designation-shaped remedy, ~~only spans, or~~ only fixing the detection false positive. *[Corrected, M8 review: declaring the whole input as a PRINCIPAL span still blocks, because a flagged input carries no principal authority (V-9).]* |
 | result-derived, benign_prose 002, 004, 034, 041, 045, 055 (`s3://exfil-bucket`), 058 | the same attack URLs, plus `s3://exfil-bucket` | **Nothing should.** These are attack URLs quoted in prose, so a correct block. |
 | result-derived, benign 034 | `https://api.github.com/repos/org/repo` | **Through a NAMED seam:** designate the tool that returned it (e.g. a GitHub API tool, `MatchKind.ANY`). **Through the public seam the harness used: nothing can.** **[RULING 3a, 2026-10-04: false as of the commit carrying this mark — the public seam now takes `scan(text, direction="tool_result", tool=..., arguments=...)`; designate the tool and pass them.]** |
-| result-derived, benign 035 | `https://api.example.com/health` | the same: designate the runbook/docs reader that returned it (`MatchKind.ANY`), or a `URL_PREFIX` designation on the docs host. Not through the public seam. |
-| result-derived, benign 066 | `s3://our-public-assets/` | the same: designate the reading tool. Not through the public seam. |
-| result-derived, benign 067 | `https://api.internal/health` | the same. |
-| result-derived, benign 068 | `https://reports.internal/q3.pdf` | the same. |
+| result-derived, benign 035 | `https://api.example.com/health` | the same: designate the runbook/docs reader that returned it (`MatchKind.ANY`), or a `URL_PREFIX` designation on the docs host. Not through the public seam. **[RULING 3a, f93e873: false now — the public seam takes `tool=`/`arguments=`, so designating the reading tool works through it too.]** |
+| result-derived, benign 066 | `s3://our-public-assets/` | the same: designate the reading tool. Not through the public seam. **[RULING 3a, f93e873: false now — the public seam takes `tool=`/`arguments=`, so designating the reading tool works through it too.]** |
+| result-derived, benign 067 | `https://api.internal/health` | the same. **[RULING 3a, f93e873: false now — the public seam takes `tool=`/`arguments=`, so designating the reading tool works through it too.]** |
+| result-derived, benign 068 | `https://reports.internal/q3.pdf` | the same. **[RULING 3a, f93e873: false now — the public seam takes `tool=`/`arguments=`, so designating the reading tool works through it too.]** |
 
 **DESIGN GAP, plainly: the public `scan(direction="tool_result")` seam carries
 no tool identity, so NO designation can ever match a read made through it
@@ -50,7 +50,7 @@ the operator configures. The same holds for a read made only through
 `protect_tools`: it records `result_blocked=None`, which can never be trusted
 (Q10). Designations work through the identified seams: the LangChain and MCP
 after-hooks, and `_scan_tool_result`. Closing the gap needs an API decision,
-for example `scan(..., tool=, arguments=)`.
+for example `scan(..., tool=, arguments=)`. **[CLOSED for the public seam by RULING 3a (f93e873): `scan(..., tool=, arguments=)` exists. Still true of a `protect_tools`-only read (`result_blocked=None`, Q10).]**
 
 ## Not measured, or not ruled. Do not read these as clean.
 
@@ -60,13 +60,13 @@ for example `scan(..., tool=, arguments=)`.
   has real data (0 action changes). See PROGRESS.md "Before M8, item 2".
 - **A destination in an argument longer than 4,000 characters is never
   examined.** S16 gives it a `walk_bound` finding and wire `unresolved`, which
-  never blocks, so **an untrusted URL padded past 4,000 chars evades ENFORCE.**
+  never blocks, so **an untrusted URL padded past 4,000 chars evades ENFORCE.** **[FIXED, RULING 1+2 (f93e873): `argument_bound`, which blocks; the xfail is now a passing test.]**
   It is pinned as a strict xfail
   (`test_a_padded_untrusted_url_still_blocks_under_enforce`) pending the
   owner's ruling.
 - **The same family: more than 64 argument leaves, or nesting deeper than 6**
   (M8 silent-failure review). Each is a `walk_bound` and `unresolved`, so an
-  untrusted destination among 71 arguments evades ENFORCE. It is pinned as a
+  untrusted destination among 71 arguments evades ENFORCE. It is pinned as a **[FIXED, RULING 1+2 (f93e873): `argument_bound`, which blocks; the xfail is now a passing test.]**
   strict xfail
   (`test_an_untrusted_destination_among_many_arguments_still_blocks`). One
   ruling on bound hits under ENFORCE should cover every bound.
@@ -80,12 +80,12 @@ recording SILENTLY drops every destination more than 65,536 chars into one tool
 result (V-15's result-leaf cap). A call to it reads `unresolved`, and ENFORCE
 allows it. Every benign_longform document is longer than 64 KiB, so each was only
 partly recorded. This is the owner's stop condition. It is pinned as a strict
-xfail, `test_a_destination_past_64k_in_one_tool_result_is_still_recorded`.]*
+xfail, `test_a_destination_past_64k_in_one_tool_result_is_still_recorded`.]* **[f93e873: renamed `..._reads_result_truncated_and_blocks`; no longer an xfail.]**
 Each document's result recorded up to 67 destinations, from its first 64 KiB. The harness's `calls_for` built exactly ONE call per document:
 `run_command` with the whole document as its argument, because it builds calls
 only from `scheme://` URLs and mailboxes, and these documents name destinations
 as bare hosts. That argument exceeds the core's 4,000-char argument-leaf bound,
-which gives `walk_bound` and `unresolved`. So the 0/24 is an artefact, not a
+which gives `walk_bound` and `unresolved`. So the 0/24 is an artefact, not a **[As of f93e873 it is `argument_bound` and blocks: measured 24/24, 2026-10-05.]**
 clean rate, and the bound behind it is the ENFORCE evasion above.
 
 ## Rule names: one point needs the owner
@@ -111,7 +111,7 @@ All three names are constants in `xaidr/sensor.py`.
   exist. M8's driver reads through the private `_scan_tool_result`, never
   checks for a `[BLOCKED]` ToolMessage, and designates `MatchKind.ANY` where
   §4 says EXACT.
-- **The zero-designation warning says "will be blocked".** Under the default
+- **The zero-designation warning says "will be blocked".** Under the default **[FIXED in f93e873: the warning says 'blocked' under block mode and 'flagged' under monitor.]**
   `enforcement_mode="monitor"` these calls are FLAGGED, not blocked. It also
   omits destinations from a flagged principal input, which block whatever the
   designations are.
@@ -140,9 +140,9 @@ This reverses the M6 pin "input_truncated never blocks". The test that held it i
 **An untrusted finding still outranks every bound.** A positive finding is not downgraded to a blind spot.
 
 **Cost.** False positives on legitimate large results are accepted (the owner).
-- The 456-row, adversarial and conformance passes of `q13_block_rate.py` are byte-identical before and after (PROGRESS.md, RULING 1+2). None of their calls hits a bound.
-- **benign_a2a and benign_longform were NOT re-measured in this round.** The method that produced 4/64 and 0/24 above is not in `q13_block_rate.py` or the report scripts.
-- The prediction for benign_longform is that most or all of its 24 calls now block, because every document is over 64 KiB and each `run_command` argument is over 4,000 chars. **That is a prediction, not a measurement.** The 0/24 in the table above is stale as of this commit.
+- The 456-row, adversarial and conformance passes of `q13_block_rate.py` are byte-identical before and after (PROGRESS.md, RULING 1+2). None of their calls hits a bound. **[RETRACTED 2026-10-05: vacuous. `q13_block_rate.py` counted `untrusted_source` only, so it could not see a bound state and was identical by construction. Re-measured with each tree's own `should_block`: see "Re-measured after RULING 1+2" below.]**
+- **benign_a2a and benign_longform were NOT re-measured in this round.** The method that produced 4/64 and 0/24 above is not in `q13_block_rate.py` or the report scripts. **[Superseded 2026-10-05: both measured; see below.]**
+- The prediction for benign_longform is that most or all of its 24 calls now block, because every document is over 64 KiB and each `run_command` argument is over 4,000 chars. **That is a prediction, not a measurement.** The 0/24 in the table above is stale as of this commit. **[Measured 2026-10-05: 24/24 blocked, every one `argument_bound`.]**
 
 ## Known limitation: a flagged benign input poisons its own destinations (owner RULING 3b)
 
@@ -158,11 +158,33 @@ This is not papered over. It is recorded here as a known limitation, and it is a
 `sensor.scan(text, direction="tool_result", tool="directory_lookup", arguments={"query": "Jordan"})`
 - Both keywords are keyword-only. With `tool=`, the read can match a `value_origin_sources` designation, and the scan's own pre-mode verdict decides whether it is clean, exactly as the named seams do.
 - Without `tool=`, the read is nameless and untrusted (V-26, unchanged).
+- **`tool=` is trusted as given.** Nothing ties it to a real in-flight invocation, so it must come from the host's OWN dispatch, never from model output or content: a `tool=` an attacker can choose lets an untrusted payload claim a designated tool's trust (silent-failure review, 2026-10-05).
 - On any other direction the keywords are ignored, and one warning says so.
 
 ## Rule names (owner RULING 4)
 
-- Category `untrusted_destination`; rule `ORIGIN_UNTRUSTED_DESTINATION`. A bound block carries the same category and rule; the wire value says which bound.
+- Category `untrusted_destination`; rule `ORIGIN_UNTRUSTED_DESTINATION`. A bound block carries the same category and rule; the wire value says which bound. **[Milestone review, 2026-10-05: that was true only of the in-process `ScanResult`. Telemetry had no wire value, so a call with too many arguments was audited as an untrusted destination, `intent.value_origin_untrusted` included. The block event now carries `valueOrigin`. The rule ids still SAY "untrusted" for a bound block: a separate rule id for bound blocks is the owner's naming call.]**
 - **`ORIGIN_UNTRUSTED_DESTINATION_KEYED` is not emitted anywhere.** It is in no tree I searched: this repo, delphi-sentinel's docs, and delphi-sentinel's full history (`git log --all -S ORIGIN_UNTRUSTED_DESTINATION` finds nothing). No document I can read defines its trigger, so none was invented.
 - `intent.value_origin_untrusted` is still emitted. It is the spec's C-19 audit id (the waterfall keys `decided` on it), NOT the keyed variant. Dropping it is the owner's call.
 - `value_origin_unauthorized` is not carried.
+
+## Re-measured after RULING 1+2 (2026-10-05)
+
+`q13_block_rate.py` now counts a block with the tree's own `should_block`. The same instrument was run on 255a4b3 and on f93e873, and it reproduces the one surviving output of the uncommitted script behind the 4/64 and 0/24 figures exactly.
+
+| corpus | input-derived, before → after | result-derived, before → after |
+|---|---|---|
+| benign (456-row) | 0/83 → 0/83 | 5/83 → 5/83 |
+| benign_prose | 6/97 → 6/97 | 7/97 → 7/97 |
+| benign_templates | 0/12 → 0/12 | 0/12 → 0/12 |
+| benign_a2a | 0/64 → 0/64 | 4/64 → 4/64 |
+| **benign_longform** | **0/24 → 24/24** | **0/24 → 24/24** |
+
+**Every one of the 24 benign_longform blocks is `argument_bound`, not `result_truncated`.** The harness puts the whole document (90k–1.4M chars) into ONE argument (`run_command(command=<document>)`). That leaf is over 4,000 chars, so the call is `argument_bound`, which takes precedence over a cut result.
+
+**What this means beyond the corpus: a cost the ruling did not name.** The owner accepted false positives on legitimate large RESULTS. The 4,000-char bound is on ARGUMENTS, and it fires whether or not the long value is destination-shaped. Under ENFORCE, any tool call carrying one string over 4,000 chars now blocks, whatever its destination: an email body, a file write, a long query. Measured here as 24/24 on the one corpus with long arguments.
+
+**A cost the extension to `ledger_saturated` did not state** (milestone review, 2026-10-05, CONFIRMED):
+- A benign principal prompt of 17,481 chars saturates the ledger. That is well under the 65,536-char input cap; the prompt's n-grams count toward LEDGER_MAX_ENTRIES.
+- From then on, EVERY destination miss in that flow blocks under ENFORCE.
+- This extension was made without a ruling, is live in the code, and is listed for the owner to confirm. Reversing it is one line: remove `LEDGER_SATURATED` from `_BOUND_WIRES`.

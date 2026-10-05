@@ -10,8 +10,9 @@ counts as a leaf, including empty and whitespace-only strings; other scalars are
 ignored and not counted. The arguments mapping is the container at depth 1, so
 leaves sit at most 6 deep. ``truncated`` is True iff a 65th string leaf exists,
 or a container sits at depth > 6, or a leaf exceeds 4,000 chars — and then one
-``walk_bound`` finding is emitted, so a bound hit is ``unresolved``, never
-``no_destination`` (S16: otherwise leaf 65 is a bypass). Exactly 64 leaves is not
+``walk_bound`` finding is emitted, so a bound hit is never ``no_destination``
+(S16: otherwise leaf 65 is a bypass); the evaluator names it ``argument_bound``
+(RULING 1+2; this said ``unresolved`` until then). Exactly 64 leaves is not
 truncated. Findings within the bound still count.
 
 Sets are walked in a sorted order, because their iteration order changes with

@@ -468,7 +468,7 @@ lifetime.
 chars (M6), but a destination past the cap no longer reads a silent
 `unresolved`. If the flow's principal input was capped and a lookup misses, the
 wire is **`input_truncated`**, a TENTH wire value. Its verdict is NOT_EVALUATED,
-so it never blocks, like `ledger_saturated`. Its own §3.4 row reads: "the
+so it never blocks, like `ledger_saturated`. **[Superseded by RULING 1+2 (2026-10-04): both block under ENFORCE.]** Its own §3.4 row reads: "the
 principal's input was longer than value origin records; a destination past that
 point cannot be traced." An untrusted finding still outranks it. Absence is a
 row, never a missing row. **This is a vocabulary and interface change:**
