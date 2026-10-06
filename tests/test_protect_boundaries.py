@@ -650,19 +650,27 @@ def test_an_http_reporters_own_traffic_is_not_scanned(cap, wait_events):
     import httpx
     from xaidr.autopatch import exempt
 
-    _protect(["httpx"], cap)
+    manifest = _protect(["httpx"], cap)
 
     reporter_client = exempt(_httpx_client())
     reporter_client.post(
         "http://collector.internal/events", json={"message": INJECTION}
     )
 
-    # The attack text went out unscanned precisely because it is OUR OWN
-    # telemetry, and telemetry about telemetry is the loop.
-    assert cap.events == [], cap.events
-
     # ...while an ordinary client on the same patched class still blocks it.
     assert _blocked(_attack_httpx_body)
+
+    # Flush BEFORE reading `cap` (fresh review, 2026-10-05): telemetry is
+    # flushed on its own thread, so `cap.events == []` read at once passed
+    # whether or not the reporter's POST had been scanned. The ordinary block is
+    # the control: it MUST arrive, which proves the flush delivered.
+    manifest.unprotect(close_sensor=True)
+    # The attack text went out unscanned precisely because it is OUR OWN
+    # telemetry, and telemetry about telemetry is the loop. Exactly ONE event:
+    # the control's block. A scan of the reporter's POST would be one more (an
+    # event does not name its destination, so it is counted, not matched).
+    actions = [e.get("data", {}).get("action") for e in cap.events]
+    assert actions == ["blocked"], cap.events
 
 
 @requires_httpx

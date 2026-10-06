@@ -1138,7 +1138,7 @@ class TestRealToolResultSeam:
             # close_sensor=True: telemetry is batched and flushed on its own
             # thread, and unprotect() leaves it running by design (its lifetime
             # belongs to the host). Reading `cap` before the flush made this test
-            # fail ~1 run in 6 with directions=[] (CI f44aee4, run 37367672884;
+            # fail intermittently with directions=[] (CI f44aee4, run 37367672884;
             # also reproduced on 77d9b4a). Closing the sensor flushes it first.
             manifest.unprotect(close_sensor=True)
         tool_messages = [m for m in out["messages"] if isinstance(m, ToolMessage)]
