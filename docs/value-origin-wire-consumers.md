@@ -83,3 +83,37 @@ M9 is held at STOP 4 regardless.
 `result_unread` was added on 2026-10-05 (Q18 under the bounds ruling), making thirteen values. The same inventory applies: nothing outside this repo was changed.
 
 `extraction_incomplete` was added on 2026-10-06 (the atom pass's work budget), making fourteen values. The same inventory applies: nothing outside this repo was changed.
+
+## M9 (2026-10-06): the full final list the consumer must accept
+
+The sensor emits `valueOrigin` at the top level of `data` on every tool-call event (all six exits; never null), mapped to `gen_ai.security.value_origin`, at schema **0.3.0**. **What the consumer must accept: all fourteen values below.** Row state and text are the normative §3.4 rows (`tests/value_origin_conformance/row_text.json` is the machine-readable copy).
+
+| wire value | verdict | row state | emitted under the default `v1`? | blocks under ENFORCE? | row text (tool_call) |
+|---|---|---|---|---|---|
+| `principal` | authorized | ran_clean | yes | no | Intent: destination traces to the principal's own input (a declared principal span). |
+| `principal_undeclared_span` | authorized | ran_clean | yes | no | Intent: destination traces to the principal's input — assuming the whole input was the principal's own; no span structure was declared, so quoted content would read the same. |
+| `trusted_source` | authorized | ran_clean | yes | no | Intent: destination traces to a designated trusted source. |
+| `untrusted_source` | unauthorized | ran_evidence | yes | yes: `ORIGIN_UNTRUSTED_DESTINATION` + `intent.value_origin_untrusted` | Intent: destination traces to an untrusted source. |
+| `unresolved` | unresolved | ran_evidence | yes | no | Intent: destination origin unresolved — it traces to no recorded source. |
+| `no_destination` | not_evaluated | not_applicable | yes | no | Intent: not applicable — this call carries no destination-shaped value. |
+| `no_flow` | not_evaluated | not_recorded | yes | no | Intent: not evaluated — no flow context was visible to this call (none was started, or it did not reach this thread). |
+| `ledger_absent` | not_evaluated | not_recorded | yes | no | Intent: not evaluated — a flow was active but its provenance ledger was never bound; the sensor's flow entry is not wired. |
+| `ledger_saturated` | not_evaluated | not_recorded | yes | no | Intent: not evaluated — this flow's ledger was full; an unmatched destination cannot be called novel. |
+| `input_truncated` | not_evaluated | not_recorded | **no (withheld)** | no | Intent: not evaluated — this destination traces to no recorded source; the principal's input was longer than value origin examines whole (64 KiB), and the part past that point was scanned only for destination addresses. |
+| `argument_bound` | unresolved | ran_evidence | **no (withheld)** | no | Intent: destination not fully examined — this call's arguments exceed what value origin examines whole (a value over 4,000 characters, more than 64 values, or nesting deeper than 6); past that point they were scanned only for destination addresses. |
+| `result_truncated` | not_evaluated | not_recorded | **no (withheld)** | no | Intent: not evaluated — this destination traces to no recorded source; a tool result in this flow exceeded what value origin examines whole (a value over 65,536 characters, more than 64 values, or nesting deeper than 6), and the part past that point was scanned only for destination addresses. |
+| `result_unread` | not_evaluated | not_recorded | **no (withheld)** | yes: `ORIGIN_UNEXAMINABLE_SOURCE` + `intent.value_origin_untrusted` | Intent: not evaluated — a tool result in this flow was an unread network response (httpx, requests, urllib3 or aiohttp), which value origin does not read so as not to consume it; a destination in it cannot be traced. |
+| `extraction_incomplete` | not_evaluated | not_recorded | **no (withheld)** | no | Intent: not evaluated — value origin's scan for destination addresses in a long value reached its work budget; the rest was not scanned, so a destination there may be missed. |
+
+**The gate** (`Sensor(value_origin_wire=...)`, my choice under the owner's "do not emit a value no consumer accepts"):
+- `"v1"` (default) emits the nine the Brain's code on delphi-sentinel origin/main (01450c7) accepts.
+- `"v2"` emits all fourteen.
+- `"off"` emits nothing.
+
+A withheld value leaves the key absent. That is indistinguishable on the wire from "not reported", by design, until the consumer is updated. It is named in a once-per-value warning, and it applies to EVERY reporter (SIEM and file users included).
+
+**Deployed vs main** (milestone review, 2026-10-06): the deployed Brain, `8c01911` per `/health`, predates the value-origin code and ignores the field entirely. origin/main (#137) accepts nine. Whether `add-value-origin.sql` is applied to the live database is unverifiable from here (#84).
+
+**For the consumer to accept all fourteen, change** inventory rows #1–#5 and #7 above for the five new values (`input_truncated`, `argument_bound`, `result_truncated`, `result_unread`, `extraction_incomplete`), plus the column comment (#6) and the spec tables (#8). **Switch the sensor to `v2` only after a DEPLOYED Brain accepts all fourteen.**
+
+**Known gap (host-only):** `sensor.scan(text, direction="tool_call")`, which bypasses `scan_tool_call`, emits a tool-call event without `valueOrigin`. No caller inside xaidr does this.

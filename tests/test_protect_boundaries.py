@@ -562,12 +562,14 @@ def test_the_operator_blocked_tools_list_holds_in_monitor_mode(cap):
 def test_langchain_middleware_and_basetool_do_not_double_scan(cap, wait_events):
     fakes.install_langchain_core()
     fakes.install_langchain()
-    _protect(["langchain", "langchain_core"], cap, enforcement_mode="monitor")
+    manifest = _protect(["langchain", "langchain_core"], cap, enforcement_mode="monitor")
 
     agent = _langchain_agent(lambda command: f"ran {command}")
     agent.call_tool("run_command", {"command": "ls -la /tmp"})
 
-    wait_events(cap, 1)
+    # Sweep, 2026-10-06: waiting for ONE event and then counting passed while a
+    # second (double-scan) event was still in flight. Flush first, then count.
+    manifest.unprotect(close_sensor=True)
     tool_events = [e for e in cap.events if e["data"].get("toolName") == "run_command"]
     assert len(tool_events) == 1, (
         f"one tool call produced {len(tool_events)} scans — the middleware / "

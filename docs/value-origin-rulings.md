@@ -520,3 +520,6 @@ Showing that RECORD mode leaves it byte-identical is A2's obligation (C-11).
 - **Ledger:** a separate 65,536 budget for key n-grams, 10,000 kept for destinations (the recommendation, approved). The laundering gap keeps its strict xfail and is named in the ENFORCE docs.
 - **`unexaminable_source` / `ORIGIN_UNEXAMINABLE_SOURCE` approved, with `intent.value_origin_untrusted` RESTORED alongside it.** It is the Brain-side spec's audit id, and the intent lens filters on it.
 - **The 4,001 vs 3,999 cliff** is recorded as a known artefact.
+
+## 2026-10-06 — M9 built behind a consumer gate (owner delegated the shape)
+`valueOrigin` is emitted on every tool-call event, behind `value_origin_wire`. The default `"v1"` is exactly the nine values the Brain's code accepts. It is safe to ship now, because no value the consumer rejects is ever sent. `"v2"` is all fourteen, for after a deployed Brain accepts them; `"off"` emits nothing. Chosen over default-off because v1 delivers what the consumer can store today without one rejected value; the cost is that five states are withheld (and named in a warning) until v2. SCHEMA_VERSION 0.3.0 (Q14).

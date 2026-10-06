@@ -6,6 +6,8 @@ model (allow / flag / block). No account, no backend, no network escalation.
 
 from __future__ import annotations
 
+import contextvars
+import functools
 import inspect
 import json
 import logging
@@ -487,6 +489,58 @@ def _coerce_scannable(value) -> Optional[str]:
     return None
 
 
+# ── M9: the valueOrigin wire field, and its consumer gate (owner, 2026-10-06) ──
+# "Do not emit a value no consumer accepts." The Brain on delphi-sentinel
+# origin/main (01450c7, src/value-origin.ts VALUE_ORIGINS) accepts exactly the
+# nine below and stores anything else as NULL while counting it rejected (the
+# Brain DEPLOYED on 2026-10-06, 8c01911 per /health, predates that code and
+# ignores the field: milestone review). Withholding applies to EVERY reporter. The
+# sensor names the consumer's vocabulary (Sensor(value_origin_wire=...)):
+#   "v1"  the nine the Brain accepts today -- the DEFAULT, safe to ship now;
+#   "v2"  all fourteen, for once the consumer accepts them;
+#   "off" emit nothing.
+# A value outside the active vocabulary is WITHHELD -- the key is absent, as for
+# a sensor that does not report -- and named in a once-per-value warning; it is
+# always on ScanResult.value_origin. Literals, not WireValue, so this module
+# reaches into the core only inside guarded calls (the fault-isolation sweep);
+# tests/test_value_origin_m9.py pins v2 == every WireValue.
+_VO_WIRE_V1 = frozenset({
+    "principal", "principal_undeclared_span", "trusted_source", "untrusted_source",
+    "unresolved", "no_destination", "no_flow", "ledger_absent", "ledger_saturated",
+})
+_VO_WIRE_VOCABULARIES = {
+    "off": frozenset(),
+    "v1": _VO_WIRE_V1,
+    "v2": _VO_WIRE_V1 | frozenset({"input_truncated", "argument_bound", "result_truncated",
+                                    "result_unread", "extraction_incomplete"}),
+}
+# One tool call's wire value, scoped by @_vo_call_scope around scan_tool_call so
+# every emitter that call reaches -- main, circuit-open, scan-error, fail-closed,
+# gate, not-scannable -- sees it at the one choke point, _enqueue_event.
+_VO_CALL_WIRE: "contextvars.ContextVar[list | None]" = contextvars.ContextVar(
+    "xaidr_value_origin_call_wire", default=None)
+
+
+def _vo_call_scope(fn):
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        token = _VO_CALL_WIRE.set([None])
+        try:
+            return fn(self, *args, **kwargs)
+        finally:
+            _VO_CALL_WIRE.reset(token)
+    return wrapper
+
+
+def _vo_note_wire(cv) -> None:
+    """Record this call's wire value for its events (absent on OFF or a fault)."""
+    holder = _VO_CALL_WIRE.get()
+    if holder is not None:
+        wire = getattr(getattr(cv, "wire", None), "value", None)
+        holder[0] = wire if isinstance(wire, str) and wire else None
+
+
+
 class DelphiSensor:
     """Standalone agent security sensor.
 
@@ -526,6 +580,7 @@ class DelphiSensor:
         fail_closed=(),
         value_origin="record",
         value_origin_sources: Sequence = (),
+        value_origin_wire: str = "v1",
     ):
         if not agent_id:
             raise ValueError("agent_id is required")
@@ -787,6 +842,15 @@ class DelphiSensor:
         # no_flow warning per sensor (Q6). The comment above predates M4.
         self._value_origin = _vo.validate_mode(value_origin)
         self._value_origin_sources = _vo.validate_designations(value_origin_sources)
+        # M9: which wire values the consumer accepts (see _VO_WIRE_VOCABULARIES).
+        if value_origin_wire not in _VO_WIRE_VOCABULARIES:
+            raise ValueError(
+                f"value_origin_wire must be one of {sorted(_VO_WIRE_VOCABULARIES)}, "
+                f"not {value_origin_wire!r}")
+        self._vo_wire_name = value_origin_wire
+        self._vo_wire_vocab = _VO_WIRE_VOCABULARIES[value_origin_wire]
+        self._vo_withheld_warned: set = set()
+        self._vo_emit_fault_logged = False
         self._vo_no_flow_warned = False          # Q6: one no_flow warning per sensor
         self._vo_attach_fault_logged = False
         self._vo_spans_warned = False            # M6: spans= on a non-input direction
@@ -1000,7 +1064,7 @@ class DelphiSensor:
                 "failClosedDetail": detail,
             }
             data.update(extra)
-            self._telemetry.enqueue(
+            self._enqueue_event(
                 {"type": "scan", "agentId": self.agent_id, "data": data}
             )
         except Exception:
@@ -1335,7 +1399,7 @@ class DelphiSensor:
                 "enforcementMode": self.enforcement_mode,
                 **event,
             }
-            self._telemetry.enqueue({
+            self._enqueue_event({
                 "type": "circuit_breaker",
                 "agentId": self.agent_id,
                 "data": data,
@@ -1402,7 +1466,7 @@ class DelphiSensor:
                 "promptHash": None,
             }
             data.update(extra)
-            self._telemetry.enqueue({
+            self._enqueue_event({
                 "type": "scan",
                 "agentId": self.agent_id,
                 "data": data,
@@ -1440,7 +1504,7 @@ class DelphiSensor:
                 "gate": gate_name,
             }
             data.update(extra)
-            self._telemetry.enqueue({
+            self._enqueue_event({
                 "type": "scan",
                 "agentId": self.agent_id,
                 "data": data,
@@ -1732,7 +1796,7 @@ class DelphiSensor:
             "promptHash": None,
         }
         data.update(extra)
-        self._telemetry.enqueue({
+        self._enqueue_event({
             "type": "scan",
             "agentId": self.agent_id,
             "data": data,
@@ -1811,7 +1875,7 @@ class DelphiSensor:
                 "errorType": type(exc).__name__,
             }
             data.update(extra)
-            self._telemetry.enqueue(
+            self._enqueue_event(
                 {"type": "scan", "agentId": self.agent_id, "data": data}
             )
         except Exception:
@@ -2144,7 +2208,7 @@ class DelphiSensor:
                     data["nanoFpApplies"] = f"{applies[0]}/{applies[1]}"
             except Exception:
                 pass
-        self._telemetry.enqueue({
+        self._enqueue_event({
             "type": "scan",
             "agentId": self.agent_id,
             "data": data,
@@ -2379,7 +2443,7 @@ class DelphiSensor:
             data["provenance"] = prov
         if parent_context is not None:
             data["traceParent"] = parent_context.as_metadata()
-        self._telemetry.enqueue({
+        self._enqueue_event({
             "type": "scan",
             "agentId": self.agent_id,
             "data": data,
@@ -2403,6 +2467,44 @@ class DelphiSensor:
             self._tool_arg_norm = n
         return n
 
+    def _vo_first_withheld(self, wire: str) -> bool:
+        """True the first time ``wire`` is withheld (under the lock: silent-failure review)."""
+        with self._vo_lock:
+            first = wire not in self._vo_withheld_warned
+            self._vo_withheld_warned.add(wire)
+        return first
+
+    def _enqueue_event(self, event: dict) -> None:
+        """Every telemetry event this sensor emits passes here (M9). A TOOL-CALL
+        event gets ``valueOrigin`` at the top level of ``data`` when its call has
+        a wire value the consumer's vocabulary accepts; otherwise the key stays
+        absent (OFF, an evaluate fault, every other direction, or a withheld
+        value). Never None. A fault here never costs the event."""
+        try:
+            holder = _VO_CALL_WIRE.get()
+            wire = holder[0] if holder else None
+            data = event.get("data") if isinstance(event, dict) else None
+            if wire is not None and isinstance(data, dict) and data.get("direction") == "tool_call":
+                if wire in self._vo_wire_vocab:
+                    data["valueOrigin"] = wire
+                elif self._vo_wire_vocab and self._vo_first_withheld(wire):
+                    logger.warning(
+                        "xaidr: Sensor(agent_id=%r): value-origin wire value %r withheld from "
+                        "telemetry (every reporter): value_origin_wire=%r, the vocabulary the "
+                        "consumer accepts, does not include it. The Brain's code on "
+                        "delphi-sentinel origin/main accepts nine values and stores any other "
+                        "as NULL; the Brain deployed on 2026-10-06 (8c01911) does not read the "
+                        "field at all. It is still on ScanResult.value_origin. Set "
+                        "value_origin_wire='v2' once the consumer accepts all fourteen.",
+                        self.agent_id, wire, self._vo_wire_name)
+        except Exception:
+            if not self._vo_emit_fault_logged:
+                self._vo_emit_fault_logged = True
+                logger.exception("xaidr: value origin's wire-field emission faulted; the event "
+                                 "is sent without valueOrigin")
+        self._telemetry.enqueue(event)
+
+    @_vo_call_scope
     def scan_tool_call(
         self,
         tool_name: str,
@@ -2420,6 +2522,7 @@ class DelphiSensor:
         autopatch.tool_verdict does (M4 review). RECORD and
         ENFORCE evaluate; nothing acts on the verdict until M8."""
         cv = self._value_origin_verdict(tool_name, arguments)
+        _vo_note_wire(cv)                 # M9: every event of this call sees it
         blocked = self._value_origin_block(tool_name, cv)
         if blocked is not None:
             return blocked
@@ -2473,10 +2576,10 @@ class DelphiSensor:
         # (M8 silent-failure review: emitting after _apply_mode left a softened
         # value-origin block with no trace anywhere.)
         try:
-            # valueOrigin: which state blocked (milestone review: a bound block was
-            # audited as an untrusted destination, with no wire value at all).
-            self._emit_gate_verdict(result, "value_origin", "tool_call", toolName=name,
-                                    valueOrigin=getattr(getattr(cv, "wire", None), "value", None))
+            # valueOrigin reaches this event through _enqueue_event, behind the
+            # consumer gate (M9). Passing it here explicitly, as 3daf41f did,
+            # bypassed the gate: a result_unread block sent a value the Brain rejects.
+            self._emit_gate_verdict(result, "value_origin", "tool_call", toolName=name)
         except Exception:
             pass                                 # telemetry never decides a verdict
         try:
@@ -3122,7 +3225,7 @@ class DelphiSensor:
         }
         if prov:
             data["provenance"] = prov
-        self._telemetry.enqueue({
+        self._enqueue_event({
             "type": "scan",
             "agentId": self.agent_id,
             "data": data,

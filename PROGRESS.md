@@ -2580,7 +2580,7 @@ Last round's watcher ran `gh run list --commit f93e873`. With the 7-character ha
 
 **milestone-reviewer:** six findings, all addressed in this commit.
 1. HIGH, the vacuous re-measure. Retracted in place, re-measured above (the reviewer's independent benign_longform count, 24/24 `argument_bound`, agrees).
-2. MEDIUM-HIGH, a bound block was audited as an untrusted destination. Telemetry had no wire value. The block event now carries `valueOrigin`. Red first:
+2. MEDIUM-HIGH, a bound block was audited as an untrusted destination. Telemetry had no wire value. The block event now carries `valueOrigin`. Red first: **[M9, 2026-10-06: on the WIRE this holds only for values the consumer accepts. Under the default `value_origin_wire="v1"` (the Brain's nine) the five new states, `result_unread` included, are WITHHELD from telemetry for every reporter. They stay on `ScanResult.value_origin`, and a `result_unread` block still carries `ORIGIN_UNEXAMINABLE_SOURCE` + `intent.value_origin_untrusted`. Set `"v2"` once the consumer accepts all fourteen.]**
 ```
 E   AssertionError: the block event does not say which state blocked it: {'timestamp': '2026-10-05T18:18:32.938428Z', 'scanId': 'e64dadfec124', 'agentId': 'bounds-tel', 'action': 'blocked', 'score': 1.0, 'category': 'untrusted_destination', 'rules': ['ORIGIN_UNTRUSTED_DESTINATION', 'intent.value_ori
 ```
@@ -3042,3 +3042,114 @@ Also fixed: one shared budget per call; old claims retracted in place; the evalu
   END TO END sensor.scan(5 MB (a|a) bypass-test input): off 1300 ms, record 1397 ms, delta +97 ms
   END TO END sensor.scan(5 MB e-acute.e-acute (non-ASCII, rejected)): off 1193 ms, record 1325 ms, delta +132 ms
 ```
+
+## Round: PR #34, the vacuous-test sweep, M9 behind a consumer gate, carried items (owner, 2026-10-06)
+
+### 1. PR #34
+Brought to head `3174fb2188db182418860cfa1bc47ebf05be1974` (CI run 37402988651 success, 12/12; DCO 37402988647 success), with that round's evidence on top. It read back identical. After this push it is updated again, once CI finishes.
+
+### 2. The vacuous-test sweep (run last round; reported here)
+**Fixed, because they were clearly broken.** With every event dropped by an evidence-only plugin, the old versions PASS and the new ones FAIL:
+```
+OLD: 2 passed in 0.03s
+NEW:
+2 failed in 0.03s
+E   AssertionError: no circuit_breaker event was captured, so the privacy check never ran on the breaker path: []
+E   AssertionError: only 0 events: the timestamp format was never checked
+tests/test_event_timestamps.py:117: AssertionError: only 0 events: the timestamp format was never checked
+tests/test_schema_event_types.py:320: AssertionError: no circuit_breaker event was captured, so the privacy check never ran on the breaker path: []
+```
+- `test_schema_event_types.py:306` now requires a `circuit_breaker` event before its privacy loop.
+- `test_event_timestamps.py:112` now requires at least 3 events before its regex loop.
+- `test_protect_manifest.py:443` and `test_protect_boundaries.py:562` now flush (`unprotect(close_sensor=True)`) before counting, so a double scan's second event can no longer be in flight. **Their catching a real double scan is NOT demonstrated:** there is no cheap way to inject one. They pass normally and with the flush held. The four files: 146 passed, 1 skipped in 0.83s; 2 passed in 1.08s.
+
+**Listed, not fixed** (owner: fix only what is clearly broken):
+- `test_cluster_a1_a2_a6.py:107/127/135` pass even if `flush()`/close are no-ops: the first event wakes the worker at once. A fix needs a held-worker harness.
+- MEDIUM, each backed by a synchronous check or a sibling test: `test_protect_manifest.py:471/513/795`, `test_protect_boundaries.py:694`, `test_reporters.py:33` (sleeps instead of flushing), `test_a8_protect_http_destination.py:256` (an empty capture serializes to "[]"), `value_origin_conformance/test_race.py:185`.
+- LOW: `test_destination_block_telemetry.py:166`, `test_circuit_breaker.py:345`, `test_operational_resilience.py:300`, `test_tool_result_direction.py:296`, `test_trace_context.py:195/204`, `test_a2a_routing.py:202`, `test_command_parse.py:367`, `test_sensor_extensions.py:214`.
+
+### 3. M9: `valueOrigin` on every tool-call event, behind a consumer gate
+**The gate (my choice; why: see docs/value-origin-rulings.md).**
+- `value_origin_wire="v1"` is the default: exactly the Brain's nine.
+- `"v2"` is all fourteen; `"off"` emits nothing.
+- A withheld value is absent from the wire and named once in a warning.
+
+The full final list the consumer must accept is in docs/value-origin-wire-consumers.md.
+
+**How it is wired.** One choke point, `_enqueue_event`, carries all 9 enqueue sites in the sensor class. `@_vo_call_scope` on `scan_tool_call` scopes the call's wire value, so every exit that call reaches sees it. The explicit `valueOrigin=` that 3daf41f passed to block events is gone, because it bypassed the gate. The schema maps `gen_ai.security.value_origin`, and SCHEMA_VERSION is 0.3.0 (Q14).
+
+**Red first:**
+```
+    raise RuntimeError("m9 evaluate fault")
+/Users/anirudhkotaru/worktrees/opena2a/value-origin-seams/tests/test_value_origin_m9.py:111: AssertionError: scan_error: the path's own marker is missing, so this did not exercise scan_error
+/Users/anirudhkotaru/worktrees/opena2a/value-origin-seams/tests/test_value_origin_m9.py:112: AssertionError: circuit: a tool-call event without valueOrigin is indistinguishable from an old sensor (C-13): ['<absent>']
+/Users/anirudhkotaru/worktrees/opena2a/value-origin-seams/tests/test_value_origin_m9.py:112: AssertionError: fail_closed: a tool-call event without valueOrigin is indistinguishable from an old sensor (C-13): ['<absent>',
+/Users/anirudhkotaru/worktrees/opena2a/value-origin-seams/tests/test_value_origin_m9.py:112: AssertionError: gate: a tool-call event without valueOrigin is indistinguishable from an old sensor (C-13): ['<absent>']
+/Users/anirudhkotaru/worktrees/opena2a/value-origin-seams/tests/test_value_origin_m9.py:112: AssertionError: main: a tool-call event without valueOrigin is indistinguishable from an old sensor (C-13): ['<absent>']
+/Users/anirudhkotaru/worktrees/opena2a/value-origin-seams/tests/test_value_origin_m9.py:112: AssertionError: not_scannable: a tool-call event without valueOrigin is indistinguishable from an old sensor (C-13): ['<absent>
+/Users/anirudhkotaru/worktrees/opena2a/value-origin-seams/tests/test_value_origin_m9.py:136: AssertionError: never null
+/Users/anirudhkotaru/worktrees/opena2a/value-origin-seams/tests/test_value_origin_m9.py:181: AttributeError: module 'xaidr.sensor' has no attribute '_VO_WIRE_VOCABULARIES'
+/Users/anirudhkotaru/worktrees/opena2a/value-origin-seams/tests/test_value_origin_m9.py:191: AssertionError: Q14: absence now means 'not reported', so the version moves
+/Users/anirudhkotaru/worktrees/opena2a/value-origin-seams/tests/test_value_origin_m9.py:50: TypeError: DelphiSensor.__init__() got an unexpected keyword argument 'value_origin_wire'
+11 failed in 0.04s
+AssertionError: circuit: a tool-call event without valueOrigin is indistinguishable from an old sensor (C-13): ['<absent>']
+AssertionError: fail_closed: a tool-call event without valueOrigin is indistinguishable from an old sensor (C-13): ['<absent>', '<absent>']
+AssertionError: gate: a tool-call event without valueOrigin is indistinguishable from an old sensor (C-13): ['<absent>']
+AssertionError: main: a tool-call event without valueOrigin is indistinguishable from an old sensor (C-13): ['<absent>']
+AssertionError: never null
+AssertionError: not_scannable: a tool-call event without valueOrigin is indistinguishable from an old sensor (C-13): ['<absent>']
+AssertionError: Q14: absence now means 'not reported', so the version moves
+AssertionError: scan_error: the path's own marker is missing, so this did not exercise scan_error
+AttributeError: module 'xaidr.sensor' has no attribute '_VO_WIRE_VOCABULARIES'
+RuntimeError: m9 evaluate fault
+TypeError: DelphiSensor.__init__() got an unexpected keyword argument 'value_origin_wire'
+WARNING  xaidr.sensor:sensor.py:1776 xaidr: scan failed open on tool_call (RuntimeError at test_value_origin_m9:84) scan_id=b423e23c7a68 [message suppressed: may contain scanned content]
+```
+**Sabotage.** SM1 is ARCHITECTURE's own: drop the field from `_emit_scan_error`. **SM3 (the direction filter removed) first stayed GREEN** — a finding. Nothing checked an event of another kind emitted INSIDE a tool call. A test now does (the breaker's own transition event), and SM3 goes red:
+```
+== SM1 dropped from _emit_scan_error (ARCHITECTURE's sabotage): 1 failed, 10 passed in 0.03s
+   red: test_every_tool_call_path_carries_its_marker_then_value_origin[scan_error]
+   msg: scan_error: a tool-call event without valueOrigin is indistinguishable from an old sensor (C-13): ['<absent>']
+== SM2 the consumer gate removed (every value emitted): 2 failed, 9 passed in 0.03s
+   red: test_v1_withholds_a_value_the_brain_does_not_accept_and_says_so
+   red: test_v2_emits_every_value_and_off_emits_none
+   msg: [{'timestamp': '2026-10-06T03:36:12.322035Z', 'scanId': '4ea7936d51c3', 'agentId': 'm9', 'action': 'blocked', ...}, {'timestamp': '2026-10-06T03:36:12.322092Z', 'scanId':
+   msg: v1 emitted a value the Brain stores as NULL and counts rejected: ['result_unread', 'result_unread']
+== SM3 the tool-call direction filter removed: 11 passed in 0.03s
+== SM4 the call's wire never noted: 9 failed, 2 passed in 0.04s
+   red: test_absent_in_off_on_an_evaluate_fault_and_on_non_tool_call_events
+   red: test_every_tool_call_path_carries_its_marker_then_value_origin[circuit]
+   red: test_every_tool_call_path_carries_its_marker_then_value_origin[fail_closed]
+   msg: [{'timestamp': '2026-10-06T03:36:12.848063Z', 'scanId': 'af786f6fd0d0', 'agentId': 'm9', 'action': 'blocked', ...}, {'timestamp': '2026-10-06T03:36:12.848122Z', 'scanId':
+   msg: circuit: a tool-call event without valueOrigin is indistinguishable from an old sensor (C-13): ['<absent>']
+== SM5 the schema stops mapping it: 1 failed, 10 passed in 0.03s
+   red: test_the_schema_maps_it_and_the_version_moves
+   msg: {'gen_ai.security.schema_version': '0.3.0', 'gen_ai.security.event_type': 'scan', 'gen_ai.security.event_id': '226cd7d70cb5', 'gen_ai.security.timestamp': '2026-10-06T03:
+== restored: True
+SM3 again, after the new test:
+1 failed, 11 passed in 0.03s
+E   AssertionError: valueOrigin leaked onto a non-tool-call event: [('circuit_breaker', 'no_flow')]
+tests/test_value_origin_m9.py:209: AssertionError: valueOrigin leaked onto a non-tool-call event: [('circuit_breaker', 'no_flow')]
+```
+**Green before the push:**
+- in-process (80 files: every suite that emits telemetry or scans tool calls, plus conformance): **7798 passed, 16 skipped, 12 xfailed, 1 warning in 216.24s (0:03:36)**;
+- real frameworks: **26 passed, 53 skipped in 0.57s**;
+- from the wheel (10 files, including test_m9_from_the_wheel, which now drives all six exits): **86 passed in 51.84s**.
+
+**Reviews (fresh context).**
+- **milestone-reviewer:** no code defect. It confirmed v1 == the Brain's nine on origin/main, that nothing bypasses the gate, and that reverting each emitter reddens only its own path. Its findings:
+  - the DEPLOYED Brain (8c01911) does not read the field at all (now stated);
+  - three ENFORCE-doc lines were made false by the gate (corrected in place);
+  - the six exits now run from the wheel (fail-closed on v2: its argument_bound is withheld under v1);
+  - v1 withholds from every reporter (stated);
+  - stale 0.2.0 references (schema.py, docs/alerts.md fixed; the Splunk TA's "Targets 0.2.0" left: `KV_MODE = json` still extracts the field);
+  - `scan(direction="tool_call")` outside `scan_tool_call` emits no field (host-only; recorded).
+- **silent-failure-hunter:** no gate defect. Its findings:
+  - my six-exit wheel test expected `no_flow` where the driver had bound a ledger (fixed);
+  - the warn-once set is now under the lock;
+  - **deferred, PLAUSIBLE and pre-existing:** the implicit ledger lasts until the next input scan on that thread, so a reused worker thread's later, unrelated tool calls read the previous request's ledger. M9 now puts that value on the wire. It is S-2 / ruling 3.1 behaviour and needs its own ruling.
+
+### 4. Carried items
+- **The silent-failure MEDIUM (a fallback with no tool identity, fails safe):** still OPEN by the owner's choice, and recorded: `- **Left open on purpose:** the silent-failure review's MEDIUM. `frameworks._scan_result`'s fallback, for a sensor without `_scan_tool_result`, passes no tool identity. It fails safe, and the owner wo`.
+- **The poison-laundering strict xfail:** kept, DEFERRED. Closing it needs a ruling on what a dropped write MEANS (treat it as unexaminable and block, or record what fits). Re-run now, with the cliff below: `1 passed, 1 xfailed in 0.89s`.
+- **The 4,001 vs 3,999 cliff, re-checked with the atom pass budget-bound:** it persists, unchanged. The budget limits only very long values; the cliff is C-8's whole-leaf rule meeting atom extraction past 4,000 chars. Pinned by `test_known_artefact_the_4000_char_cliff`.

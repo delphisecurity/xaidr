@@ -322,7 +322,10 @@ def test_a_bound_block_tells_telemetry_which_bound():
     from xaidr import provenance_chain as pc
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
+        # value_origin_wire="v2": result_unread is outside the Brain's nine, so the
+        # default "v1" withholds it from telemetry (M9's gate); v2 shows it.
         s = xaidr.Sensor(agent_id="bounds-tel", value_origin="enforce", enforcement_mode="block",
+                         value_origin_wire="v2",
                          reporter=type("N", (), {"report": lambda *a, **k: None})())
     events = []
     real = s._telemetry.enqueue
