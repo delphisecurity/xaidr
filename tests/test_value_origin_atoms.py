@@ -290,9 +290,33 @@ def test_through_the_sensor_a_destination_past_the_cap_of_a_CLEAN_input_is_the_p
         r = s.scan_tool_call("send_email", {"to": "bob@corp.example"})
         return r_in.action, r_in.category, r.action, r.value_origin.wire.value
     scan_action, scan_cat, act, wire = _in_flow(s, fn)
-    assert scan_action == "allowed", f"precondition: the input scan inside the flow gave {scan_action} ({scan_cat})"
-    assert wire == "principal_undeclared_span" and act != "blocked", (
-        f"bob@corp.example sits {len(text) - 20:,} chars into a CLEAN principal input; got {(act, wire)}")
+    # The scanner's verdict on a 91 KB input depends on the runner: clean here,
+    # `flagged (dos_attempt)` on CI's slower runners (8863bec, run 37393510535).
+    # V-9 reads that verdict, so the origin follows it; what this pins is that
+    # the destination past 64 KiB is FOUND either way, never input_truncated.
+    # The always-clean principal case is the next test, at the recording seam.
+    want = "principal_undeclared_span" if scan_action == "allowed" else "untrusted_source"
+    assert wire == want, (
+        f"bob@corp.example sits {len(text) - 20:,} chars into the principal input (scan "
+        f"{scan_action}, {scan_cat}); V-9 gives {want}, the call gave {(act, wire)}")
+
+
+def test_the_sensor_input_seam_records_a_clean_input_whole():
+    """Deterministic: the sensor's own recording seam, given a CLEAN verdict
+    (the scanner's verdict on long input varies by runner). Before 58d7f64 the
+    sensor cut the text to 64 KiB here, and bob, past the cut, was lost."""
+    text = ("Notes on the quarterly plan, item %d. " % 0) * 2000 + "Email it to bob@corp.example."
+    assert len(text) > 65_536
+    s, _ = _sensor()
+
+    def fn():
+        s._vo_record_input(text, None, "input", True)      # the seam, clean pre-mode verdict
+        r = s.scan_tool_call("send_email", {"to": "bob@corp.example"})
+        return r.action, r.value_origin.wire.value
+    got = _in_flow(s, fn)
+    assert got[1] == "principal_undeclared_span" and got[0] != "blocked", (
+        f"the sensor lost a destination {len(text) - 20:,} chars into a clean principal "
+        f"input: {got}")
 
 
 def test_a_really_saturated_ledger_reports_it_and_does_not_block():
