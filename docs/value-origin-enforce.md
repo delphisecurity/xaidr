@@ -167,7 +167,7 @@ This is not papered over. It is recorded here as a known limitation, and it is a
 
 - Category `untrusted_destination`; rule `ORIGIN_UNTRUSTED_DESTINATION`. A bound block carries the same category and rule; the wire value says which bound. **[Milestone review, 2026-10-05: that was true only of the in-process `ScanResult`. Telemetry had no wire value, so a call with too many arguments was audited as an untrusted destination, `intent.value_origin_untrusted` included. The block event now carries `valueOrigin`. The rule ids still SAY "untrusted" for a bound block: a separate rule id for bound blocks is the owner's naming call.]** **[Answered 2026-10-05: `ORIGIN_UNEXAMINABLE_SOURCE` for the only bound that still blocks.]**
 - **`ORIGIN_UNTRUSTED_DESTINATION_KEYED` is not emitted anywhere.** It is in no tree I searched: this repo, delphi-sentinel's docs, and delphi-sentinel's full history (`git log --all -S ORIGIN_UNTRUSTED_DESTINATION` finds nothing). No document I can read defines its trigger, so none was invented. **[Corrected 2026-10-05, owner: it comes from the original value-origin design as the Tier 2 keyed variant and was never built — DESIGNED, NOT IMPLEMENTED (docs/value-origin-rulings.md).]**
-- `intent.value_origin_untrusted` is still emitted. It is the spec's C-19 audit id (the waterfall keys `decided` on it), NOT the keyed variant. Dropping it is the owner's call. **[2026-10-05: on a `result_unread` block it IS now dropped. That was MY decision, not the owner's ruling (the owner named only the rule id). Consequence (C-19, PLAUSIBLE): the waterfall marks the intent stage `decided` on that id, so an unexaminable block may show no deciding stage. For the owner.]**
+- `intent.value_origin_untrusted` is still emitted. It is the spec's C-19 audit id (the waterfall keys `decided` on it), NOT the keyed variant. Dropping it is the owner's call. **[2026-10-05: on a `result_unread` block it IS now dropped. That was MY decision, not the owner's ruling (the owner named only the rule id). Consequence (C-19, PLAUSIBLE): the waterfall marks the intent stage `decided` on that id, so an unexaminable block may show no deciding stage. For the owner.]** **[Superseded 2026-10-06 (owner): `intent.value_origin_untrusted` is carried ALONGSIDE `ORIGIN_UNEXAMINABLE_SOURCE`; see "Why an unexaminable block carries TWO rule ids".]**
 - `value_origin_unauthorized` is not carried.
 
 ## Re-measured after RULING 1+2 (2026-10-05)
@@ -221,9 +221,9 @@ It was reproduced with REAL unread objects, not stand-ins: an `httpx.Response` o
 | `result_truncated` | **no** (visible) | the same parts of a result are searched for atoms, and each is RECORDED with the result's origin |
 | `input_truncated` | **no** (visible) | the sensor no longer cuts the input; the core records atoms from ALL of it and key n-grams from the first 64 KiB |
 | `ledger_saturated` | **no** (visible, loud warning) | unchanged: the cap is the question (below) |
-| `result_unread` (Q18) | **yes** | a stream cannot be read without consuming it. Category `unexaminable_source`, rule `ORIGIN_UNEXAMINABLE_SOURCE`, never `ORIGIN_UNTRUSTED_DESTINATION` / `intent.value_origin_untrusted` |
+| `result_unread` (Q18) | **yes** | a stream cannot be read without consuming it. Category `unexaminable_source`, rule `ORIGIN_UNEXAMINABLE_SOURCE`, never `ORIGIN_UNTRUSTED_DESTINATION` / `intent.value_origin_untrusted` **[Superseded 2026-10-06 (owner): `intent.value_origin_untrusted` is carried ALONGSIDE `ORIGIN_UNEXAMINABLE_SOURCE`; see "Why an unexaminable block carries TWO rule ids".]** |
 
-"Atoms" are C-7's prose pass (`prose_candidates`) over the WHOLE string, with no leaf, length or depth bound; the walk is cycle-safe. Only the expensive whole-value examination stays bounded. An over-length leaf is handed on whole, so a destination straddling the 64 KiB cut is found (sabotage SA3: handing on only the tail loses it).
+"Atoms" are C-7's prose pass (`prose_candidates`) over the WHOLE string, with no leaf, length or depth bound; the walk is cycle-safe. Only the expensive whole-value examination stays bounded. An over-length leaf is handed on whole, so a destination straddling the 64 KiB cut is found (sabotage SA3: handing on only the tail loses it). **[Superseded 2026-10-06 (owner): the atom pass is bounded by WORK; see "The atom pass is bounded by WORK".]**
 
 **The rule id, and a category the ruling did not name.** The owner ruled a separate rule id for a block on a source that could not be examined. The category `untrusted_destination` would be the same false statement, so it changed too, to `unexaminable_source`. **For the owner to confirm.**
 
@@ -260,7 +260,7 @@ benign_longform, 24 docs, 10,100,008 chars (core value-origin cost, summed):
   record_tool_result               total     1685 ms     70.2 ms/doc   largest doc 162 ms
   evaluate_call(run_command=doc)   total     1486 ms     61.9 ms/doc   largest doc 158 ms
 ```
-- **Atoms cost about 110 ns per char of prose (about 45 on non-prose), linear in the value's size, with no bound.** **[Corrected 2026-10-05 (milestone review): ADDRESS-DENSE text costs ~1.45–1.70 µs/char — 7–8.5 s per 5 MB on EACH path, and an attacker controls it. See "What it costs, corrected" below.]**
+- **Atoms cost about 110 ns per char of prose (about 45 on non-prose), linear in the value's size, with no bound.** **[Corrected 2026-10-05 (milestone review): ADDRESS-DENSE text costs ~1.45–1.70 µs/char — 7–8.5 s per 5 MB on EACH path, and an attacker controls it. See "What it costs, corrected" below.]** **[Superseded 2026-10-06 (owner): the atom pass is bounded by WORK; see "The atom pass is bounded by WORK".]**
 - The 5 MB case through the sensor gains **+216 ms** per input scan on a ~1 s scan. **[Corrected: that row used 5 MB of 'A', not test_truncation_bypass's own input; on its input the gain is +510 ms (1.37 → 1.88 s).]**
 - 5 MB of real prose costs **about 0.55 s on each path** (input, result, argument).
 - **benign_longform:** 94 ms/doc on input, 70 on result, 62 on argument; the 1.4 MB doc costs about 160–170 ms per path.
@@ -327,7 +327,7 @@ benign_longform (24 docs, 10,100,008 chars): input 1859 ms total, 77 ms/doc | re
 NOT the atom pass -- the EXAMINED bound itself: a result of 64 leaves x 64 KiB, address-dense: result 6254 ms
 ```
 - **The 5 MB bomb end to end: +43 ms** (1.36 → 1.40 s). It was +510 ms unbounded, which failed CI at 2.59 s against 2.5 s.
-- **The worst case under the budget, address-dense text: about 0.25 s per call** on the input path, 0.16 s on the result path and 0.07 s on the argument path. It was 7–8.5 s. Most of what remains is the EXAMINED part: the 64 KiB input window, and a result leaf's 64 KiB prefix.
+- **The worst case under the budget, address-dense text: about 0.25 s per call** on the input path, 0.16 s on the result path and 0.07 s on the argument path. It was 7–8.5 s. Most of what remains is the EXAMINED part: the 64 KiB input window, and a result leaf's 64 KiB prefix. **[Corrected 2026-10-06 (milestone review): rejected candidates were not charged, so non-ASCII text cost ~0.7 s. Every candidate examined is now charged; see "Cost, corrected" below.]**
 - **NOT met, and outside this ruling:** the examined bound for a RESULT is itself up to 64 leaves × 64 KiB of full examination. With address-dense text that costs **6.25 s**, so address-dense text can still reach seconds through the examined part. This predates the atom pass (V-15). It is reported for the owner's ruling and not changed here.
 
 **Block rate after:** benign_longform is unchanged at 7/24 and 8/24, all `untrusted_source`. Four calls per pass now read `extraction_incomplete`:
@@ -341,7 +341,7 @@ benign_longform (24 generated documents, 90k..1.4M chars), ENFORCE, block mode:
 **The 4,001 vs 3,999 cliff is a KNOWN ARTEFACT** (owner, 2026-10-06), re-checked after the budget change: it persists. The budget limits only very long values. The cliff comes from C-8's whole-leaf rule meeting atom extraction past 4,000 chars. Pinned by `test_known_artefact_the_4000_char_cliff`.
 
 ## The ledger has two budgets (owner, approved 2026-10-06)
-- **Budgets:** destinations keep `LEDGER_MAX_ENTRIES = 10,000`; the principal's key n-grams get their own `LEDGER_MAX_NGRAMS = 65,536`, sized to the 64 KiB n-gram window (a full window yields at most ~49K). A 17 KB prompt no longer fills the ledger.
+- **Budgets:** destinations keep `LEDGER_MAX_ENTRIES = 10,000`; the principal's key n-grams get their own `LEDGER_MAX_NGRAMS = 65,536`, sized to the 64 KiB n-gram window (a full window yields at most ~49K). A 17 KB prompt no longer fills the ledger. **[Corrected 2026-10-06 (milestone review): false for 1-char distinct tokens, where one 64 KiB input yields 125,907 n-grams and still overflows the 65,536 budget. Ordinary words yield at most ~49K.]**
 - **Known gap, named here as the owner asked:** a tool result naming more distinct addresses than 10,000 still saturates the destination budget. Its whole write, poison included, is dropped, and saturation does not block, so **the poisoned destination is laundered and the call to it is allowed.** It is pinned by the strict xfail `test_a_saturating_result_does_not_launder_its_poison`.
 
 ## Why an unexaminable block carries TWO rule ids (owner, 2026-10-06)
@@ -349,3 +349,24 @@ A `result_unread` block carries **`ORIGIN_UNEXAMINABLE_SOURCE`** (category `unex
 - **The first says WHY:** a source could not be examined. `ORIGIN_UNTRUSTED_DESTINATION` would be a false statement.
 - **The second is the audit id the Brain-side spec defines (C-19).** The Brain half becomes the intent lens, which filters on it.
 - Dropping the second on one path (58d7f64–3f5bf94) hid these blocks from anything filtering on it. It is restored alongside, not instead.
+
+### Cost, corrected after the reviews of 097be72 (2026-10-06)
+Two reviews found the budget leaky, and both leaks are fixed:
+- **Rejected candidates were not charged.** Every candidate the extractor EXAMINES now costs 64 units.
+- **A container's whole width was taken in one uncounted step.** The examined walk has a 65,536-node budget, and the atom walk charges each child.
+
+Also fixed:
+- A result's atom pass re-read the examined 64 KiB prefix. Only the tail is handed on now.
+- The walk and the atom pass share ONE budget per call.
+
+```
+5 MB, core value-origin cost per path (budget 500,000 units, 1/char + 64/candidate examined):
+  x.co (accepted atoms)                    input    239 ms | result    157 ms | argument     67 ms
+  x.zz (bad TLD, rejected)                 input    109 ms | result     57 ms | argument     24 ms
+  e-acute.e-acute (non-ASCII, rejected)    input    178 ms | result    112 ms | argument     38 ms
+  (a|a) bypass-test input                  input    165 ms | result     61 ms | argument     53 ms
+  6M-wide dict argument                    argument    434 ms   (the silent-failure review measured 9,877 ms before the width fix)
+  END TO END sensor.scan(5 MB (a|a) bypass-test input): off 1300 ms, record 1397 ms, delta +97 ms
+  END TO END sensor.scan(5 MB e-acute.e-acute (non-ASCII, rejected)): off 1193 ms, record 1325 ms, delta +132 ms
+```
+**The worst case under the budget, measured: under 0.25 s per call on the atom-pass paths.** The largest is the input path on accepted addresses (239 ms), mostly the examined 64 KiB window. A 6M-wide dict costs 0.43 s. The 5 MB bomb gains +97 ms end to end. The examined result bound (64 leaves × 64 KiB, ~6 s on address-dense text) is unchanged and still reported for the owner's ruling.

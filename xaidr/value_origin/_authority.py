@@ -714,15 +714,19 @@ def _blank(text: str, spans: List[Tuple[int, int]]) -> str:
     return "".join(chars)
 
 
-def prose_candidates(text: str) -> List[Tuple[int, Authority]]:
+def prose_candidates(text: str, counter: Optional[List[int]] = None) -> List[Tuple[int, Authority]]:
     """Every destination candidate in prose, as (position, authority), in text
     order. URLs first and blanked; then mailboxes, blanked so a mailbox never
     authorizes its own domain (V-20); then bare hosts (ruling 3.4: ICANN TLD or
     reserved name only), phones and strict IPs. A candidate for which
-    normalisation fails is dropped."""
+    normalisation fails is dropped. ``counter``, if given, is incremented once per
+    candidate EXAMINED, accepted or not -- what the work budget charges for (a
+    rejected candidate costs the same normalisation: milestone review, 2026-10-06)."""
     out: List[Tuple[int, Authority]] = []
     taken: List[Tuple[int, int]] = []
     for m in _P_URL_RE.finditer(text):
+        if counter is not None:
+            counter[0] += 1
         cand = m.group(0).rstrip(_TRAILING)
         taken.append((m.start(), m.end()))
         a = classify_value(cand, arg_mode=False)
@@ -733,6 +737,8 @@ def prose_candidates(text: str) -> List[Tuple[int, Authority]]:
     text = _blank(text, taken)
     taken = []
     for m in _P_EMAIL_RE.finditer(text):
+        if counter is not None:
+            counter[0] += 1
         cand = m.group(0).rstrip(".-")
         taken.append((m.start(), m.end()))
         a = mailbox_authority(cand)
@@ -740,6 +746,8 @@ def prose_candidates(text: str) -> List[Tuple[int, Authority]]:
             out.append((m.start(), a))
     text = _blank(text, taken)
     for m in _P_HOST_RE.finditer(text):
+        if counter is not None:
+            counter[0] += 1
         host = m.group(1)
         last = host.rsplit(".", 1)[-1]
         if last.isdigit():
@@ -751,14 +759,20 @@ def prose_candidates(text: str) -> List[Tuple[int, Authority]]:
         if a is not None:
             out.append((m.start(), a))
     for m in _P_PHONE_RE.finditer(text):
+        if counter is not None:
+            counter[0] += 1
         a = phone_authority(m.group(0))
         if a is not None:
             out.append((m.start(), a))
     for m in _P_IPV4_RE.finditer(text):
+        if counter is not None:
+            counter[0] += 1
         ip = _strict_ip(m.group(0))
         if ip is not None:
             out.append((m.start(), Authority(scheme="ip", value=ip_key(ip))))
     for m in _P_IPV6_RE.finditer(text):
+        if counter is not None:
+            counter[0] += 1
         if m.group(0).count(":") < 2:
             continue
         ip = _strict_ip(m.group(0))

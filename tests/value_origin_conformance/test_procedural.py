@@ -186,8 +186,9 @@ def test_r1_a_parsed_part_that_misses_in_a_saturated_ledger_reports_saturation()
 def test_v16d_destinations_are_a_separate_unit_from_ngrams():
     """V-16(d), settled 2026-09-24: a prompt whose n-grams overflow the cap drops
     its n-grams, not the principal's addresses. Re-shaped 2026-10-06: n-grams now
-    have their own 65,536 budget, sized to the 64 KiB window, so ONE input can no
-    longer overflow it (this used one 3,000-word prompt); two in one flow do."""
+    have their own 65,536 budget, sized to the 64 KiB window, so one input of
+    ordinary words no longer overflows it (one of 1-char distinct tokens still can:
+    125,907 n-grams -- milestone review); this used one 3,000-word prompt, now two."""
     bind_fresh_ledger()
     first = " ".join(f"a{i}" for i in range(9_000))    # < 64 KiB: ~36,000 n-grams
     assert len(first) < 65_536

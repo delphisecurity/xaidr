@@ -225,6 +225,8 @@ def test_a_full_ledger_warns_loudly_that_it_drops_and_does_not_block(caplog):
     def run():
         vo.bind_fresh_ledger()
         with caplog.at_level(logging.WARNING, logger="xaidr.value_origin"):
+            # Saturated through DESTINATIONS (was a 6,000-word input): key n-grams have
+            # their own 65,536 budget since 2026-10-06, so an input no longer fills it.
             vo.record_tool_result("web_fetch", {}, [" ".join(f"https://h{i}.example/" for i in range(j, j + 400)) for j in range(0, 12_000, 400)], designations=(), result_blocked=False)
     contextvars.Context().run(run)
     msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
@@ -326,6 +328,7 @@ def test_a_really_saturated_ledger_reports_it_and_does_not_block():
     """Milestone review: the earlier test built the verdict by hand."""
     def run():
         vo.bind_fresh_ledger()
+        # Through DESTINATIONS (was a 6,000-word input): see the separate n-gram budget.
         out = vo.record_tool_result("web_fetch", {}, [" ".join(f"https://h{i}.example/" for i in range(j, j + 400)) for j in range(0, 12_000, 400)], designations=(), result_blocked=False)
         return out, vo.evaluate_call("http_post", {"url": "https://never.example/"}, flow_active=True)
     out, v = contextvars.Context().run(run)

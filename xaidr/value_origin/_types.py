@@ -196,6 +196,7 @@ LEDGER_MAX_NGRAMS: int = 65_536       # the principal's key n-grams, their OWN b
 # each scanned char costs 1, each extracted atom ATOM_COST (measured: ~100 ns/char,
 # ~7 us/atom). Per seam call. Hitting it is visible (extraction_incomplete), never a block.
 ATOM_WORK_BUDGET: int = 500_000
+MAX_WALK_NODES: int = 65_536    # the EXAMINED walk's node budget: width cannot escape it (review)
 ATOM_COST: int = 64
 ATOM_CHUNK_CHARS: int = 16_384
 MAX_ARG_LEAVES: int = 64      # same bound as open's strings_in(..., limit=64)

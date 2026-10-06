@@ -185,6 +185,7 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
          UNTRUSTED_SOURCE (a positive finding outranks a blind spot), a bound
          names itself, first match wins: a miss on a ledger holding an unread
          I/O-backed result -> RESULT_UNREAD (it blocks, so it outranks the rest);
+         an atom pass that hit its WORK budget -> EXTRACTION_INCOMPLETE;
          a walk bound on this call's arguments -> ARGUMENT_BOUND; a miss on a
          saturated ledger -> LEDGER_SATURATED; a miss on a ledger holding a cut
          tool result -> RESULT_TRUNCATED; a cut principal input -> INPUT_TRUNCATED

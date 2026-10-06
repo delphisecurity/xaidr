@@ -2994,3 +2994,51 @@ A fresh read-only survey of all 161 test files. **Not fixed this round.**
   - `value_origin_conformance/test_race.py:185` (`assert not partial` with no proof that any reader saw a resolved view).
 - **LOW:** eight more (listed in the survey: destination_block_telemetry:166, circuit_breaker:345, operational_resilience:300, tool_result_direction:296, trace_context:195/204, a2a_routing:202, command_parse:367, sensor_extensions:214).
 - **Confirmed safe:** tests that wrap `_telemetry.enqueue` capture synchronously; ~16 files flush or close before reading.
+
+### The reviews of 097be72, and what was fixed before the one push
+**silent-failure-hunter, CRITICAL (confirmed): a wide container escaped the budget** (6M keys: 9.9 s). Fixed: the examined walk has a 65,536-node budget and hands the rest on lazily; the atom walk charges each child. Red, then sabotage (width uncounted again):
+```
+2 failed, 5 deselected in 3.26s
+E   AssertionError: argument: the walks enumerated 4,000,136 children of a 2,000,000-wide dict -- a container's whole width was taken in one uncounted step, so width alone chooses how long the scan takes
+E   AssertionError: result: the walks enumerated 4,000,136 children of a 2,000,000-wide dict -- a container's whole width was taken in one uncounted step, so width alone chooses how long the scan takes
+tests/test_value_origin_budget.py:128: AssertionError: argument: the walks enumerated 4,000,136 children of a 2,000,000-wide dict -- a container's whole width was taken in one uncounted step, so width alone chooses how long the scan takes
+tests/test_value_origin_budget.py:128: AssertionError: result: the walks enumerated 4,000,136 children of a 2,000,000-wide dict -- a container's whole width was taken in one uncounted step, so width alone chooses how long the scan takes
+2 failed, 5 deselected in 3.45s
+E   AssertionError: argument: the walks enumerated 4,000,136 children of a 2,000,000-wide dict -- a container's whole width was taken in one uncounted step, so width alone chooses how long the scan ta
+E   AssertionError: result: the walks enumerated 4,000,136 children of a 2,000,000-wide dict -- a container's whole width was taken in one uncounted step, so width alone chooses how long the scan take
+tests/test_value_origin_budget.py:128: AssertionError: argument: the walks enumerated 4,000,136 children of a 2,000,000-wide dict -- a container's whole width was taken in one uncounted step, so width
+tests/test_value_origin_budget.py:128: AssertionError: result: the walks enumerated 4,000,136 children of a 2,000,000-wide dict -- a container's whole width was taken in one uncounted step, so width a
+```
+Its LOW (a straddling atom at the input window with no nearby whitespace) is fixed with a 2,048-char overlap.
+
+**milestone-reviewer:**
+- **HIGH: the result atom pass re-read the examined prefix; a URL 9 chars past the cut was let through.** Only the tail is handed on now.
+- **HIGH: rejected candidates were not charged.** `prose_candidates` counts every candidate it examines (an optional `counter`), and the budget charges 64 per candidate.
+
+Red first:
+```
+2 failed, 7 deselected in 0.75s
+E   AssertionError: a poisoned URL just past the 64 KiB cut of a result read 'extraction_incomplete': the budget was spent re-reading the examined prefix
+E   AssertionError: the atom pass scanned 507,942 chars of rejected-candidate text: rejected candidates cost the same normalisation and were not charged for it
+tests/test_value_origin_budget.py:143: AssertionError: a poisoned URL just past the 64 KiB cut of a result read 'extraction_incomplete': the budget was spent re-reading the examined prefix
+tests/test_value_origin_budget.py:154: AssertionError: the atom pass scanned 507,942 chars of rejected-candidate text: rejected candidates cost the same normalisation and were not charged for it
+```
+Also fixed: one shared budget per call; old claims retracted in place; the evaluate_call docstring names EXTRACTION_INCOMPLETE; and the moved saturation tests carry a note.
+
+**Green before the push:**
+- in-process (every value-origin suite, protect_boundaries, truncation_bypass, conformance, and test_differential_oracles + test_url_classes for `prose_candidates`/url_parse): **755 passed, 8 xfailed, 1 warning in 69.14s**;
+- real frameworks: 26 passed, 53 skipped in 0.68s; wheel: 71 passed in 46.43s.
+
+**My own guard bug, again:** the green-only commit guard grepped `failed|error`, and it matched "8 xfailed". This is the same mistake as earlier in the build. Use `[0-9]+ failed`.
+
+**Cost, final:**
+```
+5 MB, core value-origin cost per path (budget 500,000 units, 1/char + 64/candidate examined):
+  x.co (accepted atoms)                    input    239 ms | result    157 ms | argument     67 ms
+  x.zz (bad TLD, rejected)                 input    109 ms | result     57 ms | argument     24 ms
+  e-acute.e-acute (non-ASCII, rejected)    input    178 ms | result    112 ms | argument     38 ms
+  (a|a) bypass-test input                  input    165 ms | result     61 ms | argument     53 ms
+  6M-wide dict argument                    argument    434 ms   (the silent-failure review measured 9,877 ms before the width fix)
+  END TO END sensor.scan(5 MB (a|a) bypass-test input): off 1300 ms, record 1397 ms, delta +97 ms
+  END TO END sensor.scan(5 MB e-acute.e-acute (non-ASCII, rejected)): off 1193 ms, record 1325 ms, delta +132 ms
+```

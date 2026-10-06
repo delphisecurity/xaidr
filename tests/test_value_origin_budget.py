@@ -39,9 +39,9 @@ def scanned(monkeypatch):
     seen = []
     real = _authority.prose_candidates
 
-    def counting(text):
+    def counting(text, *a, **k):
         seen.append(len(text))
-        return real(text)
+        return real(text, *a, **k)
     monkeypatch.setattr(_authority, "prose_candidates", counting)
     monkeypatch.setattr(_ledger, "prose_candidates", counting)
     return seen
@@ -92,3 +92,65 @@ def test_known_artefact_the_4000_char_cliff():
     long_ = _flow(("input", NEUTRAL), ("result", "see " + EVIL), call={"body": body(4_001)})
     assert short.wire.value == "no_destination" and not should_block(short, mode=Mode.ENFORCE)
     assert long_.wire.value == "untrusted_source" and should_block(long_, mode=Mode.ENFORCE)
+
+
+# ── silent-failure review of 097be72 (CRITICAL): structural width ────────────
+@pytest.fixture
+def children_seen(monkeypatch):
+    """How many child nodes the walks enumerate, whichever walk asks."""
+    from xaidr.value_origin import _extract
+    seen = [0]
+    real = _extract._children
+
+    def counting(node):
+        is_container, kids = real(node)
+
+        def it():
+            for k in kids:
+                seen[0] += 1
+                yield k
+        return is_container, it()
+    monkeypatch.setattr(_extract, "_children", counting)
+    return seen
+
+
+WIDE = 2_000_000
+
+
+@pytest.mark.parametrize("path", ["argument", "result"])
+def test_a_wide_container_cannot_escape_the_work_budget(path, children_seen):
+    wide = {f"k{i}": "s" for i in range(66)}
+    wide["wide"] = {str(i): "v" for i in range(WIDE)}
+    if path == "argument":
+        v = _flow(("input", NEUTRAL), call=dict(wide, url="https://other.example/"))
+    else:
+        v = _flow(("input", NEUTRAL), ("result", wide), call={"url": "https://other.example/"})
+    assert children_seen[0] < 1_500_000, (
+        f"{path}: the walks enumerated {children_seen[0]:,} children of a {WIDE:,}-wide "
+        "dict -- a container's whole width was taken in one uncounted step, so width "
+        "alone chooses how long the scan takes")
+    assert v.wire.value == "extraction_incomplete", (path, v.wire.value)
+
+
+
+# ── milestone review of 097be72 ──────────────────────────────────────────────
+def test_a_url_just_past_an_address_dense_result_prefix_is_still_found():
+    """HIGH: the atom pass re-scanned the EXAMINED 64 KiB prefix from char 0, so an
+    address-dense prefix spent the budget before the cut and a URL 9 chars past
+    it was let through (before the budget it was found)."""
+    prefix = ("x.co " * 13_110)[:65_540]
+    v = _flow(("input", NEUTRAL), ("result", prefix + " " + EVIL), call={"url": EVIL})
+    assert v.wire.value == "untrusted_source", (
+        f"a poisoned URL just past the 64 KiB cut of a result read {v.wire.value!r}: the "
+        "budget was spent re-reading the examined prefix")
+
+
+def test_rejected_candidates_are_charged_too(scanned):
+    """HIGH: only ACCEPTED atoms were charged, so candidates the extractor examines
+    and rejects (non-ASCII hosts, bad TLDs) ran nearly free: 'é.é' x 5 MB cost
+    ~0.6 s per call against the claimed 0.25 s worst."""
+    _flow(("input", NEUTRAL), call={"url": "https://other.example/", "body": "é.é " * 1_250_000})
+    total = sum(scanned)
+    assert total < 100_000, (
+        f"the atom pass scanned {total:,} chars of rejected-candidate text: rejected "
+        "candidates cost the same normalisation and were not charged for it")

@@ -144,9 +144,8 @@ def test_input_truncated_is_visible_and_does_not_block():
     "KNOWN GAP under the owner's 2026-10-05 ruling (ledger_saturated does not block): "
     "a result with enough distinct URLs saturates the 10,000-entry ledger, the whole "
     "unit -- poison included -- is dropped, and the call to it reads ledger_saturated "
-    "and is ALLOWED. A ~17 KB benign principal prompt saturates it too, after which no "
-    "tool result is recorded at all. The owner asked what the cap should be: "
-    "docs/value-origin-enforce.md"))
+    "and is ALLOWED. (A 17 KB prompt no longer saturates it: key n-grams have their own "
+    "65,536 budget since 2026-10-06; the 10,000-destination budget is what this hits.)"))
 def test_a_saturating_result_does_not_launder_its_poison():
     def run():
         vo.bind_fresh_ledger()

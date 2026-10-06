@@ -276,7 +276,7 @@ def record_principal_input(text: str, spans: Sequence[Span] | None = None, *,
         grams: List[Tuple[bytes, bool]] = []
         late: List[Tuple[bytes, Entry]] = []   # atoms past the examined window
         atom_budget = AtomBudget()             # one call's WORK budget (2026-10-06)
-        budget = MAX_INPUT_NGRAM_CHARS   # owner, 2026-10-05: keys are bounded, atoms are not
+        budget = MAX_INPUT_NGRAM_CHARS   # key n-grams: the 64 KiB window; atoms past it: the WORK budget
         if lg is not None and len(text) > MAX_INPUT_NGRAM_CHARS:
             lg.input_truncated = True     # visible; it no longer blocks
         for span_text, writer in span_list:            # left to right (V-24)
@@ -290,7 +290,9 @@ def record_principal_input(text: str, spans: Sequence[Span] | None = None, *,
                 # last whitespace before the cut so a straddling atom is whole; its
                 # atoms go in their OWN write, last (milestone review).
                 cut = span_text.rfind(" ", max(0, len(window) - 2048), len(window))
-                tail = span_text[cut + 1 if cut >= 0 else len(window):]
+                # No whitespace near the cut: overlap 2,048 chars anyway, so an atom
+                # straddling it is still whole (silent-failure review, LOW).
+                tail = span_text[cut + 1 if cut >= 0 else max(0, len(window) - 2048):]
                 for _, a in budgeted_atoms([((), tail)], atom_budget):
                     late.append((_digest_authority(a), (origin, declared, None)))
             if is_principal and budget > 0:
@@ -384,7 +386,7 @@ def _result_authorities(result: Any) -> Tuple[List[Authority], bool]:
     kept apart so the recorder writes them separately (milestone review)."""
     out: List[Authority] = []
     seen = set()
-    leaves, truncated, unread, extra, exhausted = result_leaves_bounded(result)
+    leaves, truncated, unread, extra, budget = result_leaves_bounded(result)
     for leaf in leaves:
         found: List[Authority] = []
         whole = classify_value(leaf, arg_mode=False)
@@ -397,13 +399,12 @@ def _result_authorities(result: Any) -> Tuple[List[Authority], bool]:
             if a not in seen:
                 seen.add(a)
                 out.append(a)
-    late: List[Authority] = []
-    budget = AtomBudget()                    # past the bound: WORK-bounded (2026-10-06)
+    late: List[Authority] = []               # past the bound: WORK-bounded, one budget
     for _, a in budgeted_atoms([((), leaf) for leaf in extra], budget):
         if a not in seen:
             seen.add(a)
             late.append(a)
-    return out, truncated, unread, late, exhausted or budget.hit
+    return out, truncated, unread, late, budget.hit
 
 
 def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
