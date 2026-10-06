@@ -51,6 +51,9 @@ def path(kind, text):
     return lambda: ctx(run)
 
 
+from xaidr.value_origin import _types as _T  # noqa: E402
+print(f"budget: ATOM_WORK_BUDGET={_T.ATOM_WORK_BUDGET:,} units per seam call; 1/char + "
+      f"ATOM_COST={_T.ATOM_COST}/atom; chunks of {_T.ATOM_CHUNK_CHARS:,} chars")
 print(f"5 MB ({N:,} chars), core value-origin cost per path:")
 for label, text in SHAPES.items():
     cells = []
@@ -82,3 +85,7 @@ print(f"END TO END sensor.scan(test_truncation_bypass's 5 MB input): off {off * 
 tot = {k: sum(best(path(k, d), 1) for d in docs) for k in ("input", "result", "argument")}
 print(f"benign_longform ({len(docs)} docs, {sum(map(len, docs)):,} chars): " + " | ".join(
     f"{k} {v * 1000:.0f} ms total, {v / len(docs) * 1000:.0f} ms/doc" for k, v in tot.items()))
+dense_examined = ["x.co " * (65_536 // 5)] * 64
+sec = best(path("result", dense_examined), n=1)
+print(f"NOT the atom pass -- the EXAMINED bound itself: a result of 64 leaves x 64 KiB, "
+      f"address-dense: result {sec * 1000:.0f} ms")

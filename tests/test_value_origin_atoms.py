@@ -200,10 +200,13 @@ def test_result_unread_still_blocks_under_its_own_rule_id_and_category():
     tel = [e["data"] for e in events if e.get("data", {}).get("gate") == "value_origin"]
     for where, cat, rl in (("returned", category, rules),
                            ("telemetry", tel[0]["category"], tel[0]["rules"])):
-        assert "ORIGIN_UNTRUSTED_DESTINATION" not in rl and "intent.value_origin_untrusted" not in rl, (
+        assert "ORIGIN_UNTRUSTED_DESTINATION" not in rl, (
             f"{where}: a call blocked because a source could not be examined is recorded as an "
             f"untrusted destination: rules={rl}, category={cat!r}")
-        assert rl == ["ORIGIN_UNEXAMINABLE_SOURCE"] and cat == "unexaminable_source", (where, rl, cat)
+        # Both ids (owner, 2026-10-06): its own, and the C-19 audit id the Brain
+        # filters on -- dropping that one hid these blocks from the intent lens.
+        assert rl == ["ORIGIN_UNEXAMINABLE_SOURCE", "intent.value_origin_untrusted"] and (
+            cat == "unexaminable_source"), (where, rl, cat)
 
 
 def test_an_untrusted_block_keeps_the_ruled_names():
@@ -222,7 +225,7 @@ def test_a_full_ledger_warns_loudly_that_it_drops_and_does_not_block(caplog):
     def run():
         vo.bind_fresh_ledger()
         with caplog.at_level(logging.WARNING, logger="xaidr.value_origin"):
-            vo.record_principal_input(" ".join(f"w{i}" for i in range(6000)), None, input_clean=True)
+            vo.record_tool_result("web_fetch", {}, [" ".join(f"https://h{i}.example/" for i in range(j, j + 400)) for j in range(0, 12_000, 400)], designations=(), result_blocked=False)
     contextvars.Context().run(run)
     msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
     assert any("DROPPED" in m and "does not block" in m for m in msgs), (
@@ -323,7 +326,7 @@ def test_a_really_saturated_ledger_reports_it_and_does_not_block():
     """Milestone review: the earlier test built the verdict by hand."""
     def run():
         vo.bind_fresh_ledger()
-        out = vo.record_principal_input(" ".join(f"w{i}" for i in range(6000)), None, input_clean=True)
+        out = vo.record_tool_result("web_fetch", {}, [" ".join(f"https://h{i}.example/" for i in range(j, j + 400)) for j in range(0, 12_000, 400)], designations=(), result_blocked=False)
         return out, vo.evaluate_call("http_post", {"url": "https://never.example/"}, flow_active=True)
     out, v = contextvars.Context().run(run)
     assert out is vo.RecordOutcome.SATURATED, out

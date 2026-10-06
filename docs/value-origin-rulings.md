@@ -514,3 +514,9 @@ Showing that RECORD mode leaves it byte-identical is A2's obligation (C-11).
 - **A separate rule id for a block on a source that could not be examined:** `ORIGIN_UNEXAMINABLE_SOURCE`. Its category is `unexaminable_source` (category not named by the owner; for confirmation). It never carries `ORIGIN_UNTRUSTED_DESTINATION` (ruled) or `intent.value_origin_untrusted` (MY decision, not ruled; C-19's waterfall keys `decided` on that id, so an unexaminable block may show no deciding stage — for the owner).
 - **`ORIGIN_UNTRUSTED_DESTINATION_KEYED`: DESIGNED, NOT IMPLEMENTED.** It comes from the original value-origin design as the Tier 2 keyed variant and was never built. Nothing emits it, and no emission is invented for it (owner, 2026-10-05: "my error").
 - **Left open on purpose:** the silent-failure review's MEDIUM. `frameworks._scan_result`'s fallback, for a sensor without `_scan_tool_result`, passes no tool identity. It fails safe, and the owner would rather it stay visible than be quietly patched.
+
+## 2026-10-06 — the atom pass bounded by work; two ledger budgets; both audit ids (owner)
+- **The atom pass is bounded by WORK** (option a): 500,000 units per seam call (1/char + 64/atom). Hitting it is a visible state, `extraction_incomplete`, fourteen wire values in all, and it does NOT block. (c), relaxing the size guarantee, is REFUSED. (b), a pre-filter, only if measured; not adopted.
+- **Ledger:** a separate 65,536 budget for key n-grams, 10,000 kept for destinations (the recommendation, approved). The laundering gap keeps its strict xfail and is named in the ENFORCE docs.
+- **`unexaminable_source` / `ORIGIN_UNEXAMINABLE_SOURCE` approved, with `intent.value_origin_untrusted` RESTORED alongside it.** It is the Brain-side spec's audit id, and the intent lens filters on it.
+- **The 4,001 vs 3,999 cliff** is recorded as a known artefact.

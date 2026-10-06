@@ -70,10 +70,11 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ._authority import classify_value, prose_candidates
 from ._designations import source_matches
-from ._extract import (argument_value, key_authority, key_ngram, result_leaves_bounded,
-                       span_ngrams)
+from ._extract import (AtomBudget, argument_value, budgeted_atoms, key_authority, key_ngram,
+                       result_leaves_bounded, span_ngrams)
 from ._types import (
     LEDGER_MAX_ENTRIES,
+    LEDGER_MAX_NGRAMS,
     MAX_INPUT_NGRAM_CHARS,
     Authority,
     Origin,
@@ -106,7 +107,7 @@ def _digest_ngram(g: str) -> bytes:
 
 class _Ledger:
     __slots__ = ("lock", "pid", "explicit", "entries", "ngrams", "saturated", "sat_logged",
-                 "input_truncated", "result_truncated", "result_unread")
+                 "input_truncated", "result_truncated", "result_unread", "atoms_incomplete")
 
     def __init__(self, *, explicit: bool) -> None:
         self.lock = _new_lock()
@@ -118,6 +119,7 @@ class _Ledger:
         self.input_truncated = False     # a principal input exceeded the 64 KiB key n-gram window
         self.result_truncated = False    # a tool result hit a bound before recording (RULING 1+2)
         self.result_unread = False       # an I/O-backed result was skipped unread (Q18)
+        self.atoms_incomplete = False    # an atom pass hit its WORK budget (2026-10-06)
         self.sat_logged = False
 
     def __repr__(self) -> str:                  # discloses nothing (C-12)
@@ -202,9 +204,12 @@ def _merge_ngram(old: Optional[bool], declared: bool) -> bool:
 def _apply_unit(lg: _Ledger, entries: List[Tuple[bytes, Entry]],
                 ngrams: List[Tuple[bytes, bool]]) -> bool:
     """All-or-none write of one unit. Caller holds the lock. False = dropped."""
-    new_digests = {d for d, _ in entries if d not in lg.entries}
-    new_digests |= {d for d, _ in ngrams if d not in lg.ngrams}
-    if len(lg.entries) + len(lg.ngrams) + len(new_digests) > LEDGER_MAX_ENTRIES:
+    # Separate budgets (owner, approved 2026-10-06): key n-grams can no longer
+    # starve destination recording -- a 17 KB prompt filled the shared 10,000.
+    new_e = {d for d, _ in entries if d not in lg.entries}
+    new_g = {d for d, _ in ngrams if d not in lg.ngrams}
+    if (len(lg.entries) + len(new_e) > LEDGER_MAX_ENTRIES
+            or len(lg.ngrams) + len(new_g) > LEDGER_MAX_NGRAMS):
         lg.saturated = True
         return False
     for d, e in entries:
@@ -218,12 +223,13 @@ def _log_saturation_once(lg: _Ledger) -> None:
     """Called OUTSIDE the lock."""
     if lg.saturated and not lg.sat_logged:
         lg.sat_logged = True
-        _log.warning("value origin: this flow's ledger is FULL at %d entries (destinations "
-                     "and the principal's key n-grams share it; a ~17 KB prompt fills it). "
-                     "Every emission after this is DROPPED, untrusted tool results "
-                     "included, and an unmatched destination reports ledger_saturated, "
-                     "which does not block (owner, 2026-10-05). The cap is too small: see "
-                     "docs/value-origin-enforce.md.", LEDGER_MAX_ENTRIES)
+        _log.warning("value origin: this flow's ledger is FULL (%d destinations or %d "
+                     "key n-grams). Every emission after this is DROPPED, untrusted tool "
+                     "results included, and an unmatched destination reports "
+                     "ledger_saturated, which does not block (owner, 2026-10-05). A "
+                     "result naming more distinct addresses than the cap launders its "
+                     "own: docs/value-origin-enforce.md.", LEDGER_MAX_ENTRIES,
+                     LEDGER_MAX_NGRAMS)
 
 
 # ── principal input ──────────────────────────────────────────────────────────
@@ -269,17 +275,24 @@ def record_principal_input(text: str, spans: Sequence[Span] | None = None, *,
         dests: List[Tuple[bytes, Entry]] = []
         grams: List[Tuple[bytes, bool]] = []
         late: List[Tuple[bytes, Entry]] = []   # atoms past the examined window
+        atom_budget = AtomBudget()             # one call's WORK budget (2026-10-06)
         budget = MAX_INPUT_NGRAM_CHARS   # owner, 2026-10-05: keys are bounded, atoms are not
         if lg is not None and len(text) > MAX_INPUT_NGRAM_CHARS:
             lg.input_truncated = True     # visible; it no longer blocks
         for span_text, writer in span_list:            # left to right (V-24)
             is_principal = writer is Writer.PRINCIPAL and clean
             origin = Origin.PRINCIPAL if is_principal else Origin.UNTRUSTED_SOURCE
-            for pos, a in prose_candidates(span_text):   # per span: no straddling; WHOLE span
-                # Past the examined window, atoms go in their OWN write, last:
-                # junk there must never drop what the window recorded (review).
-                (dests if pos < budget else late).append(
-                    (_digest_authority(a), (origin, declared, None)))
+            window = span_text[:max(budget, 0)]
+            for _, a in prose_candidates(window):      # the examined window: per span
+                dests.append((_digest_authority(a), (origin, declared, None)))
+            if len(span_text) > len(window):
+                # Past the window: the WORK-bounded atom pass (2026-10-06), from the
+                # last whitespace before the cut so a straddling atom is whole; its
+                # atoms go in their OWN write, last (milestone review).
+                cut = span_text.rfind(" ", max(0, len(window) - 2048), len(window))
+                tail = span_text[cut + 1 if cut >= 0 else len(window):]
+                for _, a in budgeted_atoms([((), tail)], atom_budget):
+                    late.append((_digest_authority(a), (origin, declared, None)))
             if is_principal and budget > 0:
                 for g in span_ngrams(span_text[:budget]):
                     grams.append((_digest_ngram(g), declared))
@@ -290,6 +303,8 @@ def record_principal_input(text: str, spans: Sequence[Span] | None = None, *,
             ok_dest = _apply_unit(lg, dests, [])
             ok_gram = _apply_unit(lg, [], grams) if grams else True
             ok_late = _apply_unit(lg, late, []) if late else True
+            if atom_budget.hit:
+                lg.atoms_incomplete = True     # visible (extraction_incomplete), never a block
         _log_saturation_once(lg)
         return (RecordOutcome.RECORDED if (ok_dest and ok_gram and ok_late)
                 else RecordOutcome.SATURATED)
@@ -359,7 +374,7 @@ def _read_trust(lg: _Ledger, plans: List[Tuple[SourceDesignation, List[_KeyPlan]
 def result_authorities(result: Any) -> List[Authority]:
     """Every destination candidate in a raw result: each leaf tried whole, and
     scanned as prose (C-7). May run host code (V-15)."""
-    out, _, _, late = _result_authorities(result)
+    out, _, _, late, _ = _result_authorities(result)
     return out + late
 
 
@@ -369,7 +384,7 @@ def _result_authorities(result: Any) -> Tuple[List[Authority], bool]:
     kept apart so the recorder writes them separately (milestone review)."""
     out: List[Authority] = []
     seen = set()
-    leaves, truncated, unread, extra = result_leaves_bounded(result)
+    leaves, truncated, unread, extra, exhausted = result_leaves_bounded(result)
     for leaf in leaves:
         found: List[Authority] = []
         whole = classify_value(leaf, arg_mode=False)
@@ -383,12 +398,12 @@ def _result_authorities(result: Any) -> Tuple[List[Authority], bool]:
                 seen.add(a)
                 out.append(a)
     late: List[Authority] = []
-    for leaf in extra:                       # owner, 2026-10-05: atoms past the bound
-        for _, a in prose_candidates(leaf):
-            if a not in seen:
-                seen.add(a)
-                late.append(a)
-    return out, truncated, unread, late
+    budget = AtomBudget()                    # past the bound: WORK-bounded (2026-10-06)
+    for _, a in budgeted_atoms([((), leaf) for leaf in extra], budget):
+        if a not in seen:
+            seen.add(a)
+            late.append(a)
+    return out, truncated, unread, late, exhausted or budget.hit
 
 
 def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
@@ -403,7 +418,7 @@ def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
         if lg is None:
             return RecordOutcome.NO_LEDGER
         # Everything that can run host code, BEFORE the lock (C-15).
-        auths, cut, unread, late = _result_authorities(result)
+        auths, cut, unread, late, incomplete = _result_authorities(result)
         plans = []
         for d in designations:
             if source_matches(d, tool_name, arguments):
@@ -418,6 +433,8 @@ def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
                 lg.result_truncated = True   # RULING 1+2: a miss here is result_truncated
             if unread:
                 lg.result_unread = True      # Q18 under the bounds ruling: never silent
+            if incomplete:
+                lg.atoms_incomplete = True   # the atom pass hit its WORK budget: visible
             entry = _read_trust(lg, plans, result_blocked)
             ok = _apply_unit(lg, [(d, entry) for d in digests], [])
             # Past-the-bound atoms in their OWN write, after the examined part, so
@@ -433,7 +450,7 @@ def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
 
 # ── lookup (for evaluate_call) ───────────────────────────────────────────────
 def lookup(lg: _Ledger, auths: List[Authority]
-           ) -> Tuple[List[Optional[Entry]], bool, bool, bool, bool]:
+           ) -> Tuple[List[Optional[Entry]], bool, bool, bool, bool, bool]:
     """Entries for ``auths`` in one lock acquisition, plus whether the ledger
     is saturated, whether a principal input was cut, and whether a tool result
     was cut, and whether one was skipped unread — a read racing a multi-entry
@@ -441,4 +458,4 @@ def lookup(lg: _Ledger, auths: List[Authority]
     digests = [_digest_authority(a) for a in auths]
     with lg.lock:
         return ([lg.entries.get(d) for d in digests], lg.saturated, lg.input_truncated,
-                lg.result_truncated, lg.result_unread)
+                lg.result_truncated, lg.result_unread, lg.atoms_incomplete)

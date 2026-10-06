@@ -159,5 +159,6 @@ def test_the_installed_wheel_blocks_after_an_unread_io_backed_result(installed, 
 
 
 def test_the_installed_wheel_names_an_unexaminable_block_truthfully(installed):
-    assert installed["q18_names"] == ["unexaminable_source", ["ORIGIN_UNEXAMINABLE_SOURCE"]], (
+    assert installed["q18_names"] == ["unexaminable_source",
+                                      ["ORIGIN_UNEXAMINABLE_SOURCE", "intent.value_origin_untrusted"]], (
         installed["q18_names"])

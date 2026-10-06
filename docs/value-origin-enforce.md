@@ -304,3 +304,48 @@ benign_longform (24 docs, 10,100,008 chars): input 2400 ms total, 100 ms/doc | r
 - `test_truncation_bypass`'s own input gains +510 ms end to end. That test still passes locally and on CI's base jobs.
 
 Whether to bound the atom pass, with a cap that would fail visibly, is the owner's ruling. Nothing here works around it.
+
+## The atom pass is bounded by WORK (owner, 2026-10-06)
+
+> "Bound the atom pass by WORK, not by input position. The timing test is right; the unbounded ruling that broke it was mine." Option (c), relaxing the size guarantee, is refused: "lets an attacker choose how long the scan takes".
+
+- **The budget.** Each seam call gets `ATOM_WORK_BUDGET = 500,000` units: 1 per scanned char, plus `ATOM_COST = 64` per extracted atom. The weights come from the measured ~100 ns/char and ~7 µs/atom.
+- **How it runs.** Values are scanned in whitespace-aligned chunks of 16,384 chars. The walk that collects the skipped strings is bounded by the same budget.
+- **When the budget runs out.** The rest is not scanned, and the call reads **`extraction_incomplete`** (verdict `not_evaluated`, row `not_recorded`), which **does not block**. For an argument it says so directly; for a result or input it says so on a later miss. It outranks every other non-blocking bound, because a destination may have been missed.
+- **A faster pre-filter (option b) was not adopted.** It was not measured.
+
+**Cost under the budget** (`scripts/value_origin_measurements/atom_cost.py`):
+```
+xaidr from: ./xaidr
+budget: ATOM_WORK_BUDGET=500,000 units per seam call; 1/char + ATOM_COST=64/atom; chunks of 16,384 chars
+5 MB (5,000,000 chars), core value-origin cost per path:
+  test_truncation_bypass's own input ('(a|a)' x n/5)     input     157 ms (    31 ns/char) | result      59 ms (    12 ns/char) | argument      53 ms (    11 ns/char)
+  real prose (benign_longform's largest doc, repeated)   input      74 ms (    15 ns/char) | result      60 ms (    12 ns/char) | argument      56 ms (    11 ns/char)
+  ADDRESS-DENSE ('x.co ' repeated): the worst case       input     244 ms (    49 ns/char) | result     163 ms (    33 ns/char) | argument      70 ms (    14 ns/char)
+END TO END sensor.scan(test_truncation_bypass's 5 MB input): off 1361 ms, record 1404 ms, delta +43 ms
+benign_longform (24 docs, 10,100,008 chars): input 1859 ms total, 77 ms/doc | result 1207 ms total, 50 ms/doc | argument 963 ms total, 40 ms/doc
+NOT the atom pass -- the EXAMINED bound itself: a result of 64 leaves x 64 KiB, address-dense: result 6254 ms
+```
+- **The 5 MB bomb end to end: +43 ms** (1.36 → 1.40 s). It was +510 ms unbounded, which failed CI at 2.59 s against 2.5 s.
+- **The worst case under the budget, address-dense text: about 0.25 s per call** on the input path, 0.16 s on the result path and 0.07 s on the argument path. It was 7–8.5 s. Most of what remains is the EXAMINED part: the 64 KiB input window, and a result leaf's 64 KiB prefix.
+- **NOT met, and outside this ruling:** the examined bound for a RESULT is itself up to 64 leaves × 64 KiB of full examination. With address-dense text that costs **6.25 s**, so address-dense text can still reach seconds through the examined part. This predates the atom pass (V-15). It is reported for the owner's ruling and not changed here.
+
+**Block rate after:** benign_longform is unchanged at 7/24 and 8/24, all `untrusted_source`. Four calls per pass now read `extraction_incomplete`:
+```
+benign_longform (24 generated documents, 90k..1.4M chars), ENFORCE, block mode:
+  P-flow-I                     calls=   24  would block=   7  rate=29.17% | benign_longform: 7/24 [('argument_bound', 13), ('extraction_incomplete', 4), ('untrusted_source', 7)]
+  P-flow-R                     calls=   24  would block=   8  rate=33.33% | benign_longform: 8/24 [('argument_bound', 12), ('extraction_incomplete', 4), ('untrusted_source', 8)]
+  P-seam                       calls=   24  would block=   8  rate=33.33% | benign_longform: 8/24 [('argument_bound', 12), ('extraction_incomplete', 4), ('untrusted_source', 8)]
+```
+
+**The 4,001 vs 3,999 cliff is a KNOWN ARTEFACT** (owner, 2026-10-06), re-checked after the budget change: it persists. The budget limits only very long values. The cliff comes from C-8's whole-leaf rule meeting atom extraction past 4,000 chars. Pinned by `test_known_artefact_the_4000_char_cliff`.
+
+## The ledger has two budgets (owner, approved 2026-10-06)
+- **Budgets:** destinations keep `LEDGER_MAX_ENTRIES = 10,000`; the principal's key n-grams get their own `LEDGER_MAX_NGRAMS = 65,536`, sized to the 64 KiB n-gram window (a full window yields at most ~49K). A 17 KB prompt no longer fills the ledger.
+- **Known gap, named here as the owner asked:** a tool result naming more distinct addresses than 10,000 still saturates the destination budget. Its whole write, poison included, is dropped, and saturation does not block, so **the poisoned destination is laundered and the call to it is allowed.** It is pinned by the strict xfail `test_a_saturating_result_does_not_launder_its_poison`.
+
+## Why an unexaminable block carries TWO rule ids (owner, 2026-10-06)
+A `result_unread` block carries **`ORIGIN_UNEXAMINABLE_SOURCE`** (category `unexaminable_source`) AND **`intent.value_origin_untrusted`**.
+- **The first says WHY:** a source could not be examined. `ORIGIN_UNTRUSTED_DESTINATION` would be a false statement.
+- **The second is the audit id the Brain-side spec defines (C-19).** The Brain half becomes the intent lens, which filters on it.
+- Dropping the second on one path (58d7f64–3f5bf94) hid these blocks from anything filtering on it. It is restored alongside, not instead.

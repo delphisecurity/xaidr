@@ -28,7 +28,7 @@ class Verdict(str, enum.Enum):
 
 
 class WireValue(str, enum.Enum):
-    """The complete value set of ``valueOrigin`` (§2). Thirteen, case-sensitive
+    """The complete value set of ``valueOrigin`` (§2). Fourteen, case-sensitive
     (INPUT_TRUNCATED added by the owner, A2 after M6: truncation is its own
     state, never a silent unresolved; ARGUMENT_BOUND and RESULT_TRUNCATED added
     by the owner's RULING 1+2 after M8: every bound is a visible state, and under
@@ -51,6 +51,7 @@ class WireValue(str, enum.Enum):
     ARGUMENT_BOUND = "argument_bound"      # this call's argument walk hit a bound (C-8, V-11)
     RESULT_TRUNCATED = "result_truncated"  # a recorded tool result was cut AND lookup missed
     RESULT_UNREAD = "result_unread"        # an I/O-backed result was skipped unread (Q18) AND lookup missed
+    EXTRACTION_INCOMPLETE = "extraction_incomplete"  # the atom pass hit its WORK budget (owner, 2026-10-06)
 
 
 class RowState(str, enum.Enum):
@@ -98,6 +99,7 @@ class UnresolvedReason(str, enum.Enum):
 
     WALK_BOUND = "walk_bound"        # the argument walk hit a bound (C-8, V-11)
     PARSE_FAILURE = "parse_failure"  # destination-shaped, but did not parse (V-4, 3.2)
+    ATOM_BUDGET = "atom_budget"      # past a bound, the atom pass hit its WORK budget (2026-10-06)
 
 
 # Wire strength, weakest first (ruling 2026-09-24). The wire is the weakest
@@ -188,7 +190,14 @@ class CallVerdict:
 
 
 # (No per-feature generation constant — ruling 2026-09-24; see C-21.)
-LEDGER_MAX_ENTRIES: int = 10_000
+LEDGER_MAX_ENTRIES: int = 10_000      # destinations (owner, 2026-10-06: kept)
+LEDGER_MAX_NGRAMS: int = 65_536       # the principal's key n-grams, their OWN budget (approved)
+# The atom pass past a bound is bounded by WORK, not position (owner, 2026-10-06):
+# each scanned char costs 1, each extracted atom ATOM_COST (measured: ~100 ns/char,
+# ~7 us/atom). Per seam call. Hitting it is visible (extraction_incomplete), never a block.
+ATOM_WORK_BUDGET: int = 500_000
+ATOM_COST: int = 64
+ATOM_CHUNK_CHARS: int = 16_384
 MAX_ARG_LEAVES: int = 64      # same bound as open's strings_in(..., limit=64)
 MAX_ARG_DEPTH: int = 6
 MAX_LEAF_CHARS: int = 4_000   # same ceiling as url_parse.MAX_URL_CHARS

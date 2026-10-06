@@ -140,7 +140,9 @@ def test_s10_a_drop_makes_a_miss_ledger_saturated_and_hits_still_answer(caplog):
         input_clean=True) is RecordOutcome.RECORDED
     # 1 destination + the span's n-grams: tokens "email", "boss@corp.example"
     # (C-3: a trailing full stop is not part of a token) -> 2 unigrams + 1 bigram.
-    used = 1 + 3
+    # Owner, 2026-10-06: key n-grams have their OWN budget, so only the one
+    # destination counts against LEDGER_MAX_ENTRIES (this was 1 + 3).
+    used = 1
     _fill_to(LEDGER_MAX_ENTRIES - used - 1)     # one slot left
     with caplog.at_level(logging.WARNING, logger="xaidr.value_origin"):
         # V-16(b): a unit that would cross the cap is dropped WHOLE.
@@ -182,10 +184,15 @@ def test_r1_a_parsed_part_that_misses_in_a_saturated_ledger_reports_saturation()
 
 
 def test_v16d_destinations_are_a_separate_unit_from_ngrams():
-    """V-16(d), settled 2026-09-24: a long prompt whose n-grams overflow the cap
-    drops its n-grams, not the principal's addresses."""
+    """V-16(d), settled 2026-09-24: a prompt whose n-grams overflow the cap drops
+    its n-grams, not the principal's addresses. Re-shaped 2026-10-06: n-grams now
+    have their own 65,536 budget, sized to the 64 KiB window, so ONE input can no
+    longer overflow it (this used one 3,000-word prompt); two in one flow do."""
     bind_fresh_ledger()
-    words = " ".join(f"w{i}" for i in range(3_000))     # ~12,000 n-grams
+    first = " ".join(f"a{i}" for i in range(9_000))    # < 64 KiB: ~36,000 n-grams
+    assert len(first) < 65_536
+    assert record_principal_input(first, input_clean=True) is RecordOutcome.RECORDED
+    words = " ".join(f"b{i}" for i in range(9_000))    # ~36,000 more: crosses 65,536
     text = f"Email boss@corp.example. {words}"
     assert record_principal_input(text, [Span(text=text, writer=Writer.PRINCIPAL)],
                                   input_clean=True) is RecordOutcome.SATURATED

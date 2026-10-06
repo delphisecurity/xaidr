@@ -7,7 +7,7 @@ from typing import List, Mapping, Optional, Tuple
 
 from . import _ledger
 from ._extract import extract_destinations
-from ._types import (
+from ._types import (UnresolvedReason, 
     WIRE_STRENGTH,
     CallVerdict,
     DestinationFinding,
@@ -34,6 +34,7 @@ _VERDICT = {
     WireValue.ARGUMENT_BOUND: Verdict.UNRESOLVED,          # S16's verdict, now a named wire
     WireValue.RESULT_TRUNCATED: Verdict.NOT_EVALUATED,
     WireValue.RESULT_UNREAD: Verdict.NOT_EVALUATED,
+    WireValue.EXTRACTION_INCOMPLETE: Verdict.NOT_EVALUATED,
 }
 
 # Owner, 2026-10-05, narrowing RULING 1+2: "Blocking is the fallback for a value
@@ -44,12 +45,12 @@ _UNEXAMINABLE_WIRES = frozenset({WireValue.RESULT_UNREAD})
 
 
 def verdict_of(wire: WireValue) -> Verdict:
-    """Total over the thirteen wire values (V-3; input_truncated added after A2 M6,
+    """Total over the fourteen wire values (V-3; input_truncated added after A2 M6,
     argument_bound and result_truncated by RULING 1+2 after M8, result_unread
-    by the same ruling for Q18). ``CallVerdict.verdict`` is always
+    by the same ruling for Q18, extraction_incomplete by the work budget, 2026-10-06). ``CallVerdict.verdict`` is always
     ``verdict_of(wire)``; paid's L2 driver and the Brain derive the verdict
     from the wire value only through this function. Never raises: a string
-    outside the thirteen is NOT_EVALUATED, matching ``row_text``'s not_recorded row
+    outside the fourteen is NOT_EVALUATED, matching ``row_text``'s not_recorded row
     for an unrecognised value."""
     try:
         return _VERDICT[WireValue(wire)]
@@ -91,6 +92,10 @@ _ROWS = {
                          "result in this flow exceeded what value origin examines whole (a value over "
                          "65,536 characters, more than 64 values, or nesting deeper than 6), and the "
                          "part past that point was scanned only for destination addresses."),
+    "extraction_incomplete": (RowState.NOT_RECORDED,
+                              "Intent: not evaluated — value origin's scan for destination "
+                              "addresses in a long value reached its work budget; the rest was "
+                              "not scanned, so a destination there may be missed."),
     "result_unread": (RowState.NOT_RECORDED,
                       "Intent: not evaluated — a tool result in this flow was an unread "
                       "network response (httpx, requests, urllib3 or aiohttp), which value "
@@ -193,7 +198,7 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
         if not found:
             return _verdict(WireValue.NO_DESTINATION, (), truncated)
         auths = [f.destination for f in found if f.destination is not None]
-        entries, saturated, input_truncated, result_truncated, result_unread = (
+        entries, saturated, input_truncated, result_truncated, result_unread, atoms_incomplete = (
             _ledger.lookup(lg, auths))
         it = iter(entries)
         out: List[DestinationFinding] = []
@@ -201,6 +206,8 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
         truncated_miss = False
         result_miss = False
         unread_miss = False
+        incomplete_miss = False
+        budget_hit = any(f.reason is UnresolvedReason.ATOM_BUDGET for f in found)
         for f in found:
             if f.destination is None:
                 out.append(DestinationFinding(path=f.path, destination=None, reason=f.reason,
@@ -213,6 +220,7 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
                 truncated_miss = truncated_miss or input_truncated
                 result_miss = result_miss or result_truncated
                 unread_miss = unread_miss or result_unread
+                incomplete_miss = incomplete_miss or atoms_incomplete
                 out.append(DestinationFinding(path=f.path, destination=f.destination,
                                               reason=None, origin=Origin.UNRESOLVED,
                                               span_declared=None, source_label=None))
@@ -233,6 +241,8 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
             # dropped write explains a miss better than a cut.
             if unread_miss:
                 wire = WireValue.RESULT_UNREAD        # Q18: the one bound that blocks
+            elif budget_hit or incomplete_miss:
+                wire = WireValue.EXTRACTION_INCOMPLETE  # the work budget ran out (2026-10-06)
             elif truncated:
                 wire = WireValue.ARGUMENT_BOUND
             elif saturated_miss:

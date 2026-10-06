@@ -118,20 +118,27 @@ def _walk(root: Any, *, leaf_cap: int, char_cap: int, truncate_long: bool,
     return leaves, truncated, unread
 
 
-def _all_strings(items, normalise=None) -> Tuple[List[Tuple[Path, str]], bool]:
-    """Every string under ``items`` ((path, node) pairs) with NO leaf, length or
-    depth bound; cycle-safe. (strings, whether a node could not be examined: an
-    unread I/O node, or host code that RAISED -- a fault here is confined to its
-    node and made visible, never allowed to drop what the bounded walk examined:
-    silent-failure review, 2026-10-05)."""
+def _all_strings(items, normalise=None) -> Tuple[List[Tuple[Path, str]], bool, bool]:
+    """Every string under ``items`` ((path, node) pairs) with no leaf, length or
+    depth bound, but bounded by WORK: it stops once the strings and nodes it has
+    collected reach ATOM_WORK_BUDGET (owner, 2026-10-06). Cycle-safe.
+    (strings, whether a node could not be examined -- an unread I/O node, or host
+    code that RAISED, confined to its node: silent-failure review --, whether it
+    stopped at the budget with nodes left)."""
+    from ._types import ATOM_WORK_BUDGET
     out: List[Tuple[Path, str]] = []
     unread = False
     seen = set()
+    work = 0
     stack = list(reversed(items))
     while stack:
+        if work >= ATOM_WORK_BUDGET:
+            return out, unread, True
         path, node = stack.pop()
+        work += 1
         if isinstance(node, str):
             out.append((path, node))
+            work += len(node)
             continue
         try:
             if normalise is not None:
@@ -141,6 +148,7 @@ def _all_strings(items, normalise=None) -> Tuple[List[Tuple[Path, str]], bool]:
                     continue
                 if isinstance(node, str):
                     out.append((path, node))
+                    work += len(node)
                     continue
             is_container, kids = _children(node)
             if not is_container or id(node) in seen:
@@ -151,15 +159,49 @@ def _all_strings(items, normalise=None) -> Tuple[List[Tuple[Path, str]], bool]:
             unread = True
             continue
         stack.extend(reversed(batch))
-    return out, unread
+    return out, unread, False
 
 
-def _atoms(strings):
-    """Cheap destination-atom extraction (C-7's prose pass) over whole strings."""
+class AtomBudget:
+    """One seam call's WORK budget for the atom pass (owner, 2026-10-06)."""
+    __slots__ = ("left", "hit")
+
+    def __init__(self) -> None:
+        from ._types import ATOM_WORK_BUDGET
+        self.left = ATOM_WORK_BUDGET
+        self.hit = False
+
+
+def _chunks(s: str):
+    """``s`` in ATOM_CHUNK_CHARS pieces, cut at whitespace where there is any in
+    the last half of a piece, so an atom is rarely split."""
+    from ._types import ATOM_CHUNK_CHARS
+    i, n = 0, len(s)
+    while i < n:
+        j = min(i + ATOM_CHUNK_CHARS, n)
+        if j < n:
+            k = max(s.rfind(c, i + ATOM_CHUNK_CHARS // 2, j) for c in " \n\t")
+            if k > i:
+                j = k + 1
+        yield s[i:j]
+        i = j
+
+
+def budgeted_atoms(strings, budget: AtomBudget):
+    """(path, Authority) for each destination atom (C-7's prose pass) in WHOLE
+    strings, chunk by chunk, charging 1 per char and ATOM_COST per atom, until the
+    budget is spent; then ``budget.hit`` is True and the rest is not scanned."""
     from ._authority import prose_candidates
+    from ._types import ATOM_COST
     for path, s in strings:
-        for _, a in prose_candidates(s):
-            yield path, a
+        for chunk in _chunks(s):
+            if budget.left <= 0:
+                budget.hit = True
+                return
+            found = prose_candidates(chunk)
+            budget.left -= len(chunk) + ATOM_COST * len(found)
+            for _, a in found:
+                yield path, a
 
 
 def extract_destinations(arguments: Mapping[str, object] | None
@@ -200,14 +242,18 @@ def extract_destinations(arguments: Mapping[str, object] | None
             # Owner, 2026-10-05: what the bound kept from examination is still
             # searched for destination ATOMS, so a padded destination is found.
             seen = {f.destination for f in out if f.destination is not None}
-            strings, faulted = _all_strings(skipped)
-            for path, a in _atoms(strings):
+            strings, faulted, exhausted = _all_strings(skipped)
+            budget = AtomBudget()
+            for path, a in budgeted_atoms(strings, budget):
                 if a not in seen:
                     seen.add(a)
                     out.append(Finding(path=path, destination=a, reason=None))
             if faulted:     # a node past the bound could not be examined: visible
                 out.append(Finding(path=(), destination=None,
                                    reason=UnresolvedReason.PARSE_FAILURE))
+            if exhausted or budget.hit:   # the WORK budget ran out: visible, not a block
+                out.append(Finding(path=(), destination=None,
+                                   reason=UnresolvedReason.ATOM_BUDGET))
             out.append(Finding(path=(), destination=None,
                                reason=UnresolvedReason.WALK_BOUND))
         return tuple(out), truncated
@@ -251,7 +297,7 @@ def result_leaves(result: Any) -> List[str]:
     return result_leaves_bounded(result)[0]
 
 
-def result_leaves_bounded(result: Any) -> Tuple[List[str], bool, bool, List[str]]:
+def result_leaves_bounded(result: Any) -> Tuple[List[str], bool, bool, List[str], bool]:
     """``result_leaves`` plus whether any bound was hit (a leaf cut at 65,536
     chars, more than 64 leaves, nesting deeper than 6). The recorder marks the
     ledger, so a later miss reads result_truncated, never a silent unresolved
@@ -261,10 +307,12 @@ def result_leaves_bounded(result: Any) -> Tuple[List[str], bool, bool, List[str]
     leaves, truncated, unread = _walk(result, leaf_cap=MAX_ARG_LEAVES,
                                       char_cap=MAX_RESULT_LEAF_CHARS, truncate_long=True,
                                       normalise=_normalise_result_node, skipped=skipped)
-    extra, unread_extra = _all_strings(skipped, normalise=_normalise_result_node)
+    extra, unread_extra, exhausted = _all_strings(skipped, normalise=_normalise_result_node)
     # Fourth value (owner, 2026-10-05): the WHOLE strings the bound kept from
-    # examination, for atom extraction only.
-    return [s for _, s in leaves], truncated, unread or unread_extra, [s for _, s in extra]
+    # examination, for atom extraction only; fifth: the collection stopped at the
+    # WORK budget (2026-10-06).
+    return ([s for _, s in leaves], truncated, unread or unread_extra,
+            [s for _, s in extra], exhausted)
 
 
 def argument_value(arguments: Mapping[str, object] | None, name: str):

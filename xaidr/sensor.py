@@ -2461,8 +2461,12 @@ class DelphiSensor:
         name = tool_name if isinstance(tool_name, str) else None
         untrusted = getattr(cv, "verdict", None) is _vo.Verdict.UNAUTHORIZED
         result = ScanResult(action="blocked", score=1.0, category=(_VO_BLOCK_CATEGORY if untrusted else _VO_UNEXAMINABLE_CATEGORY),
+                            # Both ids on an unexaminable block (owner, 2026-10-06): its
+                            # own rule says WHY; intent.value_origin_untrusted is the
+                            # audit id the Brain-side spec defines (C-19), which the
+                            # intent lens and any filter on it must keep seeing.
                             rules=([_VO_BLOCK_RULE, _VO_AUDIT_RULE] if untrusted
-                   else [_VO_UNEXAMINABLE_RULE]))
+                   else [_VO_UNEXAMINABLE_RULE, _VO_AUDIT_RULE]))
         # Telemetry records the TRUE verdict FIRST, then _apply_mode may soften it
         # (monitor, an S6 transform), as every other gate in this file does: the
         # S6 contract is that telemetry has already seen the original verdict.

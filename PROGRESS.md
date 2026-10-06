@@ -2933,3 +2933,64 @@ assert 2.589886500000034 < 2.5        (pytest py3.10, base; py3.11 and py3.12 ba
   - (c) relax the invariant for value origin.
 
 `3daf41f` was deliberately NOT re-run, because the head is not green.
+
+
+## Round: the atom pass bounded by work; two ledger budgets; both audit ids (owner, 2026-10-06)
+**Red first:** the work bound, counted deterministically as the chars the extractor actually scans, not by timing:
+```
+3 failed, 2 passed in 22.33s
+AssertionError: argument: the atom pass scanned 5,000,038 chars of a 5 MB address-dense value -- unbounded, so an attacker chooses how long the scan takes
+AssertionError: input: the atom pass scanned 5,000,039 chars of a 5 MB address-dense value -- unbounded, so an attacker chooses how long the scan takes
+AssertionError: result: the atom pass scanned 5,065,574 chars of a 5 MB address-dense value -- unbounded, so an attacker chooses how long the scan takes
+```
+My first 17 KB ledger test passed when it should have failed. Its prompt repeated phrases, and the ledger stores DISTINCT n-grams. It now uses ~10,400 distinct n-grams (red under SB5 below).
+
+**Green:** 613 passed, 8 xfailed, 1 warning in 62.58s (0:01:02); 26 passed, 53 skipped in 0.64s; 38 passed in 43.52s.
+
+**Sabotage, one per change:**
+```
+== SB1 no work budget: 3 failed, 3 passed, 26 deselected in 23.16s
+   msg: argument: the atom pass scanned 5,000,038 chars of a 5 MB address-dense value -- unbounded, so an attacker chooses how long the scan takes
+   msg: input: the atom pass scanned 5,000,041 chars of a 5 MB address-dense value -- unbounded, so an attacker chooses how long the scan takes
+== SB2 argument budget hit not made visible: 1 failed, 5 passed, 26 deselected in 0.53s
+   msg: argument: the budget was hit but the call reads 'argument_bound': incomplete extraction is not visible
+== SB3 result/input budget hit not marked on the ledger: 1 failed, 5 passed, 26 deselected in 0.52s
+   msg: result: the budget was hit but the call reads 'result_truncated': incomplete extraction is not visible
+== SB4 extraction_incomplete blocks: 3 failed, 3 passed, 26 deselected in 0.54s
+   msg: argument: hitting the budget must not block
+   msg: input: hitting the budget must not block
+== SB5 the shared ledger cap restored: 1 failed, 5 passed, 26 deselected in 0.52s
+   msg: a benign 22,289-char prompt gave RecordOutcome.SATURATED: its ~10,400 distinct key n-grams filled the 10,000 entries destinations share (owner, approved: a separate 65,536)
+== SB6 intent.value_origin_untrusted dropped again: 1 failed, 5 passed, 26 deselected in 0.54s
+   msg: ('returned', ['ORIGIN_UNEXAMINABLE_SOURCE'], 'unexaminable_source')
+== restored: True
+```
+**Cost under the budget, and the examined-bound exposure:** see docs/value-origin-enforce.md.
+```
+xaidr from: ./xaidr
+budget: ATOM_WORK_BUDGET=500,000 units per seam call; 1/char + ATOM_COST=64/atom; chunks of 16,384 chars
+5 MB (5,000,000 chars), core value-origin cost per path:
+  test_truncation_bypass's own input ('(a|a)' x n/5)     input     157 ms (    31 ns/char) | result      59 ms (    12 ns/char) | argument      53 ms (    11 ns/char)
+  real prose (benign_longform's largest doc, repeated)   input      74 ms (    15 ns/char) | result      60 ms (    12 ns/char) | argument      56 ms (    11 ns/char)
+  ADDRESS-DENSE ('x.co ' repeated): the worst case       input     244 ms (    49 ns/char) | result     163 ms (    33 ns/char) | argument      70 ms (    14 ns/char)
+END TO END sensor.scan(test_truncation_bypass's 5 MB input): off 1361 ms, record 1404 ms, delta +43 ms
+benign_longform (24 docs, 10,100,008 chars): input 1859 ms total, 77 ms/doc | result 1207 ms total, 50 ms/doc | argument 963 ms total, 40 ms/doc
+NOT the atom pass -- the EXAMINED bound itself: a result of 64 leaves x 64 KiB, address-dense: result 6254 ms
+```
+**Pins re-shaped for the separate budgets** (each noted at its site): test_procedural's S10 (only the destination counts against 10,000) and V-16d (two inputs, because one can no longer overflow 65,536 n-grams). The saturation tests in test_value_origin_atoms now saturate through DESTINATIONS. test_interface gains `extraction_incomplete` and `atom_budget`.
+
+### Survey: tests that can pass without checking anything (owner: report, fix nothing beyond scope)
+A fresh read-only survey of all 161 test files. **Not fixed this round.**
+- **HIGH:**
+  - `test_protect_manifest.py:443` (double-protect, "proof by telemetry"): `wait_events(cap, 1)` then `len == 1`. A second scan on another sensor's worker can still be in flight, so the test passes.
+  - `test_protect_boundaries.py:562` (LangChain middleware + BaseTool double scan): the same shape, with no synchronous backstop.
+  - `test_cluster_a1_a2_a6.py:107/127/135`: passes even if `flush()` or close is a no-op. The flush interval only bounds an idle wait; the first event wakes the worker at once.
+  - `test_schema_event_types.py:306` and `test_event_timestamps.py:112`: `for e in events:` loops with no non-empty check.
+- **MEDIUM:**
+  - `test_protect_manifest.py:471/513/795`;
+  - `test_protect_boundaries.py:694`;
+  - `test_reporters.py:33` (sleep instead of flush; passes with the reporter guard removed);
+  - `test_a8_protect_http_destination.py:256` (an empty capture serializes to "[]");
+  - `value_origin_conformance/test_race.py:185` (`assert not partial` with no proof that any reader saw a resolved view).
+- **LOW:** eight more (listed in the survey: destination_block_telemetry:166, circuit_breaker:345, operational_resilience:300, tool_result_direction:296, trace_context:195/204, a2a_routing:202, command_parse:367, sensor_extensions:214).
+- **Confirmed safe:** tests that wrap `_telemetry.enqueue` capture synchronously; ~16 files flush or close before reading.
