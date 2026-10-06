@@ -2860,3 +2860,40 @@ The Q13 block rate is identical before and after these fixes (benign_longform 7/
 - **`58d7f649247ea31bed0adbe15f181001c178773a`, run 37365500142:** all three **base** jobs and full 3.12 **passed**, confirming the Q18 base fix on CI. Full 3.10, full 3.11 and real-frameworks were **cancelled**.
 - **`3daf41fde51d79b785dc2424aece1cc80b3b2e0e`, run 37355329885 attempt 2:** cancelled before any tests ran.
 - **Cause (likely), my own:** re-running an old commit's run on the same branch puts both runs in one concurrency group, and they cancelled each other. **Re-run an old commit only when no run is in progress on the branch.**
+
+## Round close: CI green on the final head (owner's stop condition, 2026-10-05)
+
+The owner re-sent the same four-item directive. Items 1–4 were already done in `58d7f64` and `f44aee4`. What was unmet was the stop condition: **CI green on the final head**. `f44aee41…` (run 37367672884) failed twice over.
+
+### 1. The real-frameworks failure is a pre-existing FLAKY TEST, not this round's change
+`tests/test_real_frameworks.py:1148: blocked, but not on the result path: ran=['readme.md'] directions=[]`. Reproduced locally with CI's exact pins (langchain-core 1.6.1, langchain 1.4.1, langgraph 1.2.12, langgraph-prebuilt 1.1.0) in a separate venv:
+- head f44aee4: passes;
+- 58d7f64: passes;
+- **77d9b4a, green on CI: FAILS.**
+
+Over 30 runs, `TestRealToolResultSeam` failed 5 times on the head.
+
+**Cause.** The test's `_Cap` is the reporter, and telemetry is batched and flushed on its own thread. The test read `cap.directions()` right after `manifest.unprotect()`, which by design leaves telemetry running (`close_sensor=False`: "telemetry lifetime belongs to the host application"). A run that read before the flush saw `directions=[]`. The benign-`arun` test (line 1072) had the same race, and its message would claim "every tool result on the async path goes to the model unscanned": a false alarm waiting to happen.
+
+**Fix (test only).** Both tests now call `manifest.unprotect(close_sensor=True)`, which drains synchronously (`close_sync`) before `cap` is read.
+
+**Deterministic proof.** A flake cannot be shown red by one run, so a pytest plugin used for evidence only holds every background flush 0.5 s:
+```
+FIXED:
+6 passed, 73 deselected in 2.00s
+slowflush patched: ['SyncTelemetryQueue._collect_batch']
+
+SABOTAGE (read before flush restored):
+3 failed, 3 passed, 73 deselected in 0.53s
+E   AssertionError: a real BaseTool.arun return never reached the after position — every tool result on the async path goes to the model unscanned (directions scanned: [])
+E   AssertionError: blocked, but not on the result path: ran=['readme.md'] directions=[]
+slowflush patched: ['SyncTelemetryQueue._collect_batch']
+tests/test_real_frameworks.py:1076: AssertionError: a real BaseTool.arun return never reached the after position — every tool result on the async path goes to the model unscanned (directions scanned: 
+tests/test_real_frameworks.py:1153: AssertionError: blocked, but not on the result path: ran=['readme.md'] directions=[]
+```
+Statistically, with the flush NOT held: ===== BEFORE (unprotect() leaves telemetry unflushed): failed runs of 60: 1; ===== AFTER (close_sensor=True): failed runs of 60: 0. And 0 failures in 20 more runs of the whole class.
+
+**A rule I broke:** I had never run `tests/test_real_frameworks.py` locally. It covers the LangChain seam behind this round's change, and it needs the pinned frameworks, which this machine did not have. It now has its own scratch venv with CI's pins.
+
+### 2. The cancelled matrix job is infrastructure
+The `derive Python matrix` job on f44aee4 has **no log at all**: it never started on a runner, and it was cancelled after 15 minutes (20:06:28 → 20:21:30). The pytest matrix depends on it, so no pytest job ran on that head. This was not caused by the code. It is cleared by a fresh run.

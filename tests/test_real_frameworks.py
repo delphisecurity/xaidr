@@ -1072,7 +1072,7 @@ class TestRealToolResultSeam:
         try:
             out = asyncio.run(read_doc.arun(self.ARGS))
         finally:
-            manifest.unprotect()
+            manifest.unprotect(close_sensor=True)   # flush before reading `cap` (see below)
         assert "tool_result" in cap.directions(), (
             "a real BaseTool.arun return never reached the after position — "
             "every tool result on the async path goes to the model unscanned "
@@ -1135,7 +1135,12 @@ class TestRealToolResultSeam:
         try:
             out = self._run_graph(build(), how)
         finally:
-            manifest.unprotect()
+            # close_sensor=True: telemetry is batched and flushed on its own
+            # thread, and unprotect() leaves it running by design (its lifetime
+            # belongs to the host). Reading `cap` before the flush made this test
+            # fail ~1 run in 6 with directions=[] (CI f44aee4, run 37367672884;
+            # also reproduced on 77d9b4a). Closing the sensor flushes it first.
+            manifest.unprotect(close_sensor=True)
         tool_messages = [m for m in out["messages"] if isinstance(m, ToolMessage)]
         assert tool_messages, f"no ToolMessage — the graph did not survive ({how})"
         refusal = tool_messages[-1]
