@@ -2912,3 +2912,24 @@ old form, read at once      : 0 events -> PASSES (vacuous)
 new form, flushed, exactly the control's one event: ['flagged', 'flagged'] -> fails (CATCHES the regression)
 ```
 The fixed test passes normally, with the flush held, and in 20/20 runs. The whole file: 80 passed.
+
+### Stopped on the owner's reserved ruling: the atom pass breaks the input-scaling invariant on CI
+Final head `3f5bf94d9971993298608613149064df7dda9a71`, CI run 37394599232. **11 of 12 jobs green**, plus DCO (37394599234). The flake fix holds: real frameworks passed. The failure:
+```
+FAILED tests/test_truncation_bypass.py::test_large_adversarial_input_is_bounded_and_does_not_scale - AssertionError: 5MB bomb took 2.59s
+assert 2.589886500000034 < 2.5        (pytest py3.10, base; py3.11 and py3.12 base passed)
+```
+- That test guards an existing security invariant: **work on an input must not scale with its size.**
+- The owner's 2026-10-05 ruling made destination-atom extraction run over the WHOLE input, with no bound. That is linear by design: +510 ms locally on this test's own 5 MB input (`scripts/value_origin_measurements/atom_cost.py`), and ~1.5 µs/char on address-dense text.
+- On CI's py3.10 runner it pushed the input scan 0.09 s past the 2.5 s bound.
+- The owner said: *"If it cannot be made cheap, give me the number and I will rule again rather than you working around it."* So **nothing was changed**: the bound was not raised, and the atom pass was not capped.
+
+**The numbers for the ruling:**
+- 5 MB bomb on py3.10 CI: 2.59 s (bound 2.5 s).
+- Atoms: ~100–120 ns/char typical, ~1.5 µs/char address-dense.
+- The options this leaves:
+  - (a) cap the atom pass, past which the state is visible and fails closed or open per the owner;
+  - (b) a faster atom pre-filter (unmeasured);
+  - (c) relax the invariant for value origin.
+
+`3daf41f` was deliberately NOT re-run, because the head is not green.
