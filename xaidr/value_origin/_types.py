@@ -28,7 +28,7 @@ class Verdict(str, enum.Enum):
 
 
 class WireValue(str, enum.Enum):
-    """The complete value set of ``valueOrigin`` (§2). Fourteen, case-sensitive
+    """The complete value set of ``valueOrigin`` (§2). Fifteen, case-sensitive
     (INPUT_TRUNCATED added by the owner, A2 after M6: truncation is its own
     state, never a silent unresolved; ARGUMENT_BOUND and RESULT_TRUNCATED added
     by the owner's RULING 1+2 after M8: every bound is a visible state, and under
@@ -52,6 +52,7 @@ class WireValue(str, enum.Enum):
     RESULT_TRUNCATED = "result_truncated"  # a recorded tool result was cut AND lookup missed
     RESULT_UNREAD = "result_unread"        # an I/O-backed result was skipped unread (Q18) AND lookup missed
     EXTRACTION_INCOMPLETE = "extraction_incomplete"  # the atom pass hit its WORK budget (owner, 2026-10-06)
+    WRITE_DROPPED = "write_dropped"        # a DESTINATION write the full ledger could not accept, AND lookup missed
 
 
 class RowState(str, enum.Enum):
@@ -196,6 +197,10 @@ LEDGER_MAX_NGRAMS: int = 65_536       # the principal's key n-grams, their OWN b
 # each scanned char costs 1, each extracted atom ATOM_COST (measured: ~100 ns/char,
 # ~7 us/atom). Per seam call. Hitting it is visible (extraction_incomplete), never a block.
 ATOM_WORK_BUDGET: int = 500_000
+# A result's EXAMINED pass (up to 64 leaves of 64 KiB) is budgeted by work too
+# (owner, 2026-10-06: it cost ~6 s on address-dense text). Same charging: 1/char,
+# ATOM_COST/candidate examined. Spending it is visible (extraction_incomplete).
+EXAMINED_WORK_BUDGET: int = 1_000_000   # halved after review: distinct IDN URLs cost ~1.3 s at 2M
 MAX_WALK_NODES: int = 65_536    # the EXAMINED walk's node budget: width cannot escape it (review)
 ATOM_COST: int = 64
 ATOM_CHUNK_CHARS: int = 16_384

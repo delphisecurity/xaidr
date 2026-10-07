@@ -35,22 +35,24 @@ _VERDICT = {
     WireValue.RESULT_TRUNCATED: Verdict.NOT_EVALUATED,
     WireValue.RESULT_UNREAD: Verdict.NOT_EVALUATED,
     WireValue.EXTRACTION_INCOMPLETE: Verdict.NOT_EVALUATED,
+    WireValue.WRITE_DROPPED: Verdict.NOT_EVALUATED,
 }
 
 # Owner, 2026-10-05, narrowing RULING 1+2: "Blocking is the fallback for a value
-# that genuinely cannot be examined, not the answer to a cost control." Only an
-# unread I/O-backed result (Q18) is such a value; argument_bound, result_truncated,
+# that genuinely cannot be examined, not the answer to a cost control." An unread
+# I/O-backed result (Q18, result_unread) and a write the ledger did not accept
+# (write_dropped, 2026-10-06) are such values; argument_bound, result_truncated,
 # input_truncated and ledger_saturated are visible states that do not block.
-_UNEXAMINABLE_WIRES = frozenset({WireValue.RESULT_UNREAD})
+_UNEXAMINABLE_WIRES = frozenset({WireValue.RESULT_UNREAD, WireValue.WRITE_DROPPED})  # 2026-10-06
 
 
 def verdict_of(wire: WireValue) -> Verdict:
-    """Total over the fourteen wire values (V-3; input_truncated added after A2 M6,
+    """Total over the fifteen wire values (V-3; input_truncated added after A2 M6,
     argument_bound and result_truncated by RULING 1+2 after M8, result_unread
     by the same ruling for Q18, extraction_incomplete by the work budget, 2026-10-06). ``CallVerdict.verdict`` is always
     ``verdict_of(wire)``; paid's L2 driver and the Brain derive the verdict
     from the wire value only through this function. Never raises: a string
-    outside the fourteen is NOT_EVALUATED, matching ``row_text``'s not_recorded row
+    outside the fifteen is NOT_EVALUATED, matching ``row_text``'s not_recorded row
     for an unrecognised value."""
     try:
         return _VERDICT[WireValue(wire)]
@@ -60,7 +62,8 @@ def verdict_of(wire: WireValue) -> Verdict:
 
 def should_block(verdict: CallVerdict, *, mode: Mode) -> bool:
     """True iff ``mode is Mode.ENFORCE`` and either the verdict is UNAUTHORIZED
-    or the wire names a source value origin could not examine (result_unread).
+    or the wire names a source value origin could not examine (result_unread, or
+    write_dropped: a destination write the full ledger could not accept, 2026-10-06).
     The other bound states (argument_bound, result_truncated, input_truncated,
     ledger_saturated) and a plain UNRESOLVED never block (owner, 2026-10-05).
     The only effect value origin has on an action."""
@@ -92,6 +95,11 @@ _ROWS = {
                          "result in this flow exceeded what value origin examines whole (a value over "
                          "65,536 characters, more than 64 values, or nesting deeper than 6), and the "
                          "part past that point was scanned only for destination addresses."),
+    "write_dropped": (RowState.NOT_RECORDED,
+                      "Intent: not evaluated — a write to this flow's ledger was lost "
+                      "(the ledger was full, or recording it faulted), so value origin does "
+                      "not know what that input or result named; a destination it does not "
+                      "know is treated as unexaminable."),
     "extraction_incomplete": (RowState.NOT_RECORDED,
                               "Intent: not evaluated — value origin's scan for destination "
                               "addresses in a long value reached its work budget; the rest was "
@@ -185,6 +193,7 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
          UNTRUSTED_SOURCE (a positive finding outranks a blind spot), a bound
          names itself, first match wins: a miss on a ledger holding an unread
          I/O-backed result -> RESULT_UNREAD (it blocks, so it outranks the rest);
+         a miss on a ledger that DROPPED a destination write -> WRITE_DROPPED (blocks);
          an atom pass that hit its WORK budget -> EXTRACTION_INCOMPLETE;
          a walk bound on this call's arguments -> ARGUMENT_BOUND; a miss on a
          saturated ledger -> LEDGER_SATURATED; a miss on a ledger holding a cut
@@ -199,8 +208,8 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
         if not found:
             return _verdict(WireValue.NO_DESTINATION, (), truncated)
         auths = [f.destination for f in found if f.destination is not None]
-        entries, saturated, input_truncated, result_truncated, result_unread, atoms_incomplete = (
-            _ledger.lookup(lg, auths))
+        (entries, saturated, input_truncated, result_truncated, result_unread,
+         atoms_incomplete, dests_dropped) = _ledger.lookup(lg, auths)
         it = iter(entries)
         out: List[DestinationFinding] = []
         saturated_miss = False
@@ -208,6 +217,7 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
         result_miss = False
         unread_miss = False
         incomplete_miss = False
+        dropped_miss = False
         budget_hit = any(f.reason is UnresolvedReason.ATOM_BUDGET for f in found)
         for f in found:
             if f.destination is None:
@@ -222,6 +232,7 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
                 result_miss = result_miss or result_truncated
                 unread_miss = unread_miss or result_unread
                 incomplete_miss = incomplete_miss or atoms_incomplete
+                dropped_miss = dropped_miss or dests_dropped
                 out.append(DestinationFinding(path=f.path, destination=f.destination,
                                               reason=None, origin=Origin.UNRESOLVED,
                                               span_declared=None, source_label=None))
@@ -241,7 +252,9 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
             # body hid result_unread). Then saturation before truncation: a
             # dropped write explains a miss better than a cut.
             if unread_miss:
-                wire = WireValue.RESULT_UNREAD        # Q18: the one bound that blocks
+                wire = WireValue.RESULT_UNREAD        # Q18: a bound that blocks
+            elif dropped_miss:
+                wire = WireValue.WRITE_DROPPED        # owner, 2026-10-06: it blocks too
             elif budget_hit or incomplete_miss:
                 wire = WireValue.EXTRACTION_INCOMPLETE  # the work budget ran out (2026-10-06)
             elif truncated:

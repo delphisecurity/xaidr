@@ -23,7 +23,10 @@ EXPECT = {
     "s30_host_record_hop": ["principal_undeclared_span", "unresolved"],
     "s2_circuit_open": ["principal_undeclared_span", True, "unresolved"],
     "spans_ignored_warnings": 1,
-    "not_scannable_ends_previous": "unresolved",
+    # Owner, 2026-10-06 (ruling 4): a non-scannable input is a write the ledger did not
+    # accept, so the miss reads write_dropped (and blocks under ENFORCE). It still ends
+    # the previous request (S-2): a FRESH ledger is bound. This pinned "unresolved".
+    "not_scannable_ends_previous": "write_dropped",
     "a2a_inbound_ends_implicit": "unresolved",
     "a2a_inbound_keeps_explicit": "principal_undeclared_span",
     "spans_mismatch_warnings": 1,

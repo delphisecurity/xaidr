@@ -3151,5 +3151,124 @@ tests/test_value_origin_m9.py:209: AssertionError: valueOrigin leaked onto a non
 
 ### 4. Carried items
 - **The silent-failure MEDIUM (a fallback with no tool identity, fails safe):** still OPEN by the owner's choice, and recorded: `- **Left open on purpose:** the silent-failure review's MEDIUM. `frameworks._scan_result`'s fallback, for a sensor without `_scan_tool_result`, passes no tool identity. It fails safe, and the owner wo`.
-- **The poison-laundering strict xfail:** kept, DEFERRED. Closing it needs a ruling on what a dropped write MEANS (treat it as unexaminable and block, or record what fits). Re-run now, with the cliff below: `1 passed, 1 xfailed in 0.89s`.
+- **The poison-laundering strict xfail:** kept, DEFERRED. Closing it needs a ruling on what a dropped write MEANS (treat it as unexaminable and block, or record what fits). Re-run now, with the cliff below: `1 passed, 1 xfailed in 0.89s`. **[Superseded 2026-10-06, rulings 2/4: a dropped DESTINATION write (the ledger full, or recording it faulted) now reads `write_dropped` and BLOCKS as unexaminable; the laundering xfail is closed. See "A dropped write blocks" below.]**
 - **The 4,001 vs 3,999 cliff, re-checked with the atom pass budget-bound:** it persists, unchanged. The budget limits only very long values; the cliff is C-8's whole-leaf rule meeting atom extraction past 4,000 chars. Pinned by `test_known_artefact_the_4000_char_cliff`.
+
+
+## Round: reused threads (STOPPED), the examined limit, a dropped write blocks (owner, 2026-10-06)
+
+### Ruling 1: STOPPED, as the owner's condition requires (a seam change is needed)
+Red first, on a reused pool thread (xfail disabled to show it):
+```
+1 failed in 0.02s
+E   AssertionError: user B's call to an address only user A typed read 'principal_undeclared_span': A's principal authority carried across requests on a reused pool thread
+tests/test_value_origin_reuse.py:51: AssertionError: user B's call to an address only user A typed read 'principal_undeclared_span': A's principal authority carried across requests on a reused pool thread
+tests/test_value_origin_reuse.py:79: AssertionError: user B scanned its own input first and still read 'principal_undeclared_span': user A's open flow kept its explicit ledger across requests
+1 failed, 1 deselected in 0.02s
+E   AssertionError: user B scanned its own input first and still read 'principal_undeclared_span': user A's open flow kept its explicit ledger across requests
+```
+Both are committed as strict xfails, found-but-unfixed and pinned. What could and could not be done within today's seams is in docs/value-origin-enforce.md.
+- **Corrected after the milestone review:** a third entry exists (`_vo_inbound_a2a`), and the CrewAI and Agents framework hooks DO fire per invocation. They are fixable within today's seams, but not shipped alone.
+- **Found by the review:** the worse variant, `begin_flow` without `clear_flow`.
+
+### Rulings 2 and 4
+Red first:
+```
+3 failed, 1 passed in 6.29s
+E   AssertionError: ('allowed', 'ledger_saturated', None, [])
+E   AssertionError: a dropped destination write read 'ledger_saturated': the system does not know what it just saw, and treated it as benign
+E   AssertionError: a result's examined pass scanned 4,194,278 chars of address-dense text: the 64 x 64 KiB examined bound alone lets an attacker choose a ~6 s scan
+tests/test_value_origin_drop.py:109: AssertionError: a result's examined pass scanned 4,194,278 chars of address-dense text: the 64 x 64 KiB examined bound alone lets an attacker choose a ~6 s scan
+tests/test_value_origin_drop.py:55: AssertionError: a dropped destination write read 'ledger_saturated': the system does not know what it just saw, and treated it as benign
+tests/test_value_origin_drop.py:88: AssertionError: ('allowed', 'ledger_saturated', None, [])
+```
+Sabotage, one per change (SD5 is the discriminating one: key-n-gram drops must stay non-blocking):
+```
+== SD1 a dropped destination write is not marked: 3 failed, 2 passed, 32 deselected in 1.85s
+   red: test_a_dropped_destination_write_blocks_as_unexaminable
+   red: test_a_dropped_write_block_carries_the_unexaminable_names
+   red: test_a_saturating_result_does_not_launder_its_poison
+   msg: ('allowed', 'ledger_saturated', None, [])
+   msg: a dropped destination write read 'ledger_saturated': the system does not know what it just saw, and treated it as benign
+== SD2 write_dropped does not block: 3 failed, 2 passed, 32 deselected in 1.85s
+   red: test_a_dropped_destination_write_blocks_as_unexaminable
+   red: test_a_dropped_write_block_carries_the_unexaminable_names
+   red: test_a_saturating_result_does_not_launder_its_poison
+   msg: ('allowed', 'write_dropped', None, [])
+   msg: a dropped write must block (owner, ruling 4)
+== SD3 the examined pass unbudgeted again: 1 failed, 4 passed, 32 deselected in 7.39s
+   red: test_a_results_examined_pass_is_bounded_by_work_and_says_so
+   msg: a result's examined pass scanned 4,194,278 chars of address-dense text: the 64 x 64 KiB examined bound alone lets an attacker choose a ~6 s scan
+== SD4 a dropped write named as an untrusted destination: 1 failed, 4 passed, 32 deselected in 1.85s
+   red: test_a_dropped_write_block_carries_the_unexaminable_names
+   msg: ('blocked', 'write_dropped', 'untrusted_destination', ['ORIGIN_UNTRUSTED_DESTINATION', 'intent.value_origin_untrusted'])
+== SD5 key-n-gram drops also mark a dropped destination write: 1 failed, 4 passed, 32 deselected in 1.85s
+   red: test_a_dropped_key_ngram_write_stays_ledger_saturated_and_does_not_block
+   msg: write_dropped
+== restored: True
+```
+**Reviews of the uncommitted change (fresh context).**
+- **silent-failure-hunter, CRITICAL, and the milestone-reviewer, HIGH, both confirmed:** a write lost to a FAULT set no flag, laundering more cheaply than a full ledger. **Fixed:** every FAULT return from the two recorders now marks the lost write. This also covers a mis-split span list and a non-string input. **That extension is mine, for the owner to confirm.** Red, green, then sabotage:
+```
+tests/test_value_origin_drop.py:126: AssertionError: a write lost to a fault read 'unresolved': the system does not know what it just saw, and treated it as benign
+tests/test_value_origin_drop.py:139: AssertionError: unresolved
+2 failed, 4 deselected in 0.02s
+E   AssertionError: a write lost to a fault read 'unresolved': the system does not know what it just saw, and treated it as benign
+E   AssertionError: unresolved
+--- after the fix: 6 passed, 2 xfailed in 0.98s
+--- sabotage (the lost write not marked):
+tests/test_value_origin_drop.py:126: AssertionError: a write lost to a fault read 'unresolved': the system does not know what it just saw, and treated it as benign
+tests/test_value_origin_drop.py:139: AssertionError: unresolved
+2 failed, 4 deselected in 0.01s
+E   AssertionError: a write lost to a fault read 'unresolved': the system does not know what it just saw, and treated it as benign
+E   AssertionError: unresolved
+```
+- **Pins changed by it** (each noted at its site): M6 `not_scannable_ends_previous` (`write_dropped`; a fresh ledger is still bound) and conformance S21 (expected.jsonl regenerated at --rev 01450c7). The atoms warning test was renamed: the warning now says a dropped write blocks.
+- **milestone-reviewer, other findings:**
+  - the false-positive check used a fresh ledger per document, so it could not reach a per-FLOW cap. Re-measured as one flow: every benign document (540) as tool results in ONE flow: 1,391 distinct destination entries (13.9% of the 10,000 cap), dropped=False;
+  - the examined budget's "263 ms worst" was the cheapest shape. Distinct IDN URLs cost ~1.0–1.3 s, so the budget was halved:
+```
+  64 x 64 KiB distinct URLs https://h{i}.co/p                        340 ms
+  64 x 64 KiB distinct IDN URLs https://bücher{i}.de/p               563 ms
+  128 x 64 KiB distinct IDN URLs (examined + past the bound)         826 ms
+  64 x 64 KiB address-dense 'x.co '                                  176 ms
+```
+  - stale docs and the runtime warning were corrected;
+  - the item 1 note's facts were corrected (above).
+
+**False-positive measurement (per document):**
+```
+R1 pin updated
+xaidr    : /Users/anirudhkotaru/worktrees/opena2a/value-origin-seams/xaidr/__init__.py
+version  : 1.19.0
+measuring: THE WORKING TREE at /Users/anirudhkotaru/worktrees/opena2a/value-origin-seams — not an installed wheel. Set XAIDR_FROM_INSTALL=1 (neutral cwd, python -I) to measure a published artifact instead.
+
+benign documents measured: 768 (456-row corpus, benign_a2a, benign_longform, adversarial benign sets)
+  that trip write_dropped as a TOOL RESULT: 0 []
+  that trip write_dropped as an INPUT:      0 []
+  most distinct addresses in one benign document (cap 10,000): [(1428, 'benign_longform:LF-kubectl_dump-900k'), (635, 'benign_longform:LF-kubectl_dump-400k'), (238, 'benign_longform:LF-kubectl_dump-150k'), (143, 'benign_longform:LF-kubectl_dump-90k'), (11, 'benign_longform:LF-thread_dump-90k')]
+the EXAMINED pass under EXAMINED_WORK_BUDGET (2,000,000 units), one result:
+  64 leaves x 64 KiB, address-dense ('x.co ')                    263 ms
+  64 leaves x 64 KiB, rejected non-ASCII ('é.é ')                143 ms
+  64 leaves x 64 KiB, ordinary prose                             124 ms
+```
+**Block rate after (no benign call reads `write_dropped`):**
+```
+  P-flow-I                     calls=  494  would block=  26  rate= 5.26% | attacks: 20/302 | benign: 0/83 | benign_prose: 6/97 | benign_templates: 0/12
+  P-flow-R                     calls=  494  would block=  37  rate= 7.49% | attacks: 25/302 | benign: 5/83 | benign_prose: 7/97 | benign_templates: 0/12
+  P-flow-I                     calls=   64  would block=   0  rate= 0.00% | benign_a2a: 0/64 [('no_destination', 58), ('principal_undeclared_span', 4), ('unresolved', 2)]
+  P-flow-R                     calls=   64  would block=   4  rate= 6.25% | benign_a2a: 4/64 [('no_destination', 58), ('unresolved', 2), ('untrusted_source', 4)]
+  P-flow-I                     calls=   24  would block=   7  rate=29.17% | benign_longform: 7/24 [('argument_bound', 11), ('extraction_incomplete', 6), ('untrusted_source', 7)]
+  P-flow-R                     calls=   24  would block=   8  rate=33.33% | benign_longform: 8/24 [('argument_bound', 10), ('extraction_incomplete', 6), ('untrusted_source', 8)]
+  A-calls                      calls=  470  would block=  98  rate=20.85% [('no_destination', 368), ('unresolved', 4), ('untrusted_source', 98)]
+  A-flow-I                     calls=  228  would block=   0  rate= 0.00% [('no_destination', 228)]
+  A-flow-R                     calls=  228  would block=   0  rate= 0.00% [('no_destination', 228)]
+  A-steps                      calls=   36  would block=   0  rate= 0.00% [('no_destination', 28), ('unresolved', 8)]
+```
+**Green before the push:**
+- in-process (83 files: every suite that emits telemetry or scans tool calls, plus the new tests, url_parse users and conformance): **7845 passed, 16 skipped, 13 xfailed, 1 warning in 229.08s (0:03:49)**;
+- real frameworks (CI pins): **26 passed, 53 skipped in 0.67s**;
+- from the wheel (every outside test): **86 passed in 54.39s**.
+
+### Ruling 3
+The Splunk TA's "Targets 0.2.0" is LEFT, and recorded in the backlog (docs/value-origin-rulings.md).

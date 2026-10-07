@@ -517,9 +517,18 @@ Showing that RECORD mode leaves it byte-identical is A2's obligation (C-11).
 
 ## 2026-10-06 — the atom pass bounded by work; two ledger budgets; both audit ids (owner)
 - **The atom pass is bounded by WORK** (option a): 500,000 units per seam call (1/char + 64/atom). Hitting it is a visible state, `extraction_incomplete`, fourteen wire values in all, and it does NOT block. (c), relaxing the size guarantee, is REFUSED. (b), a pre-filter, only if measured; not adopted.
-- **Ledger:** a separate 65,536 budget for key n-grams, 10,000 kept for destinations (the recommendation, approved). The laundering gap keeps its strict xfail and is named in the ENFORCE docs.
+- **Ledger:** a separate 65,536 budget for key n-grams, 10,000 kept for destinations (the recommendation, approved). The laundering gap keeps its strict xfail and is named in the ENFORCE docs. **[Superseded 2026-10-06, rulings 2/4: a dropped DESTINATION write (the ledger full, or recording it faulted) now reads `write_dropped` and BLOCKS as unexaminable; the laundering xfail is closed. See "A dropped write blocks" below.]**
 - **`unexaminable_source` / `ORIGIN_UNEXAMINABLE_SOURCE` approved, with `intent.value_origin_untrusted` RESTORED alongside it.** It is the Brain-side spec's audit id, and the intent lens filters on it.
 - **The 4,001 vs 3,999 cliff** is recorded as a known artefact.
 
 ## 2026-10-06 — M9 built behind a consumer gate (owner delegated the shape)
 `valueOrigin` is emitted on every tool-call event, behind `value_origin_wire`. The default `"v1"` is exactly the nine values the Brain's code accepts. It is safe to ship now, because no value the consumer rejects is ever sent. `"v2"` is all fourteen, for after a deployed Brain accepts them; `"off"` emits nothing. Chosen over default-off because v1 delivers what the consumer can store today without one rejected value; the cost is that five states are withheld (and named in a warning) until v2. SCHEMA_VERSION 0.3.0 (Q14).
+
+## 2026-10-06 — rulings 1–4 on reused threads, the examined limit, the Splunk TA, a dropped write (owner)
+- **1. Reused worker threads: FIX, gates M9 going further.** STOPPED at the owner's own condition: binding on entry for a flow-less host needs a seam change (a request scope, or an S-2/V-27 change). The framework hooks (CrewAI kickoff, Agents Runner.run) could be fixed within today's seams and are NOT shipped alone. Two strict xfails pin the defect (no input of B's own; and begin_flow without clear_flow).
+- **2. The examined limit: capped by work.** `EXAMINED_WORK_BUDGET = 1,000,000` units per result; spending it is `extraction_incomplete`, which does not block.
+- **3. The Splunk TA "Targets 0.2.0": left.** It is a published artifact in a different lane, recorded in the backlog below.
+- **4. A dropped ledger write BLOCKS** as `write_dropped`, under the unexaminable names. Extended after review, for the owner to confirm: a write lost to a FAULT (a raising `model_dump`, a mis-split span list, a non-string input) is a write the ledger did not accept.
+
+### Backlog (owner-ruled, outside this branch)
+- The Splunk TA says it "Targets 0.2.0" (`README.md`, `app.conf`, `app.manifest`, `props.conf`); the schema is 0.3.0 since M9. `KV_MODE = json` still extracts `gen_ai.security.value_origin`. (Owner, 2026-10-06: leave it; do not widen this branch.)

@@ -221,7 +221,9 @@ def test_an_untrusted_block_keeps_the_ruled_names():
                                ["ORIGIN_UNTRUSTED_DESTINATION", "intent.value_origin_untrusted"])
 
 
-def test_a_full_ledger_warns_loudly_that_it_drops_and_does_not_block(caplog):
+def test_a_full_ledger_warns_loudly_what_a_dropped_write_means(caplog):
+    # Renamed 2026-10-06 (was ..._that_it_drops_and_does_not_block): a dropped
+    # DESTINATION write now BLOCKS (write_dropped); the warning must say which.
     def run():
         vo.bind_fresh_ledger()
         with caplog.at_level(logging.WARNING, logger="xaidr.value_origin"):
@@ -230,7 +232,7 @@ def test_a_full_ledger_warns_loudly_that_it_drops_and_does_not_block(caplog):
             vo.record_tool_result("web_fetch", {}, [" ".join(f"https://h{i}.example/" for i in range(j, j + 400)) for j in range(0, 12_000, 400)], designations=(), result_blocked=False)
     contextvars.Context().run(run)
     msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
-    assert any("DROPPED" in m and "does not block" in m for m in msgs), (
+    assert any("dropped a write" in m and "write_dropped" in m and "BLOCKS" in m for m in msgs), (
         f"a full ledger drops every later emission, untrusted tool results included, and the "
         f"warning does not say so: {msgs}")
 
@@ -324,7 +326,10 @@ def test_the_sensor_input_seam_records_a_clean_input_whole():
         f"input: {got}")
 
 
-def test_a_really_saturated_ledger_reports_it_and_does_not_block():
+def test_a_really_saturated_ledger_reports_a_dropped_write_and_blocks():
+    # Renamed 2026-10-06 (was ..._and_does_not_block): the saturation here drops a
+    # DESTINATION write, which now blocks; a dropped key-n-gram write still does not
+    # (tests/test_value_origin_drop.py).
     """Milestone review: the earlier test built the verdict by hand."""
     def run():
         vo.bind_fresh_ledger()
@@ -333,7 +338,7 @@ def test_a_really_saturated_ledger_reports_it_and_does_not_block():
         return out, vo.evaluate_call("http_post", {"url": "https://never.example/"}, flow_active=True)
     out, v = contextvars.Context().run(run)
     assert out is vo.RecordOutcome.SATURATED, out
-    assert v.wire.value == "ledger_saturated" and not should_block(v, mode=Mode.ENFORCE), v.wire.value
+    assert v.wire.value == "write_dropped" and should_block(v, mode=Mode.ENFORCE), v.wire.value
 
 
 # ── silent-failure review of 58d7f64 (2026-10-05) ────────────────────────────

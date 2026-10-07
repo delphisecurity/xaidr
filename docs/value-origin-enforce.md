@@ -119,10 +119,10 @@ All three names are constants in `xaidr/sensor.py`.
 
 ## Every bound blocks under ENFORCE (owner RULING 1+2, 2026-10-04)
 
-**[NARROWED by the owner, 2026-10-05: only `result_unread` still blocks. argument_bound, result_truncated, input_truncated and ledger_saturated are visible states that do not block, and atom extraction finds what a bound used to hide. See "The bounds ruling, narrowed" at the end.]**
+**[NARROWED by the owner, 2026-10-05: only `result_unread` still blocks. argument_bound, result_truncated, input_truncated and ledger_saturated are visible states that do not block, and atom extraction finds what a bound used to hide. See "The bounds ruling, narrowed" at the end.]** **[2026-10-06, rulings 2/4: `write_dropped` blocks too; fifteen values.]**
 
 The owner: *"Every bound in this system fails open and silently ... An attacker needs padding, not skill."*
-The cap numbers are unchanged. What exceeding one MEANS is new: each bound is a visible wire value, and under ENFORCE it blocks. **[M9, 2026-10-06: on the WIRE this holds only for values the consumer accepts. Under the default `value_origin_wire="v1"` (the Brain's nine) the five new states, `result_unread` included, are WITHHELD from telemetry for every reporter. They stay on `ScanResult.value_origin`, and a `result_unread` block still carries `ORIGIN_UNEXAMINABLE_SOURCE` + `intent.value_origin_untrusted`. Set `"v2"` once the consumer accepts all fourteen.]**
+The cap numbers are unchanged. What exceeding one MEANS is new: each bound is a visible wire value, and under ENFORCE it blocks. **[M9, 2026-10-06: on the WIRE this holds only for values the consumer accepts. Under the default `value_origin_wire="v1"` (the Brain's nine) the five new states, `result_unread` included, are WITHHELD from telemetry for every reporter. They stay on `ScanResult.value_origin`, and a `result_unread` block still carries `ORIGIN_UNEXAMINABLE_SOURCE` + `intent.value_origin_untrusted`. Set `"v2"` once the consumer accepts all fourteen.]** **[2026-10-06, rulings 2/4: `write_dropped` blocks too; fifteen values.]**
 
 | bound | before | now |
 |---|---|---|
@@ -134,7 +134,7 @@ The cap numbers are unchanged. What exceeding one MEANS is new: each bound is a 
 **Why two new states, not one.** `argument_bound` is a fact about THIS CALL: some of its arguments were never read, so it holds with no lookup at all. `result_truncated` is a fact about the LEDGER: an earlier result was cut, and it matters only when this call's destination misses. A call can be both. One state would have to say "one of two things happened", and an operator could not tell which.
 
 **Extended past the four bounds the owner named, for the owner to confirm or reverse.** `input_truncated` and `ledger_saturated` already had visible states but still ALLOWED. Both are padding routes:
-- A single result with enough distinct URLs saturates the ledger, and the poison in it is dropped (`test_a_saturating_result_does_not_launder_its_poison`).
+- A single result with enough distinct URLs saturates the ledger, and the poison in it is dropped (`test_a_saturating_result_does_not_launder_its_poison`). **[Superseded 2026-10-06, rulings 2/4: a dropped DESTINATION write (the ledger full, or recording it faulted) now reads `write_dropped` and BLOCKS as unexaminable; the laundering xfail is closed. See "A dropped write blocks" below.]**
 - A declared-span input padded past the cap hides whatever follows.
 
 This reverses the M6 pin "input_truncated never blocks". The test that held it is renamed at its site.
@@ -165,7 +165,7 @@ This is not papered over. It is recorded here as a known limitation, and it is a
 
 ## Rule names (owner RULING 4)
 
-- Category `untrusted_destination`; rule `ORIGIN_UNTRUSTED_DESTINATION`. A bound block carries the same category and rule; the wire value says which bound. **[Milestone review, 2026-10-05: that was true only of the in-process `ScanResult`. Telemetry had no wire value, so a call with too many arguments was audited as an untrusted destination, `intent.value_origin_untrusted` included. The block event now carries `valueOrigin`. The rule ids still SAY "untrusted" for a bound block: a separate rule id for bound blocks is the owner's naming call.]** **[Answered 2026-10-05: `ORIGIN_UNEXAMINABLE_SOURCE` for the only bound that still blocks.]** **[M9, 2026-10-06: on the WIRE this holds only for values the consumer accepts. Under the default `value_origin_wire="v1"` (the Brain's nine) the five new states, `result_unread` included, are WITHHELD from telemetry for every reporter. They stay on `ScanResult.value_origin`, and a `result_unread` block still carries `ORIGIN_UNEXAMINABLE_SOURCE` + `intent.value_origin_untrusted`. Set `"v2"` once the consumer accepts all fourteen.]**
+- Category `untrusted_destination`; rule `ORIGIN_UNTRUSTED_DESTINATION`. A bound block carries the same category and rule; the wire value says which bound. **[Milestone review, 2026-10-05: that was true only of the in-process `ScanResult`. Telemetry had no wire value, so a call with too many arguments was audited as an untrusted destination, `intent.value_origin_untrusted` included. The block event now carries `valueOrigin`. The rule ids still SAY "untrusted" for a bound block: a separate rule id for bound blocks is the owner's naming call.]** **[Answered 2026-10-05: `ORIGIN_UNEXAMINABLE_SOURCE` for the only bound that still blocks.]** **[M9, 2026-10-06: on the WIRE this holds only for values the consumer accepts. Under the default `value_origin_wire="v1"` (the Brain's nine) the five new states, `result_unread` included, are WITHHELD from telemetry for every reporter. They stay on `ScanResult.value_origin`, and a `result_unread` block still carries `ORIGIN_UNEXAMINABLE_SOURCE` + `intent.value_origin_untrusted`. Set `"v2"` once the consumer accepts all fourteen.]** **[2026-10-06, rulings 2/4: `write_dropped` blocks too; fifteen values.]**
 - **`ORIGIN_UNTRUSTED_DESTINATION_KEYED` is not emitted anywhere.** It is in no tree I searched: this repo, delphi-sentinel's docs, and delphi-sentinel's full history (`git log --all -S ORIGIN_UNTRUSTED_DESTINATION` finds nothing). No document I can read defines its trigger, so none was invented. **[Corrected 2026-10-05, owner: it comes from the original value-origin design as the Tier 2 keyed variant and was never built — DESIGNED, NOT IMPLEMENTED (docs/value-origin-rulings.md).]**
 - `intent.value_origin_untrusted` is still emitted. It is the spec's C-19 audit id (the waterfall keys `decided` on it), NOT the keyed variant. Dropping it is the owner's call. **[2026-10-05: on a `result_unread` block it IS now dropped. That was MY decision, not the owner's ruling (the owner named only the rule id). Consequence (C-19, PLAUSIBLE): the waterfall marks the intent stage `decided` on that id, so an unexaminable block may show no deciding stage. For the owner.]** **[Superseded 2026-10-06 (owner): `intent.value_origin_untrusted` is carried ALONGSIDE `ORIGIN_UNEXAMINABLE_SOURCE`; see "Why an unexaminable block carries TWO rule ids".]**
 - `value_origin_unauthorized` is not carried.
@@ -201,7 +201,7 @@ This is not papered over. It is recorded here as a known limitation, and it is a
 
 It was reproduced with REAL unread objects, not stand-ins: an `httpx.Response` on a stream, a `urllib3.HTTPResponse(preload_content=False)` and a `requests.Response`. Each was tested top-level and nested in a dict. In every case the ledger recorded nothing, the call read `unresolved` and was allowed, and nothing was consumed.
 
-**The manifest half of Q18 was never built.** Q18 said to "report them `not_recorded` in the manifest". `ProtectionManifest` (`xaidr/autopatch/manifest.py`) has no value-origin field, and it is returned once by `protect()`, so it cannot carry a per-read state. The visible state is therefore a wire value. **[M9, 2026-10-06: on the WIRE this holds only for values the consumer accepts. Under the default `value_origin_wire="v1"` (the Brain's nine) the five new states, `result_unread` included, are WITHHELD from telemetry for every reporter. They stay on `ScanResult.value_origin`, and a `result_unread` block still carries `ORIGIN_UNEXAMINABLE_SOURCE` + `intent.value_origin_untrusted`. Set `"v2"` once the consumer accepts all fourteen.]**
+**The manifest half of Q18 was never built.** Q18 said to "report them `not_recorded` in the manifest". `ProtectionManifest` (`xaidr/autopatch/manifest.py`) has no value-origin field, and it is returned once by `protect()`, so it cannot carry a per-read state. The visible state is therefore a wire value. **[M9, 2026-10-06: on the WIRE this holds only for values the consumer accepts. Under the default `value_origin_wire="v1"` (the Brain's nine) the five new states, `result_unread` included, are WITHHELD from telemetry for every reporter. They stay on `ScanResult.value_origin`, and a `result_unread` block still carries `ORIGIN_UNEXAMINABLE_SOURCE` + `intent.value_origin_untrusted`. Set `"v2"` once the consumer accepts all fourteen.]** **[2026-10-06, rulings 2/4: `write_dropped` blocks too; fifteen values.]**
 
 **Now:**
 - The skip stays, still unread.
@@ -285,7 +285,7 @@ benign_longform, 24 docs, 10,100,008 chars (core value-origin cost, summed):
 ### What the ledger cap should be (asked by the owner)
 - **Measured:** a 17,481-char prompt yields 13,134 key n-grams, and a full 64 KiB prompt yields 49,262. All of them share the 10,000-entry cap with destinations. An entry costs ~117 bytes.
 - **Recommendation: give the principal's key n-grams their OWN budget,** sized to the 64 KiB n-gram window (65,536 entries, ≤ ~7.7 MB per flow at 117 B), and keep destinations at their own 10,000. Then n-grams can never starve destination recording. A single shared cap would need ≥ ~60,000 to hold one full input plus its destinations.
-- **Known gap, either way:** an attacker-controlled result with more distinct URLs than the cap still saturates the ledger, and the poison in it is dropped. Saturation no longer blocks, so that call is allowed. This is pinned as a strict xfail (`test_a_saturating_result_does_not_launder_its_poison`). Closing it means treating a dropped unit like an unexaminable read, which is the owner's call.
+- **Known gap, either way:** an attacker-controlled result with more distinct URLs than the cap still saturates the ledger, and the poison in it is dropped. Saturation no longer blocks, so that call is allowed. This is pinned as a strict xfail (`test_a_saturating_result_does_not_launder_its_poison`). Closing it means treating a dropped unit like an unexaminable read, which is the owner's call. **[Superseded 2026-10-06, rulings 2/4: a dropped DESTINATION write (the ledger full, or recording it faulted) now reads `write_dropped` and BLOCKS as unexaminable; the laundering xfail is closed. See "A dropped write blocks" below.]**
 
 ### What it costs, corrected (milestone review, 2026-10-05)
 Rerunnable: `scripts/value_origin_measurements/atom_cost.py`.
@@ -342,7 +342,7 @@ benign_longform (24 generated documents, 90k..1.4M chars), ENFORCE, block mode:
 
 ## The ledger has two budgets (owner, approved 2026-10-06)
 - **Budgets:** destinations keep `LEDGER_MAX_ENTRIES = 10,000`; the principal's key n-grams get their own `LEDGER_MAX_NGRAMS = 65,536`, sized to the 64 KiB n-gram window (a full window yields at most ~49K). A 17 KB prompt no longer fills the ledger. **[Corrected 2026-10-06 (milestone review): false for 1-char distinct tokens, where one 64 KiB input yields 125,907 n-grams and still overflows the 65,536 budget. Ordinary words yield at most ~49K.]**
-- **Known gap, named here as the owner asked:** a tool result naming more distinct addresses than 10,000 still saturates the destination budget. Its whole write, poison included, is dropped, and saturation does not block, so **the poisoned destination is laundered and the call to it is allowed.** It is pinned by the strict xfail `test_a_saturating_result_does_not_launder_its_poison`.
+- **Known gap, named here as the owner asked:** a tool result naming more distinct addresses than 10,000 still saturates the destination budget. Its whole write, poison included, is dropped, and saturation does not block, so **the poisoned destination is laundered and the call to it is allowed.** It is pinned by the strict xfail `test_a_saturating_result_does_not_launder_its_poison`. **[Superseded 2026-10-06, rulings 2/4: a dropped DESTINATION write (the ledger full, or recording it faulted) now reads `write_dropped` and BLOCKS as unexaminable; the laundering xfail is closed. See "A dropped write blocks" below.]**
 
 ## Why an unexaminable block carries TWO rule ids (owner, 2026-10-06)
 A `result_unread` block carries **`ORIGIN_UNEXAMINABLE_SOURCE`** (category `unexaminable_source`) AND **`intent.value_origin_untrusted`**.
@@ -370,3 +370,41 @@ Also fixed:
   END TO END sensor.scan(5 MB e-acute.e-acute (non-ASCII, rejected)): off 1193 ms, record 1325 ms, delta +132 ms
 ```
 **The worst case under the budget, measured: under 0.25 s per call on the atom-pass paths.** The largest is the input path on accepted addresses (239 ms), mostly the examined 64 KiB window. A 6M-wide dict costs 0.43 s. The 5 MB bomb gains +97 ms end to end. The examined result bound (64 leaves × 64 KiB, ~6 s on address-dense text) is unchanged and still reported for the owner's ruling.
+
+## A dropped write blocks; the examined pass budgeted; reused threads STOPPED (owner, 2026-10-06)
+
+### Ruling 4: a dropped ledger write BLOCKS
+> "A write the ledger could not accept means the system does not know what it just saw. Unexaminable, not benign, same rule as result_unread."
+
+- **The state.** A dropped DESTINATION write sets the ledger's `dests_dropped`, and a later miss reads **`write_dropped`**. It blocks under ENFORCE as category `unexaminable_source`, with `ORIGIN_UNEXAMINABLE_SOURCE` and `intent.value_origin_untrusted`.
+- **What counts as dropped.** Any of the four destination writes refused because the ledger is full (input window, input past the window, result examined, result past the bound).
+- **Extended after review: a write lost to a FAULT counts too.** Examples: a result whose `model_dump` raises, a mis-split span list, a non-string input. Both reviews independently showed that path set no flag and laundered more cheaply. **This extension is mine, for the owner to confirm.**
+- A dropped key-n-gram write stays `ledger_saturated` (visible, non-blocking): the principal's keys, not what anything named.
+- **The laundering strict xfail is CLOSED.** The test now asserts the block.
+
+**False-positive cost, measured before closing it:**
+- 
+- benign documents measured: 768 (456-row corpus, benign_a2a, benign_longform, adversarial benign sets)
+-   that trip write_dropped as a TOOL RESULT: 0 []
+-   that trip write_dropped as an INPUT:      0 []
+- every benign document (540) as tool results in ONE flow: 1,391 distinct destination entries (13.9% of the 10,000 cap), dropped=False. **The measurement above uses a fresh ledger per document, which cannot reach a per-FLOW cap** (milestone review). This one-flow run is the honest bound. Every benign corpus in this repo together uses 13.9% of it.
+- **Not measured:** a crawl-like flow, such as an agent reading many link-heavy pages, could cross 10,000 distinct addresses in one flow. No such corpus exists here. That is the number the owner asked to see before a rule change; it is open.
+
+### Ruling 2: the examined pass, bounded by work
+- **The budget.** A result's EXAMINED pass (up to 64 leaves of 64 KiB) is charged `EXAMINED_WORK_BUDGET = 1,000,000` units per result, at 1/char and 64 per candidate examined, checked per leaf.
+- **When it runs out.** Spending it reads `extraction_incomplete` (visible, no block).
+- **Sizing.** The first value, 2,000,000, measured 263 ms only on the cheapest dense shape. The review found distinct IDN URLs at ~1.0–1.3 s, so it was halved.
+- **Worst case under it, measured:**
+```
+  64 x 64 KiB distinct URLs https://h{i}.co/p                        340 ms
+  64 x 64 KiB distinct IDN URLs https://bücher{i}.de/p               563 ms
+  128 x 64 KiB distinct IDN URLs (examined + past the bound)         826 ms
+  64 x 64 KiB address-dense 'x.co '                                  176 ms
+```
+The worst shape found is 826 ms (128 × 64 KiB of distinct IDN URLs, examined plus past the bound), against ~6 s before. One leaf can overshoot the per-leaf check. Arguments (64 × 4,000-char mailbox lists, 86 ms) and the input (the 64 KiB window plus the atom pass, ~0.28 s on 1 MB) were already small.
+
+### Ruling 1: reused worker threads, STOPPED (a seam change is needed)
+- **Reproduced** on a reused pool thread (user A, then user B): B's call to an address only A typed reads A's authority. Pinned as a strict xfail.
+- **Corrected after review.** Three entries bind or reset a ledger today: `begin_flow()`, `extract_context()`, and the sensor's inbound-A2A entry (`_vo_inbound_a2a`). There is also a per-invocation signal I first missed: the CrewAI `kickoff`/`akickoff`/`kickoff_async` and Agents `Runner.run`/`run_sync` hooks fire on EVERY invocation, but re-bind only when there is input text to scan, so `kickoff(inputs={})` carries A's ledger. **Those framework paths could be fixed within today's seams.** Not shipped on their own, per "do not narrow".
+- **Needs the owner:** a host that never begins a flow gives the sensor NO request-entry signal. The fix is a new entry seam (a request scope), or an S-2/V-27 change so a flow-less call never reads an implicit ledger.
+- **A worse variant** (milestone review), also a strict xfail: `begin_flow` for A without `clear_flow` keeps A's EXPLICIT ledger. An explicit ledger is never replaced, so it survives even B's own input scan.

@@ -140,12 +140,7 @@ def test_input_truncated_is_visible_and_does_not_block():
     assert not should_block(v, mode=Mode.ENFORCE), "owner, 2026-10-05: it no longer blocks"
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "KNOWN GAP under the owner's 2026-10-05 ruling (ledger_saturated does not block): "
-    "a result with enough distinct URLs saturates the 10,000-entry ledger, the whole "
-    "unit -- poison included -- is dropped, and the call to it reads ledger_saturated "
-    "and is ALLOWED. (A 17 KB prompt no longer saturates it: key n-grams have their own "
-    "65,536 budget since 2026-10-06; the 10,000-destination budget is what this hits.)"))
+# Was a strict xfail (KNOWN GAP) until the owner ruled, 2026-10-06: a dropped write BLOCKS.
 def test_a_saturating_result_does_not_launder_its_poison():
     def run():
         vo.bind_fresh_ledger()
@@ -162,7 +157,7 @@ def test_a_saturating_result_does_not_launder_its_poison():
         assert outcome is vo.RecordOutcome.SATURATED, outcome
         return vo.evaluate_call("http_post", {"url": EVIL}, flow_active=True)
     v = _fresh(run)
-    assert v.wire.value == "ledger_saturated", v.wire.value
+    assert v.wire.value == "write_dropped", v.wire.value
     assert should_block(v, mode=Mode.ENFORCE), (
         "a result with enough distinct URLs saturates the ledger, its poison is dropped, "
         "and the call to it is allowed under ENFORCE")

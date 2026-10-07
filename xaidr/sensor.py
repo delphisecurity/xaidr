@@ -497,7 +497,7 @@ def _coerce_scannable(value) -> Optional[str]:
 # ignores the field: milestone review). Withholding applies to EVERY reporter. The
 # sensor names the consumer's vocabulary (Sensor(value_origin_wire=...)):
 #   "v1"  the nine the Brain accepts today -- the DEFAULT, safe to ship now;
-#   "v2"  all fourteen, for once the consumer accepts them;
+#   "v2"  all fifteen, for once the consumer accepts them;
 #   "off" emit nothing.
 # A value outside the active vocabulary is WITHHELD -- the key is absent, as for
 # a sensor that does not report -- and named in a once-per-value warning; it is
@@ -512,7 +512,8 @@ _VO_WIRE_VOCABULARIES = {
     "off": frozenset(),
     "v1": _VO_WIRE_V1,
     "v2": _VO_WIRE_V1 | frozenset({"input_truncated", "argument_bound", "result_truncated",
-                                    "result_unread", "extraction_incomplete"}),
+                                    "result_unread", "extraction_incomplete",
+                                    "write_dropped"}),
 }
 # One tool call's wire value, scoped by @_vo_call_scope around scan_tool_call so
 # every emitter that call reaches -- main, circuit-open, scan-error, fail-closed,
@@ -2495,7 +2496,7 @@ class DelphiSensor:
                         "delphi-sentinel origin/main accepts nine values and stores any other "
                         "as NULL; the Brain deployed on 2026-10-06 (8c01911) does not read the "
                         "field at all. It is still on ScanResult.value_origin. Set "
-                        "value_origin_wire='v2' once the consumer accepts all fourteen.",
+                        "value_origin_wire='v2' once the consumer accepts all fifteen.",
                         self.agent_id, wire, self._vo_wire_name)
         except Exception:
             if not self._vo_emit_fault_logged:

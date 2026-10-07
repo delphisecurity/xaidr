@@ -216,9 +216,9 @@ class AtomBudget:
     """One seam call's WORK budget for the atom pass (owner, 2026-10-06)."""
     __slots__ = ("left", "hit")
 
-    def __init__(self) -> None:
+    def __init__(self, left: "int | None" = None) -> None:
         from ._types import ATOM_WORK_BUDGET
-        self.left = ATOM_WORK_BUDGET
+        self.left = ATOM_WORK_BUDGET if left is None else left
         self.hit = False
 
 

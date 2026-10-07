@@ -72,7 +72,8 @@ ENUMS = {
                   "ledger_absent", "ledger_saturated", "input_truncated",
                   "argument_bound", "result_truncated",        # RULING 1+2 after M8
                   "result_unread",                             # Q18, same ruling
-                  "extraction_incomplete"],                    # work budget, 2026-10-06
+                  "extraction_incomplete",                     # work budget, 2026-10-06
+                  "write_dropped"],                            # a dropped write blocks, 2026-10-06
     "RowState": ["decided", "ran_evidence", "ran_clean", "not_reached", "not_applicable",
                  "not_recorded"],
     "Writer": ["principal", "untrusted"],
@@ -158,7 +159,8 @@ _VERDICT_CASES = [
     ("no_flow", "not_evaluated"), ("ledger_absent", "not_evaluated"),
     ("ledger_saturated", "not_evaluated"), ("input_truncated", "not_evaluated"),
     ("argument_bound", "unresolved"), ("result_truncated", "not_evaluated"),
-    ("result_unread", "not_evaluated"), ("extraction_incomplete", "not_evaluated")]
+    ("result_unread", "not_evaluated"), ("extraction_incomplete", "not_evaluated"),
+    ("write_dropped", "not_evaluated")]
 
 
 def test_the_verdict_table_covers_every_wire_value():
