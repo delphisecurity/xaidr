@@ -357,8 +357,9 @@ def _requires_python_floor():
 # Scope is tests/ + scripts/ + xaidr/, wider than the binary rule above, because
 # a private stdlib import inside the shipped package is strictly worse than one
 # in a test: it breaks a 3.10 USER at import time, where no CI job is watching.
-# Swept at the time of writing — xaidr/ and scripts/ are clean, and the only
-# site in the tree is the one below.
+# Swept at the time of writing — xaidr/ and scripts/ are clean. The sites in the
+# tree are the ones below; the second (test_redos_pattern_audit.py) arrived
+# undeclared and this gate turned all six pytest jobs red on it, as designed.
 
 # Stdlib modules that are private by documentation but not by spelling: no
 # leading underscore to key on. The sre_* trio are the ones our matrix spans —
@@ -382,6 +383,26 @@ _ALLOWED_PRIVATE_STDLIB = {
     ),
     ("test_case_insensitivity_property.py", "sre_parse"): (
         "the 3.10 half of the same guarded import."
+    ),
+    ("test_redos_pattern_audit.py", "re._parser"): (
+        "the regex PARSE TREE, for the same reason as above. The generated-seed "
+        "sweep (test_generated_trigger_growth_is_not_superlinear) walks every "
+        "rule's SubPattern tree to build a trigger-then-whitespace input: it has "
+        "to know which positions are literals, classes, repeats and branches, "
+        "and the compiled Pattern exposes none of that. `re.DEBUG` prints the "
+        "same tree as unversioned text on stdout, which is the private format "
+        "with a parser of our own on top. Guarded, with `sre_parse` on 3.10."
+    ),
+    ("test_redos_pattern_audit.py", "re._constants"): (
+        "the opcodes (LITERAL, IN, BRANCH, MAX_REPEAT, CATEGORY_SPACE, ...) the "
+        "parse tree above is made of. Meaningless without that tree and private "
+        "for the same reason. Guarded, with `sre_constants` on 3.10."
+    ),
+    ("test_redos_pattern_audit.py", "sre_parse"): (
+        "the 3.10 half of the guarded re._parser import."
+    ),
+    ("test_redos_pattern_audit.py", "sre_constants"): (
+        "the 3.10 half of the guarded re._constants import."
     ),
 }
 

@@ -727,3 +727,233 @@ def test_no_rule_uses_an_unbounded_wildcard():
         f"unbounded wildcard in {offenders} — use a bounded, delimiter-excluding "
         f"class such as [^\\n]{{0,200}} so the span cannot be re-split"
     )
+
+
+# ── 7. the shape the battery forgot: a rule's OWN trigger, then whitespace ───
+#
+# THE GAP THIS CLOSES. Sections 1 and 2 above flood each rule with ITS OWN
+# anchors (own-literal-flood / own-literal-wsrun) and with eight generic shapes.
+# None of them is the shape that actually hung four shipped rules: the rule's own
+# TRIGGER PHRASE — enough of its leading literals to get the engine INTO the
+# pattern's ambiguous middle — followed by a long run of whitespace and NOTHING
+# ELSE. The engine enters the middle, the consecutive `\s*`/`\s+`/optional-group
+# /`[:\s]+` quantifiers there each try to eat the whitespace run in many
+# combinations, the trailing required token (a word, a digit, a base64 blob, the
+# second half of a split) never arrives, and the engine backtracks over every
+# partition. That is cubic in the length of the whitespace run, and the existing
+# battery never built it, so all four rules passed sections 1 and 2 while a
+# 4000-character input pinned a core for ~2 minutes.
+#
+# The seed is GENERATED FROM EACH RULE'S OWN PATTERN (never hand-written), so a
+# rule the maintainer of this list forgets to enumerate cannot dodge the check:
+# every rule in ALL_RULES is swept. The generator walks the compiled pattern and
+# emits the longest prefix satisfiable by letters-and-single-spaces — taking the
+# first branch of each required alternation, emitting one space per whitespace
+# quantifier, skipping optional literal groups — and STOPS at the first
+# obligation that whitespace cannot satisfy (a word/digit/base64 class, a `.`,
+# a `[\s\S]`/`[:\s]` wildcard span). That stop point is exactly the mouth of the
+# ambiguous middle, which is where the whitespace flood is then appended.
+#
+# THE SECOND DEFECT IN THE GATE, NAMED. test_growth_is_not_superlinear above is
+# ALSO blind to these four, for two independent reasons, either of which is
+# enough: (a) it is parametrized over a HAND-MAINTAINED list, GROWTH_RULES, that
+# none of the four is on; (b) it measures only the shapes in battery(), which
+# does not include trigger-then-whitespace. So the growth gate reported coverage
+# it was not performing. test_generated_trigger_growth_is_not_superlinear below
+# removes both: it sweeps EVERY rule, on the generated shape, with the same 4x
+# step and ratio ceiling — so growth is now checked where the stopwatch ceiling
+# is, and neither depends on a list a person must remember to edit.
+
+try:                                    # 3.11+: the public-ish home
+    import re._parser as _sre_parse
+    import re._constants as _sre_const
+except ImportError:                     # 3.10 and earlier
+    import sre_parse as _sre_parse      # type: ignore
+    import sre_constants as _sre_const  # type: ignore
+
+_LITERAL = _sre_const.LITERAL
+_IN = _sre_const.IN
+_ANY = _sre_const.ANY
+_BRANCH = _sre_const.BRANCH
+_SUBPATTERN = _sre_const.SUBPATTERN
+_MAX_REPEAT = _sre_const.MAX_REPEAT
+_MIN_REPEAT = _sre_const.MIN_REPEAT
+_AT = _sre_const.AT
+_CATEGORY = _sre_const.CATEGORY
+_CAT_SPACE = _sre_const.CATEGORY_SPACE
+_CAT_NOT_SPACE = _sre_const.CATEGORY_NOT_SPACE
+
+_GEN_STOP = object()
+
+
+def _member_is_space(op, av):
+    return (op == _CATEGORY and av == _CAT_SPACE) or (op == _LITERAL and chr(av) in " \t")
+
+
+def _class_is_pure_space(items):
+    return all(_member_is_space(op, av) for op, av in items) and bool(items)
+
+
+def _class_mixes_space_and_nonspace(items):
+    has_space = any(_member_is_space(op, av) for op, av in items)
+    has_not_space = any(op == _CATEGORY and av == _CAT_NOT_SPACE for op, av in items)
+    if has_space and has_not_space:                       # [\s\S]
+        return True
+    if has_space and any(not _member_is_space(op, av) for op, av in items):
+        return True                                       # [:\s] and friends
+    return False
+
+
+def _seq_is_pure_space(seq):
+    for op, av in seq:
+        if op in (_MAX_REPEAT, _MIN_REPEAT):
+            if not _seq_is_pure_space(av[2]):
+                return False
+        elif op == _IN:
+            if not _class_is_pure_space(av):
+                return False
+        elif op == _LITERAL and chr(av) in " \t":
+            continue
+        elif op == _SUBPATTERN:
+            if not _seq_is_pure_space(av[3]):
+                return False
+        else:
+            return False
+    return True
+
+
+def _seq_has_wildcard(seq):
+    for op, av in seq:
+        if op == _ANY:
+            return True
+        if op == _IN and _class_mixes_space_and_nonspace(av):
+            return True
+        if op in (_MAX_REPEAT, _MIN_REPEAT) and _seq_has_wildcard(av[2]):
+            return True
+        if op == _SUBPATTERN and _seq_has_wildcard(av[3]):
+            return True
+        if op == _BRANCH and any(_seq_has_wildcard(alt) for alt in av[1]):
+            return True
+    return False
+
+
+def _walk_to_ambiguous_middle(seq, out):
+    for op, av in seq:
+        if op == _LITERAL:
+            out.append(chr(av))
+        elif op == _AT:                     # ^ $ \b — zero width, carry on
+            continue
+        elif op == _IN:
+            if _class_is_pure_space(av):
+                out.append(" ")
+            else:
+                return _GEN_STOP            # required non-whitespace class
+        elif op in (_MAX_REPEAT, _MIN_REPEAT):
+            mn, mx, sub = av
+            if _seq_is_pure_space(sub):
+                out.append(" ")             # satisfy minimally, keep descending
+                continue
+            if _seq_has_wildcard(sub):
+                return _GEN_STOP            # the payload/wildcard span starts here
+            if mn == 0:
+                continue                    # optional literal group — the engine skips it too
+            return _GEN_STOP                # required non-ws repeat (\w+, [A-Za-z]{8,})
+        elif op == _SUBPATTERN:
+            if _walk_to_ambiguous_middle(av[3], out) is _GEN_STOP:
+                return _GEN_STOP
+        elif op == _BRANCH:
+            if _walk_to_ambiguous_middle(av[1][0], out) is _GEN_STOP:
+                return _GEN_STOP
+        elif op == _ANY:
+            return _GEN_STOP
+        else:
+            return _GEN_STOP
+    return None
+
+
+def generated_trigger_seed(pattern_str):
+    """The rule's own trigger phrase, derived from its pattern. ``None`` when the
+    pattern has no leading literal to key on (nothing to flood behind)."""
+    try:
+        parsed = _sre_parse.parse(pattern_str, re.IGNORECASE)
+    except re.error:
+        return None
+    out = []
+    _walk_to_ambiguous_middle(parsed, out)
+    seed = "".join(out)
+    return seed if seed.strip() else None
+
+
+def _trigger_then_whitespace(rule, n):
+    """Seed generated from THIS rule's pattern, then ``n`` spaces and nothing
+    else. ``None`` for detector rules and seedless patterns."""
+    if rule["pattern"] is None:
+        return None
+    seed = generated_trigger_seed(rule["pattern"].pattern)
+    if seed is None:
+        return None
+    return seed + " " * n
+
+
+# n is deliberately far below AUDIT_N (20_000). On a pattern that IS cubic in the
+# whitespace length, 20_000 does not fail the test — it hangs it, for minutes, on
+# a single uninterruptible re.search (see l1.py: a C-level search cannot be
+# cut short). 1500 is two orders past where the signal is unmistakable — the four
+# rules this test was written for read 0.3–0.8s here and single-digit ms once
+# fixed — and it keeps a RED run to seconds instead of a wedged machine.
+GEN_TRIGGER_N = 1500
+GEN_TRIGGER_CEILING_SEC = 0.10
+
+
+def test_every_rule_bounded_on_its_own_trigger_then_whitespace():
+    """Each rule's OWN trigger phrase + a whitespace run. The shape that hung
+    LLM01_persona_expanded, LLM01_fake_authority_marker,
+    LLM01_decode_execute_expanded and LPCI_S6_split_payload, swept across every
+    rule so a forgotten one cannot slip through."""
+    slow = []
+    for rule in ALL_RULES:
+        text = _trigger_then_whitespace(rule, GEN_TRIGGER_N)
+        if text is None:
+            continue
+        elapsed = _run(rule, text)
+        if elapsed > GEN_TRIGGER_CEILING_SEC:
+            slow.append((rule["id"], round(elapsed, 3),
+                         repr(generated_trigger_seed(rule["pattern"].pattern))))
+    assert not slow, (
+        f"{len(slow)} rule(s) exceeded {GEN_TRIGGER_CEILING_SEC}s on their own "
+        f"trigger phrase followed by {GEN_TRIGGER_N} spaces — super-linear "
+        f"backtracking over the whitespace run: "
+        f"{sorted(slow, key=lambda x: -x[1])}"
+    )
+
+
+GEN_SMALL_N = 300
+GEN_LARGE_N = 1200
+GEN_GROWTH_RATIO = 8.0
+GEN_FLOOR_SEC = 0.002
+
+
+def test_generated_trigger_growth_is_not_superlinear():
+    """The growth gate, applied where test_growth_is_not_superlinear was blind:
+    every rule, on its own generated trigger+whitespace shape, 4x step. Linear is
+    ~4; the four shipped offenders read 24x–62x here. No hand-maintained rule
+    list and no fixed battery, so neither (a) a rule missing from GROWTH_RULES nor
+    (b) a shape missing from battery() can hide a cubic rule from the growth
+    check again."""
+    bad = []
+    for rule in ALL_RULES:
+        small = _trigger_then_whitespace(rule, GEN_SMALL_N)
+        large = _trigger_then_whitespace(rule, GEN_LARGE_N)
+        if small is None:
+            continue
+        t_small = max(_run(rule, small), GEN_FLOOR_SEC)
+        t_large = _run(rule, large)
+        ratio = t_large / t_small
+        if ratio > GEN_GROWTH_RATIO:
+            bad.append((rule["id"], round(ratio, 1),
+                        f"{t_small*1000:.1f}ms->{t_large*1000:.1f}ms"))
+    assert not bad, (
+        f"{len(bad)} rule(s) grew faster than {GEN_GROWTH_RATIO}x for a 4x larger "
+        f"whitespace run on their own trigger shape (linear is ~4): "
+        f"{sorted(bad, key=lambda x: -x[1])}"
+    )
