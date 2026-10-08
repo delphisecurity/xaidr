@@ -1,37 +1,26 @@
-"""Repetition detection as a COUNTING problem, not a backtracking problem.
+"""Repetition detection as a COUNTING problem.
 
-WHY THIS MODULE EXISTS. ``LLM04_phrase_repeat_overflow`` was written as
+WHAT THIS MODULE ANSWERS. The ``phrase_repeat`` detector, which the
+``LLM04_phrase_repeat``, ``LLM04_phrase_repeat_overflow`` and
+``LLM04_repeat_loop`` rules name in place of a regex, asks one question: is
+there a unit of ``min_unit``-``max_unit`` characters repeated at least
+``min_repeats`` times in a row? That is a question about PERIODICITY, and
+periodicity is decidable in a single linear pass per period, because nothing is
+ever re-scanned.
 
-    (.{5,50})\\s*(?:\\1\\s*){20,}
-
-and that pattern is a catastrophic backtracker. The capture ``.{5,50}`` gives the
-engine 46 candidate unit lengths at every start offset, and inside the repeat
-group ``\\1`` sits directly beside ``\\s*``. When the text is whitespace, ``\\1``
-and ``\\s*`` match the SAME characters, so every repeat can be split many ways and
-the splits multiply: 103 spaces matched in microseconds, 104 spaces did not finish
-in 60 seconds. Measured on this tree, a 105-character input (104 spaces and one
-'!') pinned a core indefinitely on the content path AND the tool-argument path.
-
-A length cap cannot help — the trigger is structure, not size — and a watchdog
-timeout must not be used either, because this scanner FAILS OPEN: an unexpected
-fault returns ``allowed`` with a ``SCAN_FAILED_OPEN`` signal (sensor._emit_scan_
-error). A per-scan timeout would therefore convert the hang into a CLEAN ALLOW
-that an attacker triggers by appending 104 spaces to any payload — a total
-detection bypass, strictly worse than the DoS.
-
-So the pattern is replaced by what it was always trying to express. "Is there a
-unit of 5-50 characters repeated at least 21 times in a row" is a question about
-PERIODICITY, and periodicity is decidable in a single linear pass per period with
-no backtracking surface at all, because nothing is ever re-scanned.
+The shape is deliberate. It is not a regex, and it is not a regex behind a
+timeout either: this scanner FAILS OPEN on an unexpected fault (``allowed`` with
+a ``SCAN_FAILED_OPEN`` signal, sensor._emit_scan_error), so a timeout would turn
+a slow scan into a clean allow. A detector whose cost depends on input length
+alone needs neither.
 
 THE ALGORITHM, and why it is exact.
 
-  1. Whitespace runs collapse to a single space. That is what the rule's ``\\s*``
-     was expressing — repeats separated by "any run of whitespace" — and once the
-     separator is uniform, "unit repeated with whitespace between" becomes plain
-     periodicity. It is also what removes the ambiguity that caused the blowup:
-     after collapsing, no character can be claimed by both the unit and the
-     separator.
+  1. With ``collapse_whitespace`` set, as it is for
+     ``LLM04_phrase_repeat_overflow``, whitespace runs collapse to a single
+     space. That rule's repeats may be separated by any run of whitespace, and
+     once the separator is uniform, "unit repeated with whitespace between"
+     becomes plain periodicity.
 
   2. For each period p in [5, 50], walk a GRID of p-sized blocks and count
      consecutive equal neighbours: ``s[j:j+p] == s[j+p:j+2p]`` for j = 0, p, 2p …
@@ -63,8 +52,9 @@ import re
 # no group, no adjacent quantifier — the one shape that cannot backtrack.
 _WS_RUN = re.compile(r"\s+")
 
-# Defaults mirror the retired pattern exactly: a unit of 5-50 characters, and
-# `\1` once plus `{20,}` more = 21 occurrences.
+# Defaults are LLM04_phrase_repeat_overflow's: a unit of 5-50 characters
+# occurring at least 21 times in a row. The other phrase_repeat rules pass
+# their own values in detector_params.
 MIN_UNIT = 5
 MAX_UNIT = 50
 MIN_REPEATS = 21
@@ -140,24 +130,22 @@ def find_phrase_repeat(
     """Return the repeated span when ``text`` repeats a ``min_unit``-``max_unit``
     character unit at least ``min_repeats`` times in a row, else ``None``.
 
-    ``collapse_whitespace`` reproduces the retired pattern's ``\\s*`` BETWEEN
-    repeats and must match the rule being replaced. It is True for
-    ``LLM04_phrase_repeat_overflow`` — whose ``(?:\\1\\s*){20,}`` allowed a
-    whitespace run before every repeat — and False for ``LLM04_phrase_repeat``,
-    whose ``\\1{15,}`` allowed none, so that rule keeps requiring the copies to be
-    contiguous. Getting this backwards silently changes what each rule detects,
-    which is why it is a parameter and not a constant.
+    ``collapse_whitespace`` decides whether a run of whitespace may sit BETWEEN
+    repeats, and must match the rule using the detector. It is True for
+    ``LLM04_phrase_repeat_overflow``, whose repeats may be separated by any run
+    of whitespace, and False for ``LLM04_phrase_repeat`` and
+    ``LLM04_repeat_loop``, whose copies must be contiguous. Getting this
+    backwards silently changes what each rule detects, which is why it is a
+    parameter and not a constant.
 
-    ``allow_newline_in_unit`` reproduces the other half of the retired patterns'
-    semantics, and it is not cosmetic. Python's ``.`` does not match a newline
-    without DOTALL, so ``(.{10,1000})\\1{4,}`` could never see a repeated unit
-    that spanned a line break. Ignoring that made the replacement fire on 729 of
-    4000 randomised inputs the regex rejected — repeated LINES, which is what a
-    CSV, a log file or a JSON array looks like. Setting this False confines the
-    search to one line at a time and restores the original behaviour exactly.
-    ``LLM04_phrase_repeat_overflow`` keeps it True on purpose: its ``\\s*`` sat
-    between the repeats and absorbed newlines, so for that rule crossing a line
-    break was always allowed.
+    ``allow_newline_in_unit`` decides whether a repeated unit may span a line
+    break, and it is not cosmetic. Set False, the search runs one line at a
+    time, so repeated LINES are not a repeated unit; that is what a CSV, a log
+    file or a JSON array looks like, and ``LLM04_phrase_repeat`` and
+    ``LLM04_repeat_loop`` set it False so they do not fire on ordinary
+    structured text. ``LLM04_phrase_repeat_overflow`` keeps it True on purpose:
+    its separator is any run of whitespace, newlines included, so for that rule
+    a match may cross a line break.
 
     Linear in the input for every input. Never raises on odd input; a non-string
     or an empty string is simply not a repetition.

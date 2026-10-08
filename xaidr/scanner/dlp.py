@@ -91,12 +91,10 @@ DLP_PATTERNS = [
         "validate": "luhn",
     },
     {
-        # Bulk-email exfiltration. The old pattern repeated an email-shaped group
-        # `(?:…@…){3,}` with UNBOUNDED inner `+` quantifiers — O(n^2) on long
-        # word-char runs (a ReDoS; ~37s at a 100k cap). Replaced with a single,
-        # provably-linear email regex (bounded quantifiers) matched via findall +
-        # a count threshold: 3+ distinct email matches => bulk. Same intent, no
-        # catastrophic backtracking.
+        # Bulk-email exfiltration. One email regex whose every quantifier is
+        # bounded, matched via findall, plus a count threshold: 3+ distinct
+        # email matches => bulk. The shape is deliberate; keep the quantifiers
+        # bounded.
         "id": "DLP_email_bulk",
         "pattern": re.compile(
             r"\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,255}\.[A-Za-z]{2,24}\b",
