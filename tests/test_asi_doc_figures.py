@@ -38,6 +38,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.asi_battery  # every test here reads asi_battery/
+
 REPO = Path(__file__).resolve().parent.parent
 BATTERY = REPO / "asi_battery"
 BOUNDARY_GAP = BATTERY / "BOUNDARY_GAP.md"

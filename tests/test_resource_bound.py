@@ -84,6 +84,7 @@ def test_removed_bound_shapes_fire(args, rule):
     assert rule in {f["rule"] for f in scan("some_tool", args)}, args
 
 
+@pytest.mark.asi_battery
 def test_battery_resource_tool_calls_are_caught():
     """Every ASI04 tool-call attack in the held-out battery. All four declare a
     bound and then remove it; none of them is caught by magnitude."""
@@ -93,6 +94,7 @@ def test_battery_resource_tool_calls_are_caught():
         assert scan(a["tool"], a["args"]), f"{i} not caught: {a['args']}"
 
 
+@pytest.mark.asi_battery
 def test_battery_resource_prose_directives_are_caught():
     """The input/a2a half, end to end through the sensor."""
     s = _sensor()
@@ -164,6 +166,7 @@ def test_the_seventeen_high_volume_calls_are_silent_end_to_end():
         assert r.action == "allowed", (i, e["tool"], r.action, r.score, sorted(r.rules))
 
 
+@pytest.mark.asi_battery
 def test_battery_benign_mirror_is_clean():
     s = _sensor()
     for b in _jsonl("asi_battery/benign.jsonl"):
@@ -281,6 +284,7 @@ def test_discriminator_pool_flags_only_the_named_residual():
         f"it from G4_KNOWN_RESIDUAL. fired={sorted(fired)}")
 
 
+@pytest.mark.asi_battery
 def test_the_discriminator_exclusions_did_not_cost_a_catch():
     """The discriminating direction: the four battery tool-call attacks whose
     bound is removed must still fire after the exclusions above. A pool that
@@ -304,6 +308,7 @@ def test_the_discriminator_exclusions_did_not_cost_a_catch():
     "benign hits across 536 committed benign texts. Recursive fan-out is "
     "OBSERVED, not declared -- the delegation-rate circuit breaker's territory."))
 @pytest.mark.parametrize("case_id", ["EXH-A04", "EXH-A11"])
+@pytest.mark.asi_battery
 def test_residual_a2a_amplification(case_id):
     s = _sensor()
     attacks = {a["id"]: a for a in _jsonl("asi_battery/attacks.jsonl")}
@@ -315,6 +320,7 @@ def test_residual_a2a_amplification(case_id):
     "EXH-A07 is a delegation LOOP: A hands to B, B hands back to A. Each "
     "message is a plain bounded handoff and the harm is only in the pair, so no "
     "per-message detector reaches it. Circuit-breaker territory (opt-in)."))
+@pytest.mark.asi_battery
 def test_residual_sequence_delegation_loop():
     s = _sensor()
     attacks = {a["id"]: a for a in _jsonl("asi_battery/attacks.jsonl")}
@@ -352,6 +358,7 @@ def test_real_benign_prompts_that_broke_the_first_draft(text, why):
         s.scan(text, direction="input").rules), why
 
 
+@pytest.mark.asi_battery
 def test_the_exclusions_did_not_cost_a_catch():
     """The other half of the same change: all five input-boundary ASI04 attacks
     are still caught after the three exclusions above."""
@@ -373,6 +380,7 @@ def test_purpose_clause_is_not_non_termination():
             s.scan(text, direction="input").rules), text
 
 
+@pytest.mark.asi_battery
 def test_sequence_delegation_loop_is_not_claimed():
     """EXH-A07 (A delegates to B, B delegates back to A) has no per-message
     tell: each message is a plain, bounded handoff. It is the circuit breaker's

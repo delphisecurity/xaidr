@@ -286,7 +286,8 @@ def test_the_sensitivity_marker_is_deliberately_not_vetoed():
 # ASI/LPCI categories to GATED_CATEGORIES moved 0 of 78 pool sentences. A set
 # membership that changes nothing reads as coverage while providing none, which
 # is the thing tests/test_inert_stubs_audit.py exists to prevent, so these three
-# were narrowed at the pattern instead. Each carries its _was/_why_changed.
+# were narrowed at the pattern instead. The tests below are the record of that
+# deviation from upstream: a re-sync that reverts a narrowing turns them red.
 #
 # NEITHER HALF ALONE IS WORTH ANYTHING. A narrowing that stops the false
 # positive by also stopping the attack is not a fix, and an attack case that
@@ -333,17 +334,6 @@ def test_narrowed_rule_still_catches_its_attack(rule, benign, attack):
     assert _quiet(_sensor().scan, attack, direction="input").action == "blocked"
 
 
-@pytest.mark.parametrize("rule,benign,attack", NARROWED, ids=[n[0] for n in NARROWED])
-def test_the_narrowing_is_recorded_in_the_ruleset(rule, benign, attack):
-    """_was/_why_changed is how a deviation from upstream survives a re-sync.
-    Without it the next person to diff against upstream reverts this."""
-    raw = _raw_rule(rule)
-    assert "_was" in raw and "_why_changed" in raw, rule
-    assert raw["_was"] != raw["pattern"]
-    assert "gat" in raw["_why_changed"].lower(), (
-        "the reason must say why gating was not the instrument")
-
-
 def test_gating_these_categories_would_have_been_inert():
     """The measurement that decided narrowing over gating, kept executable.
 
@@ -354,17 +344,6 @@ def test_gating_these_categories_would_have_been_inert():
     for _, benign, _ in NARROWED:
         assert is_descriptive(benign) is False, (
             f"a frame now fires on {benign!r}; gating may be viable after all")
-
-
-def _raw_rule(rule_id):
-    import json
-    import os
-    path = os.path.join(os.path.dirname(l1.__file__), "..", "rules", "all-l1-rules.json")
-    with open(path, encoding="utf-8") as fh:
-        for r in json.load(fh):
-            if r.get("id") == rule_id:
-                return r
-    raise AssertionError(f"{rule_id} not in the shipped ruleset")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

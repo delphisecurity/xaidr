@@ -402,6 +402,7 @@ def test_the_readme_table_titles_are_the_official_owasp_titles(readme_rows):
     assert seen == set(OFFICIAL_TITLES), sorted(seen)
 
 
+@pytest.mark.asi_battery
 def test_the_battery_quotes_the_official_definitions(battery_readme):
     """THE ONE THAT WOULD HAVE CAUGHT F9.
 
@@ -432,6 +433,7 @@ def test_the_battery_quotes_the_official_definitions(battery_readme):
         )
 
 
+@pytest.mark.asi_battery
 def test_every_battery_category_is_an_owasp_id_or_a_declared_exception(
     battery_cases, battery_readme
 ):
@@ -458,6 +460,7 @@ def test_every_battery_category_is_an_owasp_id_or_a_declared_exception(
         )
 
 
+@pytest.mark.asi_battery
 def test_the_published_case_counts_equal_the_files(battery_cases, battery_readme):
     """Rule (d) of F9: no quietly smaller denominator.
 
@@ -489,6 +492,7 @@ def test_the_published_case_counts_equal_the_files(battery_cases, battery_readme
     )
 
 
+@pytest.mark.asi_battery
 def test_a_thin_category_is_named_as_thin(battery_cases):
     """A denominator below twelve has to be stated, not merely survivable.
 
@@ -511,6 +515,7 @@ def test_a_thin_category_is_named_as_thin(battery_cases):
         )
 
 
+@pytest.mark.asi_battery
 def test_the_results_table_denominators_equal_the_files(battery_cases):
     """The `n` column of RESULTS.md's per-category table is the real count.
 

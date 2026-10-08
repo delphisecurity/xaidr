@@ -142,9 +142,7 @@
     "category": "out",
     "severity": "critical",
     "owasp": "LLM02",
-    "description": "SQL injection pattern in output",
-    "_was": "\\bDROP\\s+TABLE|DELETE\\s+FROM|UNION\\s+SELECT|INSERT\\s+INTO\\s+.*VALUES",
-    "_why_changed": "Unbounded .* between two anchors is quadratic per start position (the engine runs it to end-of-text and backtracks, at every offset). Bounded to a single-line span; every real instance of this phrasing sits well inside the bound."
+    "description": "SQL injection pattern in output"
   },
   {
     "id": "OUT_code_destructive",
@@ -171,10 +169,7 @@
     "category": "out",
     "severity": "critical",
     "owasp": "LLM02",
-    "description": "Curl-to-shell piping in output",
-    "_was": "\\bcurl\\s+.*\\|\\s*(?:bash|sh|zsh)\\b",
-    "_why_changed": "Unbounded .* before the pipe: on 'curl ' repeated through a 100k input the engine ran .* to end-of-text and backtracked, at every start \u2014 2.8s for one rule. The negated class excludes '|' itself, so the greedy run stops exactly at the pipe and there is no split to retry. Same idiom LLM08_pipe_exec already uses.",
-    "_bounds_tightened": "Cost of this shape is (start positions x wildcard bound); with the leading verb repeated through a 100k input the bound is the only lever. Tightened to keep one rule's worst case in the low hundreds of ms; still spans any real single-command invocation."
+    "description": "Curl-to-shell piping in output"
   },
   {
     "id": "OUT_code_reverse_shell",
