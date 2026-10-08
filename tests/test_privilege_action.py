@@ -45,6 +45,7 @@ def test_subversion_shapes_fire(args, rule):
     assert rule in rules, (args, rules)
 
 
+@pytest.mark.asi_battery
 def test_battery_privileged_shapes_are_caught():
     """Every ASI battery tool-call step tagged as a privilege shape fires, with
     the sole documented exception of crypto-mining (a workload denylist, not a
@@ -93,6 +94,7 @@ def test_discriminator_corpus_is_clean():
         "the privilege detector fired on benign traffic:\n  " + "\n  ".join(fp))
 
 
+@pytest.mark.asi_battery
 def test_battery_benign_mirror_privileged_actions_are_clean():
     for b in _jsonl("asi_battery/benign.jsonl"):
         calls = b["steps"] if b["boundary"] == "sequence" else [b]

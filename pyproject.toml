@@ -176,6 +176,8 @@ packages = ["xaidr"]
 # --- Sdist: the package, the pools, and the scripts that regenerate figures ---
 #
 # THE SDIST SHIPS THE CORPORA AND THE REGENERATORS. THIS IS A DECISION.
+# Narrowed after 1.20.0: asi_battery/ and heldout/ no longer ship. See EXCEPT
+# below.
 #
 # It used to be `include = ["xaidr", "README.md", "pyproject.toml"]`, and that
 # list is wrong in two separate ways.
@@ -218,13 +220,32 @@ packages = ["xaidr"]
 # the dump, on purpose: checking out each version and running its own pools
 # compares two pools as well as two sensors. Shipping the pools here does not
 # change that separation. It changes where the pool half can come from — an
-# `sdist` downloaded from PyPI, not only a GitHub clone.
+# `sdist` downloaded from PyPI, not only a GitHub clone. NO LONGER TRUE after
+# 1.20.0: corpus_diff.py reads asi_battery/ and heldout/ as well, so its pool
+# half comes from a clone only. See THE COST below.
 #
-# DISCLOSURE: asi_battery/attacks.jsonl and heldout/attacks.jsonl are attack
-# corpora. They are already public — the repository is public and the README
-# links into it by path — so this publishes nothing new. It makes the README's
-# "the per-entry detail ... ships with the repository" true of the distribution
-# as well.
+# DISCLOSURE — SUPERSEDED, see the next paragraph. This argued that shipping
+# asi_battery/ and heldout/ published nothing new because the repository is
+# public. Both directories are now excluded from the sdist.
+#
+# EXCEPT /asi_battery, /heldout AND /docs/releasing.md, WHICH ARE EXCLUDED.
+# Decided after 1.20.0. They are maintainer material (the battery's gap analysis
+# and results, the held-out results, the release runbook), and an upload to PyPI
+# cannot be amended afterwards. They stay in the repository.
+#
+# THE COST, STATED. The regenerators that read those pools (asi_battery_report.py,
+# heldout_report.py and others in scripts/) still ship, without the pools, so
+# the ASI-battery and held-out figures reproduce from a clone and not from the
+# sdist. Two scripts lose more than that: corpus_diff.py and fail_closed_cost.py
+# read every pool, these two included, so they cannot run against an extracted
+# sdist at all, not even for the benign pools that do ship. Tests that read asi_battery/ carry the `asi_battery` marker and skip in
+# an extracted sdist (tests/conftest.py); the rest of tests/ runs there as before.
+# tests/test_sdist_contents.py pins both halves: what must ship, and that these
+# three do not.
+#
+# They are named in `exclude`, not just dropped from `include`, because in
+# hatchling an exclude beats an include: re-adding "/asi_battery" to the list
+# below does not put it back. Verified by building with it in both lists.
 #
 # _phase1/ is dev oracles/verification scaffolding — kept in the repo, kept OUT
 # of the distribution.
@@ -236,12 +257,10 @@ include = [
     "/scripts",
     "/tests",
     "/repro_audit.py",
-    # the committed pools every published figure is measured over
-    "/asi_battery",
+    # the committed benign pools (asi_battery/ and heldout/ are excluded below)
     "/benign_a2a",
     "/benign_longform",
     "/benign_toolcalls",
-    "/heldout",
     # prose that states the figures, so a reader of the sdist can find the claim
     # the regenerator answers
     "/docs",
@@ -253,4 +272,13 @@ include = [
     "/CODE_OF_CONDUCT.md",
     "/pyproject.toml",
 ]
-exclude = ["_phase1", "**/__pycache__", "*.pyc", "**/.pytest_cache"]
+exclude = [
+    # maintainer material, kept in the repository and out of the distribution
+    "/asi_battery",
+    "/heldout",
+    "/docs/releasing.md",
+    "_phase1",
+    "**/__pycache__",
+    "*.pyc",
+    "**/.pytest_cache",
+]

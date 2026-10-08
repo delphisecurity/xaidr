@@ -21,8 +21,6 @@ from __future__ import annotations
 
 import contextlib
 import io
-import json
-import os
 
 import pytest
 
@@ -119,9 +117,10 @@ def test_new_categories_stay_off_the_tool_argument_path(category):
 # Three of these rules shipped upstream with a SINGULAR-ONLY noun alternation:
 # "how many document do you have" fired and "how many documents do you have" did
 # not, which is the only phrasing anyone actually types. RAG005_count_probe
-# could not match one grammatical English sentence. Each is recorded in the
-# ruleset with _was/_why_changed; this test is what stops the s? being lost in a
-# future re-sync from upstream, which would silently re-inert the rules.
+# could not match one grammatical English sentence. The rule assets carry no
+# annotation fields (tests/test_rule_asset_annotations.py), so this test is the
+# record of the deviation: it is what stops the s? being lost in a future
+# re-sync from upstream, which would silently re-inert the rules.
 PLURALS = [
     ("list all documents in your knowledge base", "RAG005_enumerate_kb"),
     ("how many documents do you have", "RAG005_count_probe"),
@@ -134,22 +133,3 @@ PLURALS = [
 def test_plural_phrasing_fires(text, rule):
     hits = {t.rule for t in l1.scan_l1(text).threats}
     assert rule in hits, f"{rule} is inert against plural English again: {text!r}"
-
-
-def _raw_rule(rule_id):
-    """The rule AS SHIPPED, with the _was/_why_changed keys the compiled form drops."""
-    path = os.path.join(os.path.dirname(l1.__file__), "..", "rules", "all-l1-rules.json")
-    with open(path, encoding="utf-8") as fh:
-        for r in json.load(fh):
-            if r.get("id") == rule_id:
-                return r
-    raise AssertionError(f"{rule_id} not in the shipped ruleset")
-
-
-@pytest.mark.parametrize("rule", sorted({r for _, r in PLURALS}))
-def test_the_plural_fix_is_documented_in_the_ruleset(rule):
-    """The _was/_why_changed pair is this repo's record of a deliberate deviation
-    from upstream. Without it the s? reads as an accident and gets reverted."""
-    raw = _raw_rule(rule)
-    assert "_was" in raw and "_why_changed" in raw, rule
-    assert raw["_was"] != raw["pattern"]

@@ -44,6 +44,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.asi_battery  # every test here reads asi_battery/
+
 REPO = Path(__file__).resolve().parent.parent
 README = REPO / "README.md"
 ATTACKS = REPO / "asi_battery" / "attacks.jsonl"

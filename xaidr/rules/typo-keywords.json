@@ -1,5 +1,4 @@
 {
-  "_comment": "Security keywords for Damerau-Levenshtein typo normalization (Phase 13). Each token in the input text is checked against these keywords. If DL distance <= 1, the token is replaced with the canonical keyword before L1 regex scan.",
   "version": "1.0.0",
   "keywords": {
     "tier_a_injection_verbs": [

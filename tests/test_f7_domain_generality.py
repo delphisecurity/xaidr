@@ -160,6 +160,7 @@ def test_a_quantity_and_a_wait_are_not_removed_ceilings(case_id, args):
 
 # ── the discriminating direction: none of the five cost a catch ──────────────
 
+@pytest.mark.asi_battery
 def test_the_narrowings_did_not_cost_a_battery_catch():
     """A pool that goes clean because the detector went quiet is not a result.
     Every privilege- and resource-shaped tool-call attack in the battery, after

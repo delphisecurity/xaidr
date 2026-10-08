@@ -46,6 +46,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.asi_battery  # every test here reads asi_battery/
+
 REPO = Path(__file__).resolve().parent.parent
 BATTERY = REPO / "asi_battery"
 POOLS = ("attacks.jsonl", "benign.jsonl")
@@ -101,10 +103,12 @@ def _walk():
     artifact, and the fix would be to re-run a script rather than to correct a
     claim — so it is noise, and a gate that cries about noise gets muted.
 
-    The fallback matters because this branch ships `tests/` inside the sdist,
-    so this gate can run from an EXTRACTED SDIST with no git index and no git
-    binary. There are no run outputs there either, so the plain walk has the
-    same scope in that setting. Same shape, and for the same reason, as
+    The fallback was written for an EXTRACTED SDIST, which ships `tests/` with
+    no git index and no git binary. That no longer applies: asi_battery/ stopped
+    shipping in the sdist after 1.20.0, so this file is marked `asi_battery` and
+    skips there. The fallback now covers a git-less export of the repository
+    (`git archive`, say), which has the pools and no index. There are no run
+    outputs there either, so the plain walk has the same scope. Same shape as
     `tests/test_sdist_contents.py::_tracked_files`.
 
     Either way `scanned` asserts the result is not small, so neither path can

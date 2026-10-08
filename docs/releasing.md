@@ -78,12 +78,20 @@ three more — five pool directories present by name, holding no data. Reading
 that listing is how the 1.16.0 body concluded the pools shipped "measured from
 the built files".
 
-The sdist now carries `/xaidr`, `/scripts`, `/tests`, `/docs`, the five pool
-directories and the root prose, every pattern anchored with a leading `/`. So a
-U-1 regenerator can be run from a downloaded artifact and not only from a
-clone, which is what "verified from the built artifact" has to mean.
-`tests/test_sdist_contents.py` builds one and reads the tarball; CI runs it in
-the `rules-in-wheel guard` job against the sdist that job already built.
+The sdist carries `/xaidr`, `/scripts`, `/tests`, `/docs`, the three benign
+pool directories and the root prose, every pattern anchored with a leading `/`.
+**Through 1.20.0 it also carried `asi_battery/` and `heldout/`; it no longer
+does.** Those two, and this file, are excluded as maintainer material, and
+`pyproject.toml` records the reasoning and the cost. So a U-1 regenerator can be
+run from a downloaded artifact and not only from a clone, which is what
+"verified from the built artifact" has to mean, for the pools that ship. The
+ASI-battery and held-out figures reproduce from a clone only, and so does
+everything `scripts/corpus_diff.py` and `scripts/fail_closed_cost.py` print:
+both read every pool, those two included, so neither runs against the sdist.
+`tests/test_sdist_contents.py`
+builds one and reads the tarball in both directions (what must ship, and what
+must not); CI runs it in the `rules-in-wheel guard` job against the sdist that
+job already built.
 
 ```
 git clone --branch "v$VERSION" --single-branch . /tmp/rel && cd /tmp/rel
@@ -140,9 +148,11 @@ pins both halves.
 Every check in step 3 asks whether the artifact works. None of them asks what
 text it carries, and a wheel can pass all of them while shipping a fix's trigger
 phrase, its timing, or a versions-affected line to PyPI. Data files are where
-that hides: a `_why_changed`, a `description` or a corpus label is reviewed as
-prose by nobody and ships verbatim. Run this against the wheel you just built,
-before anything is pushed or uploaded:
+that hides: a `description` or a corpus label is reviewed as prose by nobody and
+ships verbatim. (Free-text annotation keys in the rule JSONs were a third place
+until `tests/test_rule_asset_annotations.py` began refusing any `_`-prefixed key
+in them.) Run this against the wheel you just built, before anything is pushed
+or uploaded:
 
 ```
 W=/tmp/rel/dist/xaidr-$VERSION-py3-none-any.whl
@@ -167,10 +177,11 @@ echo "SHIPPED TEXT: clean"
   clean. Blank lines are stripped first because `grep -F -f` treats an empty
   pattern as matching every line, and a gate that always refuses gets
   ignored.
-- **It reads the wheel and not the sdist.** The sdist carries the attack pools
-  and the tests by design. The wheel is what `pip install` puts on a machine,
-  and its non-`.py` files include `METADATA`, which is the README text on the
-  PyPI page.
+- **It reads the wheel and not the sdist.** The sdist carries the tests, and
+  the attack strings in their fixtures, by design (`asi_battery/` and
+  `heldout/` no longer ship in it). The wheel is what `pip install` puts on a
+  machine, and its non-`.py` files include `METADATA`, which is the README text
+  on the PyPI page.
 - **`vulnerability` on its own is not in the pattern**, because the README's
   reporting policy uses the word. A hit means stop: rewrite the text in the
   tree so it describes the fix and not the trigger, then rebuild from step 3.
