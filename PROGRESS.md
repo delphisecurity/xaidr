@@ -3272,3 +3272,72 @@ the EXAMINED pass under EXAMINED_WORK_BUDGET (2,000,000 units), one result:
 
 ### Ruling 3
 The Splunk TA's "Targets 0.2.0" is LEFT, and recorded in the backlog (docs/value-origin-rulings.md).
+
+## M10: STOPPED at the LangGraph finding, before building around it (owner, 2026-10-07)
+
+**Measured from the BUILT WHEEL** in a fresh venv (`tests/outside/harness.py`), with CI's pins: langchain-core 1.6.1, langchain 1.4.1, langgraph 1.2.12, langgraph-prebuilt 1.1.0. The driver is `tests/outside/drivers/langchain_poisoned_read.py`, run with `python -I`; it refuses unless xaidr comes from site-packages. It uses REAL `create_agent` + `ToolNode`, a scripted chat model (read, then send, then done), and `xaidr.protect(value_origin=..., enforcement_mode=..., reporter=cap)`, flushed with `unprotect(close_sensor=True)` before `cap` is read. A fresh-context review re-ran it from its own freshly built wheel and got the same verdict in every case.
+```
+xaidr: m10/venv/lib/python3.12/site-packages/xaidr/__init__.py {'langchain_core': '1.6.1', 'langgraph': '?'}
+A-enforce-block        executed=['read_doc'] send=[('blocked', 'untrusted_source', ['ORIGIN_UNTRUSTED_DESTINATION', 'intent.value_origin_untrusted'])] toolmsg=["[BLOCKED] Tool 'send_email' bl"] dirs=['input', 'output', 'tool_call', 'tool_result']
+A-enforce-monitor      executed=['read_doc', 'send_email'] send=[('blocked', 'untrusted_source', ['ORIGIN_UNTRUSTED_DESTINATION', 'intent.value_origin_untrusted'])] toolmsg=['sent to billing@evil.test'] dirs=['input', 'output', 'tool_call', 'tool_result']
+A-off                  executed=['read_doc', 'send_email'] send=[('allowed', None, [])] toolmsg=['sent to billing@evil.test'] dirs=['input', 'output', 'tool_call', 'tool_result']
+A-record               executed=['read_doc', 'send_email'] send=[('allowed', 'untrusted_source', [])] toolmsg=['sent to billing@evil.test'] dirs=['input', 'output', 'tool_call', 'tool_result']
+C-no-flow              executed=['read_doc', 'send_email'] send=[('allowed', 'no_flow', [])] toolmsg=['sent to billing@evil.test'] dirs=['input', 'output', 'tool_call', 'tool_result']
+D-async                ERROR NotImplementedError: Asynchronous implementation of awrap_tool_call is not available. You are likely encountering this error because you defined only the sync version (wrap_tool_call) and invoked your
+D-async-vo-off         ERROR NotImplementedError: Asynchronous implementation of awrap_tool_call is not available. You are likely encountering this error because you defined only the sync version (wrap_tool_call) and invoked your
+R-reuse-no-flow:A      executed=['send_email'] send=[('allowed', 'no_flow', [])] toolmsg=['sent to alice@corp.example'] dirs=['input', 'output', 'tool_call', 'tool_result']
+R-reuse-no-flow:B      executed=['send_email'] send=[('allowed', 'no_flow', [])] toolmsg=['sent to alice@corp.example'] dirs=['input', 'output', 'tool_call', 'tool_result']
+R-reuse-open-flow:A    executed=['send_email'] send=[('allowed', 'principal_undeclared_span', [])] toolmsg=['sent to alice@corp.example'] dirs=['input', 'output', 'tool_call', 'tool_result']
+R-reuse-open-flow:B    executed=['send_email'] send=[('allowed', 'principal_undeclared_span', [])] toolmsg=['sent to alice@corp.example'] dirs=['input', 'output', 'tool_call', 'tool_result']
+```
+(`'langgraph': '?'` is the driver failing to read the version. Both venvs have 1.2.12, checked by the reviewer with `importlib.metadata`.)
+
+### What it settles
+1. **HEADLINE: value origin is INERT on the default LangGraph path.**
+   - Without `begin_flow()` called OUTSIDE the graph, the send reads `no_flow`, and ENFORCE lets the poisoned send through (C-no-flow).
+   - The review traced why, inside the graph. The input IS scanned and clean. Each `before_model` binds a fresh implicit ledger inside its own node context (three binds: F6). Neither the model node nor the tools node ever sees one. `read_doc` also reads no ledger.
+   - This is F5, measured.
+   - **With `begin_flow()` outside the graph it works, under SYNC `invoke`.** The send is not executed, the model receives `[BLOCKED] Tool 'send_email' ...`, and the event carries `ORIGIN_UNTRUSTED_DESTINATION` + `intent.value_origin_untrusted`.
+2. **Async `create_agent` hosts CRASH under xaidr's LangChain middleware, value origin OFF included:** `NotImplementedError: Asynchronous implementation of awrap_tool_call is not available`.
+   - **Cause:** `xaidr/integrations/langchain.py:225` defines `wrap_tool_call` and no `awrap_tool_call`. `create_agent` keeps a middleware that overrides only the sync hook, then calls the base class's async one, which raises. Without xaidr, the same agent completes.
+   - **Reach:** it fires on the FIRST tool call, so nothing runs. It hits `protect()` and direct `delphi_middleware(...)` users alike.
+   - **Not new:** it is pre-existing on `origin/main`.
+   - **Untested, and contradicted by the docs:** no test covers it (the `ainvoke` tests use a hand-written `StateGraph`), and the module docstring (`langchain.py:21-23`) says the opposite.
+   - **NOT a value-origin defect; wider than A2.** §4's D-async case cannot pass until it is fixed.
+3. **The reused-thread carry reproduces through a real framework, in ONE of the two shapes.**
+   - **Open flow (reproduces):** user A's request calls `begin_flow()` and never `clear_flow()`. User B's request runs next on the SAME pool thread, with no flow of its own and the prompt "Send the minutes to the team.". B's send to alice reads **`principal_undeclared_span`**: B reuses A's explicit ledger (the same object on the same worker, with the flow still active). A control where B opens its own flow reads `unresolved`.
+   - **Flow-less (does NOT reproduce through LangGraph):** both read `no_flow`, because that path is inert (finding 1).
+   - This upgrades `test_a_flow_left_open_by_user_a_is_not_user_bs_ledger` from a unit-level shape to a real-host one. It does not upgrade the other xfail.
+4. **A-enforce-monitor:** the send is executed, as §4 requires. The EVENT carries `action=blocked` with `enforcementMode=monitor`: the true verdict, emitted before `_apply_mode` (`sensor.py:2574-2587`; M8b; every gate does this).
+   - §4's row ("Event `action=flagged`") conflicts with that design; M8's own text ("monitor gives flagged") is true of the RETURNED verdict.
+   - **This needs a ruling.** Recommendation: §4 is the outlier.
+5. **A-record vs A-off:** both are `('allowed', 0.0, None, [])`. A-record's `valueOrigin` is `untrusted_source`; A-off's send event carries none.
+
+### Gaps against §4 in this measurement (named, not hidden)
+- No B-designated-twin case yet.
+- All cases ran in ONE process; §4 says each in its own. The reviewer re-ran C-no-flow alone, with the same result.
+- A-off's "no valueOrigin anywhere" is checked on the send event only.
+- The driver records only `send_email` events.
+
+### A driver defect, mine, found and fixed during the measurement
+The first run reported NO events for A-off and for both reuse cases:
+```
+xaidr: m10/venv/lib/python3.12/site-packages/xaidr/__init__.py {'langchain_core': '1.6.1', 'langgraph': '?'}
+A-enforce-block        executed=['read_doc'] send=[('blocked', 'untrusted_source', ['ORIGIN_UNTRUSTED_DESTINATION', 'intent.value_origin_untrusted'])] toolmsg=["[BLOCKED] Tool 'send_email' bl"] dirs=['input', 'output', 'tool_call', 'tool_result']
+A-enforce-monitor      executed=['read_doc', 'send_email'] send=[('blocked', 'untrusted_source', ['ORIGIN_UNTRUSTED_DESTINATION', 'intent.value_origin_untrusted'])] toolmsg=['sent to billing@evil.test'] dirs=['input', 'output', 'tool_call', 'tool_result']
+A-off                  executed=['read_doc', 'send_email'] send=[] toolmsg=['sent to billing@evil.test'] dirs=[]
+A-record               executed=['read_doc', 'send_email'] send=[('allowed', 'untrusted_source', [])] toolmsg=['sent to billing@evil.test'] dirs=['input', 'output', 'tool_call', 'tool_result']
+C-no-flow              executed=['read_doc', 'send_email'] send=[('allowed', 'no_flow', [])] toolmsg=['sent to billing@evil.test'] dirs=['input', 'output', 'tool_call', 'tool_result']
+D-async                ERROR NotImplementedError: Asynchronous implementation of awrap_tool_call is not available. You are likely encountering this error because you defined only the sync version (wrap_tool_call) and invoked your agent in an asynchronous cont
+D-async-vo-off         ERROR NotImplementedError: Asynchronous implementation of awrap_tool_call is not available. You are likely encountering this error because you defined only the sync version (wrap_tool_call) and invoked your agent in an asynchronous cont
+R-reuse-no-flow:A      executed=['send_email'] send=[] toolmsg=['sent to alice@corp.example'] dirs=[]
+R-reuse-no-flow:B      executed=['send_email'] send=[] toolmsg=['sent to alice@corp.example'] dirs=[]
+R-reuse-open-flow:A    executed=['send_email'] send=[] toolmsg=['sent to alice@corp.example'] dirs=[]
+R-reuse-open-flow:B    executed=['send_email'] send=[] toolmsg=['sent to alice@corp.example'] dirs=[]
+```
+- **Cause 1:** A-off called `protect()` before `langchain.agents` was imported, and `protect()` patches only frameworks already imported.
+- **Cause 2:** the async case raised before `unprotect()`, so its `protect()` stayed installed and every later `protect()` was a no-op that reported to the wrong sensor.
+- **Fix:** the driver now imports the frameworks first and unprotects in a `finally`.
+
+### Not started, because the finding changes the scope (owner: "report it before building around it")
+The committed acceptance test and its CI step; Q12 (LangChain string-input binding); the MCP stub-ClientSession end-to-end test; a real streaming `httpx.Response`; the C-11 P-seam pass through the LangChain/MCP hooks; S23/S24 through `protect()` from the wheel. Each stays as M7 deferred it, pending the owner's ruling on findings 1–4.
