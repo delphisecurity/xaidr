@@ -2,26 +2,22 @@
 
 ## Summary
 
-Four L1 rules backtrack super-linearly on a shape the ReDoS audit never built:
-the rule's **own leading trigger phrase followed by a long run of whitespace and
-nothing else**. The trigger gets the engine into the pattern's ambiguous middle
-(consecutive `\s*`/`\s+`/optional-group/`[:\s]+` quantifiers); the whitespace run
-is then partitioned many ways while the trailing required token never arrives.
+Four L1 rules backtracked super-linearly on a shape the ReDoS audit never built:
+the rule's own leading phrase followed by a long run of whitespace and nothing
+else. That gets the engine into the pattern's ambiguous middle (consecutive
+`\s*`/`\s+`/optional-group/`[:\s]+` quantifiers), where one whitespace run is
+partitioned many ways while the trailing required token never arrives.
 
-| rule | curve on the shape | cost |
-|---|---|---|
-| `LLM01_persona_expanded` | cubic | 1.44 s @ 1000 chars, 11.5 s @ 2000 |
-| `LPCI_S6_split_payload` | super-linear | 1.06 s @ 1000, 23 s @ 4000 |
-| `LLM01_fake_authority_marker` | quadratic | 0.44 s @ 1000, 8.0 s @ 4000 |
-| `LLM01_decode_execute_expanded` | quadratic | milder, ×61 over a 4× step |
+The four rules: `LLM01_persona_expanded`, `LPCI_S6_split_payload`,
+`LLM01_fake_authority_marker`, `LLM01_decode_execute_expanded`.
 
 ## 1. Failing test first (the audit gap)
 
 Added to `tests/test_redos_pattern_audit.py` (section 7):
 
 - `test_every_rule_bounded_on_its_own_trigger_then_whitespace` — generates the
-  trigger seed **per rule, from its own compiled pattern** (walks the parse tree,
-  emits the longest letters-and-single-spaces prefix, stops at the mouth of the
+  seed **per rule, from its own compiled pattern** (walks the parse tree, emits
+  the longest letters-and-single-spaces prefix, stops at the mouth of the
   ambiguous middle), appends a whitespace run, asserts a per-pattern ceiling.
   Sweeps **every** rule in `ALL_RULES`, so a rule the maintainer forgets cannot
   dodge it.
@@ -32,23 +28,17 @@ Added to `tests/test_redos_pattern_audit.py` (section 7):
 `test_growth_is_not_superlinear` stayed green on all four for two independent
 reasons: (a) it is parametrized over a hand-maintained `GROWTH_RULES` list none
 of the four is on, and (b) it only measures the fixed `battery()` shapes, which
-never include trigger-then-whitespace. It reported coverage it was not
-performing. The new growth test depends on neither a list nor a fixed battery.
+never include this shape. It reported coverage it was not performing. The new
+growth test depends on neither a list nor a fixed battery.
 
 ### Red, against the pre-fix patterns (committed HEAD), `PYTHONDONTWRITEBYTECODE=1`
 
-```
-E  AssertionError: 4 rule(s) exceeded 0.1s on their own trigger phrase followed by
-   1500 spaces: [('LPCI_S6_split_payload', 8.033, "'part 1 '"),
-   ('LLM01_decode_execute_expanded', 5.984, ...), ('LLM01_persona_expanded', 5.097, ...),
-   ('LLM01_fake_authority_marker', 2.694, ...)]
-E  AssertionError: 4 rule(s) grew faster than 8.0x for a 4x larger whitespace run:
-   [('LLM01_decode_execute_expanded', 61.5, ...), ('LLM01_persona_expanded', 60.4, ...),
-   ('LPCI_S6_split_payload', 44.2, ...), ('LLM01_fake_authority_marker', 24.0, ...)]
-2 failed, 45 deselected in 34.48s
-```
+Both new gates went red (`2 failed`) and each named all four rules: the
+per-pattern ceiling and the growth ratio. The raw failure output is not
+reproduced here because it prints each rule's generated seed beside its timing.
+To regenerate it, run the two tests above against the pre-fix
+`xaidr/rules/all-l1-rules.json`.
 
-Both gates go red and both name all four — the ceiling AND the growth ratio.
 (This red *is* the sabotage/restore proof required by RULES: the pre-fix HEAD
 carries the old patterns, and the new audit shape reddens against them.)
 
@@ -78,8 +68,8 @@ tests/test_agentic_abuse_l1.py tests/test_tool_arg_agentic_categories.py
 
 ## 3. Sweep of all 224 patterns on the new shape
 
-Pre-fix: exactly the four exceed 50 ms at n=600 (813 / 389 / 364 / 321 ms) — no
-others. Post-fix: **0 rules over 50 ms**.
+Pre-fix: exactly the four exceeded the 50 ms bar, and no others. Post-fix:
+**0 rules over 50 ms**.
 
 ## 4. Detection must not regress — rules-only, before vs after
 
@@ -100,19 +90,10 @@ No recall loss, no new false positive.
 **after** the rule returns. Between those two checks the rule's `re.search`/
 detector runs to completion — and the file itself states a C-level `re.search`
 is uninterruptible in CPython. So the budget bounds *how many rules are entered*,
-not the time any one rule spends: one catastrophic rule runs unbounded (the 112 s
-observed), and the guards only **record** it afterward. This is the guard that
-looks like protection.
+not the time any one rule spends, and the guards only **record** a slow rule
+afterward. This is the guard that looks like protection.
 
 Not fixed on this branch: it is not a one-line change (needs a timeout-capable
 engine such as the `regex` module, or process/thread isolation). Reported per the
 goal. The real fix is the one applied above — make every pattern linear — which
 is what the file's own comment says the budget can never substitute for.
-
-## Affected released versions (measured from git tags; PyPI publication assumed, not verified)
-
-All four shipped vulnerable from **v1.4.1** (first tag containing the introducing
-commits `c6f8a4e`, `448a66f`) through **v1.19.0** (current). The persona pattern
-is byte-identical at `v1.4.1` and measures 1441 ms on the trigger shape at 1000
-chars; `fake_authority` was already in its super-linear `\s*:?\s*` form at
-`v1.4.1`. Live state (what is actually on PyPI per tag) is operator-reported.

@@ -605,7 +605,7 @@
     "score": 0.28,
     "category": "prompt_injection",
     "_was": "(?:DOCUMENT\\s*(?:PRIORITY|CLASSIFICATION)|TOP\\s*SECRET|AUTHORIZED\\s*(?:OVERRIDE|ACCESS))\\s*:?\\s*(?:\\d+|[^\\n]{0,160}?(?:supersede|override|priority))",
-    "_why_changed": "Bounding the .* (the prior fix) was not enough: `\\s*:?\\s*` is TWO whitespace-eating quantifiers around an optional colon, so on `DOCUMENT PRIORITY` + a whitespace run they split the run many ways and, for each split, the lazy `[^\\n]{0,160}?` retries 0..160 — quadratic (2.7s on a 1500-char trigger). Collapsed the two `\\s*` and the `:?` into one bounded, non-overlapping class `[\\s:]{0,8}`; the separator between the marker and its value is never more than a few spaces or a colon in any real instance."
+    "_why_changed": "Bounding the .* (the prior fix) was not enough: `\\s*:?\\s*` is TWO whitespace-eating quantifiers around an optional colon, so they can split one whitespace run many ways and, for each split, the lazy `[^\\n]{0,160}?` retries 0..160 — super-linear backtracking. Collapsed the two `\\s*` and the `:?` into one bounded, non-overlapping class `[\\s:]{0,8}`; the separator between the marker and its value is never more than a few spaces or a colon in any real instance."
   },
   {
     "id": "LLM01_hidden_content_injection",
@@ -1166,7 +1166,7 @@
   {
     "id": "LPCI_S6_split_payload",
     "_was": "(?:part|piece|fragment|segment|half)\\s+(?:1|one|A|first)\\s*(?:of\\s+\\d+)?[:\\s]+[\\s\\S]{0,400}?(?:part|piece|fragment|segment|half)\\s+(?:2|two|B|second)",
-    "_why_changed": "Bounding the tail to [\\s\\S]{0,400}? (the prior fix) was not enough: `\\s*(?:of\\s+\\d+)?[:\\s]+` puts a `\\s*` directly before an UNBOUNDED `[:\\s]+`, and both eat whitespace. On `part 1` + a whitespace run they split it many ways and, for each split, the bounded tail still retries 0..400 — super-linear (8s on a 1500-char trigger, 23s at 4000). Removed the standalone `\\s*`, folded the count into the optional group as `(?:\\s+of\\s+\\d+)?`, and bounded the delimiter run to `[:\\s]{1,8}`; the gap between `part 1` and its delimiter is never more than a few characters.",
+    "_why_changed": "Bounding the tail to [\\s\\S]{0,400}? (the prior fix) was not enough: `\\s*(?:of\\s+\\d+)?[:\\s]+` puts a `\\s*` directly before an UNBOUNDED `[:\\s]+`, and both eat whitespace, so they can split one whitespace run many ways and, for each split, the bounded tail still retries 0..400 — super-linear backtracking. Removed the standalone `\\s*`, folded the count into the optional group as `(?:\\s+of\\s+\\d+)?`, and bounded the delimiter run to `[:\\s]{1,8}`; the gap between the part marker and its delimiter is never more than a few characters.",
     "pattern": "(?:part|piece|fragment|segment|half)\\s+(?:1|one|A|first)(?:\\s+of\\s+\\d+)?[:\\s]{1,8}[\\s\\S]{0,400}?(?:part|piece|fragment|segment|half)\\s+(?:2|two|B|second)",
     "score": 0.75,
     "category": "lpci"
@@ -1273,7 +1273,7 @@
     "score": 0.93,
     "category": "jailbreak",
     "_was": "(?:pretend|imagine|suppose|assume|act\\s+as\\s+if)\\s+(?:you\\s+(?:are|were)|that\\s+you(?:'re|\\s+are))\\s+(?:a\\s+|an\\s+)?(?:AI|assistant|bot|model|system|agent)?\\s*(?:called|named|known\\s+as)?\\s*\\w+\\s+(?:who|that|with)\\s+(?:has\\s+)?(?:no|zero|without\\s+any|unrestricted|unlimited)\\s+(?:restrictions?|rules?|limitations?|constraints?|boundaries?|filters?|guidelines?|safety)",
-    "_why_changed": "The persona-middle `(?:a\\s+|an\\s+)?(?:AI|...)?\\s*(?:called|named|known\\s+as)?\\s*\\w+` stacked optional groups around TWO adjacent `\\s*`, then required `\\w+`. On `pretend you are` + a whitespace run the engine partitions the run across those overlapping `\\s*` before `\\w+` fails — cubic (1.4s at 1000 chars, did not finish quickly at 4000). Replaced the whole connective middle with one bounded, lazy, newline-excluding span `[^\\n]{0,80}?`; it still demands the `(?:no|zero|...)\\s+(?:restrictions?|...)` tail that carries the jailbreak meaning, and spans the name/role phrasing in one quantifier instead of four."
+    "_why_changed": "The persona-middle `(?:a\\s+|an\\s+)?(?:AI|...)?\\s*(?:called|named|known\\s+as)?\\s*\\w+` stacked optional groups around TWO adjacent `\\s*`, then required `\\w+`, so the engine could partition one whitespace run across those overlapping `\\s*` before `\\w+` failed — super-linear backtracking. Replaced the whole connective middle with one bounded, lazy, newline-excluding span `[^\\n]{0,80}?`; it still demands the `(?:no|zero|...)\\s+(?:restrictions?|...)` tail that carries the jailbreak meaning, and spans the name/role phrasing in one quantifier instead of four."
   },
   {
     "id": "LLM01_fiction_frame_harmful",
@@ -1293,7 +1293,7 @@
     "score": 0.85,
     "category": "encoding_evasion",
     "_was": "(?:decode|decipher|decrypt|interpret|translate|convert|parse)\\s+(?:this|the\\s+following|it|that)\\s+(?:and\\s+)?(?:run|execute|follow|do|perform|apply|implement|carry\\s+out)\\s+(?:it)?\\s*[:.]?\\s*[A-Za-z0-9+/=]{8,}",
-    "_why_changed": "`\\s+(?:it)?\\s*[:.]?\\s*` is three whitespace-eating quantifiers around two optionals, immediately before the required `[A-Za-z0-9+/=]{8,}` blob. On `decode this run` + a whitespace run the engine splits the run across those `\\s+`/`\\s*`/`\\s*` before the blob fails — quadratic. Collapsed them into `(?:\\s+it)?[\\s:.]{0,8}`: one optional `it`, then a single bounded class covering the whitespace, colon or period that separates the directive from the blob."
+    "_why_changed": "`\\s+(?:it)?\\s*[:.]?\\s*` is three whitespace-eating quantifiers around two optionals, immediately before the required `[A-Za-z0-9+/=]{8,}` blob, so the engine could split one whitespace run across those `\\s+`/`\\s*`/`\\s*` before the blob failed — super-linear backtracking. Collapsed them into `(?:\\s+it)?[\\s:.]{0,8}`: one optional `it`, then a single bounded class covering the whitespace, colon or period that separates the directive from the blob."
   },
   {
     "id": "LLM01_decode_directive_blob",
