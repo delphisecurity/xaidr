@@ -35,8 +35,11 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import dataclasses
+import functools
 import inspect
 import re
+import threading
 from typing import Any
 from uuid import uuid4
 from . import value_origin as _vo
@@ -350,7 +353,62 @@ def clear_flow() -> None:
 
 
 # ── the request scope (owner, D1, 2026-10-08) ────────────────────────────────
-_scope_exit_fault_logged = False
+#
+# Each open scope is an entry on a per-CONTEXT stack, holding the values the five
+# request vars had when it opened. An exit acts only on an entry in the context
+# it runs in, so:
+#   * the normal exit (this scope is on top) puts the saved values back;
+#   * an out-of-order exit (a scope above this one is still open) changes nothing
+#     now and hands its saved values to the scope above, which restores them when
+#     IT exits, so closing both never brings back a scope that already closed;
+#   * an exit with no entry here (another thread or task, a garbage collector
+#     running a generator's finally elsewhere, a second exit) changes NOTHING in
+#     the context it runs in, which may belong to an unrelated request, and is
+#     counted and logged.
+# The values are restored, not tokens reset: a token can only restore the state
+# from when IT was made, which is exactly the stale state an out-of-order exit
+# must not bring back (P1 fresh-context review, 2026-10-08).
+
+
+@dataclasses.dataclass(frozen=True)
+class _ScopeEntry:
+    owner: Any
+    saved: tuple | None     # (chain, correlation id, tiers, inbound mark, ledger) at entry;
+                            # None: the scope could not open and its exit restores nothing
+
+
+_SCOPES: contextvars.ContextVar[tuple] = contextvars.ContextVar("xaidr_flow_scopes", default=())
+_scope_fault_count = 0
+_scope_fault_lock = threading.Lock()
+
+
+def _scope_fault(what: str) -> None:
+    """Count every scope fault; log the 1st, 10th, 100th, ... so a recurring one
+    stays visible without flooding the log."""
+    global _scope_fault_count
+    with _scope_fault_lock:
+        _scope_fault_count += 1
+        n = _scope_fault_count
+    if str(n).rstrip("0") == "1":                           # the 1st, 10th, 100th, ...
+        _vo_log.error("xaidr.flow(): %s (%d scope fault(s) in this process so far)", what, n)
+
+
+def _saved_state() -> tuple:
+    return (_chain_ctx.get(), _corr_ctx.get(), _tiers_ctx.get(), _inbound_ctx.get(),
+            _vo.ledger_get())
+
+
+def _put_back(saved: tuple) -> None:
+    chain, corr, tiers, inbound, ledger = saved
+    _vo.ledger_set(ledger)
+    _chain_ctx.set(chain)
+    _corr_ctx.set(corr)
+    _tiers_ctx.set(tiers)
+    _inbound_ctx.set(inbound)
+
+
+def _returns_later(result: Any) -> bool:
+    return inspect.isawaitable(result) or inspect.isgenerator(result) or inspect.isasyncgen(result)
 
 
 class _FlowScope(contextlib.ContextDecorator):
@@ -359,75 +417,92 @@ class _FlowScope(contextlib.ContextDecorator):
     def __init__(self, principal: str | None, correlation_id: str | None) -> None:
         self._principal = principal
         self._correlation_id = correlation_id
-        self._saved: list[tuple[list, Any]] = []   # one entry per active entry, LIFO
-
-    def _recreate_cm(self) -> "_FlowScope":
-        # ContextDecorator calls this once per decorated CALL. Returning self would
-        # share one token list across concurrent calls on a thread pool (measured:
-        # "Token has already been used once"), so every call gets its own scope.
-        return type(self)(self._principal, self._correlation_id)
 
     def __call__(self, func):
-        # ContextDecorator wraps the CALL. For these three kinds the call only
-        # creates the coroutine or generator; the body runs later, after the scope
-        # has closed, so the decoration would scope nothing. Refuse loudly.
+        # ContextDecorator wraps the CALL. For these kinds the call only creates a
+        # coroutine or generator and the body runs after the scope has closed, so
+        # the decoration would scope nothing. Refuse them at decoration time.
         if (inspect.iscoroutinefunction(func) or inspect.isasyncgenfunction(func)
                 or inspect.isgeneratorfunction(func)):
-            raise TypeError(
-                f"xaidr.flow() cannot decorate {getattr(func, '__qualname__', func)!r}: it "
-                "is a coroutine, generator or async-generator function, whose body runs "
-                "after the call returns, outside the scope. Write `with xaidr.flow(...):` "
-                "inside the function's body instead.")
-        return super().__call__(func)
+            raise TypeError(_cannot_decorate(func))
 
-    def __enter__(self) -> str:
-        tokens = [v.set(v.get()) for v in _SCOPED_VARS]
-        ledger = _vo.ledger_token()
+        @functools.wraps(func)
+        def inner(*args, **kwds):
+            with self:
+                result = func(*args, **kwds)
+            # Callables the check above cannot see (an object with an async
+            # __call__, a sync wrapper around an async def, a function returning a
+            # generator) are caught here, by what the call RETURNED. The body has
+            # not run yet, so refusing loses nothing but a scope that never held.
+            if _returns_later(result):
+                close = getattr(result, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception:
+                        pass
+                raise TypeError(_cannot_decorate(func))
+            return result
+        return inner
+
+    def __enter__(self) -> str | None:
+        try:
+            saved = _saved_state()
+        except Exception:
+            _scope_fault("could not read the current flow to save it; this scope did "
+                         "not open, and its body runs in the flow it was entered in")
+            try:                                   # mark it, so its exit is not a second fault
+                _SCOPES.set(_SCOPES.get() + (_ScopeEntry(self, None),))
+            except Exception:
+                pass
+            return current_correlation_id()
         try:
             corr = begin_flow(principal=self._principal,
                               correlation_id=self._correlation_id)
+            # begin_flow never raises on a failed ledger bind; it keeps going. A
+            # scope must not then run on the ledger it was entered in, or its
+            # records would outlive it in the outer flow: run on none instead.
+            if saved[4] is not None and _vo.ledger_get() is saved[4]:
+                _vo.ledger_set(None)
+            # Never lower an inbound mark: a scope opened inside a request that
+            # arrived from another agent is still that request (privilege tiers).
+            if saved[3]:
+                _inbound_ctx.set(True)
+            _SCOPES.set(_SCOPES.get() + (_ScopeEntry(self, saved),))
         except BaseException:
-            _restore(tokens, ledger)
+            try:
+                _put_back(saved)
+            except Exception:
+                pass
             raise
-        self._saved.append((tokens, ledger))
         return corr
 
     def __exit__(self, exc_type, exc, tb) -> bool:
-        tokens, ledger = self._saved.pop() if self._saved else (None, None)
-        _restore(tokens, ledger)
-        return False                                  # the body's exception propagates
+        try:
+            stack = _SCOPES.get()
+            i = next((k for k in range(len(stack) - 1, -1, -1) if stack[k].owner is self), None)
+            if i is None:
+                _scope_fault("a scope exited in a context it was not entered in, or "
+                             "exited twice; nothing was changed in the context it exited in")
+            elif stack[i].saved is None:                # it never opened: nothing to put back
+                _SCOPES.set(stack[:i] + stack[i + 1:])
+            elif i == len(stack) - 1:
+                _put_back(stack[i].saved)
+                _SCOPES.set(stack[:-1])
+            else:
+                above = stack[i + 1]
+                _SCOPES.set(stack[:i] + (dataclasses.replace(above, saved=stack[i].saved),)
+                            + stack[i + 2:])
+        except Exception:
+            _scope_fault("a scope's exit faulted; the flow was left as it was")
+        return False                                   # the body's exception propagates
 
 
-_SCOPED_VARS = (_chain_ctx, _corr_ctx, _tiers_ctx, _inbound_ctx)
-
-
-def _restore(tokens, ledger) -> None:
-    """Put the five request vars back as they were at entry. Never raises (owner,
-    M7). A token minted in another Context, or used already, cannot be reset; the
-    exiting context is then cleared to "no flow", which is inert, never a carry."""
-    global _scope_exit_fault_logged
-    try:
-        if tokens is None:
-            raise RuntimeError("xaidr.flow() exited more times than it was entered")
-        _vo.ledger_reset(ledger)
-        for var, token in reversed(list(zip(_SCOPED_VARS, tokens))):
-            var.reset(token)
-        return
-    except Exception:
-        if not _scope_exit_fault_logged:
-            _scope_exit_fault_logged = True
-            _vo_log.error("xaidr.flow(): the scope could not restore the flow it was "
-                          "entered with (exited in a different context, or exited twice); "
-                          "this context is cleared to no flow. Logged once per process.",
-                          exc_info=True)
-    try:
-        _vo.unbind_ledger()
-        _chain_ctx.set(None)
-        _corr_ctx.set(None)
-        _tiers_ctx.set(None)
-        _inbound_ctx.set(False)
-    except Exception:
-        pass
+def _cannot_decorate(func) -> str:
+    return (f"xaidr.flow() cannot decorate {getattr(func, '__qualname__', func)!r}: calling it "
+            "returns a coroutine or a generator, whose body runs after the call returns, "
+            "outside the scope. For an async function, write `with xaidr.flow(...):` inside "
+            "its body. For a generator, open the scope around the code that consumes it.")
 
 
 def flow(*, principal: str | None = None,
@@ -443,18 +518,25 @@ def flow(*, principal: str | None = None,
         def handle(request): ...
 
     On exit, whether the body returned or raised, the flow and its value-origin
-    ledger are put back exactly as they were before the scope, so nesting hands
-    the outer flow back and a failed request leaves nothing for the next one on
-    the same worker thread. The plain :func:`begin_flow` / :func:`clear_flow`
-    pair still works, but if ``clear_flow()`` is skipped, for example because the
-    request raised, the next request on that thread inherits the flow.
+    ledger are put back as they were before the scope, so a failed request does
+    not leave its flow for the next request on the same worker thread. The plain
+    :func:`begin_flow` / :func:`clear_flow` pair still works, but if
+    ``clear_flow()`` is skipped, for example because the request raised, the next
+    request on that thread inherits the flow.
 
-    As a decorator it scopes each CALL separately, so it is safe on a handler
-    run by a thread pool. It refuses ``async def``, generator and async-generator
-    functions: their bodies run after the call returns, outside any scope the
-    decorator could open. Use ``with xaidr.flow(...):`` inside such a body. A
-    decorated function does not receive the correlation id; it can read it with
-    :func:`current_correlation_id`.
+    A scope opened inside another one is a NEW flow while it is open (its own
+    correlation id, chain and ledger), and the outer one is back when it exits. It
+    never lowers an inbound mark: inside a request that arrived from another agent
+    it stays inbound.
+
+    As a decorator it scopes each call. It refuses a function whose call returns a
+    coroutine or a generator (an ``async def``, a generator function, or anything
+    that returns one), because that body runs after the call returns, outside the
+    scope. A scope inside a generator's body stays open between yields, in the code
+    that consumes the generator, until the generator is closed; open it around the
+    consuming code instead. A decorated function does not receive the correlation
+    id; it can read it with :func:`current_correlation_id`. ``set_origin()`` is not
+    part of the flow; use ``origin_scope()`` for that.
     """
     return _FlowScope(principal, correlation_id)
 

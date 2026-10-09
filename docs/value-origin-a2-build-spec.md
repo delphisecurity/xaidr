@@ -4,7 +4,8 @@ Written before any code, as the owner's handoff requires (STEP 3). Base:
 `832e642` on `feat/value-origin-seams` (main `0502c99` merged in at `8ce8dc4`).
 Every number here was measured in this session against the tree or a wheel built
 from it, and each phase below names the in-tree test or driver that reproduces it.
-Nothing below is built yet.
+This was written before any code. Where building a phase, or its fresh-context
+review, changed the design, the change is marked in place as *Corrected*.
 
 ## 0. The rulings, and where the real code disagrees with them
 
@@ -36,7 +37,10 @@ Three consequences, all stated rather than worked around:
    body runs. The same is true of generator and async-generator functions (the
    body runs at iteration). A silent no-op is the worst outcome for a security
    scope, so `flow()` used as a decorator **refuses** those three kinds of
-   function with a `TypeError` that names the `with` form. Async hosts write
+   function with a `TypeError` that names the `with` form. *Corrected after P1's
+   review:* it also refuses, at call time, ANY call that returns an awaitable or
+   a generator. An object with an async `__call__`, or a sync wrapper around an
+   `async def`, passes a check of the function itself. Async hosts write
    `with xaidr.flow(...):` inside the handler. Supporting `async def` properly
    would need a `__call__` that is no longer `ContextDecorator`'s; that is a
    ruling for the owner, not something this build decides (§7, Q-A).
@@ -47,6 +51,10 @@ Three consequences, all stated rather than worked around:
    context manager per call (`_recreate_cm`, the hook `contextlib`'s own
    `_GeneratorContextManager` uses). The generator row above is the proof that
    per-call re-creation is sufficient.
+   *Corrected after P1's review:* per-call re-creation covered the decorator but
+   not one `flow()` object used with `with` on several threads. The built design
+   keeps each scope's entry on a per-CONTEXT stack instead (§1), which makes any
+   number of uses of one instance safe, so `_recreate_cm` was removed.
 3. **The decorated function never receives the yielded correlation id.**
    `ContextDecorator` calls the function with its own arguments only. A handler
    that needs the id reads `xaidr.provenance_chain.current_correlation_id()`,
@@ -154,26 +162,51 @@ with xaidr.flow(inbound=request.headers) as corr:      # corr is None if nothing
     handle(request)
 ```
 
-**Enter** takes a token on each of the five request-scoped ContextVars:
+**Enter** saves the VALUES of the five request-scoped ContextVars:
 `_chain_ctx`, `_corr_ctx`, `_tiers_ctx` and `_inbound_ctx` (provenance_chain.py:56-82),
-and `_LEDGER` (value_origin/_ledger.py:134). Then it binds:
+and `_LEDGER` (value_origin/_ledger.py:134). It pushes an entry holding them onto a
+per-context stack (a ContextVar), then binds:
 
-- `flow(principal=, correlation_id=)` runs `begin_flow()`'s body;
+- `flow(principal=, correlation_id=)` runs `begin_flow()`'s body. If the fresh
+  ledger did not bind, the scope runs on no ledger rather than the outer one. It
+  never lowers an inbound mark that was set when it opened.
 - `flow(inbound=headers)` sets chain, correlation id and tiers to `None`, then
-  runs `extract_context(headers)`, whose first act is the inbound mark.
+  runs `extract_context(headers)` (P3).
 
-**Exit**, on return or raise, resets the five tokens in reverse. That restores
-the state from before the scope, not "clear", so nesting hands the outer flow
-back. The exception propagates unchanged.
+**Exit**, on return or raise, finds this scope's entry in the stack of the
+context it runs in, and nowhere else:
 
-**Exit never raises into the host** (owner, M7). `ContextVar.reset` raises
-`ValueError` when exit runs in a different `Context` from enter, and
-`RuntimeError` when a token is reused. Either way, exit sets the five vars to
-"no flow" in the exiting context and logs ERROR once per process. The failure is
-inert (`no_flow`), never a carry.
+- **On top:** puts the saved values back. Nesting hands the outer flow back.
+- **Below an open scope** (an out-of-order exit): changes nothing now and hands
+  its saved values to the scope above it. When both have closed, the state is
+  what it was before either, never a closed scope's.
+- **Absent** (another thread or task, a garbage collector running a generator's
+  `finally` elsewhere, a second exit): changes NOTHING in the context it runs in,
+  which may belong to an unrelated request.
+
+Either way the body's exception propagates unchanged and exit never raises
+(owner, M7). Every fault is counted. The 1st, 10th, 100th and so on are logged
+at ERROR with the running count.
+
+*Corrected after P1's fresh-context review (2026-10-08).* The first build saved
+`ContextVar` TOKENS in a list on the scope instance. Its fallback, on a failed
+restore, cleared the context the exit ran in, and this section called that
+"inert (`no_flow`), never a carry". The review measured that false three ways:
+
+- A second exit, or a generator's scope collected on another thread, cleared an
+  unrelated inbound request's mark. Its privileged call went from
+  `approval_required` to `allowed`: the tier gate's 4-to-1.
+- Out-of-order exits within one context SUCCEEDED, and brought back a scope that
+  had already closed, with its ledger's authority. Nothing was logged.
+- One `flow()` object used with `with` on several threads lost the threads' outer
+  flows (92 of 100 iterations).
+
+A token can only restore the state from when it was made, which is exactly the
+stale state an out-of-order exit must not bring back. That is why the
+redesign saves values.
 
 **Not reset by the scope**, deliberately: `provenance._origin_ctx` (it has its
-own `origin_scope`), `sensor._VO_CALL_WIRE` and `_vo_seams.RESULT_SEAM` (both are
+own `origin_scope`; the docstring and docs/api.md now say so), `sensor._VO_CALL_WIRE` and `_vo_seams.RESULT_SEAM` (both are
 per-call and set/reset around each call already), and `integrations/crewai.py`'s
 own var. Each is checked in P1's review.
 
@@ -280,103 +313,135 @@ readers of `_inbound_ctx`/`_tiers_ctx`.
 
 ### P1. `xaidr.flow()` (D1) and the open-flow test (D3)
 
+*Corrected after P1's fresh-context review (2026-10-08).* This section first
+described the token design that §1 now marks corrected. As built:
+
 **Files, and why each changes:**
 
 - **`xaidr/provenance_chain.py`:** `_FlowScope(contextlib.ContextDecorator)`
-  plus the public `flow()`. It tokens the five vars on enter and resets them on
-  exit, and implements `_recreate_cm` (D1.2) and a `__call__` that refuses
-  coroutine, generator and async-generator functions (D1.1).
-- **`xaidr/value_origin/__init__.py`:** two internal seams so provenance_chain
-  does not reach into `_ledger._LEDGER`: `ledger_token()` (set-to-current,
-  returning the token) and `ledger_reset(token)`.
-- **`xaidr/value_origin/_ledger.py`:** the BINDING table in the docstring gains
-  `flow()` as a binder that also restores on exit.
+  plus the public `flow()`, and the per-context scope stack (§1).
+  - `__call__` refuses coroutine, generator and async-generator functions at
+    decoration time (D1.1). It also refuses, at CALL time, any call that returns
+    an awaitable or a generator.
+  - That second check is an override of `ContextDecorator.__call__`: the class is
+    still a `ContextDecorator`, but its call wrapper is its own. A static check
+    cannot see an object with an async `__call__`, a sync wrapper around an
+    `async def`, or a function that returns a generator. All of those scope
+    nothing.
+- **`xaidr/value_origin/_ledger.py`, `__init__.py`:**
+  - `ledger_get()` and `ledger_set()` save and restore the ledger without
+    provenance_chain reaching into `_ledger._LEDGER`. They replace the first
+    build's `ledger_token`/`ledger_reset`.
+  - The BINDING table names `flow()`.
 - **`xaidr/__init__.py`:** exports `flow`.
-- **`xaidr/sensor.py:2607-2612`:** the once-per-sensor `no_flow` warning. It
-  names `with xaidr.flow(...)` first. It states the plain pair's limitation:
-  "begin_flow()/clear_flow() still work, but if clear_flow() is skipped (for
-  example when the request raises) the next request on the same thread inherits
-  the flow". It names `flow(inbound=)` for inbound calls, and drops "A2A" (§2.1).
-- **`docs/api.md:62-65`, `README.md:959`:** the same text: `flow()` first, then
-  the plain pair's limitation stated as a limitation.
-- **`tests/test_value_origin_flow_scope.py`** (new), and the open-flow test in
-  **`tests/test_value_origin_reuse.py`**.
-- **`tests/test_value_origin_m4.py`:** the Q6 text pin also requires `flow(`.
+- **`xaidr/sensor.py`, the once-per-sensor `no_flow` warning:**
+  - It names `with xaidr.flow(...)` first, and for inbound requests says to call
+    `extract_context()` on the headers inside that scope.
+  - It states the plain pair's limitation: "if clear_flow() is skipped (for
+    example because the request raised) the next request on the same thread
+    inherits the flow".
+  - It drops "A2A" (§2.1).
+  - *Corrected:* this spec said the warning would name `flow(inbound=)`. That
+    form does not exist until P3, which changes the text.
+- **`docs/api.md`, `README.md`:**
+  - `flow()` comes first, and the plain pair's limitation is stated as a
+    limitation.
+  - For an async function, the `with` form goes inside its body.
+  - For a generator, the scope goes around the code that consumes it. A scope
+    inside a generator's body stays open between yields, in the consumer, until
+    the generator is closed.
+  - A scope nested in another is a new flow while it is open.
+  - `set_origin()` is not part of the flow.
+- **`tests/test_value_origin_flow_scope.py`** and its driver
+  **`tests/outside/drivers/flow_scope.py`** (new). The open-flow test in
+  **`tests/test_value_origin_reuse.py`**. **`tests/test_value_origin_m4.py`**: the
+  warning must name `xaidr.flow(` and state "clear_flow() is skipped".
 
-**Failing tests first.** Each is written and run against the spec commit before
-any code. The expected red is named.
+**The driver's cases, each a check in the test module and from the wheel.**
+`_state` reads all five vars in every case.
 
-- **`test_scope_that_raises_leaves_nothing_for_the_next_request`** (replaces the
-  open-flow strict xfail as the asserting test, D3). User A runs inside
-  `with xaidr.flow(principal="a")`, records, and raises. User B on the same
-  one-worker pool finds `ledger_bound()` False at its start, and its tool call,
-  made before any input of its own, reads `no_flow`. (B makes no input scan so
-  the test holds both before and after P2.)
-  Red: `AttributeError: module 'xaidr' has no attribute 'flow'`.
-- **`test_a_flow_left_open_by_user_a_is_not_user_bs_ledger`** (the existing
-  test, name kept): the literal plain-pair case stays `xfail(strict=True)`. Under
-  P2 it still xfails, because an explicit ledger survives B's own input scan. Its
-  BODY gains the flip condition as a comment and in the assertion message:
-  > This becomes asserting only if `begin_flow()` stops leaving request state
-  > bound past the request when `clear_flow()` is skipped. That needs one of two
-  > changes, both outside A2: the plain pair is removed, or `begin_flow()`
-  > becomes a scope. xaidr receives no call between user A's last statement and
-  > user B's first tool call, so nothing else can tell them apart. If this flips
-  > red (XPASS), one of those two happened: rewrite it as asserting and update
-  > docs/api.md, README.md and the no_flow warning, which all state this
-  > limitation.
-- **`test_nested_scope_restores_the_outer_flow`:** the inner exit leaves the
-  outer correlation id, chain and ledger.
-- **`test_decorated_sync_handler_is_scoped_per_call_across_threads`:** 8 threads,
-  each inside its OWN outer flow, run one decorated handler at once through a
-  barrier, 25 rounds. Each call sees its own correlation id, and the thread's outer
-  flow and ledger are back after every call, with no restore logged as failed.
-  *Corrected while building:* the first version checked only distinct ids and
-  "no exception", and the `_recreate_cm` sabotage passed it. The never-raise
-  fallback turns a shared instance's failed restores into silent clears, which
-  look like restores when there is no outer flow. With an outer flow per thread,
-  the sabotage gives 198 of 200 calls losing it.
-- **`test_decorating_a_coroutine_function_is_refused`**, and the same for
-  generator and async-generator functions: `TypeError` whose message names
-  `with xaidr.flow(`.
-- **`test_exit_in_a_different_context_does_not_raise_and_is_inert`:** enter in
-  one asyncio task and exit in another. There is no exception, the exiting
-  context reads `no_flow`, and ERROR is logged once.
-- **`test_the_body_s_exception_propagates_unchanged`:** the same exception
-  object, with the same traceback tail.
+- `scope_that_raises`: user B, next on the pool thread, starts EMPTY and reads
+  `no_flow`. The body's exception propagates as the same object, with its own
+  traceback tail. This is the asserting test D3 asks for.
+- `nested`: all five vars of the outer flow come back.
+- `nested_in_inbound`: a scope inside an inbound request stays inbound.
+- `correlation_id`: `correlation_id=` is honoured.
+- `threads`: a decorated handler, 8 threads x 25 calls, each thread inside its
+  own outer flow.
+- `shared_instance`: ONE `flow()` object used with `with` by 8 threads x 50.
+- `refusals`: seven kinds of call that would run their body after the scope
+  closes, plus a plain sync function that is NOT refused.
+- `foreign_exit`: the exiting task's own flow is untouched.
+- `double_exit` in an inbound request: the inbound mark stays.
+- `out_of_order`.
+- `interleaved_generators`.
+- `gc_elsewhere`: a generator's scope collected on a thread serving an inbound
+  request leaves that request untouched.
+- `enter_fault`: the body runs, one fault is counted, and the host sees nothing.
+- `bind_fault`: the scope does not run on the outer flow's ledger.
+- Plus: `test_the_plain_pair_s_limitation_is_stated_where_users_read` pins the
+  statement in docs/api.md and README.md.
 
-**Sabotage proofs.** Each is one edit. For each: record `shasum` of the file
-before, show the named test red with its message, restore, show the shasum
-byte-identical, show green.
+**Failing first.**
 
-- `__exit__` resets nothing → the scope+raise test reads A's
-  `principal_undeclared_span`.
-- `_recreate_cm` deleted → the thread test raises `RuntimeError`.
-- The coroutine refusal deleted → the refusal test sees no `TypeError`.
-- The fallback's `except` narrowed to `RuntimeError` only → the cross-context test
-  raises the `ValueError` the reset throws. *Corrected while building:* this spec
-  first said `ValueError`, which IS what a cross-context reset raises, so that edit
-  would have proved nothing.
+- Against `46cc8c4`, before any code: `7 failed, 4 passed, 2 xfailed` ("xaidr.flow
+  does not exist"; the export; the M4 pin).
+- Against the FIRST build (`3a6c820`), the strengthened checks, run from a clean
+  archive with the new driver and tests copied in: `10 failed, 6 passed`, each
+  red naming its consequence:
+  - `shared_instance`: "lost the thread's outer flow 399 times in 400 rounds";
+  - `double_exit`: "inbound mark now False: the tier gate would open";
+  - `gc_elsewhere`: "changed the inbound request running there";
+  - `out_of_order`: "closing an outer scope first took the inner scope's flow
+    away";
+  - `interleaved_generators`: a closed scope's flow left behind;
+  - `nested_in_inbound`: "lowered its inbound mark";
+  - `bind_fault`: "ran on the outer flow's ledger";
+  - `foreign_exit`: "an unrelated request was altered".
 
-**Outside the process.** Driver `tests/outside/drivers/flow_scope.py`, run
-in-process by the unit test and from the built wheel by
-`tests/outside/test_p1_flow_scope_from_the_wheel.py`, with no framework, so it
-runs wherever the dev extra is installed. *Moved while building:* the real
-`create_agent` reuse rows need PyPI, so they live in P5's acceptance driver. That
-driver installs LangChain anyway and already has the R-reuse cases.
+**Sabotage proofs** on the built design. Each is one edit. The file hash was
+`82d4157b4f093c43` before and after every one; each named check went red, then
+green after the restore:
+
+1. Exit puts nothing back → `scope_that_raises` ("left request state on the worker
+   thread for user B") and `nested`.
+2. A foreign or second exit clears where it runs (the first build's fallback) →
+   `foreign_exit`, `double_exit` and `gc_elsewhere`.
+3. An out-of-order exit restores its own saved state → `out_of_order` and
+   `interleaved_generators`.
+4. No refusal by what the call returns → `refusals` ("did not refuse a
+   async_callable_object").
+5. A nested scope lowers the inbound mark → `nested_in_inbound`.
+6. No guard when the fresh bind did not take → `bind_fault`.
+7. A scope that could not open is not marked → `enter_fault`, which counts its
+   exit as a second fault.
+
+The first build's sabotages are superseded with it. Its "`_recreate_cm`
+deleted" proof also no longer applies: per-context entries make one instance
+safe on any number of threads (`shared_instance`), so `_recreate_cm` was removed
+rather than kept untestable.
+
+**Outside the process.** The same driver runs from the built wheel through
+`tests/outside/test_p1_flow_scope_from_the_wheel.py`, with no framework. *Moved
+while building:* the real `create_agent` reuse rows need PyPI, so they live in
+P5's acceptance driver.
 
 **Test selection:** `tests/test_value_origin_flow_scope.py`,
 `tests/test_value_origin_reuse.py`, `tests/test_value_origin_m4.py`, SEAMS,
 TIERS, `tests/outside/test_p1_flow_scope_from_the_wheel.py`,
-`tests/outside/test_m4_from_the_wheel.py` (the warning text, from the wheel),
-`tests/outside/test_m5_from_the_wheel.py`.
+`tests/outside/test_m4_from_the_wheel.py`, `tests/outside/test_m5_from_the_wheel.py`.
 
-**Counter-case, the result that would prove P1 wrong:** a decorated sync handler
-run concurrently, where any call observes another call's correlation id or
-ledger. That would mean per-call re-creation does not isolate, and the decorator
-form is unsafe in exactly the hosts D1 targets. Measured by the thread case, in
-process and from the wheel: 8 threads × 25 calls, each thread inside its own
-outer flow.
+**Counter-case, the result that would prove P1 wrong:** any exit that changes
+state in a context its scope was not entered in, or any sequence of closes after
+which a closed scope's ledger is still bound. Either would mean the scope can
+still carry one request's authority into another. Measured by `foreign_exit`,
+`double_exit`, `gc_elsewhere`, `out_of_order`, `interleaved_generators` and
+`shared_instance`, in process and from the wheel.
+
+**Known and stated, not fixed:** a generator abandoned without `close()` keeps its
+scope open in the consumer's context. That is the plain pair's limitation in
+another form, and it is in the docs. A server that closes the response iterable,
+as PEP 3333 requires, is not affected.
 
 ### P2. S-2 removed (D2)
 

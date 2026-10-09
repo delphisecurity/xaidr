@@ -25,12 +25,10 @@ def test_the_driver_ran_the_installed_wheel(seen):
     assert "site-packages" in seen["xaidr_file"], seen["xaidr_file"]
 
 
-def test_p1_from_the_wheel(seen):
-    from tests.test_value_origin_flow_scope import (
-        check_cross_context_exit, check_nested, check_refusals, check_scope_that_raises,
-        check_threads)
-    check_scope_that_raises(seen)
-    check_nested(seen)
-    check_threads(seen)
-    check_refusals(seen)
-    check_cross_context_exit(seen)
+@pytest.mark.parametrize("name", [
+    "scope_that_raises", "nested", "nested_in_inbound", "correlation_id", "threads",
+    "shared_instance", "refusals", "foreign_exit", "double_exit", "out_of_order",
+    "interleaved_generators", "gc_elsewhere", "enter_fault", "bind_fault"])
+def test_p1_from_the_wheel(seen, name):
+    from tests import test_value_origin_flow_scope as t
+    getattr(t, f"check_{name}")(seen)

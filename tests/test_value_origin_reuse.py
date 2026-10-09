@@ -61,13 +61,18 @@ def test_a_reused_pool_thread_does_not_carry_user_as_ledger_into_user_bs_call():
     "test_scope_that_raises_leaves_nothing_for_the_next_request"))
 def test_a_flow_left_open_by_user_a_is_not_user_bs_ledger():
     # WHAT WOULD MAKE THIS ASSERTING (owner, D3: no deprecation of the plain pair in A2).
-    # It passes only if begin_flow() stops leaving request state bound past the request
-    # when clear_flow() is skipped. That needs one of two behaviour changes, both outside
-    # A2: the plain pair is removed, or begin_flow() itself becomes a scope that ends with
-    # its caller. Nothing else can work, because xaidr receives no call between user A's
-    # last statement and user B's first tool call, so the two are indistinguishable.
-    # If this XPASSes, one of those two happened: make it asserting, and update the three
-    # places that state the limitation: docs/api.md, README.md and the no_flow warning
+    # Between user A's last statement and user B's tool call, the only call xaidr gets is
+    # B's own input scan, and an explicit ledger deliberately survives an input scan
+    # (ruling 3.1: one flow spans many inputs; that is how a multi-turn request works).
+    # So nothing xaidr sees can end A's flow. This becomes asserting only if begin_flow()
+    # stops binding past the request when clear_flow() is skipped, that is, if
+    # begin_flow() itself becomes a scope that ends with its caller.
+    # Two other changes would also flip it, and both are wrong:
+    #   * letting an input scan replace an explicit ledger: it breaks multi-turn flows;
+    #   * removing the plain pair: this test then ERRORS (no begin_flow), not XPASSes.
+    # If this XPASSes, find which change did it before converting it. Only if it was
+    # begin_flow() becoming a scope: make it asserting, and update the three places
+    # that state the limitation: docs/api.md, README.md and the no_flow warning
     # (xaidr/sensor.py, Sensor._value_origin_verdict).
     from xaidr import provenance_chain as pc
     with warnings.catch_warnings():
@@ -90,5 +95,6 @@ def test_a_flow_left_open_by_user_a_is_not_user_bs_ledger():
     assert b not in AUTHORITY, (
         f"user B scanned its own input first and still read {b!r}: user A's open flow kept "
         "its explicit ledger across requests. This is the plain pair's documented limitation; "
-        "it becomes asserting only if begin_flow() stops binding past the request when "
-        "clear_flow() is skipped (the plain pair removed, or begin_flow() made a scope)")
+        "it becomes asserting only if begin_flow() itself becomes a scope that ends with its "
+        "caller (NOT by letting an input scan replace an explicit ledger: that breaks "
+        "multi-turn flows)")
