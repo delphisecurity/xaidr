@@ -2017,9 +2017,10 @@ class DelphiSensor:
             truncated = text is not None and len(text) > _VO_INPUT_CAP
             if truncated:
                 # Deliberately NOT cut here (owner, 2026-10-05): the core bounds its
-                # own work. Key n-grams come from the first 64 KiB only; destination
-                # ATOMS come from all of the text, under ATOM_WORK_BUDGET. Past 64 KiB
-                # a miss reads input_truncated, which does not block.
+                # own work. It reads key n-grams and destination atoms from the first
+                # 64 KiB in full, and destination atoms from the rest under
+                # ATOM_WORK_BUDGET. Past 64 KiB a miss reads input_truncated, or
+                # extraction_incomplete when that budget ran out; neither blocks.
                 pass
             out = _vo.record_principal_input(text if text is not None else prompt,
                                              spans, input_clean=clean, truncated=truncated)
