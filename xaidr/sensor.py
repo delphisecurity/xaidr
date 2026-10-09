@@ -2016,16 +2016,11 @@ class DelphiSensor:
             spans = list(spans) if spans is not None else None
             truncated = text is not None and len(text) > _VO_INPUT_CAP
             if truncated:
-                # NOT cut any more (owner, 2026-10-05). It used to be cut here because
-                # the input seam's cost scaled with the prompt (F8: 0.8 ms/KB; CI caught
-                # a 5MB input crossing test_truncation_bypass's bound). The core now
-                # bounds the expensive part (key n-grams, first 64 KiB) and runs only
-                # the cheap atom pass over the rest: linear, ~110 ns/char of prose.
-                # Past 64 KiB the core records destination ATOMS but no key n-grams;
-                # a miss reads input_truncated, which does not block (owner,
-                # 2026-10-05; until then the text was cut here and a destination
-                # past the cap was lost).
-                pass   # owner, 2026-10-05: NOT cut here; the core reads atoms from all of it
+                # Deliberately NOT cut here (owner, 2026-10-05): the core bounds its
+                # own work. Key n-grams come from the first 64 KiB only; destination
+                # ATOMS come from all of the text, under ATOM_WORK_BUDGET. Past 64 KiB
+                # a miss reads input_truncated, which does not block.
+                pass
             out = _vo.record_principal_input(text if text is not None else prompt,
                                              spans, input_clean=clean, truncated=truncated)
             # A FAULT on a scannable input means the record was dropped (a spans

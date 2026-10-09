@@ -194,13 +194,13 @@ class CallVerdict:
 LEDGER_MAX_ENTRIES: int = 10_000      # destinations (owner, 2026-10-06: kept)
 LEDGER_MAX_NGRAMS: int = 65_536       # the principal's key n-grams, their OWN budget (approved)
 # The atom pass past a bound is bounded by WORK, not position (owner, 2026-10-06):
-# each scanned char costs 1, each extracted atom ATOM_COST (measured: ~100 ns/char,
-# ~7 us/atom). Per seam call. Hitting it is visible (extraction_incomplete), never a block.
+# each scanned char costs 1, each extracted atom ATOM_COST. Per seam call. Hitting
+# it is visible (extraction_incomplete), never a block.
 ATOM_WORK_BUDGET: int = 500_000
-# A result's EXAMINED pass (up to 64 leaves of 64 KiB) is budgeted by work too
-# (owner, 2026-10-06: it cost ~6 s on address-dense text). Same charging: 1/char,
-# ATOM_COST/candidate examined. Spending it is visible (extraction_incomplete).
-EXAMINED_WORK_BUDGET: int = 1_000_000   # halved after review: distinct IDN URLs cost ~1.3 s at 2M
+# A result's EXAMINED pass (up to 64 leaves of 64 KiB) is budgeted by work too, with
+# the same charging: 1/char, ATOM_COST/candidate examined. Spending it is visible
+# (extraction_incomplete), never a block. The value is deliberate.
+EXAMINED_WORK_BUDGET: int = 1_000_000
 MAX_WALK_NODES: int = 65_536    # the EXAMINED walk's node budget: width cannot escape it (review)
 ATOM_COST: int = 64
 ATOM_CHUNK_CHARS: int = 16_384
