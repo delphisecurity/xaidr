@@ -327,10 +327,15 @@ any code. The expected red is named.
   > limitation.
 - **`test_nested_scope_restores_the_outer_flow`:** the inner exit leaves the
   outer correlation id, chain and ledger.
-- **`test_decorated_sync_handler_is_scoped_per_call_across_threads`:** 8 threads
-  run one decorated handler at once through a barrier. Each sees its own
-  correlation id, and none raises. Red under a class without `_recreate_cm`:
-  `RuntimeError ... already been used once`.
+- **`test_decorated_sync_handler_is_scoped_per_call_across_threads`:** 8 threads,
+  each inside its OWN outer flow, run one decorated handler at once through a
+  barrier, 25 rounds. Each call sees its own correlation id, and the thread's outer
+  flow and ledger are back after every call, with no restore logged as failed.
+  *Corrected while building:* the first version checked only distinct ids and
+  "no exception", and the `_recreate_cm` sabotage passed it. The never-raise
+  fallback turns a shared instance's failed restores into silent clears, which
+  look like restores when there is no outer flow. With an outer flow per thread,
+  the sabotage gives 198 of 200 calls losing it.
 - **`test_decorating_a_coroutine_function_is_refused`**, and the same for
   generator and async-generator functions: `TypeError` whose message names
   `with xaidr.flow(`.
@@ -348,14 +353,17 @@ byte-identical, show green.
   `principal_undeclared_span`.
 - `_recreate_cm` deleted → the thread test raises `RuntimeError`.
 - The coroutine refusal deleted → the refusal test sees no `TypeError`.
-- The fallback's `except` narrowed to `ValueError` only → the cross-context test
-  raises.
+- The fallback's `except` narrowed to `RuntimeError` only → the cross-context test
+  raises the `ValueError` the reset throws. *Corrected while building:* this spec
+  first said `ValueError`, which IS what a cross-context reset raises, so that edit
+  would have proved nothing.
 
-**Outside the process.** Driver `tests/outside/drivers/flow_scope.py`, run from
-the built wheel by a new `tests/outside/test_p1_flow_scope_from_the_wheel.py`. It
-uses real `create_agent` plus `protect(value_origin="record")` on a one-worker
-pool, the spike's three rows as asserted cases, and a decorated sync handler on 4
-pool threads.
+**Outside the process.** Driver `tests/outside/drivers/flow_scope.py`, run
+in-process by the unit test and from the built wheel by
+`tests/outside/test_p1_flow_scope_from_the_wheel.py`, with no framework, so it
+runs wherever the dev extra is installed. *Moved while building:* the real
+`create_agent` reuse rows need PyPI, so they live in P5's acceptance driver. That
+driver installs LangChain anyway and already has the R-reuse cases.
 
 **Test selection:** `tests/test_value_origin_flow_scope.py`,
 `tests/test_value_origin_reuse.py`, `tests/test_value_origin_m4.py`, SEAMS,
@@ -366,8 +374,9 @@ TIERS, `tests/outside/test_p1_flow_scope_from_the_wheel.py`,
 **Counter-case, the result that would prove P1 wrong:** a decorated sync handler
 run concurrently, where any call observes another call's correlation id or
 ledger. That would mean per-call re-creation does not isolate, and the decorator
-form is unsafe in exactly the hosts D1 targets. Measured as part of the outside
-driver, 4 threads × 200 calls.
+form is unsafe in exactly the hosts D1 targets. Measured by the thread case, in
+process and from the wheel: 8 threads × 25 calls, each thread inside its own
+outer flow.
 
 ### P2. S-2 removed (D2)
 

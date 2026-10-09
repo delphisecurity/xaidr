@@ -59,6 +59,10 @@ def check_q6(seen):
     assert seen["warn_after_flow_call_on_fresh_sensor"] == 0
     assert seen["warn_off"] == 0
     assert "begin_flow()" in seen["warning_text"] and "extract_context()" in seen["warning_text"]
+    # D1/D3 (owner, 2026-10-08): the scoped form is named first, and the plain pair's
+    # limitation is stated where an operator meets it, not only in a test name.
+    assert "xaidr.flow(" in seen["warning_text"], seen["warning_text"]
+    assert "clear_flow() is skipped" in seen["warning_text"], seen["warning_text"]
 
 
 def test_every_tool_call_exit_carries_value_origin(seen):

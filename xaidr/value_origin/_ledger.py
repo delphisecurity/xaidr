@@ -15,6 +15,9 @@ BINDING (ruling 3.1). A ledger is EXPLICIT or IMPLICIT (an internal attribute):
                                implicit bound -> REPLACED by a fresh implicit
                                explicit bound -> kept
     unbind_ledger()            clear_flow
+    ledger_token()/_reset()    xaidr.flow(): a token on enter, restored on exit (return OR
+                               raise), so a scope ends its ledger and hands back the one
+                               bound before it (owner, D1, 2026-10-08)
 
 An implicit ledger lives for one request. Replacing it at the next input scan
 is the V-27 fix: a thread-reusing server that never begins a flow must not carry
@@ -167,6 +170,18 @@ def unbind_ledger() -> None:
         _LEDGER.set(None)
     except Exception:
         _log.exception("value origin: unbind_ledger faulted")
+
+
+def ledger_token():
+    """For ``xaidr.flow()`` only: a token that restores the binding as it is NOW.
+    Setting the var to its own value changes nothing; the token is the point."""
+    return _LEDGER.set(_LEDGER.get())
+
+
+def ledger_reset(token) -> None:
+    """For ``xaidr.flow()`` only. Raises ValueError/RuntimeError, exactly as
+    ``ContextVar.reset`` does, so the scope can tell a restore that failed."""
+    _LEDGER.reset(token)
 
 
 def ledger_bound() -> bool:

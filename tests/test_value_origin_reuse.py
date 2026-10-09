@@ -54,10 +54,21 @@ def test_a_reused_pool_thread_does_not_carry_user_as_ledger_into_user_bs_call():
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "STOPPED with the rest of ruling 1 (milestone review: a worse variant). begin_flow "
-    "for A without clear_flow keeps A's EXPLICIT ledger, and an explicit ledger is never "
-    "replaced, so it survives even user B's own input scan"))
+    "the plain begin_flow()/clear_flow() pair's documented limitation (owner, D3, "
+    "2026-10-08): begin_flow for A without clear_flow keeps A's EXPLICIT ledger, and an "
+    "explicit ledger is never replaced, so it survives even user B's own input scan. The "
+    "asserting test is the scoped form: tests/test_value_origin_flow_scope.py::"
+    "test_scope_that_raises_leaves_nothing_for_the_next_request"))
 def test_a_flow_left_open_by_user_a_is_not_user_bs_ledger():
+    # WHAT WOULD MAKE THIS ASSERTING (owner, D3: no deprecation of the plain pair in A2).
+    # It passes only if begin_flow() stops leaving request state bound past the request
+    # when clear_flow() is skipped. That needs one of two behaviour changes, both outside
+    # A2: the plain pair is removed, or begin_flow() itself becomes a scope that ends with
+    # its caller. Nothing else can work, because xaidr receives no call between user A's
+    # last statement and user B's first tool call, so the two are indistinguishable.
+    # If this XPASSes, one of those two happened: make it asserting, and update the three
+    # places that state the limitation: docs/api.md, README.md and the no_flow warning
+    # (xaidr/sensor.py, Sensor._value_origin_verdict).
     from xaidr import provenance_chain as pc
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -78,4 +89,6 @@ def test_a_flow_left_open_by_user_a_is_not_user_bs_ledger():
     assert a in AUTHORITY, a
     assert b not in AUTHORITY, (
         f"user B scanned its own input first and still read {b!r}: user A's open flow kept "
-        "its explicit ledger across requests")
+        "its explicit ledger across requests. This is the plain pair's documented limitation; "
+        "it becomes asserting only if begin_flow() stops binding past the request when "
+        "clear_flow() is skipped (the plain pair removed, or begin_flow() made a scope)")

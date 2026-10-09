@@ -2607,10 +2607,15 @@ class DelphiSensor:
                 logger.warning(
                     "xaidr: Sensor(agent_id=%r): value origin saw a tool call with NO flow "
                     "active (wire no_flow), so it can trace no destination and, under "
-                    "ENFORCE, can never block. Start a flow per agent request: wrap it in "
-                    "xaidr.begin_flow() ... xaidr.clear_flow(), or call extract_context() on "
-                    "an inbound A2A request. In LangGraph/create_agent, begin_flow() must run "
-                    "OUTSIDE the graph. Logged once per sensor.", self.agent_id)
+                    "ENFORCE, can never block. Open a flow per agent request: run it inside "
+                    "`with xaidr.flow(principal=...):` (a sync request handler can be "
+                    "decorated with @xaidr.flow(...)); for a request that arrived from "
+                    "another service, call extract_context() on its headers. The plain "
+                    "xaidr.begin_flow() ... xaidr.clear_flow() pair still works, but if "
+                    "clear_flow() is skipped (for example because the request raised) the "
+                    "next request on the same thread inherits the flow. In "
+                    "LangGraph/create_agent the flow must be opened OUTSIDE the graph. "
+                    "Logged once per sensor.", self.agent_id)
         return cv
 
     def _scan_tool_call_unattached(

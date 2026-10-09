@@ -6,7 +6,7 @@ _Part of the [xaidr](https://github.com/delphisecurity/xaidr/blob/main/README.md
 from xaidr import (
     Sensor, ProtectedHttpClient, ScanResult, DelphiBlockedError, CircuitBreaker,
     set_origin, origin_scope, clear_origin,
-    begin_flow, inject_context, extract_context, clear_flow, propagate_context,
+    flow, begin_flow, inject_context, extract_context, clear_flow, propagate_context,
 )
 
 Sensor(agent_id="a", privilege_tier=1)      # 1 = highest privilege, 4 = lowest
@@ -62,4 +62,5 @@ without also stopping on `flagged`. The protected HTTP wrapper raises
 ## The one-time `no_flow` warning (value origin)
 
 - **What it means:** a tool call arrived with no flow active, so value origin could not trace its destination (logged once per sensor).
-- **What `begin_flow()` does:** it opens one request's scope (chain, correlation id and a fresh value-origin ledger); call it per agent request, outside any LangGraph graph, and `clear_flow()` at the end.
+- **How to open a flow:** `with xaidr.flow(principal=...):` around each agent request, outside any LangGraph graph. It opens one request's scope (chain, correlation id and a fresh value-origin ledger) and ends it on exit, whether the request returned or raised. A sync request handler can be decorated with `@xaidr.flow(...)`, which scopes each call; `async def`, generator and async-generator functions are refused, because their bodies run after the call returns, so use the `with` form inside them. A decorated handler reads the id with `xaidr.provenance_chain.current_correlation_id()`.
+- **The plain pair, and its limitation:** `begin_flow()` ... `clear_flow()` still works. But if `clear_flow()` is skipped, for example because the request raised, the next request on the same worker thread inherits the flow and its ledger. If you use the pair, call `clear_flow()` in a `finally`.

@@ -23,6 +23,8 @@ from ._ledger import (
     bind_fresh_ledger,
     bind_ledger,
     ledger_bound,
+    ledger_reset,
+    ledger_token,
     record_principal_input,
     record_tool_result,
     unbind_ledger,
@@ -65,7 +67,8 @@ __all__ = [
     "MAX_KEY_TOKENS", "PSL_SNAPSHOT_DATE",
     # §1.4 functions
     "validate_designations", "validate_mode", "bind_ledger", "bind_fresh_ledger",
-    "unbind_ledger", "ledger_bound", "record_principal_input", "record_tool_result",
+    "unbind_ledger", "ledger_bound", "ledger_token", "ledger_reset",
+    "record_principal_input", "record_tool_result",
     "evaluate_call", "should_block", "authority_of", "extract_destinations",
     "verdict_of", "row_text",
 ]
