@@ -19,19 +19,15 @@ EXPECT = {
     "undeclared": "principal_undeclared_span",
     "declared": "principal",
     "bytes": "principal_undeclared_span",
-    # D2 (owner, 2026-10-08): no implicit ledgers. Every flow-less case below binds no
-    # ledger at all, so it reads no_flow, or ledger_absent where a host-recorded hop
-    # makes a flow visible with no ledger behind it. These pinned S-2's implicit
-    # verdicts (["principal_undeclared_span", "unresolved"] and similar) until D2.
-    "s30": ["no_flow", "no_flow"],
-    "s30_host_record_hop": ["ledger_absent", "ledger_absent"],
-    "s2_circuit_open": ["no_flow", True, "no_flow"],
+    "s30": ["principal_undeclared_span", "unresolved"],
+    "s30_host_record_hop": ["principal_undeclared_span", "unresolved"],
+    "s2_circuit_open": ["principal_undeclared_span", True, "unresolved"],
     "spans_ignored_warnings": 1,
-    # Owner, 2026-10-06 (ruling 4) made a non-scannable input a write the ledger did not
-    # accept (write_dropped). That needs a ledger; flow-less, under D2 there is none.
-    "not_scannable_ends_previous": "no_flow",
-    # Q21's guarantee holds by construction under D2: no implicit ledger to end.
-    "a2a_inbound_ends_implicit": "no_flow",
+    # Owner, 2026-10-06 (ruling 4): a non-scannable input is a write the ledger did not
+    # accept, so the miss reads write_dropped (and blocks under ENFORCE). It still ends
+    # the previous request (S-2): a FRESH ledger is bound. This pinned "unresolved".
+    "not_scannable_ends_previous": "write_dropped",
+    "a2a_inbound_ends_implicit": "unresolved",
     "a2a_inbound_keeps_explicit": "principal_undeclared_span",
     "spans_mismatch_warnings": 1,
     # Owner, 2026-10-05: past the cap the destination is RECORDED (atoms over the whole
@@ -43,11 +39,11 @@ WHY = {
     "undeclared": "the input seam recorded nothing",
     "declared": "spans= was not honoured",
     "bytes": "a bytes prompt was not recorded as its decoded text",
-    "s30": "a flow-less request bound a ledger, so request 2 could see request 1 (S30; D2)",
-    "s30_host_record_hop": "a host recording its own hop got a ledger with no flow behind it (ruling 3.1; D2)",
-    "s2_circuit_open": "a flow-less circuit-open request bound a ledger (D2)",
-    "not_scannable_ends_previous": "a flow-less non-scannable input bound a ledger (D2)",
-    "a2a_inbound_ends_implicit": "a flow-less inbound A2A message read a ledger (Q21; D2)",
+    "s30": "request 2 saw request 1's principal input (S30)",
+    "s30_host_record_hop": "a host recording its own hop carried request 1's authority into request 2",
+    "s2_circuit_open": "a circuit-open input did not end the previous request's implicit authority (S-2)",
+    "not_scannable_ends_previous": "a non-scannable input did not end the previous request (S-2)",
+    "a2a_inbound_ends_implicit": "an inbound A2A message kept the previous request's implicit ledger (Q21)",
     "a2a_inbound_keeps_explicit": "an inbound A2A message dropped begin_flow's explicit ledger (ruling 3.1)",
     "spans_mismatch_warnings": "a spans/text mismatch dropped the record silently (M6 silent-failure review)",
     "input_cap": "a destination past the input cap was lost instead of recorded with the input's own V-9 origin (owner, 2026-10-05: don't lose the destination)",

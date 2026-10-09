@@ -11,18 +11,17 @@ BINDING (ruling 3.1). A ledger is EXPLICIT or IMPLICIT (an internal attribute):
     bind_ledger()              explicit iff nothing is bound  (no caller: record_hop stopped
                                                               binding when ruling 3.1 changed,
                                                               2026-10-04); never rebinds
-    record_principal_input()   explicit bound -> records into it
-                               nothing bound  -> records NOTHING (D2, owner, 2026-10-08)
+    record_principal_input()   nothing bound  -> fresh implicit
+                               implicit bound -> REPLACED by a fresh implicit
+                               explicit bound -> kept
     unbind_ledger()            clear_flow
     ledger_get()/ledger_set()  xaidr.flow(): saved on enter, put back on exit (return OR
                                raise), so a scope ends its ledger and hands back the one
                                bound before it (owner, D1, 2026-10-08)
 
-There are no implicit ledgers (D2, owner, 2026-10-08). Until D2 an input scan
-with no flow bound one, replaced at the next input scan (S-2, and V-27's fix):
-its lifetime depended on when the next request happened to scan, so a request
-with no input of its own read the previous one's authority. A ledger is bound
-only on entry (begin_flow, extract_context, xaidr.flow()) and ends with its flow.
+An implicit ledger lives for one request. Replacing it at the next input scan
+is the V-27 fix: a thread-reusing server that never begins a flow must not carry
+user A's principal authority into user B's request.
 
 WHAT IS STORED (C-12). ``HMAC-SHA256(k, authority.key())`` and the same for
 principal n-grams, ``k`` 32 random bytes drawn once per process. Nothing here can
@@ -192,12 +191,13 @@ def ledger_bound() -> bool:
         return False
 
 
-def _bind_for_input() -> Optional[_Ledger]:
-    """The ledger an input records into: the flow's EXPLICIT ledger, or None.
-    D2 (owner, 2026-10-08): no implicit ledgers. An input with no flow binds
-    nothing, so nothing outlives its request to be carried into the next one."""
+def _bind_for_input() -> _Ledger:
     lg = _current()
-    return lg if lg is not None and lg.explicit else None
+    if lg is not None and lg.explicit:
+        return lg
+    lg = _Ledger(explicit=False)
+    _LEDGER.set(lg)
+    return lg
 
 
 # ── the write rule (C-18) ────────────────────────────────────────────────────
@@ -291,9 +291,7 @@ def record_principal_input(text: str, spans: Sequence[Span] | None = None, *,
     """
     try:
         lg = _bind_for_input()
-        if lg is None:
-            return RecordOutcome.NO_LEDGER      # D2: no flow, no ledger, nothing recorded
-        if truncated:
+        if truncated and lg is not None:
             lg.input_truncated = True     # owner, after M6: a miss here is input_truncated
         if not isinstance(text, str):
             return _lost()

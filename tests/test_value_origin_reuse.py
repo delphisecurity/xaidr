@@ -28,50 +28,29 @@ class _Null:
         pass
 
 
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    "STOPPED for the owner's ruling (seam change): user A's implicit ledger, bound by A's "
+    "input scan, is still bound when user B's request runs on the same pool thread; B's "
+    "tool call, made before any input of B's own, reads A's principal authority"))
 def test_a_reused_pool_thread_does_not_carry_user_as_ledger_into_user_bs_call():
-    # D2 (owner, 2026-10-08): no implicit ledgers. This was a strict xfail while S-2 bound
-    # an implicit ledger at user A's input scan and it survived into user B's request on
-    # the same pool thread. Under D2 a flow-less request binds NOTHING, so there is no
-    # ledger for B to inherit. The precondition changed with it: A, flow-less too, has no
-    # authority either (it used to assert A's call was authorized).
-    from xaidr.value_origin import ledger_bound
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         s = xaidr.Sensor(agent_id="reuse", value_origin="record", reporter=_Null())
 
     def user_a():
         s.scan("Email alice@corp.example the quarterly report.", direction="input")
-        return ledger_bound(), s.scan_tool_call(
-            "send_email", {"to": "alice@corp.example"}).value_origin.wire.value
+        return s.scan_tool_call("send_email", {"to": "alice@corp.example"}).value_origin.wire.value
 
     def user_b():          # B never named alice; its tool call precedes any input of B's own
-        return ledger_bound(), s.scan_tool_call(
-            "send_email", {"to": "alice@corp.example"}).value_origin.wire.value
+        return s.scan_tool_call("send_email", {"to": "alice@corp.example"}).value_origin.wire.value
 
     with ThreadPoolExecutor(max_workers=1) as pool:      # ONE worker: B runs on A's thread
         a = pool.submit(user_a).result()
         b = pool.submit(user_b).result()
-    assert a == (False, "no_flow"), (
-        f"user A opened no flow, and its input scan still bound a ledger (ledger_bound, wire) "
-        f"= {a!r}: an implicit ledger exists, which D2 removed")
-    assert b == (False, "no_flow"), (
-        f"user B's call to an address only user A typed read {b!r}: request state from A's "
-        "flow-less request reached B on a reused pool thread")
-
-
-def test_a_flow_less_input_binds_no_ledger():
-    # D2 (owner, 2026-10-08): bind on entry only. An input scan with no flow records
-    # nothing, so nothing outlives the request to be carried.
-    from xaidr import provenance_chain as pc
-    from xaidr.value_origin import ledger_bound
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        s = xaidr.Sensor(agent_id="reuse-bind", value_origin="record", reporter=_Null())
-    pc.clear_flow()
-    s.scan("Email alice@corp.example the quarterly report.", direction="input")
-    assert not ledger_bound(), (
-        "an input scan with no flow bound a value-origin ledger: an implicit ledger "
-        "outlives the request that bound it (D2)")
+    assert a in AUTHORITY, f"precondition: user A's own call is authorized, got {a!r}"
+    assert b not in AUTHORITY, (
+        f"user B's call to an address only user A typed read {b!r}: A's principal "
+        "authority carried across requests on a reused pool thread")
 
 
 @pytest.mark.xfail(strict=True, raises=AssertionError, reason=(

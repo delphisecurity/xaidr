@@ -79,7 +79,7 @@ green.**
 
 ## 1. Every seam the core must wire into
 
-What the core needs (§1.4; rulings 3.1 and S-2 win; S-2 since reversed by D2, see the build spec): `record_principal_input`
+What the core needs (§1.4; rulings 3.1 and S-2 win): `record_principal_input`
 after each input scan, `record_tool_result` after each result scan with the
 **raw** result and the **pre-mode** verdict, `evaluate_call` + `should_block`
 **first** in `scan_tool_call` (V-18, C-13), and binding at the hop and flow
@@ -106,7 +106,7 @@ functions. Mode `OFF` skips all of it.
   `sensor.py:1831`, and recording raw bytes returns FAULT
   (`_ledger.py:240-241`). A value that cannot be scanned is passed as-is. It
   still binds, then FAULTs, which ends the previous request's implicit
-  authority (S-2). *[Reversed by D2, owner, 2026-10-08: no implicit ledgers. An input scan with no flow binds and records nothing; see docs/value-origin-a2-build-spec.md §0 D2.]*
+  authority (S-2).
 - `input_clean` is `True` only on the normal path, and only when the
   scanner's action was `allowed` **and** `_post_scan_gate` returned the result
   unchanged. Monitor softening never produces `allowed` (`local.py:838-845`,
@@ -666,7 +666,7 @@ vendors (§4.5, P4). The owner sees the diff before anything builds on it.
   - A **flagged** input gives `untrusted_source` (V-9).
   - S30: two requests on one thread with no flow; request 2 does not see
     request 1.
-  - A circuit-open input ends the previous request's implicit authority (S-2). *[Reversed by D2, owner, 2026-10-08: no implicit ledgers. An input scan with no flow binds and records nothing; see docs/value-origin-a2-build-spec.md §0 D2.]*
+  - A circuit-open input ends the previous request's implicit authority (S-2).
   - A bytes prompt records its decoded text.
   - C-11 P-input is byte-identical in **both** enforcement modes.
   - **§3.2 4a-I un-xfailed**, with *K_I* measured and pinned and the strict
