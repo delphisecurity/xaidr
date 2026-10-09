@@ -40,6 +40,13 @@ Check 2 is the one that matters and check 1 is the one that always runs. Neither
 substitutes for the other: an anchored pattern list can still name the wrong
 directories, and a passing build here says nothing about a list someone rewrites
 tomorrow in the shape that caused this.
+
+AND THE OTHER DIRECTION, AFTER 1.20.0. asi_battery/, heldout/ and
+docs/releasing.md are maintainer material and are excluded from the sdist (the
+reasoning is in pyproject.toml). The same two kinds of check pin that: one reads
+the `exclude` list and always runs, one reads the tarball. An upload cannot be
+amended, so a path that should not ship is checked as strictly as one that
+should.
 """
 from __future__ import annotations
 
@@ -58,17 +65,24 @@ REPO = Path(__file__).resolve().parent.parent
 # Directories whose every tracked file must reach the sdist. Named as
 # directories, then ENUMERATED from git below — a list of directories is a
 # statement of scope, a list of files is a thing that goes stale. The pools are
-# the data every published figure is measured over; scripts/ holds the
-# regenerators; tests/ holds the suite that gates them.
+# the data the published figures are measured over; scripts/ holds the
+# regenerators; tests/ holds the suite that gates them. asi_battery/ and
+# heldout/ are pools too, and are deliberately NOT here: see _MUST_NOT_SHIP.
 _MUST_SHIP_DIRS = [
     "xaidr",
     "scripts",
     "tests",
-    "asi_battery",
     "benign_a2a",
     "benign_longform",
     "benign_toolcalls",
+]
+
+# Paths that must NOT reach the sdist. Maintainer material, kept in the
+# repository; pyproject.toml says why and what it costs.
+_MUST_NOT_SHIP = [
+    "asi_battery",
     "heldout",
+    "docs/releasing.md",
 ]
 
 # A floor that does not depend on git, so the enumeration below cannot pass
@@ -77,10 +91,6 @@ _MUST_SHIP_DIRS = [
 # figure is read off.
 _FLOOR = [
     "tests/fixtures/shell_corpus.json",   # 167 of 186, 165 of 277, the policy table
-    "asi_battery/attacks.jsonl",          # the ASI battery baseline
-    "asi_battery/benign.jsonl",           # its register-matched mirror
-    "heldout/attacks.jsonl",              # the held-out nano figures
-    "heldout/benign.jsonl",
     "benign_toolcalls/corpus.jsonl",      # the production-shaped FP bar
     "benign_a2a/nested.jsonl",
     "benign_longform/manifest.json",      # pins the generated long-form corpus
@@ -92,8 +102,8 @@ _FLOOR = [
 ]
 
 
-def _sdist_include_patterns():
-    """The sdist `include` list, via a real TOML parser.
+def _sdist_patterns(key="include"):
+    """The sdist `include` (or `exclude`) list, via a real TOML parser.
 
     Same parser dance as tests/test_install_hints.py: `tomllib` is stdlib only
     from 3.11 and this project claims 3.10, where pytest's own `tomli>=1`
@@ -106,7 +116,7 @@ def _sdist_include_patterns():
             continue
         with open(REPO / "pyproject.toml", "rb") as fh:
             data = parser.load(fh)
-        return data["tool"]["hatch"]["build"]["targets"]["sdist"]["include"]
+        return data["tool"]["hatch"]["build"]["targets"]["sdist"].get(key, [])
     pytest.skip("neither tomllib nor tomli is importable")
 
 
@@ -118,7 +128,7 @@ def test_every_sdist_include_pattern_is_anchored():
     directories ended up in a listing that was then read as proof the pools
     shipped. `/README.md` is the request that was meant.
     """
-    patterns = _sdist_include_patterns()
+    patterns = _sdist_patterns()
     assert patterns, "the sdist target declares no include list at all"
     floating = [p for p in patterns if not p.startswith("/")]
     assert not floating, (
@@ -133,7 +143,7 @@ def test_every_sdist_include_pattern_is_anchored():
 
 def test_the_sdist_include_list_names_every_pool_and_regenerator_directory():
     """Anchoring is half the fix; naming the directories is the other half."""
-    named = {p.lstrip("/").rstrip("/") for p in _sdist_include_patterns()}
+    named = {p.lstrip("/").rstrip("/") for p in _sdist_patterns()}
     missing = [d for d in _MUST_SHIP_DIRS if d not in named]
     assert not missing, (
         "directories holding committed pools or the scripts that regenerate "
@@ -142,6 +152,22 @@ def test_the_sdist_include_list_names_every_pool_and_regenerator_directory():
         "only be reproduced from a git clone, so no claim about it can be "
         "'verified from the built artifact'."
     )
+
+
+def test_maintainer_material_is_excluded_from_the_sdist_by_name():
+    """Each must-not-ship path is in `exclude`, anchored with a leading `/`.
+
+    `exclude` rather than absence from `include`, because in hatchling an
+    exclude beats an include: a later edit that re-adds the directory to the
+    include list cannot put it back. Absence alone has no such property.
+    """
+    exclude = set(_sdist_patterns("exclude"))
+    not_excluded = [p for p in _MUST_NOT_SHIP if "/" + p not in exclude]
+    assert not not_excluded, (
+        "maintainer material must not reach the sdist, and the pyproject.toml "
+        f"sdist target does not exclude {not_excluded} by anchored name. An "
+        "upload to PyPI cannot be amended; pyproject.toml records why these "
+        "paths stay in the repository only.")
 
 
 def _tracked_files():
@@ -226,6 +252,22 @@ def test_the_built_sdist_carries_every_committed_pool_and_regenerator(tmp_path):
         "Every one of these is committed evidence that does not reach anyone "
         "who obtains this project from PyPI rather than from GitHub."
     )
+
+
+def test_the_built_sdist_leaves_out_the_maintainer_material(tmp_path):
+    """Read the tarball for the paths that must NOT be there."""
+    path = _build_sdist(tmp_path)
+    with tarfile.open(path) as tf:
+        members = tf.getnames()
+    assert members, f"{os.path.basename(path)} has no members at all"
+    inside = [m.split("/", 1)[1] for m in members if "/" in m]
+    leaked = sorted(m for m in inside
+                    if any(m == p or m.startswith(p + "/") for p in _MUST_NOT_SHIP))
+    assert not leaked, (
+        f"maintainer material reached the built sdist ({os.path.basename(path)}):"
+        "\n  " + "\n  ".join(leaked[:20]) + "\n"
+        "An upload to PyPI cannot be amended. pyproject.toml excludes these "
+        "paths and records why; the exclusion did not hold.")
 
 
 def test_the_wheel_does_not_grow_the_pools(tmp_path):

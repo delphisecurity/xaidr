@@ -147,10 +147,12 @@ tests that do not depend on this configuration.
 
 ## Reproducing any of this from an install
 
-You cannot. The wheel and the sdist ship the `xaidr` package only, with no
-`tests/` directory, so running the suite means cloning the repository. Read the
-CI logs as "the maintainers run this suite and here is the run", not as "you can
-run it from PyPI".
+Not from the wheel: it ships the `xaidr` package only. The sdist has carried
+`tests/` since 1.19.0, so the suite runs from an extracted sdist without a
+clone. It is a subset there, not the whole run: an sdist built from this tree
+leaves `asi_battery/` out, and the tests that read it skip with a reason that
+says so (`tests/conftest.py`). A clone runs all of it, and the CI logs are the
+record of that run.
 
 ## Retraction record
 

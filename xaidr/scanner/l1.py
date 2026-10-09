@@ -129,9 +129,8 @@ _L1_SCAN_BUDGET_SEC = 0.5
 # pathologically on this input. Calibrated from the audit, not guessed: with every
 # pattern now linear, the slowest single rule on a full-size 100k adversarial
 # input measures 376ms, so 1.0s leaves ~2.7x headroom for a loaded machine. The
-# separation from a real backtracker is not close — the one this finding exists
-# for did not finish in 60 seconds on 105 characters — so a wide margin costs
-# nothing in detection and removes any chance of firing on honest work.
+# margin is wide on purpose: it costs nothing in detection and removes any
+# chance of firing on honest work.
 _L1_RULE_SLOW_SEC = 1.0
 
 # WHAT HAPPENS WHEN A BOUND IS BLOWN — AND WHY NEITHER IS A TIMEOUT.
@@ -339,10 +338,8 @@ def _load_and_compile(filename: str) -> list:
             )
         # A rule may name a DETECTOR instead of carrying a regex. Some questions
         # are not regex questions: "is a 5-50 character unit repeated 21 times"
-        # is a counting problem, and the regex that expressed it
-        # (`(.{5,50})\s*(?:\1\s*){20,}`) was a catastrophic backtracker — 104
-        # spaces did not finish in 60 seconds. See scanner/repetition.py. An
-        # unknown detector name fails at LOAD for the same reason an unknown
+        # is a counting problem, answered in linear time by scanner/repetition.py.
+        # An unknown detector name fails at LOAD for the same reason an unknown
         # category does: a rule that silently does nothing is worse than a build
         # error.
         detector_name = r.get("detector")

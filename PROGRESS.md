@@ -56,7 +56,10 @@ detector that replaced the hanging phrase-repeat regex):
   `[^\n]{0,80}?`
 - `decode`: `\s+(?:it)?\s*[:.]?\s*` → `(?:\s+it)?[\s:.]{0,8}`
 
-Each `_why_changed` in the rule JSON records the specific defect and bound.
+~~Each `_why_changed` in the rule JSON records the specific defect and bound.~~
+**No longer true (2026-10-08):** the rule JSON carries no annotation fields.
+They were removed from every rule asset and `tests/test_rule_asset_annotations.py`
+now refuses any `_`-prefixed key there. The records are in git history.
 
 ### Green, after the fix
 

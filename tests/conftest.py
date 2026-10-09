@@ -23,6 +23,7 @@ _sys.dont_write_bytecode = True
 _sys.pycache_prefix = _tempfile.mkdtemp(prefix="xaidr-nopyc-")
 
 import time
+from pathlib import Path
 
 import pytest
 
@@ -37,6 +38,12 @@ def pytest_configure(config):
         "markers",
         "requires_dev_extra: needs '.[dev]' (urllib3, ada-url, hatchling); refuses, "
         "never skips, without it")
+    # One hook for both markers: two module-level pytest_configure functions would
+    # leave only the second, and the first marker would silently go unregistered.
+    config.addinivalue_line(
+        "markers",
+        "asi_battery: reads asi_battery/, which the sdist does not ship; skipped "
+        "in an extracted sdist and run everywhere else")
 
 
 class CapturingReporter:
@@ -127,3 +134,22 @@ def pytest_make_parametrize_id(config, val, argname):
         return "{}_{}chars".format(argname, len(val))
     return None
 
+
+_REPO = Path(__file__).resolve().parent.parent
+
+#: True only in an extracted sdist: pyproject.toml leaves asi_battery/ out of the
+#: distribution. A git checkout always has the directory, because it is tracked,
+#: so the `.git` half keeps a checkout from ever skipping. A deleted battery in a
+#: clone fails loudly instead of skipping, which would read as a pass.
+_NO_ASI_BATTERY = not (_REPO / "asi_battery").is_dir() and not (_REPO / ".git").exists()
+
+
+def pytest_collection_modifyitems(config, items):
+    if not _NO_ASI_BATTERY:
+        return
+    skip = pytest.mark.skip(reason=(
+        "asi_battery/ is not in the sdist (excluded in pyproject.toml); run "
+        "this from a git checkout"))
+    for item in items:
+        if item.get_closest_marker("asi_battery"):
+            item.add_marker(skip)

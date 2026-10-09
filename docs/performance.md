@@ -63,6 +63,6 @@ you that.
 Configurations, what CI does and does not build, and the `base` skip breakdown
 are also in
 [docs/testing.md](https://github.com/delphisecurity/xaidr/blob/main/docs/testing.md).
-It is a **source-tree** claim either way: the wheel and the sdist ship the
-`xaidr` package only, with no `tests/` directory, so verifying it means cloning
-the repository.
+It is a **source** claim either way, not an install claim: the wheel ships the
+`xaidr` package only. The sdist has carried `tests/` since 1.19.0, so verifying
+it means an extracted sdist or a clone of the repository.
