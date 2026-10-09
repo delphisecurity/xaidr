@@ -58,7 +58,7 @@ def test_a_reused_pool_thread_does_not_carry_user_as_ledger_into_user_bs_call():
     "2026-10-08): begin_flow for A without clear_flow keeps A's EXPLICIT ledger, and an "
     "explicit ledger is never replaced, so it survives even user B's own input scan. The "
     "asserting test is the scoped form: tests/test_value_origin_flow_scope.py::"
-    "test_scope_that_raises_leaves_nothing_for_the_next_request"))
+    "test_flow_scope[scope_that_raises]"))
 def test_a_flow_left_open_by_user_a_is_not_user_bs_ledger():
     # WHAT WOULD MAKE THIS ASSERTING (owner, D3: no deprecation of the plain pair in A2).
     # Between user A's last statement and user B's tool call, the only call xaidr gets is
@@ -69,7 +69,8 @@ def test_a_flow_left_open_by_user_a_is_not_user_bs_ledger():
     # begin_flow() itself becomes a scope that ends with its caller.
     # Two other changes would also flip it, and both are wrong:
     #   * letting an input scan replace an explicit ledger: it breaks multi-turn flows;
-    #   * removing the plain pair: this test then ERRORS (no begin_flow), not XPASSes.
+    #   * removing the plain pair: this test then fails with AttributeError, which
+    #     pytest reports as FAILED (raises=AssertionError), not XPASS.
     # If this XPASSes, find which change did it before converting it. Only if it was
     # begin_flow() becoming a scope: make it asserting, and update the three places
     # that state the limitation: docs/api.md, README.md and the no_flow warning
