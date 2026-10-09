@@ -3446,3 +3446,84 @@ R-reuse-open-flow:B    executed=['send_email'] send=[] toolmsg=['sent to alice@c
 
 ### Not started, because the finding changes the scope (owner: "report it before building around it")
 The committed acceptance test and its CI step; Q12 (LangChain string-input binding); the MCP stub-ClientSession end-to-end test; a real streaming `httpx.Response`; the C-11 P-seam pass through the LangChain/MCP hooks; S23/S24 through `protect()` from the wheel. Each stays as M7 deferred it, pending the owner's ruling on findings 1–4.
+
+## A2 build (handoff 2026-10-08): STOPPED in P1, after three designs of xaidr.flow() failed their counter-case
+
+Spec: docs/value-origin-a2-build-spec.md (`46cc8c4`, corrected in place since).
+
+### Landed
+
+| step | SHA | status |
+|---|---|---|
+| STEP 0 | `8ce8dc4`, `5a5f575`, `bde6c2f`, `832e642` | done; CI green on `832e642`, PR MERGEABLE |
+| STEP 1 | spec §2 | done; the conditional stop did not fire |
+| STEP 2 | spec §5 | done; audited; coverage 100% -> 0% under S-2 |
+| STEP 3 | `46cc8c4` | done |
+| P1 | first design `3a6c820`; second `325f12c`; third `93d60a1` | STOPPED (below) |
+| P2 | `9d8932c` | built and verified; NOT yet fresh-context reviewed |
+
+### P1: what holds, and what three reviews broke
+
+**What holds in every design**, measured in process and from the wheel:
+
+- a request scope that raises leaves nothing for the next request on the
+  thread;
+- the decorated form is per-call safe on a thread pool;
+- `async def` and generator functions are refused as decorator targets;
+- the D3 limitation is stated in docs/api.md, README.md and the no_flow
+  warning.
+
+**What broke.** P1's counter-case is: (1) a tier-gate verdict looser than with
+no `xaidr.flow()` at all, or (2) a later request starting in an earlier
+request's flow or ledger.
+
+- **First design (`3a6c820`, tokens):** a stray or second exit cleared an
+  unrelated inbound request (1). Out-of-order exits brought a closed scope back
+  (2).
+- **Second design (`325f12c`, value snapshots and a splice):**
+  - a request scope exiting with a generator's scope still open did not end
+    the request (2);
+  - a nested `flow(principal=)` replaced the chain, and the tier gate opened
+    4-to-1 (1).
+- **Third design (`93d60a1`, join and close-what-you-opened).** Reproduced in
+  this session, not only relayed:
+  - a fresh scope over an untiered upstream hop (an unconfigured sensor's
+    default) drops it. With no scope: `approval_required`, ceiling 4. Through
+    `@xaidr.flow(principal=...)`: `allowed`, ceiling 1 (1).
+  - a worker task created inside request A's scope inherits A's open entry;
+    job B's own scope JOINS it, and B reads `principal_undeclared_span` (2).
+  - The reviewers also measured (2) when an inner `clear_flow()` disarms the
+    enclosing scope, and both (1) and (2) when the generator refusal is
+    bypassed through a `@contextmanager` or class wrapper.
+
+### Why a fourth design was not attempted
+
+There is no request-boundary signal except the scope the host opens. So when
+a scope finds state already there, it cannot tell "my request's" from "an
+earlier request's left over" from "inherited by a worker". Every rule trades
+one counter-case for the other:
+
+- **Join existing state:** carries into workers and jobs (2).
+- **Replace it:** drops delegation evidence (1).
+- **Keep only "evidence":** is order-dependent, and inherits a leaked request's
+  chain.
+- **Restore on exit:** drops delegation recorded inside the scope, or lands in
+  a later request when the exit runs late.
+- **Generator detection:** bypassable by indirection, and it has false
+  positives (yield fixtures, batch generators).
+
+These are rulings for the owner (spec §7 Q-G), not implementation choices.
+
+### Also found, and reported rather than fixed (pre-existing; outside A2)
+
+These are held for the owner's disclosure call, so no detail is written here.
+
+- One shipped docstring describes how to trigger a defect in released
+  versions, and gate #40 cannot see it.
+- A2-added docstrings quote inputs that the released metadata detection
+  allows.
+- Two other published defects were measured, and reported to the owner.
+- The ENFORCE startup warning names four bound states as blocking; none of them
+  blocks.
+- One unexplained test failure occurred in 1 of 16 combined P1 runs. It was
+  not reproduced in 25 more runs, and its name was not captured.

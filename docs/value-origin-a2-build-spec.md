@@ -329,6 +329,18 @@ readers of `_inbound_ctx`/`_tiers_ctx`.
 
 ### P1. `xaidr.flow()` (D1) and the open-flow test (D3)
 
+> **STOPPED (2026-10-09), after the third design's fresh-context review.**
+> `93d60a1` meets this phase's own counter-case on both counts, reproduced in
+> the build session, not only relayed:
+>
+> - **Counter-case 1:** a fresh scope over an untiered upstream hop opens the
+>   tier gate, `approval_required` -> `allowed`.
+> - **Counter-case 2:** a worker created inside request A's scope makes job B's
+>   scope join A, and B reads A's authority.
+>
+> Everything below describes `93d60a1` as built; it is not the phase's
+> conclusion. See PROGRESS.md, "A2 build ... STOPPED in P1", and §7 Q-G.
+
 *Corrected twice, after two fresh-context reviews (2026-10-08/09).* This section
 first described the token design, then the second design. §1 records both. As
 built:
@@ -755,6 +767,25 @@ refuses unless `xaidr.__file__` is in that venv's site-packages
   not applied (§1). The second review measured that a replacing nested scope
   opens the tier gate in the documented middleware-plus-decorated-handler shape;
   joining is the safe reading of D1. Is it the owner's?
+- **Q-G (blocking P1, and with it P3 and P4).** What should `xaidr.flow()` do
+  when it finds request state already in the context? Three designs each
+  failed P1's counter-case, because every available rule trades (1) for (2)
+  (PROGRESS.md). Options:
+  - **(a) Narrow the guarantee.** An OUTERMOST scope isolates its request.
+    Nested scopes join only within the same task/thread and only while the
+    enclosing entry is live. Keep-evidence covers untiered hops.
+    `clear_flow()` never closes an enclosing scope. Generator-held scopes are
+    refused at every detectable depth. The undetectable cases are documented
+    as the plain pair's limitation, each pinned by a strict xfail whose body
+    states its flip condition.
+  - **(b) A ledger-only scope.** `flow()` never touches chain, tiers or the
+    inbound mark when a flow is already active. It binds a fresh ledger,
+    restores the ledger on exit, and seeds a principal chain only when no
+    flow is active. That removes counter-case (1) from the scope by
+    construction, because tier state stays with `begin_flow` and
+    `extract_context`. Counter-case (2) remains for ledgers, with the same
+    join-or-fresh choice.
+  Either way, P3 (`flow(inbound=)`) and P4 (auto-scope) build on the answer.
 - **Q-F.** A scope cannot be opened inside a generator's body (§1). This is
   stricter than D1 says. It is the only design of the three that two reviews
   could not break: a generator's body runs whenever and wherever it is resumed or
