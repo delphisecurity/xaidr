@@ -17,7 +17,10 @@ import pytest
 
 from .harness import ROOT, build_wheel, fresh_venv, run_driver
 
-pytestmark = pytest.mark.requires_dev_extra
+# One driver run feeds every test here, and it runs the A-* passes, which read
+# asi_battery/ and heldout/ (neither ships in the sdist), so the whole module
+# carries the asi_battery marker and skips in an extracted sdist (tests/conftest.py).
+pytestmark = [pytest.mark.requires_dev_extra, pytest.mark.asi_battery]
 
 PASSES = ("P-input", "P-flow-I", "P-flow-R", "P-seam", "P-fault",
           "A-flow-I", "A-flow-R", "A-calls", "A-steps")       # A-*: the §3.3 adversarial corpora

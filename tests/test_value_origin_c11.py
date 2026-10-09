@@ -198,6 +198,9 @@ def adversarial():
     return get
 
 
+# Reads asi_battery/ and heldout/, which the sdist does not ship (pyproject.toml
+# exclude); the asi_battery marker skips it in an extracted sdist (tests/conftest.py).
+@pytest.mark.asi_battery
 def test_the_adversarial_corpora_are_the_size_this_gate_claims():
     # Measured 2026-10-03 and pinned exactly. asi_battery holds THREE row shapes
     # per file: 64 text, 30 tool-call and 26 multi-turn (`steps`), so every one
@@ -210,6 +213,9 @@ def test_the_adversarial_corpora_are_the_size_this_gate_claims():
     assert len(steps) == 52 and sum(len(st) for _, _, st in steps) == 105
 
 
+# Reads asi_battery/ and heldout/, which the sdist does not ship (pyproject.toml
+# exclude); the asi_battery marker skips it in an extracted sdist (tests/conftest.py).
+@pytest.mark.asi_battery
 @pytest.mark.parametrize("enforcement", oracle.ENFORCEMENT)
 @pytest.mark.parametrize("p", ("A-flow-I", "A-flow-R", "A-calls", "A-steps"))
 def test_record_moves_no_action_on_the_adversarial_corpora(adversarial, p, enforcement):
