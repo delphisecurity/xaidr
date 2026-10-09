@@ -1909,8 +1909,9 @@ class DelphiSensor:
         A2 M6 (§1.1): with value origin on, EVERY ``direction="input"`` exit
         records the principal input (``record_principal_input``): the normal
         path, the gate, circuit-open, fail-closed, scan-error and
-        not-scannable ones, and a raised ``DelphiBlockedError``. A new input is a
-        new request (S-2). ``input_clean`` is True only when the scanner's
+        not-scannable ones, and a raised ``DelphiBlockedError``, into the flow's
+        ledger. With no flow there is no ledger and nothing is recorded (D2, owner,
+        2026-10-08: no implicit ledgers). ``input_clean`` is True only when the scanner's
         PRE-mode action was ``allowed`` and ``_post_scan_gate`` left the
         result unchanged. It is False for a gate verdict, fail-closed or a block,
         and None for circuit-open or a scan error. ``spans`` (Q8, keyword-only)
@@ -2027,7 +2028,7 @@ class DelphiSensor:
             # A FAULT on a scannable input means the record was dropped (a spans
             # list that does not concatenate to the text, or a core fault): say
             # so once (M6 silent-failure review). A non-scannable input FAULTs by
-            # design after binding (S-2), and is not logged.
+            # design, and is not logged.
             if (out is _vo.RecordOutcome.FAULT and text is not None
                     and not self._vo_record_fault_logged):
                 self._vo_record_fault_logged = True
@@ -2040,19 +2041,6 @@ class DelphiSensor:
                 self._vo_record_fault_logged = True
                 logger.exception("xaidr: value origin's input recording faulted; the "
                                  "verdict is unaffected")
-
-    def _vo_inbound_a2a(self) -> None:
-        """Q21 (owner, YES): an inbound A2A message starts a fresh ledger. It ends
-        the previous request's IMPLICIT ledger through S-2's own path (bind for an
-        input, recording nothing) and keeps an EXPLICIT one from begin_flow
-        (ruling 3.1). C-17: it records no destination. Never raises."""
-        try:
-            if self._value_origin is not _vo.Mode.OFF:
-                _vo.record_principal_input("", None, input_clean=None)
-        except Exception:
-            if not self._vo_record_fault_logged:
-                self._vo_record_fault_logged = True
-                logger.exception("xaidr: value origin's inbound-A2A bind faulted")
 
     def _scan_unrecorded(self, prompt, direction, destination, provider,
                          origin_context, parent_context, held) -> ScanResult:
@@ -2262,8 +2250,9 @@ class DelphiSensor:
         after the open-circuit check, mirroring ``scan_tool_call``, so calls
         already rejected by an open circuit do not keep re-counting.
         """
-        if received:
-            self._vo_inbound_a2a()          # Q21, A2 M6 (silent-failure review)
+        # Q21's fresh ledger for an inbound A2A message needs no call here any more: with
+        # no implicit ledgers (D2, owner, 2026-10-08) a flow-less message has none to end,
+        # and a flow's explicit ledger is kept (ruling 3.1).
         emit_direction = "a2a_inbound" if received else "a2a"
         extra = {"destinationAgent": destination}
         text = message if isinstance(message, str) else None

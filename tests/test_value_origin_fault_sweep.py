@@ -152,13 +152,6 @@ def _p_scan(direction):
     return lambda: _sensor().scan("summarise the quarterly report", direction=direction)
 
 
-def _p_a2a():
-    import json
-    msg = json.dumps({"jsonrpc": "2.0", "method": "message/send", "id": "1",
-                      "params": {"message": {"role": "user", "parts": [{"kind": "text", "text": "hi"}]}}})
-    return _sensor().scan_a2a(msg, "peer", received=True)
-
-
 def _p_tool_call():
     r = _sensor().scan_tool_call("http_get", {"url": "https://api.example.com/"})
     assert r.value_origin is None, "an evaluate_call fault must OMIT the field, never fill it"
@@ -275,7 +268,9 @@ PATHS = [
     ("scan(tool_result)", "record_tool_result", True, _p_scan("tool_result")),
     ("scan(output)", "record_principal_input", False, _p_scan("output")),
     ("scan_output", "record_principal_input", False, lambda: _sensor().scan_output("a reply")),
-    ("scan_a2a(received)", "record_principal_input", True, _p_a2a),
+    # scan_a2a(received) left this table with D2 (owner, 2026-10-08): its only value-origin
+    # call, Q21's implicit-ledger reset, has nothing to reset once no implicit ledger
+    # exists, so the path no longer reaches value origin at all.
     ("scan_tool_call", "evaluate_call", True, _p_tool_call),
     ("_scan_tool_result (LangChain/MCP verdict source)", "record_tool_result", True, _p_internal_result),
     ("protect_tools sync", "record_tool_result", True, _p_protect_tools_sync),

@@ -73,7 +73,12 @@ def test_s25_origin_without_a_flow():
         w2 = s.scan_tool_call("http_get", m5.URL).value_origin.wire.value
     finally:
         pc.clear_flow()
-    assert (w1, w2) == ("no_flow", "unresolved"), (w1, w2)
+    # D2 (owner, 2026-10-08): set_origin is not a flow, and an input scan with no flow
+    # binds no ledger, so both calls read no_flow. Until D2 the input scan bound an
+    # implicit ledger and the second call read "unresolved".
+    assert (w1, w2) == ("no_flow", "no_flow"), (
+        f"set_origin without a flow, then a flow-less input scan, read {(w1, w2)!r}: a "
+        "ledger was bound outside any flow (D2)")
 
 
 def _carry_on_a_reused_thread():

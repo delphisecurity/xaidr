@@ -189,9 +189,14 @@ def collect(xaidr):
     logging.getLogger("xaidr").addHandler(h)
     try:
         m = sensor()
-        for _ in range(2):                  # a caller's mis-split: spans != text
-            m.scan("email bob the report", direction="input",
-                   spans=[Span(text="something else", writer=Writer.PRINCIPAL)])
+
+        def mis_split():
+            for _ in range(2):              # a caller's mis-split: spans != text
+                m.scan("email bob the report", direction="input",
+                       spans=[Span(text="something else", writer=Writer.PRINCIPAL)])
+        # D2 (owner, 2026-10-08): a mis-split drops a record only where there is a
+        # ledger to record into, so it runs in a flow; with no flow nothing is recorded.
+        in_flow(mis_split)
     finally:
         logging.getLogger("xaidr").removeHandler(h)
     res["spans_mismatch_warnings"] = sum("did not record" in x for x in seen)

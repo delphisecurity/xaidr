@@ -15,9 +15,9 @@ document differ, the ruling wins.
 **3.1 Ledger binding.** A ledger is *explicit* or *implicit* (an internal
 attribute). `begin_flow` and `extract_context` bind explicit
 (`bind_fresh_ledger`). ~~`record_hop` binds explicit only when nothing is bound,
-otherwise it is a no-op (`bind_ledger`).~~ *[Ruling 3.1 CHANGED 2026-10-04: `record_hop` binds NO ledger — see "Ruling 3.1 CHANGED" below.]* An input scan with nothing bound binds
+otherwise it is a no-op (`bind_ledger`).~~ *[Ruling 3.1 CHANGED 2026-10-04: `record_hop` binds NO ledger — see "Ruling 3.1 CHANGED" below.]* ~~An input scan with nothing bound binds
 implicit. A later input scan replaces an implicit ledger (the V-27 cross-user
-fix), never an explicit one. Public `bind_ledger()` is the explicit bind and
+fix), never an explicit one.~~ *[Reversed by D2, owner, 2026-10-08: no implicit ledgers. An input scan with no flow binds and records nothing; see docs/value-origin-a2-build-spec.md §0 D2.]* Public `bind_ledger()` is the explicit bind and
 never rebinds an explicit ledger. No new public parameter.
 *Pinned by:* supplementary `R31-*`.
 
@@ -62,7 +62,7 @@ owner's choice, not the builder's.
 | # | question | settled |
 |---|---|---|
 | S-1 | 3.3's `Finding` against §1.2's `DestinationFinding` | **Two types.** `Finding{path, destination: Authority \| None, reason: UnresolvedReason \| None}` is what `extract_destinations` returns. `DestinationFinding` keeps its fields, except `authority` is renamed `destination: Authority \| None` and it gains `reason`. `UnresolvedReason` is a str enum `{walk_bound, parse_failure}`. All three are exported. |
-| S-2 | which public entry point binds the implicit ledger (3.1, no new parameter) | **`record_principal_input` binds.** Nothing bound → a fresh implicit ledger. Implicit bound → replaced by a fresh implicit ledger. Explicit bound → kept. It binds *before* validating, so a faulting input still ends the previous request's authority. This drops §1.4's "Does not bind" for that one function. `bind_ledger()` stays a no-op whenever anything is bound, which is what `record_hop` needs. | *[Ruling 3.1 CHANGED 2026-10-04: `record_hop` binds NO ledger — see docs/value-origin-rulings.md, "Ruling 3.1 CHANGED".]*
+| S-2 | which public entry point binds the implicit ledger (3.1, no new parameter) | *[Reversed by D2, owner, 2026-10-08: no implicit ledgers. An input scan with no flow binds and records nothing; see docs/value-origin-a2-build-spec.md §0 D2.]* ~~**`record_principal_input` binds.** Nothing bound → a fresh implicit ledger. Implicit bound → replaced by a fresh implicit ledger. Explicit bound → kept. It binds *before* validating, so a faulting input still ends the previous request's authority. This drops §1.4's "Does not bind" for that one function. `bind_ledger()` stays a no-op whenever anything is bound, which is what `record_hop` needs.~~ | *[Ruling 3.1 CHANGED 2026-10-04: `record_hop` binds NO ledger — see docs/value-origin-rulings.md, "Ruling 3.1 CHANGED".]*
 | S-3 | 3.2 against URLs that carry `@` (`https://corp.example@evil.test/`) | **URL first.** A whole value that opens with `scheme://`, or is V-19's `host/path`, is tried as a URL before the mailbox rule, so C-6/V-23 hold and the host is `evil.test`. The literal reading made the userinfo spelling UNRESOLVED, an evasion of a recorded untrusted host (`R32-url-first`). |
 | S-4 | 3.6's "UTS-46" against the doc's stdlib `idna` codec (IDNA2003) | **Nontransitional, Unicode 13.0.** ß stays ß (`xn--zca`), as browsers resolve it. CheckBidi on; STD3 rules off; CheckHyphens and VerifyDnsLength off. ZWJ/ZWNJ labels fail, because CONTEXTJ needs Joining_Type data the stdlib lacks. The mapping table, bidi classes and combining marks are vendored from Unicode 13.0 (`_idna_data.py`). 13.0 is Python 3.10's `unicodedata` version, so every valid code point is assigned on every supported interpreter, and NFC is stable for assigned code points. On failure, an argument URL host yields `dns:<raw host lowercased>` (V-23) and a mailbox is UNRESOLVED. |
 | S-5 | whether 3.4's TLD filter applies to bare hosts in **result** text | **The same filter for both.** One candidate extractor serves spans and results (`R34-result-same-filter*`). Cost: a poisoned read that names a bare `evil.corpnet` (no scheme, non-ICANN last label) is not recorded, so a call there is `unresolved`. Scheme URLs are unaffected. |
@@ -479,7 +479,7 @@ Brain/blank-canvas row tables must learn the value before M9 emits the field.
 **S25 agrees with paid's reference BY ACCIDENT (owner): this is a note, not a
 fix.** After M6, `set_origin` plus a principal-only emit gives (`no_flow`,
 `unresolved`), paid's pair. Nobody designed it: the input seam binds an implicit
-ledger on every input (S-2), and `set_origin` plays no part (the same calls
+ledger on every input (S-2) *[Reversed by D2, owner, 2026-10-08: no implicit ledgers. An input scan with no flow binds and records nothing; see docs/value-origin-a2-build-spec.md §0 D2.]*, and `set_origin` plays no part (the same calls
 without it give the same pair). **Paid's semantics were NOT verified from this
 repo.** Confirm S25 against paid's spec when paid re-vendors, before relying on
 the agreement.
@@ -525,7 +525,7 @@ Showing that RECORD mode leaves it byte-identical is A2's obligation (C-11).
 `valueOrigin` is emitted on every tool-call event, behind `value_origin_wire`. The default `"v1"` is exactly the nine values the Brain's code accepts. It is safe to ship now, because no value the consumer rejects is ever sent. `"v2"` is all fourteen, for after a deployed Brain accepts them; `"off"` emits nothing. Chosen over default-off because v1 delivers what the consumer can store today without one rejected value; the cost is that five states are withheld (and named in a warning) until v2. SCHEMA_VERSION 0.3.0 (Q14).
 
 ## 2026-10-06 — rulings 1–4 on reused threads, the examined limit, the Splunk TA, a dropped write (owner)
-- **1. Reused worker threads: FIX, gates M9 going further.** STOPPED at the owner's own condition: binding on entry for a flow-less host needs a seam change (a request scope, or an S-2/V-27 change). The framework hooks (CrewAI kickoff, Agents Runner.run) could be fixed within today's seams and are NOT shipped alone. Two strict xfails pin the defect (no input of B's own; and begin_flow without clear_flow).
+- **1. Reused worker threads: FIX, gates M9 going further.** *[Resolved in A2 by D1-D3, owner, 2026-10-08: the request scope `xaidr.flow()` and no implicit ledgers; see docs/value-origin-a2-build-spec.md.]* STOPPED at the owner's own condition: binding on entry for a flow-less host needs a seam change (a request scope, or an S-2/V-27 change). The framework hooks (CrewAI kickoff, Agents Runner.run) could be fixed within today's seams and are NOT shipped alone. Two strict xfails pin the defect (no input of B's own; and begin_flow without clear_flow).
 - **2. The examined limit: capped by work.** `EXAMINED_WORK_BUDGET = 1,000,000` units per result; spending it is `extraction_incomplete`, which does not block.
 - **3. The Splunk TA "Targets 0.2.0": left.** It is a published artifact in a different lane, recorded in the backlog below.
 - **4. A dropped ledger write BLOCKS** as `write_dropped`, under the unexaminable names. Extended after review, for the owner to confirm: a write lost to a FAULT (a raising `model_dump`, a mis-split span list, a non-string input) is a write the ledger did not accept.
