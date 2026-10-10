@@ -221,7 +221,7 @@ def test_schema_version_did_not_move_for_this_change():
     Moving the version here would tell every consumer to re-check rules that are
     still correct, which is how a version signal stops being read.
     """
-    assert SCHEMA_VERSION == "0.2.0"
+    assert SCHEMA_VERSION == "0.3.0"   # M9 (Q14) moved it: valueOrigin's absence means "not reported"
 
 
 def test_the_added_attributes_are_absent_rather_than_null_when_unknown():

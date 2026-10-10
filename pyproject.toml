@@ -153,7 +153,16 @@ haystack = ["haystack-ai>=3.0"]
 # sdist include list shipped no pool and no regenerator while its LISTING showed
 # five pool directories. Without hatchling in the test env that check skips, and
 # a skipped packaging check is indistinguishable from a passing one.
-dev = ["pytest", "hatchling>=1.18"]
+#
+# urllib3 and ada-url are TEST ORACLES, never runtime dependencies (non-negotiable
+# 6 is untouched): tests/test_differential_oracles.py checks that every host
+# urllib.parse, httpx, urllib3 (requests) and a WHATWG parser (ada-url, the
+# parser Node.js uses) read is a host value origin reads. The HTTP clients
+# disagree with each other about `https://corp.example\@evil.test/`, and an
+# urllib.parse-only differential is how finding 1 went unseen. Tests that need
+# these REFUSE without them (Q3, 2026-10-03); the `base` CI config deselects
+# them by marker instead of letting them skip.
+dev = ["pytest", "hatchling>=1.18", "httpx>=0.24", "urllib3>=2", "ada-url>=1.15"]
 
 [project.urls]
 Homepage = "https://github.com/delphisecurity/xaidr"

@@ -166,6 +166,7 @@ parent context was obtained is an xaidr observation with no standard attribute.
 Consumers on **schema 0.1.0** should note that 0.2.0 changes the timestamp's
 meaning and its format, and introduces a record type that is not a scan. Branch
 on `gen_ai.security.schema_version`; that is what it is for.
+- `gen_ai.security.value_origin`: the value-origin wire value, tool-call events only (0.3.0, M9); absent means not reported, or withheld by `value_origin_wire`.
 
 The schema propagates to built-in reporters that support `schema=`. A reporter
 with its own explicit `schema=` keeps it; the sensor's fills in built-in

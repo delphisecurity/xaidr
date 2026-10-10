@@ -956,6 +956,8 @@ honest boundary, not an oversight.
 
 ## API reference
 
+> **`value origin saw a tool call with NO flow active`** (logged once per sensor) means that call's destination could not be traced. Run each agent request inside `with xaidr.flow(principal=...):`, which opens the request scope value origin traces in and ends it even when the request raises. The plain `xaidr.begin_flow()` … `xaidr.clear_flow()` pair still works, but if `clear_flow()` is skipped, the next request on the same worker thread inherits the flow.
+
 ```python
 from xaidr import Sensor, ScanResult, DelphiBlockedError, CircuitBreaker
 

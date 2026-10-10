@@ -140,7 +140,9 @@ def test_s10_a_drop_makes_a_miss_ledger_saturated_and_hits_still_answer(caplog):
         input_clean=True) is RecordOutcome.RECORDED
     # 1 destination + the span's n-grams: tokens "email", "boss@corp.example"
     # (C-3: a trailing full stop is not part of a token) -> 2 unigrams + 1 bigram.
-    used = 1 + 3
+    # Owner, 2026-10-06: key n-grams have their OWN budget, so only the one
+    # destination counts against LEDGER_MAX_ENTRIES (this was 1 + 3).
+    used = 1
     _fill_to(LEDGER_MAX_ENTRIES - used - 1)     # one slot left
     with caplog.at_level(logging.WARNING, logger="xaidr.value_origin"):
         # V-16(b): a unit that would cross the cap is dropped WHOLE.
@@ -152,7 +154,9 @@ def test_s10_a_drop_makes_a_miss_ledger_saturated_and_hits_still_answer(caplog):
     assert out2 is RecordOutcome.RECORDED       # it still fits: a drop is per unit
     assert [r.message for r in caplog.records].count(caplog.records[0].message) == 1
     v = evaluate_call("send", {"to": ["boss@corp.example", "x1@over.example"]}, flow_active=True)
-    assert v.wire is WireValue.LEDGER_SATURATED
+    # Owner, 2026-10-06: the DROPPED write here is a destination write, so the miss
+    # reads write_dropped (and blocks under ENFORCE); this pinned LEDGER_SATURATED.
+    assert v.wire is WireValue.WRITE_DROPPED
     assert [f.origin for f in v.findings] == [Origin.PRINCIPAL, Origin.UNRESOLVED]  # V-16(e)
     assert _wire("boss@corp.example") is WireValue.PRINCIPAL          # pre-cap entry answers
     assert _wire("x3@over.example") is WireValue.UNTRUSTED_SOURCE
@@ -175,17 +179,25 @@ def test_r1_a_parsed_part_that_misses_in_a_saturated_ledger_reports_saturation()
     _fill_to(LEDGER_MAX_ENTRIES - 1)            # evil@x.example is the other one
     assert record_tool_result("filler", {}, "over@x.example", designations=(),
                               result_blocked=False) is RecordOutcome.SATURATED
-    assert _wire("never@x.example, junk") is WireValue.LEDGER_SATURATED, (
-        "a junk part hid a destination the saturated ledger cannot vouch for")
+    # Owner, 2026-10-06: the dropped write (over@x.example) is a DESTINATION write,
+    # so the miss reads write_dropped, which blocks; this pinned LEDGER_SATURATED.
+    assert _wire("never@x.example, junk") is WireValue.WRITE_DROPPED, (
+        "a junk part hid a destination the ledger dropped a write for")
     assert _wire("evil@x.example, junk") is WireValue.UNTRUSTED_SOURCE, (
         "an untrusted part beside junk walked through a saturated ledger")
 
 
 def test_v16d_destinations_are_a_separate_unit_from_ngrams():
-    """V-16(d), settled 2026-09-24: a long prompt whose n-grams overflow the cap
-    drops its n-grams, not the principal's addresses."""
+    """V-16(d), settled 2026-09-24: a prompt whose n-grams overflow the cap drops
+    its n-grams, not the principal's addresses. Re-shaped 2026-10-06: n-grams now
+    have their own 65,536 budget, sized to the 64 KiB window, so one input of
+    ordinary words no longer overflows it (one of 1-char distinct tokens still can:
+    125,907 n-grams -- milestone review); this used one 3,000-word prompt, now two."""
     bind_fresh_ledger()
-    words = " ".join(f"w{i}" for i in range(3_000))     # ~12,000 n-grams
+    first = " ".join(f"a{i}" for i in range(9_000))    # < 64 KiB: ~36,000 n-grams
+    assert len(first) < 65_536
+    assert record_principal_input(first, input_clean=True) is RecordOutcome.RECORDED
+    words = " ".join(f"b{i}" for i in range(9_000))    # ~36,000 more: crosses 65,536
     text = f"Email boss@corp.example. {words}"
     assert record_principal_input(text, [Span(text=text, writer=Writer.PRINCIPAL)],
                                   input_clean=True) is RecordOutcome.SATURATED
@@ -265,7 +277,10 @@ def test_v15_result_leaf_cap_is_64k_not_the_argument_cap():
     bind_fresh_ledger()
     record_tool_result("web_fetch", {}, "z" * 70_000 + " late@x.example", designations=(),
                        result_blocked=False)
-    assert _wire("late@x.example") is WireValue.UNRESOLVED      # past 65,536
+    # Past 65,536: RECORDED, by atom extraction over the whole leaf (owner,
+    # 2026-10-05: don't lose the destination). This line pinned UNRESOLVED (the
+    # silent drop), then RESULT_TRUNCATED (RULING 1+2, which blocked instead).
+    assert _wire("late@x.example") is WireValue.UNTRUSTED_SOURCE
 
 
 # ── never raises into the host (§1.4) ────────────────────────────────────────

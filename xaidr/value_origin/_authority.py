@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import unicodedata
 from typing import List, Optional, Tuple
 from urllib.parse import unquote_to_bytes, urlsplit
 
@@ -71,6 +72,10 @@ def bare_host_tld_ok(ascii_host: str) -> bool:
 
 
 # ── IP ───────────────────────────────────────────────────────────────────────
+_HEX_DIGITS = frozenset("0123456789abcdef")
+_OCT_DIGITS = frozenset("01234567")
+
+
 def coerce_ip(host: str):
     """The IP address ``host`` denotes across every literal form, or None.
 
@@ -92,9 +97,19 @@ def coerce_ip(host: str):
     try:
         vals = []
         for p in parts:
-            if p.lower().startswith("0x"):
-                vals.append(int(p, 16))
+            lp = p.lower()
+            if lp.startswith("0x"):
+                # A2 M3: an EMPTY hex part is 0, as WHATWG's IPv4 number parser
+                # reads it (`0x.0x.0` is 0.0.0.0 to ada and to the macOS
+                # resolver); int() raised on it. Digits are checked, not left to
+                # int(), which also takes `_` separators no resolver reads.
+                digits = lp[2:]
+                if not set(digits) <= _HEX_DIGITS:
+                    return None
+                vals.append(int(digits, 16) if digits else 0)
             elif p.startswith("0") and len(p) > 1:
+                if not set(p) <= _OCT_DIGITS:
+                    return None
                 vals.append(int(p, 8))
             elif p.isdigit() and p.isascii():
                 vals.append(int(p, 10))
@@ -201,6 +216,10 @@ _IMPLIED_RE = re.compile(r"^((?:[\w\-]{1,63}\.){1,126}[^\W\d_]{1,63})/")
 _IMPLIED_IP_RE = re.compile(r"^(\[[0-9A-Fa-f:.]{2,45}\]|[0-9]{1,3}(?:\.[0-9]{1,3}){3})"
                             r"(?::[0-9]{1,5}(?![^/?#])|(?=[/?#]))")
 _NON_DESTINATION_SCHEMES = frozenset({"file", "data"})
+# Q1: where an RFC 3986 authority ends (urlsplit's netloc delimiters).
+_AUTHORITY_END_RE = re.compile(r"[/?#]")
+# urlsplit's IPvFuture literal (`_check_bracketed_host`).
+_IPVFUTURE_RE = re.compile(r"v[a-fA-F0-9]{1,32}\..{1,64}")
 
 # Sentinels for the argument walk's three-way answer.
 NOT_A_DESTINATION = None
@@ -222,37 +241,256 @@ class ParseFailure:
 PARSE_FAILURE = ParseFailure()
 
 
-def _url_host(value: str):
-    """(raw host or None, parse_ok). ``value`` must start with ``scheme://``."""
-    m = _SCHEME_RE.match(value)
-    scheme_len = m.end()
-    # V-23: backslashes in the scheme-relative part are slashes, as WHATWG does
-    # for special schemes — `https://evil.test\@corp.example/` is evil.test.
-    rest = value[scheme_len:].replace("\\", "/")
+def _split_host(url: str):
+    """(raw host or None, parse_ok) for ONE authority split of ``url``."""
     try:
-        parts = urlsplit(value[:scheme_len] + rest)
-        host = parts.hostname
+        return urlsplit(url).hostname, True
     except ValueError:
         return None, False
-    return host, True
 
 
-def url_authority(value: str, *, arg_mode: bool):
-    """Authority of a whole-value URL; None if hostless; PARSE_FAILURE if broken."""
+def _whatwg(value: str) -> str:
+    """``value`` (which starts with ``scheme://``) as WHATWG splits it. V-23:
+    backslashes in the scheme-relative part are slashes, as WHATWG does for
+    special schemes — `https://evil.test\\@corp.example/` is evil.test."""
+    m = _SCHEME_RE.match(value)
+    return value[:m.end()] + value[m.end():].replace("\\", "/")
+
+
+def _urlsplit_3_12_2_refuses(netloc: str) -> bool:
+    """The netloc checks of CPython 3.12.2's ``urlsplit``, the most permissive
+    version measured (2026-10-03): brackets must balance, the FIRST bracketed
+    segment of the netloc must be an IPv6 or IPvFuture literal, and no
+    character may NFKC-normalise into a delimiter (``_checknetloc``). Later
+    patch releases also check the bracket in the host itself, after the last
+    ``@``, and refuse more; reading what 3.12.2 reads is the superset."""
+    if ("[" in netloc) != ("]" in netloc):
+        return True
+    if "[" in netloc:
+        first = netloc.partition("[")[2].partition("]")[0]
+        if first.startswith("v"):
+            if not _IPVFUTURE_RE.fullmatch(first):
+                return True
+        else:
+            try:
+                if not isinstance(ipaddress.ip_address(first), ipaddress.IPv6Address):
+                    return True
+            except ValueError:
+                return True
+    if not netloc.isascii():
+        bare = netloc.replace("@", "").replace(":", "").replace("#", "").replace("?", "")
+        folded = unicodedata.normalize("NFKC", bare)
+        if folded != bare and any(c in folded for c in "/?#@:"):
+            return True
+    return False
+
+
+def _authority_host(url: str, *, whatwg: bool) -> Optional[str]:
+    """The host of ``url``'s authority, without delegating to this interpreter's
+    ``urlsplit``; None if there is none.
+
+    The authority runs from ``//`` to the first ``/``, ``?`` or ``#``, and the
+    host follows its LAST ``@``. No ``//`` is no authority (R4's
+    ``http:\\\\host``), and a host still carrying a backslash is not a name any
+    resolver can look up. Brackets differ by reading, because the consumers
+    differ:
+
+      * ``whatwg=False``, the RFC 3986 reading (urllib.parse, httpx): exactly
+        what CPython 3.12.2's ``urlsplit(...).hostname`` reads, the most
+        permissive version measured. The host is the part between the first
+        ``[`` of the host and the next ``]``, otherwise the part before the
+        first ``:``. A netloc 3.12.2 refuses is no host
+        (``_urlsplit_3_12_2_refuses``). Measured: 3.12.2 reads ``il`` from
+        ``http://[::1]\\@ev[il].test`` because it validates only the netloc's
+        FIRST bracket, and 3.12.14 refuses it. urllib.parse is a covered
+        consumer, and xaidr's own ``ProtectedHttpClient._extract_host`` decides
+        destination policy with it. ``urllib.request``, by contrast, passes the
+        netloc on, percent-decoded and userinfo
+        included, and reaches neither host (it DOES reach a percent-encoded host).
+      * ``whatwg=True``, used only where ``urlsplit`` refused the WHATWG string:
+        WHATWG's host rule. A ``[`` must open the host and enclose an IPv6
+        literal. Any other bracket means no host, as WHATWG refuses
+        ``http:[evil.test]`` and ``http:ev[il].test``.
+
+    Written out rather than delegated, because ``urlsplit`` is not the same
+    function on every interpreter (V-4) and because what it REFUSES, a transport
+    may still send. Measured 2026-10-03: its bracketed-host validation, a
+    security backport, raises on ``http://[::1]\\@evil.test/`` on CPython
+    3.10.21 / 3.12.14 and returns ``evil.test`` on 3.12.2; and it raises on
+    ``http://&a:foo(b]c@d:2/``, which httpx, urllib3 and WHATWG all send to ``d``.
+    """
+    m = _SCHEME_RE.match(url)
+    if not m:
+        return None
+    rest = url[m.end():]
+    end = _AUTHORITY_END_RE.search(rest)
+    netloc = rest[:end.start()] if end else rest
+    hostinfo = netloc.rpartition("@")[2]
+    if whatwg:
+        if hostinfo.startswith("[") and "]" in hostinfo:
+            host = hostinfo[1:].partition("]")[0]
+            if not isinstance(_strict_ip(host), ipaddress.IPv6Address):
+                return None
+        elif "[" in hostinfo or "]" in hostinfo:
+            return None
+        else:
+            host = hostinfo.partition(":")[0]
+    else:
+        if _urlsplit_3_12_2_refuses(netloc):
+            return None
+        _, bracket, inside = hostinfo.partition("[")
+        host = inside.partition("]")[0] if bracket else hostinfo.partition(":")[0]
+    host = host.lower()
+    if not host or "\\" in host:
+        return None
+    return host
+
+
+# ── the macOS resolver (Q22, RE-RULED 2026-10-04) ───────────────────────────
+_DEC_QUAD_RE = re.compile(r"[0-9]{1,16}(?:\.[0-9]{1,16}){3}")
+
+
+def _leading_zero_decimal(parts: List[str]):
+    """A leading-zero dotted quad read as DECIMAL, as the macOS resolver does."""
+    if not any(len(p) > 1 and p[0] == "0" for p in parts):
+        return None
+    vals = [int(p, 10) for p in parts]
+    return ".".join(map(str, vals)) if all(v <= 255 for v in vals) else None
+
+
+def _macos_resolver_ip(host: str):
+    """The address the macOS resolver reads ``host`` as, where it differs from
+    the inet_aton / WHATWG reading the core makes, else None. Measured
+    2026-10-04: a leading-zero dotted quad is DECIMAL (000169.254.000169.254 ->
+    169.254.169.254), so is the IPv4 tail of an IPv6 literal
+    ([::ffff:169.254.0169.254] -> the mapped 169.254.169.254), and one number
+    above 2**32 - 1 wraps modulo 2**32 (4294967296, 0x100000000 -> 0.0.0.0;
+    0x1A9FEA9FE -> 169.254.169.254). glibc and WHATWG refuse all three."""
+    if ":" in host:
+        head, _, tail = host.rpartition(":")
+        if head and _DEC_QUAD_RE.fullmatch(tail):
+            quad = _leading_zero_decimal(tail.split("."))
+            if quad is not None:
+                try:
+                    return ipaddress.ip_address(head + ":" + quad)
+                except ValueError:
+                    return None
+        return None
+    if _DEC_QUAD_RE.fullmatch(host):
+        quad = _leading_zero_decimal(host.split("."))
+        return ipaddress.ip_address(quad) if quad is not None else None
+    if "." not in host and 0 < len(host) <= 64:
+        lp = host.lower()
+        if lp.startswith("0x"):
+            n = int(lp[2:], 16) if lp[2:] and set(lp[2:]) <= _HEX_DIGITS else None
+        elif len(lp) > 1 and lp[0] == "0":
+            n = int(lp, 8) if set(lp) <= _OCT_DIGITS else None
+        else:
+            n = int(lp, 10) if lp.isascii() and lp.isdigit() else None
+        if n is not None and n > 0xFFFFFFFF:
+            return ipaddress.ip_address(n % (1 << 32))
+    return None
+
+
+def _raw_split_host(url: str) -> Optional[str]:
+    """The authority's host with NO validation: after the last `@`, inside the
+    brackets or before the port. Used only to find macOS readings, which a
+    validating split refuses (`[::ffff:169.254.0169.254]`)."""
+    m = _SCHEME_RE.match(url)
+    if not m:
+        return None
+    rest = url[m.end():]
+    end = _AUTHORITY_END_RE.search(rest)
+    hostinfo = (rest[:end.start()] if end else rest).rpartition("@")[2]
+    if hostinfo.startswith("[") and "]" in hostinfo:
+        return hostinfo[1:].partition("]")[0].lower()
+    return hostinfo.partition(":")[0].lower() or None
+
+
+def _macos_readings(raw_host: Optional[str]) -> List[Authority]:
+    """Q22 as RE-RULED (twice, 2026-10-04): EVERY macOS-resolver reading is
+    READ, on every platform (a verdict must not depend on where the agent
+    runs), public ones included: a destination named by untrusted content is a
+    finding, and exfiltration goes to public addresses (4311810312 reaches
+    1.1.1.8 on macOS). The first re-ruling read only sensitive space. Developers run macOS: that is where an agent runs
+    before anyone is watching. The old premise, that the decimal reading lands
+    in reserved space, was wrong: it reaches 169.254.169.254."""
+    if not raw_host:
+        return []
+    h = raw_host.strip().rstrip(".")
+    if "%" in h:
+        try:
+            h = unquote_to_bytes(h).decode("utf-8")
+        except (UnicodeDecodeError, ValueError):
+            return []
+    if ":" not in h:
+        h = to_ascii(h) or ""
+    try:
+        ip = _macos_resolver_ip(h) if h else None
+    except ValueError:
+        return []
+    if ip is None:
+        return []
+    return [Authority(scheme="ip", value=ip_key(ip))]
+
+
+def url_authority(value: str, *, arg_mode: bool, written: Optional[str] = None):
+    """Authority of a whole-value URL; None if hostless; PARSE_FAILURE if broken.
+
+    Q1 (2026-10-03, amends V-23): EVERY reading of the authority split that a
+    real consumer performs is a destination, and the weakest decides the wire.
+    The readings are
+
+      * WHATWG (backslash is a slash; urllib3 and ada agree), via ``urlsplit``;
+      * RFC 3986 (backslash is userinfo; urllib.parse and httpx agree) of the
+        value as ``written``, before R4's special-scheme rewrite;
+      * where ``urlsplit`` REFUSES the WHATWG string, that string's authority
+        split anyway — a refusal by one parser is not a refusal by the
+        transport.
+
+    `https://corp.example\\@evil.test/` is corp.example to WHATWG and evil.test
+    to httpx (which sends there) and urllib.parse; reading only the first made a
+    call httpx sends to an UNTRUSTED evil.test come back AUTHORIZED (finding 1). Distinct
+    authorities come back as a list, WHATWG first — the mailbox-list shape — and
+    readings that normalise to one authority are one answer. A value
+    ``urlsplit`` refuses stays PARSE_FAILURE (decision 7), carrying what the
+    other readings found: R1's shape, so an untrusted host still decides.
+    """
     m = _SCHEME_RE.match(value)
     if not m:
         return NOT_A_DESTINATION
     if m.group(1).lower() in _NON_DESTINATION_SCHEMES:
         return NOT_A_DESTINATION
-    host, ok = _url_host(value)
+    whatwg = _whatwg(value)
+    host, ok = _split_host(whatwg)
     if not ok:
-        return PARSE_FAILURE if arg_mode else NOT_A_DESTINATION
-    if not host:
-        return NOT_A_DESTINATION                 # hostless (C-6)
-    a = _host_authority(host, arg_fallback=arg_mode)
-    if a is None:
-        return PARSE_FAILURE if arg_mode else NOT_A_DESTINATION
-    return a
+        primary = PARSE_FAILURE
+    elif not host:
+        primary = NOT_A_DESTINATION              # hostless (C-6)
+    else:
+        primary = _host_authority(host, arg_fallback=arg_mode) or PARSE_FAILURE
+    others = [_authority_host(value if written is None else written, whatwg=False)]  # RFC 3986
+    if not ok:
+        others.insert(0, _authority_host(whatwg, whatwg=True))          # what urlsplit refused
+    extra = []
+    for h in others:
+        a = _host_authority(h, arg_fallback=arg_mode) if h else None
+        if a is not None and a != primary and a not in extra:
+            extra.append(a)
+    for raw in (_raw_split_host(whatwg), _raw_split_host(value if written is None else written)):
+        for a in _macos_readings(raw):               # Q22, re-ruled 2026-10-04
+            if a != primary and a not in extra:
+                extra.append(a)
+    if not extra:
+        if primary is PARSE_FAILURE and not arg_mode:
+            return NOT_A_DESTINATION
+        return primary
+    if isinstance(primary, Authority):
+        return [primary, *extra]
+    if primary is PARSE_FAILURE:                 # R1's shape: UNRESOLVED, plus what parsed
+        if arg_mode:
+            return ParseFailure(extra)
+    return extra[0] if len(extra) == 1 else extra   # hostless or refused to WHATWG
 
 
 def implied_url_authority(value: str, *, arg_mode: bool):
@@ -390,13 +628,14 @@ def classify_value(value: str, *, arg_mode: bool):
         if not addr:
             return NOT_A_DESTINATION           # mailto: with no address (C-6)
         return mailbox_list(addr) if arg_mode else _single(mailbox_list(addr))
+    written = v
     m = _SPECIAL_RE.match(v)
     if m:
         v = m.group(1) + "://" + v[m.end():]
     if _SCHEME_RE.match(v):
         if any(c.isspace() for c in v):
             return PARSE_FAILURE if arg_mode else NOT_A_DESTINATION
-        return url_authority(v, arg_mode=arg_mode)
+        return url_authority(v, arg_mode=arg_mode, written=written)
     if not any(c.isspace() for c in v):
         if _IMPLIED_RE.match(v):
             return implied_url_authority(v, arg_mode=arg_mode)
@@ -434,8 +673,11 @@ def authority_of(value: str) -> Authority | None:
     too, R4), a V-19 ``host/path``, a strict IP literal alone or followed by a
     port, path, query or fragment (R4), or a ``+`` phone. A bare hostname is NOT
     a destination (V-19). A URL host
-    that fails UTS-46 still yields ``dns:<raw host lowercased>`` (V-23). Never
-    raises.
+    that fails UTS-46 still yields ``dns:<raw host lowercased>`` (V-23). A URL
+    whose authority split names two authorities (Q1) is None here, exactly as a
+    two-mailbox list is: one answer cannot name both, and either one alone is a
+    host some real consumer does not send to. ``extract_destinations`` reports
+    both. Never raises.
     """
     try:
         if not isinstance(value, str):
@@ -472,23 +714,31 @@ def _blank(text: str, spans: List[Tuple[int, int]]) -> str:
     return "".join(chars)
 
 
-def prose_candidates(text: str) -> List[Tuple[int, Authority]]:
+def prose_candidates(text: str, counter: Optional[List[int]] = None) -> List[Tuple[int, Authority]]:
     """Every destination candidate in prose, as (position, authority), in text
     order. URLs first and blanked; then mailboxes, blanked so a mailbox never
     authorizes its own domain (V-20); then bare hosts (ruling 3.4: ICANN TLD or
     reserved name only), phones and strict IPs. A candidate for which
-    normalisation fails is dropped."""
+    normalisation fails is dropped. ``counter``, if given, is incremented once per
+    candidate EXAMINED, accepted or not -- what the work budget charges for (a
+    rejected candidate costs the same normalisation: milestone review, 2026-10-06)."""
     out: List[Tuple[int, Authority]] = []
     taken: List[Tuple[int, int]] = []
     for m in _P_URL_RE.finditer(text):
+        if counter is not None:
+            counter[0] += 1
         cand = m.group(0).rstrip(_TRAILING)
         taken.append((m.start(), m.end()))
         a = classify_value(cand, arg_mode=False)
         if isinstance(a, Authority):
             out.append((m.start(), a))
+        elif isinstance(a, list):                # Q1: every reading of the split
+            out.extend((m.start(), x) for x in a)
     text = _blank(text, taken)
     taken = []
     for m in _P_EMAIL_RE.finditer(text):
+        if counter is not None:
+            counter[0] += 1
         cand = m.group(0).rstrip(".-")
         taken.append((m.start(), m.end()))
         a = mailbox_authority(cand)
@@ -496,6 +746,8 @@ def prose_candidates(text: str) -> List[Tuple[int, Authority]]:
             out.append((m.start(), a))
     text = _blank(text, taken)
     for m in _P_HOST_RE.finditer(text):
+        if counter is not None:
+            counter[0] += 1
         host = m.group(1)
         last = host.rsplit(".", 1)[-1]
         if last.isdigit():
@@ -507,14 +759,20 @@ def prose_candidates(text: str) -> List[Tuple[int, Authority]]:
         if a is not None:
             out.append((m.start(), a))
     for m in _P_PHONE_RE.finditer(text):
+        if counter is not None:
+            counter[0] += 1
         a = phone_authority(m.group(0))
         if a is not None:
             out.append((m.start(), a))
     for m in _P_IPV4_RE.finditer(text):
+        if counter is not None:
+            counter[0] += 1
         ip = _strict_ip(m.group(0))
         if ip is not None:
             out.append((m.start(), Authority(scheme="ip", value=ip_key(ip))))
     for m in _P_IPV6_RE.finditer(text):
+        if counter is not None:
+            counter[0] += 1
         if m.group(0).count(":") < 2:
             continue
         ip = _strict_ip(m.group(0))

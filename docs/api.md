@@ -6,7 +6,7 @@ _Part of the [xaidr](https://github.com/delphisecurity/xaidr/blob/main/README.md
 from xaidr import (
     Sensor, ProtectedHttpClient, ScanResult, DelphiBlockedError, CircuitBreaker,
     set_origin, origin_scope, clear_origin,
-    begin_flow, inject_context, extract_context, clear_flow, propagate_context,
+    flow, begin_flow, inject_context, extract_context, clear_flow, propagate_context,
 )
 
 Sensor(agent_id="a", privilege_tier=1)      # 1 = highest privilege, 4 = lowest
@@ -57,3 +57,10 @@ without also stopping on `flagged`. The protected HTTP wrapper raises
 `DelphiBlockedError` when it blocks a request before network execution.
 
 ---
+
+
+## The one-time `no_flow` warning (value origin)
+
+- **What it means:** a tool call arrived with no flow active, so value origin could not trace its destination (logged once per sensor).
+- **How to open a flow:** `with xaidr.flow(principal=...):` around each agent request, outside any LangGraph graph. It opens one request's scope (chain, correlation id and a fresh value-origin ledger) and ends it on exit, whether the request returned or raised. A sync request handler can be decorated with `@xaidr.flow(...)`, which scopes each call. An `async def`, a generator function, or anything whose call returns a coroutine is refused, because its body would run after the call returns, outside the scope: in an `async def`, write the `with` form inside its body. A scope cannot be opened inside a generator's body (that body runs whenever the generator is resumed or collected); open it around the code that consumes the generator. A sync handler's returned generator (a WSGI body, say) is iterated outside the scope. A scope opened inside an open scope JOINS it: same request, same flow, and its `principal=` is not applied. Opened over a request that arrived from another agent with no scope of its own, it keeps that request's chain, tiers and inbound mark and gets its own ledger. A decorated handler reads the id with `xaidr.provenance_chain.current_correlation_id()`. `set_origin()` is not part of the flow; use `origin_scope()` for it.
+- **The plain pair, and its limitation:** `begin_flow()` ... `clear_flow()` still works. But if `clear_flow()` is skipped, for example because the request raised, the next request on the same worker thread inherits the flow and its ledger. If you use the pair, call `clear_flow()` in a `finally`.

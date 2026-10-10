@@ -62,6 +62,10 @@ PRINCIPAL_DERIVED = {"principal_span", "quoted_span"}
 READ_DERIVED = {"tool_result", "attacker_keyed_read"}
 
 VERDICT = {                       # §1.4 verdict_of, transcribed (not imported)
+    "argument_bound": "unresolved", "result_truncated": "not_evaluated",  # RULING 1+2 after M8
+    "result_unread": "not_evaluated",                                   # Q18, same ruling
+    "extraction_incomplete": "not_evaluated",                           # work budget, 2026-10-06
+    "write_dropped": "not_evaluated",                                   # a dropped write, 2026-10-06
     "principal": "authorized", "principal_undeclared_span": "authorized",
     "trusted_source": "authorized", "untrusted_source": "unauthorized",
     "unresolved": "unresolved", "no_destination": "not_evaluated",

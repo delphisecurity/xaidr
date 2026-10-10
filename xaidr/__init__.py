@@ -9,7 +9,7 @@ from .sensor import DelphiSensor as Sensor, ProtectedHttpClient
 from .circuit_breaker import CircuitBreaker
 from .provenance import set_origin, origin_scope, clear_origin
 from .provenance_chain import (
-    begin_flow, inject_context, extract_context, clear_flow,
+    begin_flow, inject_context, extract_context, clear_flow, flow,
     propagate_context,
 )
 from .types import DelphiBlockedError, ScanResult
@@ -53,6 +53,7 @@ __all__ = [
     "inject_context",
     "extract_context",
     "clear_flow",
+    "flow",
     "propagate_context",
     "__version__",
 ]

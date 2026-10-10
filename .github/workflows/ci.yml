@@ -124,8 +124,19 @@ jobs:
       # at collection with ModuleNotFoundError: No module named 'tests' against
       # any non-editable install. This is also the invocation the README's
       # verified suite count is measured with.
+      #
+      # `base` installs no third-party package by design, so it DESELECTS the
+      # tests that need the dev extra's oracles and build tooling, by marker and
+      # in plain sight here. Those tests REFUSE when their oracle is missing; they
+      # never skip (Q3, 2026-10-03), because a skipped oracle is a silent pass.
+      # `full` installs the dev extra and runs every one of them.
       - name: Run test suite
-        run: python -m pytest -q
+        run: |
+          if [ "${{ matrix.config }}" = "base" ]; then
+            python -m pytest -q -m "not requires_dev_extra"
+          else
+            python -m pytest -q
+          fi
 
   # ── Real frameworks, pinned — the only job where they are installed ────────
   # Neither `test` config installs an agent framework (`dev` is pytest +

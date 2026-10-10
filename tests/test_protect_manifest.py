@@ -443,13 +443,17 @@ def test_double_protect_does_not_double_wrap(cap):
 def test_double_protect_scans_a_call_exactly_once(cap, wait_events):
     """Proof by telemetry, not by identity: one tool call, one event."""
     tools = fakes.install_langchain_core()
-    _protect(reporter=cap)
-    _protect(reporter=cap)
+    first = _protect(reporter=cap)
+    second = _protect(reporter=cap)
 
     tool = tools.BaseTool("lookup", lambda x: f"got {x}")
     assert tool.run("a customer record") == "got a customer record"
 
-    wait_events(cap, 1)
+    # Sweep, 2026-10-06: each protect() builds its own sensor, so a double scan's
+    # second event rides ANOTHER worker thread; waiting for one event and counting
+    # passed while it was still in flight. Flush both sensors, then count.
+    second.unprotect(close_sensor=True)
+    first.unprotect(close_sensor=True)
     tool_events = [e for e in cap.events if e["data"].get("toolName") == "lookup"]
     assert len(tool_events) == 1, tool_events
 

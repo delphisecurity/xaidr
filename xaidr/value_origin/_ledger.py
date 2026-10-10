@@ -8,11 +8,16 @@ and concurrent flows that each bound their own do not (row P).
 BINDING (ruling 3.1). A ledger is EXPLICIT or IMPLICIT (an internal attribute):
 
     bind_fresh_ledger()        explicit, unconditionally      begin_flow, extract_context
-    bind_ledger()              explicit iff nothing is bound  record_hop; never rebinds
+    bind_ledger()              explicit iff nothing is bound  (no caller: record_hop stopped
+                                                              binding when ruling 3.1 changed,
+                                                              2026-10-04); never rebinds
     record_principal_input()   nothing bound  -> fresh implicit
                                implicit bound -> REPLACED by a fresh implicit
                                explicit bound -> kept
     unbind_ledger()            clear_flow
+    ledger_get()/ledger_set()  xaidr.flow(): saved on enter, put back on exit (return OR
+                               raise), so a scope ends its ledger and hands back the one
+                               bound before it (owner, D1, 2026-10-08)
 
 An implicit ledger lives for one request. Replacing it at the next input scan
 is the V-27 fix: a thread-reusing server that never begins a flow must not carry
@@ -68,9 +73,14 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ._authority import classify_value, prose_candidates
 from ._designations import source_matches
-from ._extract import argument_value, key_authority, key_ngram, result_leaves, span_ngrams
+from ._extract import (AtomBudget, argument_value, budgeted_atoms, key_authority, key_ngram,
+                       result_leaves_bounded, span_ngrams)
 from ._types import (
     LEDGER_MAX_ENTRIES,
+    LEDGER_MAX_NGRAMS,
+    ATOM_COST,
+    EXAMINED_WORK_BUDGET,
+    MAX_INPUT_NGRAM_CHARS,
     Authority,
     Origin,
     RecordOutcome,
@@ -101,7 +111,9 @@ def _digest_ngram(g: str) -> bytes:
 
 
 class _Ledger:
-    __slots__ = ("lock", "pid", "explicit", "entries", "ngrams", "saturated", "sat_logged")
+    __slots__ = ("lock", "pid", "explicit", "entries", "ngrams", "saturated", "sat_logged",
+                 "input_truncated", "result_truncated", "result_unread", "atoms_incomplete",
+                 "dests_dropped")
 
     def __init__(self, *, explicit: bool) -> None:
         self.lock = _new_lock()
@@ -110,6 +122,11 @@ class _Ledger:
         self.entries: Dict[bytes, Entry] = {}
         self.ngrams: Dict[bytes, bool] = {}
         self.saturated = False
+        self.input_truncated = False     # a principal input exceeded the 64 KiB key n-gram window
+        self.result_truncated = False    # a tool result hit a bound before recording (RULING 1+2)
+        self.result_unread = False       # an I/O-backed result was skipped unread (Q18)
+        self.atoms_incomplete = False    # an atom pass hit its WORK budget (2026-10-06)
+        self.dests_dropped = False       # a DESTINATION write was dropped: blocks (owner, 2026-10-06)
         self.sat_logged = False
 
     def __repr__(self) -> str:                  # discloses nothing (C-12)
@@ -155,6 +172,18 @@ def unbind_ledger() -> None:
         _log.exception("value origin: unbind_ledger faulted")
 
 
+def ledger_get():
+    """For ``xaidr.flow()`` only: the bound ledger object as it is, or None. Raw,
+    so a scope saves and puts back exactly what was there (V-32's pid check is
+    applied where the ledger is READ, not here)."""
+    return _LEDGER.get()
+
+
+def ledger_set(ledger) -> None:
+    """For ``xaidr.flow()`` only: put back what ``ledger_get`` saved."""
+    _LEDGER.set(ledger)
+
+
 def ledger_bound() -> bool:
     try:
         return _current() is not None
@@ -194,10 +223,17 @@ def _merge_ngram(old: Optional[bool], declared: bool) -> bool:
 def _apply_unit(lg: _Ledger, entries: List[Tuple[bytes, Entry]],
                 ngrams: List[Tuple[bytes, bool]]) -> bool:
     """All-or-none write of one unit. Caller holds the lock. False = dropped."""
-    new_digests = {d for d, _ in entries if d not in lg.entries}
-    new_digests |= {d for d, _ in ngrams if d not in lg.ngrams}
-    if len(lg.entries) + len(lg.ngrams) + len(new_digests) > LEDGER_MAX_ENTRIES:
+    # Separate budgets (owner, approved 2026-10-06): key n-grams can no longer
+    # starve destination recording -- a 17 KB prompt filled the shared 10,000.
+    new_e = {d for d, _ in entries if d not in lg.entries}
+    new_g = {d for d, _ in ngrams if d not in lg.ngrams}
+    over_e = len(lg.entries) + len(new_e) > LEDGER_MAX_ENTRIES
+    if over_e or len(lg.ngrams) + len(new_g) > LEDGER_MAX_NGRAMS:
         lg.saturated = True
+        if over_e:
+            # Owner, 2026-10-06: a write the ledger could not accept means the
+            # system does not know what it just saw -- unexaminable, not benign.
+            lg.dests_dropped = True
         return False
     for d, e in entries:
         lg.entries[d] = _merge(lg.entries.get(d), e)
@@ -210,9 +246,13 @@ def _log_saturation_once(lg: _Ledger) -> None:
     """Called OUTSIDE the lock."""
     if lg.saturated and not lg.sat_logged:
         lg.sat_logged = True
-        _log.warning("value origin: this flow's ledger reached %d digests and "
-                     "dropped an emission; unmatched destinations now report "
-                     "ledger_saturated, not unresolved", LEDGER_MAX_ENTRIES)
+        _log.warning("value origin: this flow's ledger is FULL (%d destinations or %d "
+                     "key n-grams) and dropped a write. A dropped DESTINATION write means "
+                     "value origin does not know what that input or result named: an "
+                     "unmatched destination now reports write_dropped, which BLOCKS under "
+                     "ENFORCE (owner, 2026-10-06); a dropped key-n-gram write reports "
+                     "ledger_saturated, which does not.", LEDGER_MAX_ENTRIES,
+                     LEDGER_MAX_NGRAMS)
 
 
 # ── principal input ──────────────────────────────────────────────────────────
@@ -223,8 +263,22 @@ def _principal_clean(input_clean: Optional[bool]) -> bool:
     return input_clean is True
 
 
+def _lost() -> RecordOutcome:
+    """A write the ledger did not accept because recording FAULTED (or refused a
+    mis-split): the system does not know what it just saw, so a later miss reads
+    write_dropped and blocks (owner, ruling 4, 2026-10-06; the silent-failure and
+    milestone reviews: a faulted write set no flag and laundered like a full one)."""
+    try:
+        lg = _current()
+        if lg is not None:
+            lg.dests_dropped = True
+    except Exception:
+        _log.exception("value origin: could not mark a lost write")
+    return RecordOutcome.FAULT
+
+
 def record_principal_input(text: str, spans: Sequence[Span] | None = None, *,
-                           input_clean: bool | None) -> RecordOutcome:
+                           input_clean: bool | None, truncated: bool = False) -> RecordOutcome:
     """Record every destination candidate in a principal-direction input.
 
     Binds per ruling 3.1 FIRST (a new input is a new request even when its
@@ -237,8 +291,10 @@ def record_principal_input(text: str, spans: Sequence[Span] | None = None, *,
     """
     try:
         lg = _bind_for_input()
+        if truncated and lg is not None:
+            lg.input_truncated = True     # owner, after M6: a miss here is input_truncated
         if not isinstance(text, str):
-            return RecordOutcome.FAULT
+            return _lost()
         if spans is None:
             span_list = [(text, Writer.PRINCIPAL)]
             declared = False
@@ -247,32 +303,53 @@ def record_principal_input(text: str, spans: Sequence[Span] | None = None, *,
             for s in spans:
                 if (not isinstance(s, Span) or not isinstance(s.text, str)
                         or not isinstance(s.writer, Writer)):
-                    return RecordOutcome.FAULT
+                    return _lost()
                 span_list.append((s.text, s.writer))
             if "".join(t for t, _ in span_list) != text:
-                return RecordOutcome.FAULT     # a mis-split is not repaired by guessing
+                return _lost()     # a mis-split is not repaired by guessing
             declared = True
         clean = _principal_clean(input_clean)
         dests: List[Tuple[bytes, Entry]] = []
         grams: List[Tuple[bytes, bool]] = []
+        late: List[Tuple[bytes, Entry]] = []   # atoms past the examined window
+        atom_budget = AtomBudget()             # one call's WORK budget (2026-10-06)
+        budget = MAX_INPUT_NGRAM_CHARS   # key n-grams: the 64 KiB window; atoms past it: the WORK budget
+        if lg is not None and len(text) > MAX_INPUT_NGRAM_CHARS:
+            lg.input_truncated = True     # visible; it no longer blocks
         for span_text, writer in span_list:            # left to right (V-24)
             is_principal = writer is Writer.PRINCIPAL and clean
             origin = Origin.PRINCIPAL if is_principal else Origin.UNTRUSTED_SOURCE
-            for _, a in prose_candidates(span_text):   # per span: no straddling
+            window = span_text[:max(budget, 0)]
+            for _, a in prose_candidates(window):      # the examined window: per span
                 dests.append((_digest_authority(a), (origin, declared, None)))
-            if is_principal:
-                for g in span_ngrams(span_text):
+            if len(span_text) > len(window):
+                # Past the window: the WORK-bounded atom pass (2026-10-06), from the
+                # last whitespace before the cut so a straddling atom is whole; its
+                # atoms go in their OWN write, last (milestone review).
+                cut = span_text.rfind(" ", max(0, len(window) - 2048), len(window))
+                # No whitespace near the cut: overlap 2,048 chars anyway, so an atom
+                # straddling it is still whole (silent-failure review, LOW).
+                tail = span_text[cut + 1 if cut >= 0 else max(0, len(window) - 2048):]
+                for _, a in budgeted_atoms([((), tail)], atom_budget):
+                    late.append((_digest_authority(a), (origin, declared, None)))
+            if is_principal and budget > 0:
+                for g in span_ngrams(span_text[:budget]):
                     grams.append((_digest_ngram(g), declared))
+            budget -= len(span_text)
         if lg.pid != os.getpid():
             return RecordOutcome.NO_LEDGER
         with lg.lock:
             ok_dest = _apply_unit(lg, dests, [])
             ok_gram = _apply_unit(lg, [], grams) if grams else True
+            ok_late = _apply_unit(lg, late, []) if late else True
+            if atom_budget.hit:
+                lg.atoms_incomplete = True     # visible (extraction_incomplete), never a block
         _log_saturation_once(lg)
-        return RecordOutcome.RECORDED if (ok_dest and ok_gram) else RecordOutcome.SATURATED
+        return (RecordOutcome.RECORDED if (ok_dest and ok_gram and ok_late)
+                else RecordOutcome.SATURATED)
     except Exception:
         _log.exception("value origin: record_principal_input faulted")
-        return RecordOutcome.FAULT
+        return _lost()
 
 
 # ── tool results (C-2, C-3, C-3a, V-8, V-15) ─────────────────────────────────
@@ -336,21 +413,41 @@ def _read_trust(lg: _Ledger, plans: List[Tuple[SourceDesignation, List[_KeyPlan]
 def result_authorities(result: Any) -> List[Authority]:
     """Every destination candidate in a raw result: each leaf tried whole, and
     scanned as prose (C-7). May run host code (V-15)."""
+    out, _, _, late, _ = _result_authorities(result)
+    return out + late
+
+
+def _result_authorities(result: Any) -> Tuple[List[Authority], bool]:
+    """(examined candidates, whether the result walk hit a bound, whether it
+    skipped an I/O-backed node unread, atoms from past the bound). The last are
+    kept apart so the recorder writes them separately (milestone review)."""
     out: List[Authority] = []
     seen = set()
-    for leaf in result_leaves(result):
+    leaves, truncated, unread, extra, budget = result_leaves_bounded(result)
+    examined = AtomBudget(EXAMINED_WORK_BUDGET)   # the EXAMINED pass, by work (2026-10-06)
+    for leaf in leaves:
+        if examined.left <= 0:
+            examined.hit = True                    # visible (extraction_incomplete); no block
+            break
         found: List[Authority] = []
         whole = classify_value(leaf, arg_mode=False)
         if isinstance(whole, Authority):
             found.append(whole)
         elif isinstance(whole, list):
             found.extend(whole)
-        found.extend(a for _, a in prose_candidates(leaf))
+        counted = [0]
+        found.extend(a for _, a in prose_candidates(leaf, counted))
+        examined.left -= len(leaf) + ATOM_COST * counted[0]
         for a in found:
             if a not in seen:
                 seen.add(a)
                 out.append(a)
-    return out
+    late: List[Authority] = []               # past the bound: WORK-bounded, one budget
+    for _, a in budgeted_atoms([((), leaf) for leaf in extra], budget):
+        if a not in seen:
+            seen.add(a)
+            late.append(a)
+    return out, truncated, unread, late, budget.hit or examined.hit
 
 
 def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
@@ -365,29 +462,44 @@ def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
         if lg is None:
             return RecordOutcome.NO_LEDGER
         # Everything that can run host code, BEFORE the lock (C-15).
-        auths = result_authorities(result)
+        auths, cut, unread, late, incomplete = _result_authorities(result)
         plans = []
         for d in designations:
             if source_matches(d, tool_name, arguments):
                 keys = [_KeyPlan(*argument_value(arguments, k)) for k in d.key_args]
                 plans.append((d, keys))
         digests = [_digest_authority(a) for a in auths]
+        late_digests = [_digest_authority(a) for a in late]
         if lg.pid != os.getpid():
             return RecordOutcome.NO_LEDGER
         with lg.lock:
+            if cut:
+                lg.result_truncated = True   # RULING 1+2: a miss here is result_truncated
+            if unread:
+                lg.result_unread = True      # Q18 under the bounds ruling: never silent
+            if incomplete:
+                lg.atoms_incomplete = True   # the atom pass hit its WORK budget: visible
             entry = _read_trust(lg, plans, result_blocked)
             ok = _apply_unit(lg, [(d, entry) for d in digests], [])
+            # Past-the-bound atoms in their OWN write, after the examined part, so
+            # they can never drop it (milestone review, 2026-10-05).
+            ok_late = (_apply_unit(lg, [(d, entry) for d in late_digests], [])
+                       if late_digests else True)
         _log_saturation_once(lg)
-        return RecordOutcome.RECORDED if ok else RecordOutcome.SATURATED
+        return RecordOutcome.RECORDED if (ok and ok_late) else RecordOutcome.SATURATED
     except Exception:
         _log.exception("value origin: record_tool_result faulted")
-        return RecordOutcome.FAULT
+        return _lost()
 
 
 # ── lookup (for evaluate_call) ───────────────────────────────────────────────
-def lookup(lg: _Ledger, auths: List[Authority]) -> Tuple[List[Optional[Entry]], bool]:
+def lookup(lg: _Ledger, auths: List[Authority]
+           ) -> Tuple[List[Optional[Entry]], bool, bool, bool, bool, bool, bool]:
     """Entries for ``auths`` in one lock acquisition, plus whether the ledger
-    is saturated — a read racing a multi-entry write sees all or none of it."""
+    is saturated, whether a principal input was cut, and whether a tool result
+    was cut, and whether one was skipped unread — a read racing a multi-entry
+    write sees all or none of it."""
     digests = [_digest_authority(a) for a in auths]
     with lg.lock:
-        return [lg.entries.get(d) for d in digests], lg.saturated
+        return ([lg.entries.get(d) for d in digests], lg.saturated, lg.input_truncated,
+                lg.result_truncated, lg.result_unread, lg.atoms_incomplete, lg.dests_dropped)

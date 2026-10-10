@@ -19,7 +19,7 @@ Design:
   ``detection.*`` / ``interaction.*``; breaker transitions carry
   ``circuit_breaker.*``. Do not expect a verdict on a breaker record.
 
-Spec: openA2A-schema-spec.md (schema_version 0.2.0).
+Spec: openA2A-schema-spec.md (schema_version 0.3.0).
 
 Provenance/OBO fields (gen_ai.security.provenance.*) are defined by the spec but
 populated in a later phase; the mapper already passes them through if present on
@@ -55,7 +55,7 @@ from .types import safe_content_hash, utc_now_rfc3339
 #: guarantee on 0.x minors: 0.x is where a schema is allowed to still be wrong.
 #: The version rides on every event precisely so a consumer can branch on it,
 #: which is worth nothing if it does not move when the shape does.
-SCHEMA_VERSION = "0.2.0"
+SCHEMA_VERSION = "0.3.0"   # M9 (Q14): valueOrigin; absent = "not reported" or withheld by value_origin_wire
 
 #: Envelope ``type`` values the sensor emits, and the values that appear on
 #: ``gen_ai.security.event_type``. Passed through as-is rather than translated:
@@ -208,6 +208,11 @@ def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
 
     # --- envelope -----------------------------------------------------------
     out["gen_ai.security.schema_version"] = SCHEMA_VERSION
+    # M9 (Q14): the value-origin wire value, on tool-call events only. OMITTED when
+    # absent -- "not reported" since 0.3.0 -- never defaulted.
+    vo_wire = data.get("valueOrigin") if isinstance(data, dict) else None
+    if isinstance(vo_wire, str) and vo_wire:
+        out["gen_ai.security.value_origin"] = vo_wire
 
     # THE DISCRIMINATOR, and why it is emitted rather than inferred.
     #

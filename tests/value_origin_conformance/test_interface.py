@@ -40,7 +40,7 @@ SIGNATURES = {                 # §1.4 as written, extract_destinations as corre
     "unbind_ledger": "() -> 'None'",
     "ledger_bound": "() -> 'bool'",
     "record_principal_input": "(text: 'str', spans: 'Sequence[Span] | None' = None, *, "
-                              "input_clean: 'bool | None') -> 'RecordOutcome'",
+                              "input_clean: 'bool | None', truncated: 'bool' = False) -> 'RecordOutcome'",
     "record_tool_result": "(tool_name: 'str', arguments: 'Mapping[str, object] | None', "
                           "result: 'object', *, designations: 'Sequence[SourceDesignation]', "
                           "result_blocked: 'bool | None') -> 'RecordOutcome'",
@@ -69,14 +69,18 @@ ENUMS = {
     "Verdict": ["authorized", "unauthorized", "unresolved", "not_evaluated"],
     "WireValue": ["principal", "principal_undeclared_span", "trusted_source",
                   "untrusted_source", "unresolved", "no_destination", "no_flow",
-                  "ledger_absent", "ledger_saturated"],
+                  "ledger_absent", "ledger_saturated", "input_truncated",
+                  "argument_bound", "result_truncated",        # RULING 1+2 after M8
+                  "result_unread",                             # Q18, same ruling
+                  "extraction_incomplete",                     # work budget, 2026-10-06
+                  "write_dropped"],                            # a dropped write blocks, 2026-10-06
     "RowState": ["decided", "ran_evidence", "ran_clean", "not_reached", "not_applicable",
                  "not_recorded"],
     "Writer": ["principal", "untrusted"],
     "Mode": ["off", "record", "enforce"],
     "MatchKind": ["any", "url_prefix", "path_glob", "exact"],
     "RecordOutcome": ["recorded", "no_ledger", "saturated", "fault"],
-    "UnresolvedReason": ["walk_bound", "parse_failure"],
+    "UnresolvedReason": ["walk_bound", "parse_failure", "atom_budget"],   # atom_budget: 2026-10-06
 }
 
 
@@ -148,17 +152,30 @@ def test_no_ledger_accessor_is_exported():
             assert not any("correlation" in p or p == "origin" for p in params), name
 
 
-@pytest.mark.parametrize("wire,verdict", [
+_VERDICT_CASES = [
     ("principal", "authorized"), ("principal_undeclared_span", "authorized"),
     ("trusted_source", "authorized"), ("untrusted_source", "unauthorized"),
     ("unresolved", "unresolved"), ("no_destination", "not_evaluated"),
     ("no_flow", "not_evaluated"), ("ledger_absent", "not_evaluated"),
-    ("ledger_saturated", "not_evaluated")])
+    ("ledger_saturated", "not_evaluated"), ("input_truncated", "not_evaluated"),
+    ("argument_bound", "unresolved"), ("result_truncated", "not_evaluated"),
+    ("result_unread", "not_evaluated"), ("extraction_incomplete", "not_evaluated"),
+    ("write_dropped", "not_evaluated")]
+
+
+def test_the_verdict_table_covers_every_wire_value():
+    """Milestone review: the table covered 9 of 12 and nothing noticed."""
+    assert {w for w, _ in _VERDICT_CASES} == {w.value for w in vo.WireValue}
+
+
+@pytest.mark.parametrize("wire,verdict", _VERDICT_CASES)
 def test_verdict_of_is_total(wire, verdict):
     assert vo.verdict_of(vo.WireValue(wire)) is vo.Verdict(verdict)
 
 
-def test_should_block_only_on_enforce_unauthorized():
+def test_should_block_only_under_enforce_on_unauthorized_or_a_bound():
+    # Renamed after RULING 1+2 (was ..._only_on_enforce_unauthorized): the bound
+    # states block too (tests/test_value_origin_bounds.py); a plain unresolved does not.
     vo.bind_fresh_ledger()
     try:
         vo.record_tool_result("t", {}, "evil@x.example", designations=(), result_blocked=False)
