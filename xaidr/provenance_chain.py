@@ -44,6 +44,9 @@ import threading
 from typing import Any
 from uuid import uuid4
 from . import value_origin as _vo
+# xaidr.flow()'s save/restore seams are internal: value_origin's public interface
+# (__all__) is pinned by tests/value_origin_conformance/test_interface.py.
+from .value_origin import _ledger as _vo_ledger
 
 import logging as _logging
 _vo_log = _logging.getLogger("xaidr.provenance_chain")
@@ -412,12 +415,12 @@ def _scope_fault(what: str) -> None:
 
 def _saved_state() -> tuple:
     return (_chain_ctx.get(), _corr_ctx.get(), _tiers_ctx.get(), _inbound_ctx.get(),
-            _vo.ledger_get())
+            _vo_ledger.ledger_get())
 
 
 def _put_back(saved: tuple) -> None:
     chain, corr, tiers, inbound, ledger = saved
-    _vo.ledger_set(ledger)
+    _vo_ledger.ledger_set(ledger)
     _chain_ctx.set(chain)
     _corr_ctx.set(corr)
     _tiers_ctx.set(tiers)
@@ -520,8 +523,8 @@ class _FlowScope(contextlib.ContextDecorator):
                               correlation_id=self._correlation_id)
             # begin_flow keeps going if the fresh ledger did not bind. A scope must
             # not then run on the ledger it was entered in: run on none instead.
-            if saved[4] is not None and _vo.ledger_get() is saved[4]:
-                _vo.ledger_set(None)
+            if saved[4] is not None and _vo_ledger.ledger_get() is saved[4]:
+                _vo_ledger.ledger_set(None)
             # Entered over an inbound or tier-delegated context that no scope owns
             # (the plain extract_context, say): keep its chain, tiers and inbound
             # mark, which only tightens the tier gate, and give it its own ledger.

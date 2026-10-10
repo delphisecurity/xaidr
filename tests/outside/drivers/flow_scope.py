@@ -595,9 +595,9 @@ def clear_flow_closes_scopes(xaidr):
 
 def enter_faults(xaidr):
     from xaidr import provenance_chain as pc
-    from xaidr import value_origin as vo
+    from xaidr.value_origin import _ledger
     out = {}
-    for where, target, attr in (("save", vo, "ledger_get"), ("begin_flow", pc, "_new_corr")):
+    for where, target, attr in (("save", _ledger, "ledger_get"), ("begin_flow", pc, "_new_corr")):
         orig = getattr(target, attr)
         faults0 = _faults(xaidr)
 
@@ -619,7 +619,7 @@ def enter_faults(xaidr):
 
 def exit_fault(xaidr):
     """A fault while putting the flow back must not leave the closed scope's flow."""
-    from xaidr import value_origin as vo
+    from xaidr.value_origin import _ledger as vo
     faults0 = _faults(xaidr)
     orig = vo.ledger_set
     with xaidr.flow(principal="x"):
