@@ -64,10 +64,13 @@ Three consequences, all stated rather than worked around:
 
 ### D2. S-2 removed: no implicit ledgers
 
-Ruling: free now, breaking later. Confirmed free: the latest published wheel
-(1.19.0, `uv pip install --no-deps --target w119 xaidr==1.19.0`) has no
-`value_origin` package and its `begin_flow` binds no ledger, so no released host
-reads an implicit ledger.
+~~Ruling: free now, breaking later. Confirmed free: the latest published wheel (1.19.0, `uv pip install --no-deps --target w119 xaidr==1.19.0`) has no `value_origin` package and its `begin_flow` binds no ledger, so no released host reads an implicit ledger.~~
+*Retracted 2026-10-09: false since 1.20.0 was published.* The published 1.20.0
+wheel ships `xaidr/value_origin/`, and its public `record_principal_input` binds an
+implicit ledger (S-2). The Sensor does not call it in 1.20.0, so only a host that
+imports `xaidr.value_origin` directly would see D2 change it; the census found no
+such caller in any Delphi repo. "Free" now means "no known caller", not
+"unreleased". The 1.19.0 check was true when it was made.
 
 What the code says it costs, measured by running every test file that names
 value origin or a flow (24 files, 448 tests) with S-2 simulated by a pytest
