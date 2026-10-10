@@ -77,7 +77,7 @@ or a throwaway that is never bound (the same replacement STEP 2 used, §5):
 ```
 FAILED tests/test_value_origin_m6.py::test_m6_principal_input
 FAILED tests/test_value_origin_m5.py::test_s25_origin_without_a_flow
-2 failed, 446 passed, 1 skipped, 3 xfailed
+2 failed; every other test in the 24 files passed or xfailed as before
 ```
 
 - `test_m6_principal_input` pins three S-2 behaviours: S30 (`no_flow` where it
@@ -767,6 +767,17 @@ refuses unless `xaidr.__file__` is in that venv's site-packages
   not applied (§1). The second review measured that a replacing nested scope
   opens the tier gate in the documented middleware-plus-decorated-handler shape;
   joining is the safe reading of D1. Is it the owner's?
+- **Q-H (blocking P2).** D2 changes the conformance contract with paid:
+  `tests/value_origin_conformance/convert.py` says that changing an expected row
+  "must name the rule that justifies it (and obliges paid ...)". Under D2 the
+  supplementary cases R31-implicit-bound, R31-implicit-replaced and
+  R31-bind-ledger-noop-on-implicit go red. So do the implicit-bind procedural test
+  and seven M9 wheel rows. Does D2 stand with paid obliged to follow?
+  P2 (`9d8932c`) is reverted (`61969fb`) until the owner rules, and it re-applies
+  cleanly. *Corrected:* §3's SEAMS set (`tests/test_*.py`) skips
+  `tests/value_origin_conformance/` and the outside M9 test. The selection for
+  every phase must add `tests/value_origin_conformance/` and every
+  `tests/outside/test_*_from_the_wheel.py` that a phase's drivers touch.
 - **Q-G (blocking P1, and with it P3 and P4).** What should `xaidr.flow()` do
   when it finds request state already in the context? Three designs each
   failed P1's counter-case, because every available rule trades (1) for (2)

@@ -3460,7 +3460,7 @@ Spec: docs/value-origin-a2-build-spec.md (`46cc8c4`, corrected in place since).
 | STEP 2 | spec §5 | done; audited; coverage 100% -> 0% under S-2 |
 | STEP 3 | `46cc8c4` | done |
 | P1 | first design `3a6c820`; second `325f12c`; third `93d60a1` | STOPPED (below) |
-| P2 | `9d8932c` | built and verified; NOT yet fresh-context reviewed |
+| P2 | `9d8932c`, REVERTED in `61969fb` | built and verified locally, then reverted: CI showed D2 changes the conformance contract that obliges paid (spec §7 Q-H) |
 
 ### P1: what holds, and what three reviews broke
 
@@ -3527,3 +3527,17 @@ These are held for the owner's disclosure call, so no detail is written here.
   blocks.
 - One unexplained test failure occurred in 1 of 16 combined P1 runs. It was
   not reproduced in 25 more runs, and its name was not captured.
+
+### After the push: CI red, P2 reverted, P1's interface leak fixed
+
+CI on `436e6cc` went red on every pytest job. All of it came from my commits,
+through tests my selection never ran. "SEAMS" was `tests/test_*.py`, which skips
+`tests/value_origin_conformance/`; the outside M9 test and the docs suite-count
+gate were left out too.
+
+- **P1 leaked `ledger_get`/`ledger_set` into `value_origin.__all__`,** an
+  interface `test_interface.py` pins. They are internal now.
+- **P2's D2 change turned four conformance tests red,** and convert.py says
+  changing those rows obliges paid. It turned seven M9 wheel rows red too. P2
+  is reverted until the owner rules (spec §7 Q-H).
+- **The spec published a three-digit pass count.** It is reworded.
