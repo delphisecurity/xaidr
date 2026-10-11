@@ -647,6 +647,15 @@ def install_autogen_legacy() -> types.ModuleType:
             out = self.functions[name](**args)
             return True, {"name": name, "role": "function", "content": out}
 
+        async def a_execute_function(self, func_call, call_id=None):
+            # The real 0.2 line has this as a SEPARATE async method that never
+            # goes through execute_function — the sync fake alone would leave
+            # the shared factory's async half untestable.
+            name = func_call["name"]
+            args = json.loads(func_call.get("arguments") or "{}")
+            out = self.functions[name](**args)
+            return True, {"name": name, "role": "function", "content": out}
+
     mod.ConversableAgent = ConversableAgent
     return mod
 
@@ -663,21 +672,49 @@ def install_llama_index() -> types.ModuleType:
         def __init__(self, name):
             self.name = name
 
+    class ToolOutput:
+        """The real ``FunctionTool.call`` returns this, not the raw value.
+
+        ``content`` is the model-facing text (the real one joins text
+        blocks); ``raw_output`` keeps what the function returned. Both are
+        load-bearing for the result seam: the refusal must replace the
+        content the model reads without leaving the poison in the raw value.
+        """
+
+        def __init__(self, content="", tool_name="", raw_input=None,
+                     raw_output=None):
+            self.content = content if isinstance(content, str) else str(content)
+            self.tool_name = tool_name
+            self.raw_input = raw_input if raw_input is not None else {}
+            self.raw_output = raw_output
+
+        def __str__(self):
+            return self.content
+
     class FunctionTool:
         def __init__(self, name, fn):
             self.metadata = ToolMetadata(name)
             self.fn = fn
 
         def call(self, *args, **kwargs):
-            return self.fn(*args, **kwargs)
+            raw = self.fn(*args, **kwargs)
+            return ToolOutput(
+                content=raw, tool_name=self.metadata.name,
+                raw_input={"args": args, "kwargs": kwargs}, raw_output=raw,
+            )
 
         async def acall(self, *args, **kwargs):
-            return self.fn(*args, **kwargs)
+            raw = self.fn(*args, **kwargs)
+            return ToolOutput(
+                content=raw, tool_name=self.metadata.name,
+                raw_input={"args": args, "kwargs": kwargs}, raw_output=raw,
+            )
 
     class QueryEngineTool:
         pass
 
     tools.ToolMetadata = ToolMetadata
+    tools.ToolOutput = ToolOutput
     tools.FunctionTool = FunctionTool
     tools.QueryEngineTool = QueryEngineTool
     return tools
