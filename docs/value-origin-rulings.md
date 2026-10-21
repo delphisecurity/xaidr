@@ -50,7 +50,12 @@ A request opened inside a live request, or inside a flow the host began with
 inside it. A run hooked inside another hooked run (an Agents SDK
 `Agent.as_tool`, a crew kicked off from a tool) scans its input and does not
 record it as principal input: that input is the outer run's model text. A
-`flow()` scope joins only a scope that is still open. The request seam holds no
+`flow()` scope joins only a scope that is still open. A `flow()` scope opened
+while a flow is already active (a `begin_flow()`, an `extract_context()`, a
+recorded hop) leaves that flow's chain, tiers, correlation id and inbound mark
+exactly as they are, on entry and on exit, so it never loosens the privilege-tier
+gate; it gets its own ledger (Q-G (b), 2026-10-21;
+`test_a_scope_over_an_active_flow_leaves_its_chain_and_tiers_alone`). The request seam holds no
 tier state: the provenance chain, tiers and inbound mark are untouched by it.
 *Pinned by:* `tests/test_value_origin_reuse.py`,
 `tests/test_value_origin_request_scope.py`.

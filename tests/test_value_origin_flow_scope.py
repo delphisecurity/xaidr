@@ -260,3 +260,45 @@ def test_the_plain_pair_and_the_request_scope_are_stated_where_users_read():
         assert "`clear_flow()` is skipped" in text, (
             f"{rel} does not state that a skipped clear_flow() carries the flow to the "
             "next request on the thread")
+
+
+def test_a_scope_over_an_active_flow_leaves_its_chain_and_tiers_alone():
+    """Q-G (b), 2026-10-21: when a flow is already active, xaidr.flow() leaves the
+    chain, tiers and inbound mark as they are, so it never loosens the tier gate.
+    It still gives the scope its own value-origin ledger."""
+    import contextvars
+    from xaidr import provenance_chain as pc
+    from xaidr.value_origin import _ledger
+
+    def tier_state():
+        return (pc.current_chain(), pc.current_tiers(), pc._inbound_ctx.get(),
+                pc.current_correlation_id())
+
+    def run():
+        pc.record_hop("upstream-agent")                 # an untiered hop: tier unknown
+        before = tier_state()
+        outside = contextvars.copy_context().run(fs._gate, xaidr)   # the request's own verdict
+        outer_ledger = _ledger._LEDGER.get()
+        with xaidr.flow(principal="service:billing"):
+            inside_state = tier_state()
+            own_ledger = _ledger.ledger_bound() and _ledger._LEDGER.get() is not outer_ledger
+            inside = fs._gate(xaidr)
+        return outside, inside, before, inside_state, own_ledger
+    outside, inside, before, inside_state, own_ledger = contextvars.Context().run(run)
+    assert outside == GATED, f"precondition: an untiered upstream hop is gated, got {outside!r}"
+    assert inside == outside, (
+        f"a scope over an active flow loosened the tier gate: {outside!r} -> {inside!r}")
+    assert inside_state == before, (
+        f"a scope over an active flow replaced the chain: {before[0]} -> {inside_state[0]}")
+    assert own_ledger, "the scope did not get its own value-origin ledger"
+
+
+def test_a_scope_with_no_active_flow_still_starts_one_with_its_principal():
+    import contextvars
+    from xaidr import provenance_chain as pc
+
+    def run():
+        with xaidr.flow(principal="user:alice"):
+            return pc.current_chain(), pc.is_flow_active()
+    chain, active = contextvars.Context().run(run)
+    assert active and chain and chain[0]["agent_id"] == "user:alice", chain

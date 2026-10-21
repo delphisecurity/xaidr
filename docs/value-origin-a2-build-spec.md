@@ -12,6 +12,9 @@
 > - The ledger half of Q-G is answered by the request seam: a closed ledger reads
 >   as not bound in any context copied from its request, and a `flow()` scope
 >   joins only a scope that is still open. The request seam holds no tier state.
+> - The tier half of Q-G is answered as option (b): a `flow()` scope opened while a
+>   flow is already active leaves its chain, tiers, correlation id and inbound mark
+>   as they are, and gets its own ledger.
 
 Written before any code, as the owner's handoff requires (STEP 3). Base:
 `832e642` on `feat/value-origin-seams` (main `0502c99` merged in at `8ce8dc4`).

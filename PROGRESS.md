@@ -3447,97 +3447,54 @@ R-reuse-open-flow:B    executed=['send_email'] send=[] toolmsg=['sent to alice@c
 ### Not started, because the finding changes the scope (owner: "report it before building around it")
 The committed acceptance test and its CI step; Q12 (LangChain string-input binding); the MCP stub-ClientSession end-to-end test; a real streaming `httpx.Response`; the C-11 P-seam pass through the LangChain/MCP hooks; S23/S24 through `protect()` from the wheel. Each stays as M7 deferred it, pending the owner's ruling on findings 1–4.
 
-## A2 build (handoff 2026-10-08): STOPPED in P1, after three designs of xaidr.flow() failed their counter-case
+## A2: the request scope, `xaidr.flow()`, and the request seam
 
-Spec: docs/value-origin-a2-build-spec.md (`46cc8c4`, corrected in place since).
+Spec: docs/value-origin-a2-build-spec.md (the design record); behaviour:
+docs/value-origin-rulings.md §1.
 
-### Landed
+### What `xaidr.flow()` does
 
-| step | SHA | status |
-|---|---|---|
-| STEP 0 | `8ce8dc4`, `5a5f575`, `bde6c2f`, `832e642` | done; CI green on `832e642`, PR MERGEABLE |
-| STEP 1 | spec §2 | done; the conditional stop did not fire |
-| STEP 2 | spec §5 | done; audited; coverage 100% -> 0% under S-2 |
-| STEP 3 | `46cc8c4` | done |
-| P1 | first design `3a6c820`; second `325f12c`; third `93d60a1` | STOPPED (below) |
-| P2 | `9d8932c`, REVERTED in `61969fb` | built and verified locally, then reverted: CI showed D2 changes the conformance contract that obliges paid (spec §7 Q-H) |
+- **One request's scope.** With no flow active, the first scope in a context saves
+  the five request variables (chain, correlation id, tiers, inbound mark, ledger),
+  starts a flow with its `principal=`, and puts them back on exit, whether the body
+  returned or raised.
+- **Over an active flow** (a `begin_flow()`, an `extract_context()`, a recorded hop)
+  it leaves the chain, tiers, correlation id and inbound mark exactly as they are,
+  on entry and on exit, and gets its own value-origin ledger, so it never loosens
+  the privilege-tier gate (Q-G (b), 2026-10-21).
+- **Nesting.** A scope opened inside an open scope joins it. A scope joins only an
+  entry whose scope is still open, so a context copied from an ended scope starts
+  its own.
+- **Exits.** An exit closes its entry and every entry opened inside it;
+  `clear_flow()` closes every open scope in the context. A stray or second exit
+  changes nothing where it runs. Faults are counted and logged (1st, 10th, 100th),
+  and never reach the host.
+- **Decorators.** `@xaidr.flow(...)` scopes each call of a sync function. It refuses
+  `async def`, generator and async-generator functions, and any call that returns a
+  coroutine, an async generator or a non-Future awaitable. A scope cannot be opened
+  inside a generator's body; `@contextmanager` and `@asynccontextmanager` bodies are
+  allowed.
 
-### P1: what holds, and what three reviews broke
+### The request seam (ruling 4, 2026-10-21)
 
-**What holds in every design**, measured in process and from the wheel:
+A value-origin ledger belongs to the request it is bound in and closes when that
+request ends; a closed ledger reads as not bound in every context, including ones
+copied from the request. The requests: each `ThreadPoolExecutor` job, each CrewAI
+kickoff and Agents SDK run hooked by `protect()`, each fresh `xaidr.flow()`, and
+each `xaidr.request_scope()` block. A nested hooked run's input is scanned and not
+recorded as principal input. Implicit ledgers (S-2) stay, and each ends with its
+request.
 
-- a request scope that raises leaves nothing for the next request on the
-  thread;
-- the decorated form is per-call safe on a thread pool;
-- `async def` and generator functions are refused as decorator targets;
-- the D3 limitation is stated in docs/api.md, README.md and the no_flow
-  warning.
+### Evidence
 
-**What broke.** P1's counter-case is: (1) a tier-gate verdict looser than with
-no `xaidr.flow()` at all, or (2) a later request starting in an earlier
-request's flow or ledger.
-
-- **First design (`3a6c820`, tokens):** a stray or second exit cleared an
-  unrelated inbound request (1). Out-of-order exits brought a closed scope back
-  (2).
-- **Second design (`325f12c`, value snapshots and a splice):**
-  - a request scope exiting with a generator's scope still open did not end
-    the request (2);
-  - a nested `flow(principal=)` replaced the chain, and the tier gate opened
-    4-to-1 (1).
-- **Third design (`93d60a1`, join and close-what-you-opened).** Reproduced in
-  this session, not only relayed:
-  - a fresh scope over an untiered upstream hop (an unconfigured sensor's
-    default) drops it. With no scope: `approval_required`, ceiling 4. Through
-    `@xaidr.flow(principal=...)`: `allowed`, ceiling 1 (1).
-  - a worker task created inside request A's scope inherits A's open entry;
-    job B's own scope JOINS it, and B reads `principal_undeclared_span` (2).
-  - The reviewers also measured (2) when an inner `clear_flow()` disarms the
-    enclosing scope, and both (1) and (2) when the generator refusal is
-    bypassed through a `@contextmanager` or class wrapper.
-
-### Why a fourth design was not attempted
-
-There is no request-boundary signal except the scope the host opens. So when
-a scope finds state already there, it cannot tell "my request's" from "an
-earlier request's left over" from "inherited by a worker". Every rule trades
-one counter-case for the other:
-
-- **Join existing state:** carries into workers and jobs (2).
-- **Replace it:** drops delegation evidence (1).
-- **Keep only "evidence":** is order-dependent, and inherits a leaked request's
-  chain.
-- **Restore on exit:** drops delegation recorded inside the scope, or lands in
-  a later request when the exit runs late.
-- **Generator detection:** bypassable by indirection, and it has false
-  positives (yield fixtures, batch generators).
-
-These are rulings for the owner (spec §7 Q-G), not implementation choices.
-
-### Also found, and reported rather than fixed (pre-existing; outside A2)
-
-These are held for the owner's disclosure call, so no detail is written here.
-
-- One shipped docstring describes how to trigger a defect in released
-  versions, and gate #40 cannot see it.
-- A2-added docstrings quote inputs that the released metadata detection
-  allows.
-- Two other published defects were measured, and reported to the owner.
-- The ENFORCE startup warning names four bound states as blocking; none of them
-  blocks.
-- One unexplained test failure occurred in 1 of 16 combined P1 runs. It was
-  not reproduced in 25 more runs, and its name was not captured.
-
-### After the push: CI red, P2 reverted, P1's interface leak fixed
-
-CI on `436e6cc` went red on every pytest job. All of it came from my commits,
-through tests my selection never ran. "SEAMS" was `tests/test_*.py`, which skips
-`tests/value_origin_conformance/`; the outside M9 test and the docs suite-count
-gate were left out too.
-
-- **P1 leaked `ledger_get`/`ledger_set` into `value_origin.__all__`,** an
-  interface `test_interface.py` pins. They are internal now.
-- **P2's D2 change turned four conformance tests red,** and convert.py says
-  changing those rows obliges paid. It turned seven M9 wheel rows red too. P2
-  is reverted until the owner rules (spec §7 Q-H).
-- **The spec published a three-digit pass count.** It is reworded.
+- `tests/test_value_origin_flow_scope.py` runs the 19-case driver
+  `tests/outside/drivers/flow_scope.py` in process, and
+  `tests/outside/test_p1_flow_scope_from_the_wheel.py` runs it from the built wheel.
+- `tests/test_value_origin_reuse.py` and `tests/test_value_origin_request_scope.py`:
+  against the tree before the request seam, 16 of their 17 tests fail. Each of
+  four sabotages turns its tests red: the executor seam left out, ledgers left
+  open at a request's end, a nested run's input recorded, and a scope joining an
+  ended entry.
+- `test_a_scope_over_an_active_flow_leaves_its_chain_and_tiers_alone` fails before
+  Q-G (b) (`approval_required` -> `allowed` on a privileged call), passes after it,
+  and fails again when the active-flow branch is disabled.

@@ -395,6 +395,7 @@ class _ScopeEntry:
     fresh: bool             # True: this scope started the flow and restores `saved` on exit
     saved: tuple | None     # (chain, correlation id, tiers, inbound mark, ledger) at entry
     request: Any = None     # a fresh scope's value-origin request (ruling 4)
+    ledger_only: bool = False   # opened over an active flow: only the ledger is its own
     alive: list = dataclasses.field(default_factory=lambda: [True])   # [False] once it ends
 
 
@@ -530,6 +531,16 @@ class _FlowScope(contextlib.ContextDecorator):
         request = None
         try:
             request = _vo_ledger.request_enter()       # ruling 4: the flow is one request
+            if saved[0] is not None or saved[1] is not None:
+                # A flow is already active (Q-G (b), 2026-10-21): its chain, tiers,
+                # correlation id and inbound mark stay exactly as they are, on entry
+                # and on exit, so the scope never loosens the tier gate. It gets its
+                # own value-origin ledger and nothing else.
+                _vo.bind_fresh_ledger()
+                if saved[4] is not None and _vo_ledger.ledger_get() is saved[4]:
+                    _vo_ledger.ledger_set(None)
+                _SCOPES.set(stack + (_ScopeEntry(self, True, saved, request, ledger_only=True),))
+                return current_correlation_id()
             corr = begin_flow(principal=self._principal,
                               correlation_id=self._correlation_id)
             # begin_flow keeps going if the fresh ledger did not bind. A scope must
@@ -587,7 +598,12 @@ class _FlowScope(contextlib.ContextDecorator):
             _SCOPES.set(stack[:i])
             entry.alive[0] = False
             _vo_ledger.request_exit(entry.request)     # its ledgers close with it
-            if entry.fresh:
+            if entry.fresh and entry.ledger_only:
+                try:
+                    _vo_ledger.ledger_set(entry.saved[4])
+                except Exception:
+                    _scope_fault("putting the ledger back faulted")
+            elif entry.fresh:
                 try:
                     _put_back(entry.saved)
                 except Exception:
@@ -630,9 +646,11 @@ def flow(*, principal: str | None = None,
 
     A scope opened inside another one JOINS it: it is the same request, so it
     changes nothing (its ``principal=`` is not applied) and yields that request's
-    correlation id. Opened over a request that arrived from another agent with no
-    scope of its own, it keeps that request's chain, tiers and inbound mark and
-    gets its own ledger.
+    correlation id. Opened while a flow is already active with no scope of its own
+    (a ``begin_flow()``, an ``extract_context()``, a recorded hop), it leaves that
+    flow's chain, tiers, correlation id and inbound mark exactly as they are, on
+    entry and on exit, so it never loosens the privilege-tier gate, and its
+    ``principal=`` is not applied; it gets its own value-origin ledger.
 
     As a decorator it scopes each call. It refuses an ``async def``, a generator or
     async-generator function, and any call that returns a coroutine, because that

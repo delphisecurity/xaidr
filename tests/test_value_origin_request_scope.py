@@ -200,11 +200,11 @@ def test_a_flow_opened_in_a_copy_of_an_ended_flow_does_not_join_it():
             worker = contextvars.copy_context()      # a long-lived worker created in A
         def job_b():
             with xaidr.flow(principal="b"):
-                return _wire(s), (pc.current_chain() or [{}])[0].get("agent_id")
+                return _wire(s), _ledger.ledger_bound()
         return worker.run(job_b), worker.run(_wire, s)
-    (b, head), after = _fresh(serve)
+    (b, own_ledger), after = _fresh(serve)
     assert b not in AUTHORITY, f"job B's flow joined user A's ended flow and read {b!r}"
-    assert head == "b", f"job B's flow joined user A's ended flow: its chain starts at {head!r}"
+    assert own_ledger, "job B's flow joined user A's ended flow: it has no ledger of its own"
     assert after not in AUTHORITY, after
 
 
