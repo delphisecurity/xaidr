@@ -79,7 +79,7 @@ more than one reading names every one of them. This applies to every rule below.
   authority is its own finding. *Pinned by:* `Q1-*`,
   `test_q1_every_reading_of_the_authority_split_is_a_finding`, and
   `tests/test_differential_oracles.py` (spellings × urllib.parse, httpx, urllib3,
-  ada-url; it refuses to run with an oracle missing).
+  ada-url; it refuses to run unless every oracle is installed).
 - **A special scheme takes its authority after any run of `/` and `\`** (R4):
   `http:evil.test`, `http:/evil.test`, `http:\\evil.test` and
   `http:///evil.test` all name `evil.test`. The special schemes are `http`,
@@ -301,7 +301,7 @@ Each is current behaviour and can still be overruled.
 7. The prose URL scan records `http:///evil.test` as `evil.test`; prose
    `http:evil.test` is recorded by the bare-host scan.
 8. The RFC 3986 reading is a written-out split that reads exactly what CPython
-   3.12.2's `urlsplit(...).hostname` reads, the most permissive version measured,
+   3.12.2's `urlsplit(...).hostname` reads, the most lenient version measured,
    so it is the same on every interpreter. Where `urlsplit` refuses the WHATWG
    string, WHATWG's own bracket rule applies: a `[` must open the host and
    enclose an IPv6 literal.
@@ -316,6 +316,6 @@ Each is current behaviour and can still be overruled.
     against `email.utils`.
 12. Integer parts are digit-checked (§2, Addresses).
 13. A name with a port and nothing after it is a bare host, and not a destination.
-14. The first-emission lock: the S22 first-emission test and the all-or-none
+14. The first-write lock: the S22 first-write test and the all-or-none
     visibility test both stay in the suite; the second is the reliable detector of
-    a missing lock.
+    a ledger without its lock.
