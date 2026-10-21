@@ -236,7 +236,6 @@ def test_the_split_is_not_an_accident(sensor):
     "../config/settings.yaml",
     "/etc/hosts",
     "report.v2/summary",
-    "example.txt/foo",
     "we saw traffic to http://169.254.169.254/latest/",   # prose, not a URL value
     "SELECT * FROM users WHERE id = 1",
     "Hello {{name}}",
@@ -326,3 +325,47 @@ def test_a_fault_in_the_core_reading_is_logged_and_keeps_the_urlsplit_reading(mo
     faults = [r for r in caplog.records if "injected core fault" in (r.exc_text or "")
               or "injected core fault" in r.getMessage()]
     assert len(faults) == 1, f"expected the fault logged exactly once, got {len(faults)}"
+
+
+# ── ruling 2 for url_parse (2026-10-21): the shapes value origin reads ───────
+# For destination decisions only: a scheme-less `host/path` and `host:port/path`,
+# and whitespace in the path of a `scheme://` value, read as the host a client
+# that guesses http:// (or WHATWG, which percent-encodes the space) sends to.
+SCHEMELESS_AND_SPACED = [
+    ("host-path", "metadata.google.internal/computeMetadata/v1/token", "metadata.google.internal", None),
+    ("host-port-path", "metadata.google.internal:80/computeMetadata/v1/", "metadata.google.internal", None),
+    ("space-in-path", "http://169.254.169.254/latest meta-data/", "169.254.169.254", "link_local"),
+    ("tab-in-path", "http://169.254.169.254/latest\tmeta-data/", "169.254.169.254", "link_local"),
+    ("space-in-path-name", "http://metadata.google.internal/compute Metadata/v1", "metadata.google.internal", None),
+]
+
+
+@pytest.mark.parametrize("name,value,host,address", SCHEMELESS_AND_SPACED,
+                         ids=[c[0] for c in SCHEMELESS_AND_SPACED])
+def test_the_shapes_value_origin_reads_are_urls_here_too(name, value, host, address):
+    shape = parse_url(value)
+    assert shape is not None, f"{name}: {value!r} is not read as a URL"
+    assert (shape.host, shape.address) == (host, address), shape
+
+
+@pytest.mark.parametrize("name,value,host,address", SCHEMELESS_AND_SPACED,
+                         ids=[c[0] for c in SCHEMELESS_AND_SPACED])
+def test_a_metadata_destination_blocks_in_every_shape_value_origin_reads(sensor, name, value, host, address):
+    r = _scan(sensor, "http_get", {"url": value})
+    assert r.action == "blocked", f"{name}: {value!r} -> {r.action}/{r.score} {r.rules}"
+
+
+@pytest.mark.parametrize("value", [
+    "http://169.254.169.254 x/latest",           # whitespace in the authority: no host
+    "metadata.google.internal/a b",              # scheme-less with whitespace: prose
+    "metadata.google.internal:80",               # a bare host with a port
+    "metadata.google.internal",                  # a bare host
+])
+def test_shapes_value_origin_does_not_read_are_not_urls_here_either(value):
+    assert parse_url(value) is None, parse_url(value)
+
+
+def test_a_scheme_less_name_with_a_path_is_a_host_and_no_address():
+    shape = parse_url("example.txt/foo")
+    assert shape is not None and shape.host == "example.txt" and shape.address is None, shape
+    assert classify_url("example.txt/foo") is None

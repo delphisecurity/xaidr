@@ -62,7 +62,7 @@ from typing import NamedTuple, Optional
 from urllib.parse import urlsplit
 
 from ..value_origin._authority import (
-    _SPECIAL_RE, ParseFailure, _host_authority, _whatwg, classify_value)
+    _IMPLIED_RE, _SPECIAL_RE, ParseFailure, _host_authority, _whatwg, classify_value)
 
 # Hard input ceiling. A URL longer than this is not something we can say anything
 # useful about, and the cap keeps the scan cost flat regardless of what a caller
@@ -208,6 +208,33 @@ def _url_address(value: str, split_host: str) -> Optional[str]:
     return max(kinds, key=_SEVERITY.index)
 
 
+_TAB_NEWLINE = str.maketrans("", "", "\t\n\r")
+
+
+def _space_only_after_authority(value: str) -> bool:
+    """True when ``value`` opens with ``scheme://`` and all of its whitespace comes
+    after the authority (the first ``/``, ``?``, ``#`` or backslash after ``//``)."""
+    m = _SCHEME_RE.match(value)
+    if not m or not m.group(2):
+        return False
+    rest = value[m.end():]
+    end = re.search(r"[/?#\\]", rest)
+    return end is not None and not any(c.isspace() for c in rest[:end.start()])
+
+
+def _implied_name_shape(value: str) -> Optional[UrlShape]:
+    """A scheme-less ``host/path`` or ``host:port/path`` whose host is a name, read
+    as value origin reads it (``_IMPLIED_RE``): the host a client that guesses
+    ``http://`` sends to. A bare name, with or without a port, is not a URL."""
+    if any(c.isspace() for c in value):
+        return None
+    m = _IMPLIED_RE.match(value)
+    if not m:
+        return None
+    host = m.group(1).lower().rstrip(".")
+    return UrlShape(scheme="", host=host, address=_address_kind(host), raw=value)
+
+
 def looks_like_url(text: str) -> bool:
     """Cheap gate: is this VALUE a URL?
 
@@ -225,14 +252,20 @@ def parse_url(text: str) -> Optional[UrlShape]:
     try:
         if not isinstance(text, str) or not text.strip():
             return None
-        capped = text[:MAX_URL_CHARS].strip()
-        # A URL argument is a single token. Embedded whitespace means this is
-        # prose that CONTAINS a URL, not a URL-valued argument, and prose belongs
-        # to the content path where the L1 rules already read it.
-        if any(c.isspace() for c in capped):
+        capped = text[:MAX_URL_CHARS].strip().translate(_TAB_NEWLINE)
+        # A URL argument is a single token, with one exception (ruling 2): in a
+        # `scheme://` value, whitespace AFTER the authority is a path, query or
+        # fragment character WHATWG percent-encodes, and the host is unaffected.
+        # Tabs and newlines are removed first, as WHATWG and urlsplit remove them.
+        # Any other whitespace means prose that CONTAINS a URL, which belongs to
+        # the content path where the L1 rules already read it.
+        if any(c.isspace() for c in capped) and not _space_only_after_authority(capped):
             return None
 
         m = _SCHEME_RE.match(capped)
+        if m and not m.group(2) and _IMPLIED_RE.match(capped):
+            # `name:port/path`: the "scheme" is a host, as value origin reads it.
+            return _implied_name_shape(capped)
         if m:
             scheme = m.group(1).lower()
             # `file:///etc/passwd` has an empty authority and a meaningful path;
@@ -267,7 +300,7 @@ def parse_url(text: str) -> Optional[UrlShape]:
         # Scheme-less, bare-address form: `169.254.169.254/latest/meta-data/`.
         b = _BARE_AUTHORITY_RE.match(capped)
         if not b:
-            return None
+            return _implied_name_shape(capped)
         host = b.group(1).strip("[]").lower()
         if host.endswith("."):
             # No consumer reads `169.254.169.254.` as an address (glibc and the
@@ -277,7 +310,7 @@ def parse_url(text: str) -> Optional[UrlShape]:
             return None
         kind = _address_kind(host)
         if kind is None:
-            return None
+            return _implied_name_shape(capped)
         # Without a scheme there is nothing to say "this is a destination", so the
         # value has to say it some other way: either it is a WELL-FORMED address
         # literal, or it carries a path/query/fragment. Otherwise "1.2" — a
