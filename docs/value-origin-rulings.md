@@ -139,6 +139,10 @@ it:
 
 ### Addresses
 
+- **A name is keyed by its registrable domain**: the PSL algorithm over both
+  sections with the default `*` rule; a host that is itself a public suffix, or
+  one label, is kept whole. So `docs.northbank.example` and a principal's
+  `northbank.example` are the same destination (`pos-drift-*`).
 - **One normaliser**: every literal form (hex, octal, decimal, short dotted,
   IPv4-mapped IPv6), mapped addresses unwrapped before rendering
   (`coerce_ip`, `ip_key`).
@@ -180,9 +184,11 @@ it:
 - **Quoting that does not balance is junk**: the whole value fails, and its `,` and
   `;` are taken literally to find the parts that parse
   (`R32-untrusted-unbalanced-quote`).
-- **The local part is ASCII by grammar.** A non-ASCII local part is `unresolved`
-  (3.6; `R36-nonascii-local`). The domain may be Unicode and is UTS-46-encoded.
-  No plus-stripping and no dot removal: both collide distinct mailboxes (S18).
+- **The local part is ASCII by grammar, and lowercased.** A non-ASCII local part
+  is `unresolved` (3.6; `R36-nonascii-local`). The domain may be Unicode and is
+  UTS-46-encoded. Lowercasing is the one fold applied to a local part
+  (`V23-local-part-lower`, `pos-format-*`); no plus-stripping and no dot removal,
+  because those collide distinct mailboxes (S18).
 
 ### Phones and bare hosts in prose
 
