@@ -255,7 +255,7 @@ def parse_url(text: str) -> Optional[UrlShape]:
         capped = text[:MAX_URL_CHARS].strip().translate(_TAB_NEWLINE)
         # A URL argument is a single token, with one exception (ruling 2): in a
         # `scheme://` value, whitespace AFTER the authority is a path, query or
-        # fragment character WHATWG percent-encodes, and the host is unaffected.
+        # fragment character WHATWG percent-encodes, and the host stays readable.
         # Tabs and newlines are removed first, as WHATWG and urlsplit remove them.
         # Any other whitespace means prose that CONTAINS a URL, which belongs to
         # the content path where the L1 rules already read it.
