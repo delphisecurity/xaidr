@@ -2031,9 +2031,10 @@ class DelphiSensor:
                                    "for direction='input'; ignored for %r. Logged once.",
                                    self.agent_id, direction)
                 return
-            if _vo_seams.NESTED_RUN.get():
-                # A run hooked inside another hooked run: its input is the outer
-                # run's model text, scanned above and never principal input.
+            if _vo_seams.NESTED_RUN.get() or _vo_seams.NOT_PRINCIPAL.get():
+                # A run hooked inside another hooked run (its input is the outer
+                # run's model text), or run input that is a tool output or an
+                # assistant turn: scanned above, never principal input.
                 return
             text = _coerce_scannable(prompt)
             spans = list(spans) if spans is not None else None

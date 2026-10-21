@@ -395,6 +395,7 @@ class _ScopeEntry:
     fresh: bool             # True: this scope started the flow and restores `saved` on exit
     saved: tuple | None     # (chain, correlation id, tiers, inbound mark, ledger) at entry
     request: Any = None     # a fresh scope's value-origin request (ruling 4)
+    within: Any = None      # the request it was opened in: the entry ends with it
     ledger_only: bool = False   # opened over an active flow: only the ledger is its own
     alive: list = dataclasses.field(default_factory=lambda: [True])   # [False] once it ends
 
@@ -520,7 +521,8 @@ class _FlowScope(contextlib.ContextDecorator):
             # An entry whose scope has ended is not a request to join: it reaches
             # this context only through a copy made while it was open (a worker
             # task created inside it), and its request is over.
-            stack = tuple(e for e in _SCOPES.get() if e.alive[0])
+            stack = tuple(e for e in _SCOPES.get()
+                          if e.alive[0] and (e.within is None or e.within.live))
             if stack:                                  # an open scope here: join it
                 _SCOPES.set(stack + (_ScopeEntry(self, False, None),))
                 return current_correlation_id()
@@ -539,7 +541,8 @@ class _FlowScope(contextlib.ContextDecorator):
                 _vo.bind_fresh_ledger()
                 if saved[4] is not None and _vo_ledger.ledger_get() is saved[4]:
                     _vo_ledger.ledger_set(None)
-                _SCOPES.set(stack + (_ScopeEntry(self, True, saved, request, ledger_only=True),))
+                _SCOPES.set(stack + (_ScopeEntry(self, True, saved, request, ledger_only=True,
+                                                 within=_vo_ledger._REQUEST.get()),))
                 return current_correlation_id()
             corr = begin_flow(principal=self._principal,
                               correlation_id=self._correlation_id)
@@ -554,7 +557,8 @@ class _FlowScope(contextlib.ContextDecorator):
                 _chain_ctx.set(saved[0])
                 _tiers_ctx.set(saved[2])
                 _inbound_ctx.set(saved[3])
-            _SCOPES.set(stack + (_ScopeEntry(self, True, saved, request),))
+            _SCOPES.set(stack + (_ScopeEntry(self, True, saved, request,
+                                             within=_vo_ledger._REQUEST.get()),))
             return corr
         except Exception:
             _vo_ledger.request_exit(request)
@@ -671,9 +675,13 @@ _REQUEST_SCOPES: contextvars.ContextVar[tuple] = contextvars.ContextVar(
 class _RequestScope:
     """``xaidr.request_scope()``'s context manager. See :func:`request_scope`."""
 
+    def __init__(self) -> None:
+        self._opened: list = []              # its records, wherever it is exited
+
     def __enter__(self) -> None:
         try:
-            rec = _vo_ledger.request_enter()
+            rec = _vo_ledger.request_enter(accumulate=True)
+            self._opened.append(rec)
             _REQUEST_SCOPES.set(_REQUEST_SCOPES.get() + ((self, rec),))
         except Exception:
             _scope_fault("request_scope(): opening it faulted; the body runs in the "
@@ -688,6 +696,12 @@ class _RequestScope:
                 _REQUEST_SCOPES.set(stack[:i])
                 for _, rec in reversed(stack[i:]):     # and every one opened inside it
                     _vo_ledger.request_exit(rec)
+                if stack[i][1] in self._opened:
+                    self._opened.remove(stack[i][1])
+            elif self._opened:
+                # Exited in another context (a generator closed on another thread):
+                # the request still ends, and its ledgers close.
+                _vo_ledger.request_exit(self._opened.pop())
         except Exception:
             _scope_fault("request_scope(): its exit faulted")
         return False                                   # the body's exception propagates
@@ -709,9 +723,13 @@ def request_scope() -> _RequestScope:
     ``begin_flow()``, an ``extract_context()``) end when it exits, on return or
     raise: a closed ledger reads as not bound everywhere, including in work
     started inside the block that outlives it, so no later request reads this
-    request's principal authority. Opened inside a live request, or inside a
-    flow the host began, it joins that and changes nothing. It never touches the
-    provenance chain, tiers or the inbound mark.
+    request's principal authority. Opened inside a live request, it joins that
+    and changes nothing; a ledger bound outside any request (a ``begin_flow()``
+    with no request around it) is hidden inside the block and back after it.
+    Every input inside the block keeps authorizing for the rest of the block. An
+    exit in another context (a generator closed on another thread) still ends
+    the request. It never touches the provenance chain, tiers or the inbound
+    mark.
 
     Each ``ThreadPoolExecutor`` work item, each CrewAI kickoff, each Agents SDK
     ``Runner.run`` and each fresh :func:`flow` is already a request; this is for

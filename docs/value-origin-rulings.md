@@ -45,12 +45,22 @@ reads its authority. The requests are:
   Agents SDK run (`Runner.run`, `run_sync`) hooked by `protect()`;
 - each fresh `xaidr.flow()` scope.
 
-A request opened inside a live request, or inside a flow the host began with
-`begin_flow()`, joins it and changes nothing. An exit ends every request opened
-inside it. A run hooked inside another hooked run (an Agents SDK
-`Agent.as_tool`, a crew kicked off from a tool) scans its input and does not
-record it as principal input: that input is the outer run's model text. A
-`flow()` scope joins only a scope that is still open. A `flow()` scope opened
+A request opened inside a live request joins it and changes nothing. A ledger
+bound outside any request (a `begin_flow()` with no request around it, a pool
+initializer's) belongs to no request: inside a request it is hidden, and it is
+back when the request ends. An exit ends every request opened inside it, and a
+`request_scope()` exited in another context (a generator closed on another
+thread) still ends its request. In a request the host or a framework declares
+(`request_scope()`, a hooked run) every input keeps authorizing for the rest of
+it; in an executor job, which may be a loop serving one user after another, a new
+input still ends the previous implicit ledger (S-2). A run hooked inside another
+hooked run (an Agents SDK `Agent.as_tool`, a crew kicked off from a tool) scans
+its input and does not record it as principal input: that input is the outer
+run's model text. In an Agents SDK run's input list, only a string or a user,
+system or developer message is principal input; a replayed tool output or
+assistant turn is scanned the same way and not recorded as the principal's. A
+`flow()` scope joins only a scope that is still open, inside a request that is
+still live. A `flow()` scope opened
 while a flow is already active (a `begin_flow()`, an `extract_context()`, a
 recorded hop) leaves that flow's chain, tiers, correlation id and inbound mark
 exactly as they are, on entry and on exit, so it never loosens the privilege-tier

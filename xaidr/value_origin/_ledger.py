@@ -127,7 +127,7 @@ def _digest_ngram(g: str) -> bytes:
 class _Ledger:
     __slots__ = ("lock", "pid", "explicit", "entries", "ngrams", "saturated", "sat_logged",
                  "input_truncated", "result_truncated", "result_unread", "atoms_incomplete",
-                 "dests_dropped", "closed")
+                 "dests_dropped", "closed", "owner")
 
     def __init__(self, *, explicit: bool) -> None:
         self.lock = _new_lock()
@@ -143,6 +143,7 @@ class _Ledger:
         self.dests_dropped = False       # a DESTINATION write was dropped: blocks (owner, 2026-10-06)
         self.sat_logged = False
         self.closed = False              # its request ended: read as not bound, everywhere
+        self.owner = None                # the request it was bound in, if any
 
     def __repr__(self) -> str:                  # discloses nothing
         return (f"<value-origin ledger {'explicit' if self.explicit else 'implicit'} "
@@ -161,10 +162,15 @@ def _current() -> Optional[_Ledger]:
 
 # ── the request (ruling 4) ───────────────────────────────────────────────────
 class _Request:
-    __slots__ = ("live", "ledgers", "saved_ledger", "saved_request")
+    __slots__ = ("live", "ledgers", "saved_ledger", "saved_request", "accumulate")
 
-    def __init__(self, saved_ledger, saved_request) -> None:
+    def __init__(self, saved_ledger, saved_request, accumulate=False) -> None:
         self.live = True
+        # True for a request the host or a framework declares (request_scope(), a
+        # hooked run): every input in it keeps authorizing in it. An executor job
+        # may be a loop serving many users, so there a new input still ends the
+        # previous implicit ledger (S-2).
+        self.accumulate = accumulate
         self.ledgers: List[_Ledger] = []
         self.saved_ledger = saved_ledger
         self.saved_request = saved_request
@@ -179,22 +185,21 @@ def _bound(lg: _Ledger) -> _Ledger:
     rec = _REQUEST.get()
     if rec is not None and rec.live:
         rec.ledgers.append(lg)
+        lg.owner = rec
     return lg
 
 
-def request_enter() -> Optional[_Request]:
-    """Open a request in this context. Returns its record, or None when it JOINS:
-    inside a live request, or inside a host's own flow (a live explicit ledger no
-    request owns). Otherwise any ledger bound here belongs to no live request in
-    this context, so it is hidden for the request's duration. Never raises."""
+def request_enter(*, accumulate: bool = False) -> Optional[_Request]:
+    """Open a request in this context. Returns its record, or None when it JOINS a
+    live request. Otherwise any ledger bound here belongs to no live request in
+    this context (a flow left open, a pool initializer's begin_flow()), so it is
+    hidden for the request's duration. Never raises."""
     try:
         rec = _REQUEST.get()
         if rec is not None and rec.live:
             return None
         lg = _LEDGER.get()
-        if lg is not None and lg.explicit and not lg.closed and lg.pid == os.getpid():
-            return None
-        new = _Request(lg, rec)
+        new = _Request(lg, rec, accumulate)
         _REQUEST.set(new)
         _LEDGER.set(None)
         return new
@@ -277,8 +282,9 @@ def ledger_bound() -> bool:
 
 def _bind_for_input() -> _Ledger:
     lg = _current()
-    if lg is not None and lg.explicit:
-        return lg
+    if lg is not None and (lg.explicit or (lg.owner is not None and lg.owner.live
+                                           and lg.owner.accumulate)):
+        return lg                  # a flow's ledger, or this live request's: one request, many inputs
     return _bound(_Ledger(explicit=False))
 
 

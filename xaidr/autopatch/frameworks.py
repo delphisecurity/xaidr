@@ -715,6 +715,15 @@ def _patch_deepagents(ctx: PatchContext) -> None:
 # ─────────────────────────────────────────────────────────────────────────
 
 
+def _principal_turn(item: Any) -> bool:
+    """An Agents SDK run-input item the principal wrote: a string, or a message
+    whose role is user, system or developer."""
+    if isinstance(item, str):
+        return True
+    role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
+    return role in ("user", "system", "developer")
+
+
 def _patch_openai_agents(ctx: PatchContext) -> None:
     ctx.module("agents")
 
@@ -724,8 +733,19 @@ def _patch_openai_agents(ctx: PatchContext) -> None:
             value = kwargs.get("input")
             if value is None and len(args) > 2:
                 value = args[2]
+            # Only the principal's own turns are principal input: a plain string,
+            # or a user, system or developer message. A replayed tool output or
+            # assistant turn is scanned the same way and not recorded as the
+            # principal's (ruling 1: untrusted content never raises authority).
+            own = set(strings_in(value if isinstance(value, str) else
+                                 [i for i in value or () if _principal_turn(i)]
+                                 if isinstance(value, (list, tuple)) else value, limit=64))
             for text in strings_in(value, limit=8):
-                scan_text_boundary(ctx.sensor, text, "input")
+                token = _vo_seams.NOT_PRINCIPAL.set(text not in own)
+                try:
+                    scan_text_boundary(ctx.sensor, text, "input")
+                finally:
+                    _vo_seams.NOT_PRINCIPAL.reset(token)
             return None
 
         def after(result: Any, args: tuple, kwargs: dict) -> Any:

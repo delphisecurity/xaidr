@@ -49,6 +49,11 @@ def enclosing_result_seam(fn):
 #: principal input.
 NESTED_RUN: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "xaidr_value_origin_nested_run", default=False)
+#: True while an entry hook scans run input that is not the principal's own (an
+#: Agents SDK tool output or assistant turn replayed in a run's input list): it is
+#: scanned, and not recorded as principal input.
+NOT_PRINCIPAL: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "xaidr_value_origin_not_principal", default=False)
 _RUN_DEPTH: contextvars.ContextVar[int] = contextvars.ContextVar(
     "xaidr_value_origin_run_depth", default=0)
 
@@ -56,18 +61,22 @@ _RUN_DEPTH: contextvars.ContextVar[int] = contextvars.ContextVar(
 def _enter_run():
     from .value_origin import _ledger
     depth = _RUN_DEPTH.get()
-    return (_ledger.request_enter(), _RUN_DEPTH.set(depth + 1), NESTED_RUN.set(depth > 0))
+    return (_ledger.request_enter(accumulate=True), _RUN_DEPTH.set(depth + 1),
+            NESTED_RUN.set(depth > 0))
 
 
 def _exit_run(state) -> None:
-    from .value_origin import _ledger
     rec, depth_token, nested_token = state
     for var, token in ((NESTED_RUN, nested_token), (_RUN_DEPTH, depth_token)):
         try:
             var.reset(token)
         except Exception:
             pass                           # exited in another context: nothing to reset there
-    _ledger.request_exit(rec)
+    try:
+        from .value_origin import _ledger
+        _ledger.request_exit(rec)
+    except Exception:
+        pass                               # interpreter shutdown: nothing left to end
 
 
 def request_scoped_run(fn):
