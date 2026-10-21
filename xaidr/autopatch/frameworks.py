@@ -29,6 +29,7 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from .. import run_tree
 from ..types import DelphiBlockedError
 from .core import (
     Halt,
@@ -355,7 +356,11 @@ def _patch_langchain_core(ctx: PatchContext) -> None:
             tool_input = kwargs.get("tool_input")
             if tool_input is None and len(args) > 1:
                 tool_input = args[1]
-            halt = scan_tool_boundary(ctx.sensor, name, tool_input)
+            token = run_tree.bind_tool_call_id(kwargs.get("tool_call_id"))
+            try:
+                halt = scan_tool_boundary(ctx.sensor, name, tool_input)
+            finally:
+                run_tree.reset_tool_call_id(token)
             if halt is None:
                 return None
             return Halt(_langchain_refusal(halt.value, name, kwargs))
@@ -389,7 +394,13 @@ def _patch_langchain_core(ctx: PatchContext) -> None:
             if not text or not text.strip():
                 _record_unscanned(ctx.sensor, name, tool_input, result)
                 return result
-            verdict = _scan_result(ctx.sensor, text, name, tool_input, result)
+            # The same tool_call_id the argument scan carried, so the result
+            # event joins the call event that produced it (toolCallId).
+            token = run_tree.bind_tool_call_id(kwargs.get("tool_call_id"))
+            try:
+                verdict = _scan_result(ctx.sensor, text, name, tool_input, result)
+            finally:
+                run_tree.reset_tool_call_id(token)
             if not verdict.must_halt:
                 return result
             message = (
@@ -526,6 +537,73 @@ def _patch_langchain(ctx: PatchContext) -> None:
         "ran `from langchain.agents import create_agent` before protect() holds "
         "the unpatched original. Call protect() before importing your agent "
         "modules, or pass middleware=[delphi_middleware(...)] yourself."
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# langchain run tree — which run, which flow, which graph node.
+#
+# THE SEAM IS THE PUBLIC ``configure`` CLASSMETHOD, NOT LANGCHAIN'S HOOK
+# REGISTRY. The registry (``register_configure_hook``) lives in
+# ``langchain_core.tracers.context``, which LangChain imports lazily on its
+# first run, so at protect() time it is not in sys.modules and using it would
+# mean importing a framework module (rule 1). ``CallbackManager.configure`` and
+# ``AsyncCallbackManager.configure`` are where every runnable and every
+# ``BaseTool.run``/``arun`` builds its callback manager; the wrapper adds one
+# handler to what they return. If a LangChain release configures callbacks
+# some other way, the handler stops seeing runs and events report
+# ``runTree: "unknown_run"``; tests/test_run_tree.py's canary turns that red.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _patch_langchain_run_tree(ctx: PatchContext) -> None:
+    ctx.module("langchain_core.callbacks.manager")
+    # Both read by the run tree at runtime, from sys.modules only: the
+    # handler's base class, and the ContextVar holding the current run.
+    base = getattr(ctx.module("langchain_core.callbacks.base"),
+                   "BaseCallbackHandler", None)
+    ctx.module("langchain_core.runnables.config")
+    if not isinstance(base, type):
+        raise PatchUnavailable(
+            "langchain_core.callbacks.base.BaseCallbackHandler not found — "
+            "unexpected version layout; events carry no run keys"
+        )
+    run_tree.handler_for(base)
+
+    def factory(orig: Callable) -> Callable:
+        def after(manager: Any, args: tuple, kwargs: dict) -> Any:
+            run_tree.attach(manager)
+            return manager
+
+        return make_wrapper(orig, after=after)
+
+    ctx.install(
+        "langchain_core.callbacks.manager", "CallbackManager.configure",
+        "run-tree", factory,
+        "every sync callback manager LangChain configures carries the run-tree "
+        "handler, which indexes run -> root, parent and graph node",
+    )
+    ctx.try_install(
+        "langchain_core.callbacks.manager", "AsyncCallbackManager.configure",
+        "run-tree", factory,
+        "same, for the async callback managers (ainvoke, BaseTool.arun)",
+    )
+
+    def register() -> Callable[[], None]:
+        run_tree.activate()
+        return run_tree.deactivate
+
+    ctx.install_registry_hook(
+        "xaidr.run_tree", "run-tree", register,
+        "events emitted inside a LangChain run carry runRootId (the flow key), "
+        "runTaskId, runParentId, runNode, runNodePath, runStep, runSeq and "
+        "runSource; tool events carry toolCallId. Outside any run: "
+        "runTree='no_run' and no ids. unprotect() stops the stamping",
+    )
+    ctx.note(
+        "langchain run tree: a run that started BEFORE protect() was never "
+        "indexed, so its events report runTree='unknown_run' until it ends; "
+        "every run started afterwards is stamped."
     )
 
 
@@ -1128,6 +1206,14 @@ TARGETS: tuple[FrameworkTarget, ...] = (
     FrameworkTarget(
         "langchain", ("langchain", "langchain.agents"), _patch_langchain,
         "input + output + tool via delphi_middleware injection into create_agent",
+    ),
+    # Detected on the module that defines what it wraps. A bare
+    # `import langchain_core.tools` does not load it, and then no run exists
+    # whose tree could be captured; create_agent and langgraph both load it.
+    FrameworkTarget(
+        "langchain-run-tree", ("langchain_core.callbacks.manager",),
+        _patch_langchain_run_tree,
+        "run tree: flow key, task, parent and graph node on every event",
     ),
     FrameworkTarget(
         "langgraph", ("langgraph",), _patch_langgraph,

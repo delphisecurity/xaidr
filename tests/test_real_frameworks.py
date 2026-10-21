@@ -1036,6 +1036,17 @@ class TestRealToolResultSeam:
                                  quiet=True, reporter=cap)
 
     @staticmethod
+    def _drain(manifest):
+        """Deliver every queued event to the capture before it is read.
+
+        Telemetry reaches the reporter on a background thread, so reading
+        ``cap.directions()`` straight after the call races that thread and
+        reads ``[]`` whenever the worker has not been scheduled yet. ``flush``
+        drains the queue and joins the worker, so its in-flight batch lands too.
+        """
+        manifest.sensor.flush()
+
+    @staticmethod
     def _run_graph(graph, how):
         import asyncio
 
@@ -1071,6 +1082,7 @@ class TestRealToolResultSeam:
         manifest = self._protect(cap)
         try:
             out = asyncio.run(read_doc.arun(self.ARGS))
+            self._drain(manifest)
         finally:
             manifest.unprotect(close_sensor=True)   # flush before reading `cap` (see below)
         assert "tool_result" in cap.directions(), (
@@ -1134,6 +1146,7 @@ class TestRealToolResultSeam:
         manifest = self._protect(cap)
         try:
             out = self._run_graph(build(), how)
+            self._drain(manifest)
         finally:
             # close_sensor=True: telemetry is batched and flushed on its own
             # thread, and unprotect() leaves it running by design (its lifetime

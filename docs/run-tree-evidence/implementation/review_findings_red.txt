@@ -1,0 +1,30 @@
+FFFFF._mixed: entries 4090, retained 2038 KiB (all files)
+._roots_only_abandoned: entries 4096, retained 2576 KiB (all files)
+F_reuse_storm: entries 4095, retained 2576 KiB (all files)
+E       AssertionError: SECURITY: two concurrent flows that reused one CHILD run_id were stamped with one root: [{'direction': 'input', 'toolName': None, 'runTree': 'stamped', 'runRootId': '01a15291-5414-7722-b553-b659c346c778', 'runNode': None, 'toolCallId': 
+E       AssertionError: SECURITY: a root id that had already collided was handed out again once the first flow ended, merging two live flows: [{'direction': 'input', 'toolName': None, 'runTree': 'stamped', 'runRootId': 'd598c4eb-bd29-4f62-8215-81b3ea8e2028', '
+E       AssertionError: after unprotect() the in-flight handler indexed 100 runs
+E           AssertionError: SECURITY: run 6d5e931a-f120-4163-ba6d-a31f0b458231 resolves to a stamped root after a run-id reuse, so two flows can share one key: status=stamped
+E           AssertionError: SECURITY: run f666ef2d-46cc-40d7-880a-0a3562026736 resolves to a stamped root after a run-id reuse, so two flows can share one key: status=stamped
+E           AssertionError: SECURITY: run 00e84d21-28a1-4586-bc80-3c9b03cc3892 resolves to a stamped root after a run-id reuse, so two flows can share one key: status=stamped
+E           AssertionError: SECURITY: run d05a4c64-ebd3-4a1d-847a-71d13aeea571 resolves to a stamped root after a run-id reuse, so two flows can share one key: status=stamped
+        index, retained = _retained_by(workload)
+        print(f"{workload.__name__}: entries {len(index)}, retained {retained/1024:.0f} KiB (all files)")
+>       assert retained < 2 * 1024 * 1024, (
+            f"the run index retains {retained/1024/1024:.2f} MB under {workload.__name__}; "
+E       AssertionError: the run index retains 2.52 MB under _roots_only_abandoned; the budget is 2 MB
+        index, retained = _retained_by(workload)
+        print(f"{workload.__name__}: entries {len(index)}, retained {retained/1024:.0f} KiB (all files)")
+>       assert retained < 2 * 1024 * 1024, (
+            f"the run index retains {retained/1024/1024:.2f} MB under {workload.__name__}; "
+E       AssertionError: the run index retains 2.52 MB under _reuse_storm; the budget is 2 MB
+FAILED tests/test_run_tree.py::TestRealRunTree::test_t2_a_reused_child_run_id_in_two_concurrent_flows_never_merges
+FAILED tests/test_run_tree.py::TestRealRunTree::test_t2_a_collided_root_id_stays_collided_after_the_first_flow_ends
+FAILED tests/test_run_tree.py::TestRealRunTree::test_t5_unprotect_stops_indexing_runs_already_in_flight
+FAILED tests/test_run_tree.py::test_t2_index_a_reused_child_id_collides_both_flows
+FAILED tests/test_run_tree.py::test_t2_index_a_root_id_equal_to_a_live_child_collides
+FAILED tests/test_run_tree.py::test_t2_index_a_collided_root_id_stays_collided_after_the_first_flow_ends
+FAILED tests/test_run_tree.py::test_t2_index_a_root_id_reused_after_its_flow_ended_is_a_collision
+FAILED tests/test_run_tree.py::test_d4_budget_index_stays_under_2mb_with_many_flows[roots_only_abandoned]
+FAILED tests/test_run_tree.py::test_d4_budget_index_stays_under_2mb_with_many_flows[reuse_storm]
+9 failed, 2 passed, 20 deselected in 7.67s

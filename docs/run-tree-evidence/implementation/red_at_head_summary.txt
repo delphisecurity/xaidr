@@ -1,0 +1,22 @@
+E       assert 'langchain-run-tree' in ['httpx', 'requests', 'langchain_core', 'langchain', 'langgraph', 'deepagents', ...]
+
+tests/test_run_tree.py:780: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_run_tree.py::TestRealRunTree::test_t1_every_event_in_one_graph_run_carries_one_root
+FAILED tests/test_run_tree.py::TestRealRunTree::test_t2_two_concurrent_flows_never_share_a_root
+FAILED tests/test_run_tree.py::TestRealRunTree::test_t2_a_reused_run_id_is_a_collision_never_a_merged_root
+FAILED tests/test_run_tree.py::TestRealRunTree::test_current_root_is_the_flow_key_in_process
+FAILED tests/test_run_tree.py::TestRealRunTree::test_t3_a_faulting_handler_never_reaches_the_host_or_the_log
+FAILED tests/test_run_tree.py::TestRealRunTree::test_t3_a_faulting_stamp_never_costs_the_event_or_the_verdict
+FAILED tests/test_run_tree.py::TestRealRunTree::test_t5_a_direct_tool_run_is_no_run_and_never_a_synthesized_root
+FAILED tests/test_run_tree.py::TestRealRunTree::test_t5_protect_twice_is_idempotent_and_unprotect_detaches
+FAILED tests/test_run_tree.py::TestRealRunTree::test_t6_canary_langchain_still_routes_through_configure
+FAILED tests/test_run_tree.py::TestRealRunTree::test_t7_a_tool_result_joins_its_tool_call_by_tool_call_id
+FAILED tests/test_run_tree.py::TestRealRunTree::test_async_toolnode_graph_is_stamped_on_one_root
+FAILED tests/test_run_tree.py::TestRealRunTree::test_async_create_agent_without_middleware_is_stamped
+FAILED tests/test_run_tree.py::test_t4_abandoned_roots_are_evicted_under_the_cap
+FAILED tests/test_run_tree.py::test_d4_budget_stamp_p99_at_most_10us - Import...
+FAILED tests/test_run_tree.py::test_d4_budget_callback_p99_at_most_10us - Imp...
+FAILED tests/test_run_tree.py::test_d4_budget_index_stays_under_2mb_with_many_flows
+FAILED tests/test_run_tree.py::test_t5_without_langchain_no_run_keys_and_the_manifest_says_so
+17 failed, 1 xfailed in 0.74s

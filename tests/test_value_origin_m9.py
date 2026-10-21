@@ -208,3 +208,26 @@ def test_a_non_tool_call_event_inside_a_tool_call_never_carries_it():
     assert other, f"precondition: an event of another kind inside a tool call: {[e.get('type') for e in ev]}"
     assert all("valueOrigin" not in e["data"] for e in other), (
         f"valueOrigin leaked onto a non-tool-call event: {[(e.get('type'), e['data'].get('valueOrigin')) for e in other]}")
+
+
+def test_one_tool_call_event_carries_value_origin_and_the_run_tree_stamp():
+    """Both additions on one event: ``valueOrigin`` and the run-tree keys share
+    ``_enqueue_event``. Framework-free, so the base CI jobs run it too."""
+    from xaidr import run_tree
+    was_active = run_tree.is_active()
+    run_tree.activate()
+    token = run_tree.bind_tool_call_id("call_m9")
+    try:
+        s, ev = _sensor()
+        s.scan_tool_call("run_command", {"command": "ls"})
+    finally:
+        run_tree.reset_tool_call_id(token)
+        if not was_active:
+            run_tree.deactivate()
+    tool = _tool_events(ev)
+    assert tool, "no tool-call event was emitted"
+    for d in tool:
+        assert d.get("valueOrigin") == "no_flow", f"valueOrigin absent: {d}"
+        assert d.get("runTree") in ("no_run", "unknown_run"), (
+            f"the run-tree stamp is absent, so the event cannot be joined to its run: {d}")
+        assert d.get("toolCallId") == "call_m9", f"toolCallId absent: {d}"

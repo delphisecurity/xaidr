@@ -1,0 +1,3 @@
+== built from 7592c74+working tree; xaidr from /private/tmp/claude-501/-Users-anirudhkotaru-worktrees-xaidr-run-tree/b99029e4-36b1-462d-a4b5-0d8b56d60389/scratchpad/venv-wheel/lib/python3.12/site-packages/xaidr/__init__.py
+29 passed, 1 skipped, 1 xfailed in 8.24s
+55 passed, 54 skipped, 1 xfailed in 8.44s

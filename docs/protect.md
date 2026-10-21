@@ -53,6 +53,7 @@ the reversal handle (`manifest.unprotect()`). Four rules govern it:
 | `langgraph` | *(none — no seam of its own)* | tool only, transitively via `langchain-core`. Graph input/output: **not covered** |
 | `deepagents` | *(none — no seam of its own)* | input + output + tool **iff `protect()` ran before `import deepagents`**; otherwise tool only |
 | `langchain` | `agents.create_agent` | input + output + tool, via `delphi_middleware` injection |
+| `langchain-run-tree` | `callbacks.manager.CallbackManager.configure` / `AsyncCallbackManager.configure` | not a boundary: stamps every event emitted inside a LangChain run with the flow it belongs to (see *Run tree* below) |
 | `openai-agents` | `Runner.run` / `.run_sync` | input + output |
 | `crewai` | `hooks.register_before_tool_call_hook` (a **hook**, not a patch), `Crew.kickoff` | agent-driven tool calls + crew input |
 | `autogen-core` / `autogen` | `BaseTool.run_json`, `ConversableAgent.execute_function` | tool |
@@ -225,6 +226,35 @@ framework's seam is affected. **If you match on the refusal, match on
 above for why. Transport and entrypoint boundaries raise
 `DelphiBlockedError` instead — there is no in-band way for an HTTP send to say
 "refused".
+
+**Run tree: which flow an event belongs to.** When LangChain is loaded,
+`protect()` also wraps the public `CallbackManager.configure` /
+`AsyncCallbackManager.configure` so every callback manager carries one handler
+that indexes runs (run id → root, parent, graph node). Every event emitted
+inside a LangChain or LangGraph run then carries flat top-level keys:
+
+| Key | Meaning |
+|---|---|
+| `runTree` | `stamped` · `no_run` (no run config reached the emit point: outside every run, or a thread started without copying its context) · `unknown_run` (cannot be placed) · `collision` (the run id named more than one run: a caller-supplied `run_id` reused, at once or in sequence) · `fault` |
+| `runRootId` | the root run LangChain minted for the invocation: **the flow key**. An id that named more than one run is never a key |
+| `runTaskId` / `runParentId` | the run executing when the event was emitted, and its parent (for a `tool_call`, the ToolNode run: the tool's own run has not started yet) |
+| `runNode` / `runNodePath` / `runStep` | the innermost graph node, node names from root to leaf, and the LangGraph step |
+| `runSeq` | per-flow order, since telemetry is stored in arrival order |
+| `runSource` | `"langchain"` |
+| `toolCallId` | LangChain's `tool_call_id` on `tool_call` **and** `tool_result` events, so a result joins the call that produced it. The id is unique only within a flow (two flows can both have a `call_1`), so join on `(runRootId, toolCallId)` |
+
+The ids are present only when `runTree` is `stamped`. No root is ever
+synthesized: an event outside a run says `no_run`, and every ambiguous case
+(a run that began before `protect()`, a reused `run_id`, a fault) carries no
+ids rather than a guessed one. On Python < 3.11, LangChain cannot carry the run
+config into async nodes (`asyncio.create_task` has no `context=` before 3.11),
+so their events report `unknown_run`. In-process, `xaidr.run_tree.current_root()`
+returns the same flow key, or `None` whenever there is no trustworthy one. The
+paired Brain change (delphi-sentinel `feat/run-tree-reader`, not yet merged or
+deployed) stores `runRootId` in a new `ai_guard_logs.run_root_id` column and the
+rest in `metadata`. Until that change is deployed and its migration applied,
+the Brain drops these keys. The design and its rulings are in
+`docs/run-tree-spec.md`.
 
 `protect()` wires **boundaries only**. Telemetry, policy loading, and the circuit
 breaker stay where they already are — the `Sensor` constructor — and everything

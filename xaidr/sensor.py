@@ -26,6 +26,7 @@ from uuid import uuid4
 from . import local_policy as _policy
 from . import provenance as _prov
 from . import provenance_chain as _chain
+from . import run_tree as _run_tree
 from .authz import classify
 from .authz.classifier import (
     SHELL_ARG_KEYS as _SHELL_ARG_KEYS,
@@ -2486,11 +2487,16 @@ class DelphiSensor:
         return first
 
     def _enqueue_event(self, event: dict) -> None:
-        """Every telemetry event this sensor emits passes here (M9). A TOOL-CALL
-        event gets ``valueOrigin`` at the top level of ``data`` when its call has
-        a wire value the consumer's vocabulary accepts; otherwise the key stays
-        absent (OFF, an evaluate fault, every other direction, or a withheld
-        value). Never None. A fault here never costs the event."""
+        """Every telemetry event this sensor emits passes here, once.
+
+        Two additions, both keys only, so the event and its verdict reach the
+        reporter exactly as built. A TOOL-CALL event gets ``valueOrigin`` at the
+        top level of ``data`` when its call has a wire value the consumer's
+        vocabulary accepts; otherwise the key stays absent (OFF, an evaluate
+        fault, every other direction, or a withheld value), never None. Every
+        event gets the run-tree keys (``xaidr.run_tree``), which describe where
+        it was emitted rather than what was scanned; that stamp never raises. A
+        fault in either never costs the event."""
         try:
             holder = _VO_CALL_WIRE.get()
             wire = holder[0] if holder else None
@@ -2513,6 +2519,9 @@ class DelphiSensor:
                 self._vo_emit_fault_logged = True
                 logger.exception("xaidr: value origin's wire-field emission faulted; the event "
                                  "is sent without valueOrigin")
+        data = event.get("data") if isinstance(event, dict) else None
+        if isinstance(data, dict):
+            _run_tree.stamp(data)
         self._telemetry.enqueue(event)
 
     @_vo_call_scope
@@ -4401,7 +4410,7 @@ class ProtectedHttpClient:
             prov = _resolve_provenance(self._sensor.agent_id)
             if prov:
                 data["provenance"] = prov
-            self._sensor._telemetry.enqueue({
+            self._sensor._enqueue_event({
                 "type": "scan",
                 "agentId": self._sensor.agent_id,
                 "data": data,
