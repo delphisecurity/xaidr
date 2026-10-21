@@ -23,8 +23,6 @@ CI green). `25dc9de` is also A1's pin for the chassis.
 
 ## Out of scope
 - Anything in paid, the Brain or the chassis.
-- The four metadata-endpoint integer spellings still carrying strict xfails
-  (`0xA9FEA9FE`, decimal, octal, mixed). Follow-up, not A2.
 - Any new network surface. Nothing is sent anywhere new.
 
 ## Scope

@@ -63,6 +63,7 @@ def check_q6(seen):
     # limitation is stated where an operator meets it, not only in a test name.
     assert "xaidr.flow(" in seen["warning_text"], seen["warning_text"]
     assert "clear_flow() is skipped" in seen["warning_text"], seen["warning_text"]
+    assert "xaidr.request_scope()" in seen["warning_text"], seen["warning_text"]
 
 
 def test_every_tool_call_exit_carries_value_origin(seen):

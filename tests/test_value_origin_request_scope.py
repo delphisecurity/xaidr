@@ -173,7 +173,7 @@ def test_the_executor_seam_touches_only_xaidrs_own_state():
     with ThreadPoolExecutor(max_workers=1) as pool:
         pool.submit(_HOST_VAR.set, "job one").result()
         seen = pool.submit(_HOST_VAR.get).result()
-    assert seen == "job one", "a host context variable no longer persists between jobs"
+    assert seen == "job one", "a host context variable did not persist between jobs, as the stdlib keeps it"
 
 
 def test_a_job_that_raises_still_ends_its_request():

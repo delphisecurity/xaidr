@@ -81,8 +81,9 @@ def coerce_ip(host: str):
 
     Moved here from ``scanner/url_parse._coerce_ip``: the one normaliser
     lives inside the vendored unit. Integer forms (hex / octal / decimal / short
-    dotted) are what ``inet_aton`` accepts; they apply ONLY inside a URL host
-    — ``"4417"`` as a bare value is not an address.
+    dotted) are what ``inet_aton`` accepts; they apply to a host, a URL's or a
+    scheme-less argument's with a locator after it — ``"4417"`` alone is not an
+    address.
     """
     if not host:
         return None
@@ -221,8 +222,7 @@ _IMPLIED_RE = re.compile(r"^((?:[\w\-]{1,63}\.){1,126}[^\W\d_]{1,63})(?::[0-9]{1
 _IMPLIED_INT_RE = re.compile(r"^([0-9][0-9A-Za-z.]{0,63})(?::[0-9]{1,5}(?![^/?#])|(?=[/?#]))")
 # No scheme, a STRICT address literal (a dotted quad, or IPv6 in
 # brackets), then a port, path, query or fragment — `169.254.169.254/latest`.
-# Strict because the integer spellings (hex, decimal, octal, short dotted)
-# count only inside a URL host: `2024/report` is a path, not 0.0.7.232.
+# Read in results too; the integer spellings above are read in arguments only.
 _IMPLIED_IP_RE = re.compile(r"^(\[[0-9A-Fa-f:.]{2,45}\]|[0-9]{1,3}(?:\.[0-9]{1,3}){3})"
                             r"(?::[0-9]{1,5}(?![^/?#])|(?=[/?#]))")
 _NON_DESTINATION_SCHEMES = frozenset({"file", "data"})
@@ -670,9 +670,11 @@ def classify_value(value: str, *, arg_mode: bool):
     the parts of a mailbox list that did parse), an Authority, or — for a
     mailbox list — a list of Authorities. Order (ruling 3.2, URLs
     first): a URL is tried first, so a URL carrying '@' is still a URL —
-    including a special scheme with no `//` and a strict IP literal followed by
-    a port or path; otherwise a value with '@' is a mailbox list; then a
-    phone; then a bare strict IP. Bare hostnames are never destinations here.
+    including a special scheme with no `//`, a scheme-less `host[:port]/path`,
+    a strict IP literal followed by a port, path, query or fragment, and, for
+    an argument, an address in any inet_aton spelling followed by one;
+    otherwise a value with '@' is a mailbox list; then a phone; then a bare
+    strict IP. Bare hostnames are never destinations here.
     """
     v = value.strip()
     if not v or len(v) > MAX_LEAF_CHARS:
@@ -691,7 +693,7 @@ def classify_value(value: str, *, arg_mode: bool):
         # WHATWG and urlsplit both remove every tab and newline from a URL; other
         # whitespace counts only where it lands. In a host it is no host (that
         # reading fails); in a path, query or fragment WHATWG percent-encodes it
-        # and the host is unaffected (ruling 3).
+        # and the host stays readable (ruling 3).
         return url_authority(url, arg_mode=arg_mode, written=written.translate(_TAB_NEWLINE))
     if not any(c.isspace() for c in v):
         if _IMPLIED_RE.match(v):
@@ -731,8 +733,9 @@ def authority_of(value: str) -> Authority | None:
 
     Accepts one addr-spec mailbox (optionally ``display <addr>`` or
     ``mailto:``), a ``scheme://host…`` URL (a special scheme without the ``//``
-    too, R4), a V-19 ``host/path``, a strict IP literal alone or followed by a
-    port, path, query or fragment (R4), or a ``+`` phone. A bare hostname is NOT
+    too, R4), a scheme-less ``host[:port]/path``, a strict IP literal alone or
+    followed by a port, path, query or fragment (R4), an address in any inet_aton
+    spelling followed by one, or a ``+`` phone. A bare hostname is NOT
     a destination (V-19). A URL host
     that fails UTS-46 still yields ``dns:<raw host lowercased>`` (V-23). A URL
     whose authority split names two authorities (Q1) is None here, exactly as a

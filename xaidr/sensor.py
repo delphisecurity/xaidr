@@ -2641,10 +2641,13 @@ class DelphiSensor:
                     "ENFORCE, can never block. Open a flow per agent request: run it inside "
                     "`with xaidr.flow(principal=...):` (a sync request handler can be "
                     "decorated with @xaidr.flow(...)); for a request that arrived from "
-                    "another service, call extract_context() on its headers. The plain "
-                    "xaidr.begin_flow() ... xaidr.clear_flow() pair still works, but if "
-                    "clear_flow() is skipped (for example because the request raised) the "
-                    "next request on the same thread inherits the flow. In "
+                    "another service, call extract_context() on its headers. A server "
+                    "loop that handles one request after another on one thread marks "
+                    "each with `with xaidr.request_scope():`. The plain "
+                    "xaidr.begin_flow() ... xaidr.clear_flow() pair still works; outside "
+                    "a request, if clear_flow() is skipped (for example because the "
+                    "request raised) the next request on the same thread inherits the "
+                    "flow. In "
                     "LangGraph/create_agent the flow must be opened OUTSIDE the graph. "
                     "Logged once per sensor.", self.agent_id)
         return cv

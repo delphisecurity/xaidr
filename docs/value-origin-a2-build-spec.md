@@ -1,5 +1,18 @@
 # A2 build spec: the request scope (D1–D5) and M10's remainder
 
+> **Status (1.22.0).** This is the design record. What is built is recorded as
+> behaviour in [value-origin-rulings.md](value-origin-rulings.md) §1:
+> - A value-origin ledger belongs to the request it is bound in and closes when
+>   that request ends: each `ThreadPoolExecutor` job, each CrewAI kickoff and
+>   Agents SDK run hooked by `protect()` (P4), each fresh `xaidr.flow()`, and each
+>   `xaidr.request_scope()` block. Implicit ledgers stay (D2 is not applied), and
+>   each one ends with its request.
+> - Q-C is answered as P4 proposes: a nested hooked run's input is scanned and
+>   not recorded as principal input.
+> - The ledger half of Q-G is answered by the request seam: a closed ledger reads
+>   as not bound in any context copied from its request, and a `flow()` scope
+>   joins only a scope that is still open. The request seam holds no tier state.
+
 Written before any code, as the owner's handoff requires (STEP 3). Base:
 `832e642` on `feat/value-origin-seams` (main `0502c99` merged in at `8ce8dc4`).
 Every number here was measured in this session against the tree or a wheel built

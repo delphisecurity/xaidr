@@ -116,7 +116,7 @@ A withheld value leaves the key absent. That is indistinguishable on the wire fr
 
 **For the consumer to accept all fourteen, change** inventory rows #1–#5 and #7 above for the five new values (`input_truncated`, `argument_bound`, `result_truncated`, `result_unread`, `extraction_incomplete`), plus the column comment (#6) and the spec tables (#8). **Switch the sensor to `v2` only after a DEPLOYED Brain accepts all fourteen.**
 
-**Known gap (host-only):** `sensor.scan(text, direction="tool_call")`, which bypasses `scan_tool_call`, emits a tool-call event without `valueOrigin`. No caller inside xaidr does this.
+**A host that calls `sensor.scan(text, direction="tool_call")` directly**, instead of `scan_tool_call`, emits a tool-call event without `valueOrigin`, because value origin evaluates tool calls in `scan_tool_call`. No caller inside xaidr does this.
 
 ## 2026-10-06: fifteen values, with `write_dropped` (supersedes the table above)
 `write_dropped` (owner, ruling 4): a destination write the ledger did not accept (full, or recording faulted). It BLOCKS under ENFORCE. It is withheld under the default `v1`, like the other new values. **What the consumer must accept: all fifteen.**

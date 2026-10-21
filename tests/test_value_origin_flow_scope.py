@@ -251,11 +251,12 @@ def test_flow_is_exported():
     assert "flow" in xaidr.__all__
 
 
-def test_the_plain_pair_s_limitation_is_stated_where_users_read():
-    # D3 (owner, 2026-10-08): not only in a test name.
+def test_the_plain_pair_and_the_request_scope_are_stated_where_users_read():
+    # D3 (owner, 2026-10-08) and ruling 4 (2026-10-21): not only in a test name.
     for rel in ("docs/api.md", "README.md"):
         text = (REPO / rel).read_text(encoding="utf-8")
         assert "xaidr.flow(" in text, f"{rel} does not name the scoped form"
+        assert "xaidr.request_scope()" in text, f"{rel} does not name the request scope"
         assert "`clear_flow()` is skipped" in text, (
             f"{rel} does not state that a skipped clear_flow() carries the flow to the "
             "next request on the thread")
