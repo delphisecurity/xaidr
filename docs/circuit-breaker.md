@@ -76,13 +76,13 @@ on upgrade, without editing anything — and there is no honest default value,
 since a supervisor fanning out to twenty workers is routine in one deployment and
 an incident in another.
 
-### The removed-bound detector (new in 1.15.0), and where the line is
+### The removed-bound detector, and where the line is
 
 That last sentence is the reason every threshold here is opt-in, and it is worth
 saying exactly what it does and does not rule out. **A volume is deployment-
 relative. A nulled bound is not.**
 
-Since 1.15.0 the tool boundary checks tool arguments for a ceiling the caller
+The tool boundary checks tool arguments for a ceiling the caller
 *named and then removed* — `budget_cap: none`, `spend_limit: off`, `max_cost:
 unset`, `concurrency: unbounded`, `instances: unlimited`, `expires: never` — and
 the input and A2A boundaries check for the same claim written as an instruction
@@ -115,14 +115,14 @@ is), an absent or `null` argument (that is a tool-contract question, not
 something an argument dict can show), and recursive fan-out, which is *observed*
 rather than declared and is therefore `delegation_rate_threshold`'s job above.
 
-> **Fixed in this release, and it was live.** Through 1.10.0 the sensor called a
-> `record_delegation` method the breaker runtime did not implement. Every
-> outbound `scan_a2a` with a breaker configured raised `AttributeError`, the
-> fail-open handler caught it, and the count was dropped — so the delegation
-> trigger did not exist while appearing to, and `circuit_state` kept reporting
-> `"closed"`. Measured on the published 1.10.0 wheel: 50 delegations against a
-> threshold of 5 left the circuit closed. A counter that faults now reports
-> **once** at ERROR and says the trigger is not counting, and
+> **A delegation counter that faults is loud, not silent.** If the sensor calls
+> a method the breaker runtime does not implement (such as `record_delegation`),
+> every outbound `scan_a2a` with a breaker configured raises `AttributeError`,
+> the fail-open handler catches it, and the count is dropped — so the delegation
+> trigger does not exist while appearing to, and `circuit_state` keeps reporting
+> `"closed"`: 50 delegations against a threshold of 5 leave the circuit closed.
+> A counter that faults therefore reports **once** at ERROR and says the trigger
+> is not counting, and
 > `tests/test_delegation_rate_breaker.py` asserts that every method the sensor
 > calls on the runtime is implemented, so the class of bug cannot recur silently.
 

@@ -1,14 +1,14 @@
 """The `mcp_server:` policy match field must actually match.
 
-It is documented as a match field but read from the request CONTEXT, which
-``evaluate_policy`` never populated — so a rule keyed on it silently matched
-nothing, in every path, even for a tool call made with ``mcp_server="srv"``.
-That is the ``trust_below`` footgun class: an advertised control that does
-nothing, minus the load-time rejection.
+It is documented as a match field but read from the request CONTEXT, so
+``evaluate_policy`` must populate that context: otherwise a rule keyed on it
+would silently match nothing, in every path, even for a tool call made with
+``mcp_server="srv"``. That is the ``trust_below`` footgun class: an advertised
+control that does nothing, minus the load-time rejection.
 
-The controls here matter as much as the fix: ``destination_type: ["mcp_server"]``
-was the working alternative people were told to use, so it gets a regression
-guard, and a policy-free MCP call must still run.
+The controls here matter as much as the match itself:
+``destination_type: ["mcp_server"]`` is the other documented way to gate MCP
+calls, so it gets a regression guard, and a policy-free MCP call must still run.
 """
 from __future__ import annotations
 
@@ -70,9 +70,9 @@ def test_mcp_server_field_does_not_match_call_without_mcp_server():
     )
 
 
-# (d) control: the working alternative still works ────────────────────────
+# (d) control: the destination_type route still works ─────────────────────
 def test_destination_type_mcp_server_still_blocks():
-    """Regression guard on what people were told to use instead."""
+    """Regression guard on the other documented way to gate MCP calls."""
     s = _sensor({"destination_type": ["mcp_server"]})
     assert s.scan_tool_call(TOOL, ARGS, mcp_server="srv-a").action == "blocked"
     # ...and still does not catch a plain tool call.

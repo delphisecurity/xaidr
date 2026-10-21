@@ -1,10 +1,11 @@
 """BS5 guard — normalizer completeness (spaced-out / accented / Cyrillic consonants).
 
-The §11 work closed zero-width / homoglyph-vowel / leet / fullwidth obfuscation.
-BS5 extends the SAME Unicode normalizer (not a new rule) for the residual forms:
+The Unicode normalizer folds zero-width / homoglyph-vowel / leet / fullwidth
+obfuscation. BS5 extends the SAME normalizer (not a new rule) for the residual
+forms:
   * spaced-out single-letter runs ("i g n o r e all previous instructions"),
   * accented/diacritic substitution ("ígnóré áll ..."),
-  * Cyrillic/Greek CONSONANT homoglyphs (г->r etc; the vowels were already mapped).
+  * Cyrillic/Greek CONSONANT homoglyphs (г->r etc; the vowels are mapped too).
 
 Make-or-break FP guard: legitimately accented names (José/café/Zürich), real
 Cyrillic/Greek words, normal spacing and short initialisms must NOT fold into a

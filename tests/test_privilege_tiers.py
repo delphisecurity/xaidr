@@ -449,7 +449,7 @@ def test_j_an_unknown_hop_resolves_to_lowest_privilege_not_highest():
     assert least_privileged_tier(1, [None, None]) == LOWEST_PRIVILEGE_TIER
 
 
-# ── (k) construction-time validation, ADV-2 style ────────────────────────────
+# ── (k) construction-time validation, loud ───────────────────────────────────
 
 @pytest.mark.parametrize("bad", [0, 5, -1, 99, "1", "high", 1.0, 2.5, True, False,
                                  [1], {"tier": 1}, object()])
@@ -496,7 +496,7 @@ def test_the_condition_is_numeric_and_lives_beside_trust_below():
 
 
 def test_a_typo_in_the_condition_is_rejected_at_load_not_silently_disarmed():
-    """Inherits the ADV-2 unknown-key validator, which is the point of putting
+    """Inherits the unknown-key validator, which is the point of putting
     it under `conditions:`."""
     s = DelphiSensor(agent_id="x", reporter=_Recorder())
     bad = {**TIER_POLICY, "rules": [{

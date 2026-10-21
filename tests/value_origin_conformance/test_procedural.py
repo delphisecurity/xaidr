@@ -1,6 +1,6 @@
 """Supplementary cases that need Python objects, concurrency or scale, so they
-cannot be JSON flow scripts: S7, S8, S10 (V-16), fork (V-32), result shapes
-(V-15), the never-raise contract (§1.4), and C-12's disclosure property.
+cannot be JSON flow scripts: S7, S8, S10 (saturation), fork, result shapes,
+the never-raise contract, and the ledger's disclosure property.
 """
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ def _wire(to):
     return evaluate_call("send_email", {"to": to}, flow_active=True).wire
 
 
-# ── S7 / S8: concurrent flows and sibling tasks (C-16 rows P and N) ──────────
+# ── S7 / S8: concurrent flows and sibling tasks (report rows P and N) ─────────
 def test_s7_concurrent_flows_do_not_share_a_ledger():
     """Flow A's trusted read of evil@x.example is invisible to flow B: B is
     unresolved (report row P). Each flow binds its own ledger at entry."""
@@ -100,7 +100,7 @@ def test_s8_sibling_tasks_share_the_flow_ledger():
 
 
 def test_s9_bare_thread_without_context_is_no_flow():
-    """V-12: the L2 half (real ThreadPoolExecutor, propagate_context) is A2's.
+    """The L2 half (real ThreadPoolExecutor, propagate_context) is A2's.
     At L1: a thread that did not receive the context sees no ledger."""
     import threading
     bind_fresh_ledger()
@@ -114,7 +114,7 @@ def test_s9_bare_thread_without_context_is_no_flow():
     assert got == {"w": WireValue.NO_FLOW, "copied": WireValue.PRINCIPAL_UNDECLARED_SPAN}
 
 
-# ── S10 / V-16: saturation ───────────────────────────────────────────────────
+# ── S10: saturation ───────────────────────────────────────────────────────────
 def _fill_to(n_digests):
     """Fill the bound ledger with exactly ``n_digests`` authority digests."""
     per = 60                                # ≤ 64 leaves per result
@@ -127,7 +127,7 @@ def _fill_to(n_digests):
 
 
 def test_s10_exactly_at_cap_without_a_drop_is_not_saturated():
-    """V-16(a): saturated means a drop HAS OCCURRED, not len >= cap."""
+    """Saturated means a drop HAS OCCURRED, not len >= cap."""
     bind_fresh_ledger()
     _fill_to(LEDGER_MAX_ENTRIES)
     assert _wire("never-seen@x.example") is WireValue.UNRESOLVED
@@ -145,7 +145,7 @@ def test_s10_a_drop_makes_a_miss_ledger_saturated_and_hits_still_answer(caplog):
     used = 1
     _fill_to(LEDGER_MAX_ENTRIES - used - 1)     # one slot left
     with caplog.at_level(logging.WARNING, logger="xaidr.value_origin"):
-        # V-16(b): a unit that would cross the cap is dropped WHOLE.
+        # A unit that would cross the cap is dropped WHOLE.
         out = record_tool_result("filler", {}, ["x1@over.example", "x2@over.example"],
                                  designations=(), result_blocked=False)
         out2 = record_tool_result("filler", {}, ["x3@over.example"], designations=(),
@@ -160,16 +160,16 @@ def test_s10_a_drop_makes_a_miss_ledger_saturated_and_hits_still_answer(caplog):
     assert [f.origin for f in v.findings] == [Origin.PRINCIPAL, Origin.UNRESOLVED]  # V-16(e)
     assert _wire("boss@corp.example") is WireValue.PRINCIPAL          # pre-cap entry answers
     assert _wire("x3@over.example") is WireValue.UNTRUSTED_SOURCE
-    # A positive finding outranks the blind spot (§1.4 step 5).
+    # A positive finding outranks the blind spot.
     v = evaluate_call("send", {"to": ["x3@over.example", "x1@over.example"]}, flow_active=True)
     assert v.wire is WireValue.UNTRUSTED_SOURCE
-    # V-16(c): re-emitting an existing authority at the cap is RECORDED.
+    # Re-emitting an existing authority at the cap is RECORDED.
     assert record_tool_result("filler", {}, "x3@over.example", designations=(),
                               result_blocked=False) is RecordOutcome.RECORDED
 
 
 def test_r1_a_parsed_part_that_misses_in_a_saturated_ledger_reports_saturation():
-    """R1 with §1.4 step 5: a part that parsed is a destination like any other.
+    """R1: a part that parsed is a destination like any other.
     After a drop, `x@…, junk` whose part misses is LEDGER_SATURATED, as S10's
     list is; before R1 the part was invisible and the value read UNRESOLVED. An
     untrusted part still outranks the blind spot."""
@@ -205,7 +205,7 @@ def test_v16d_destinations_are_a_separate_unit_from_ngrams():
     assert _wire("stranger@corp.example") is WireValue.LEDGER_SATURATED
 
 
-# ── fork (C-15, V-32) ────────────────────────────────────────────────────────
+# ── fork ──────────────────────────────────────────────────────────────────────
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="os.fork does not exist on this platform")
 def test_after_fork_the_inherited_ledger_is_not_bound():
     bind_fresh_ledger()
@@ -217,7 +217,7 @@ def test_after_fork_the_inherited_ledger_is_not_bound():
             res = [ledger_bound(),
                    evaluate_call("s", {"to": "a@x.example"}, flow_active=False).wire.value,
                    evaluate_call("s", {"to": "a@x.example"}, flow_active=True).wire.value]
-            vo.bind_ledger()                        # V-32: binds a fresh one
+            vo.bind_ledger()                        # binds a fresh one
             res += [ledger_bound(), _wire("a@x.example").value]
             os.write(w, repr(res).encode())
         finally:
@@ -229,7 +229,7 @@ def test_after_fork_the_inherited_ledger_is_not_bound():
     assert _wire("a@x.example") is WireValue.PRINCIPAL_UNDECLARED_SPAN   # parent unaffected
 
 
-# ── V-15: raw result shapes ──────────────────────────────────────────────────
+# ── raw result shapes ─────────────────────────────────────────────────────────
 @dataclasses.dataclass
 class Contact:
     name: str
@@ -283,7 +283,7 @@ def test_v15_result_leaf_cap_is_64k_not_the_argument_cap():
     assert _wire("late@x.example") is WireValue.UNTRUSTED_SOURCE
 
 
-# ── never raises into the host (§1.4) ────────────────────────────────────────
+# ── never raises into the host ────────────────────────────────────────────────
 class Exploding:
     def model_dump(self):
         raise RuntimeError("host bug")
@@ -312,7 +312,7 @@ def test_evaluate_call_returns_none_only_on_an_internal_fault(monkeypatch):
     assert evaluate_call("s", {"to": "a@x.example"}, flow_active=True) is None
 
 
-# ── C-12: the ledger discloses nothing ───────────────────────────────────────
+# ── the ledger discloses nothing ──────────────────────────────────────────────
 def test_the_ledger_holds_digests_only():
     from xaidr.value_origin import _ledger
     bind_fresh_ledger()

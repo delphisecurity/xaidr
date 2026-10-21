@@ -74,9 +74,9 @@ trace = ["opentelemetry-api>=1.20"]
 # instance records the runtime actually in use (DelphiNano.onnxruntime_version),
 # and a runtime outside the measured ranges means re-running the battery.
 #
-# THE FLOORS BELOW ARE MEASURED, NOT ASSERTED. Both previous floors were wrong:
-# they were the oldest versions that existed, not the oldest that work. Each was
-# installed against the pinned artifact and the failure observed:
+# THE FLOORS BELOW ARE MEASURED, NOT ASSERTED: each is the oldest version that
+# loads the pinned artifact, not the oldest that exists. Each candidate was
+# installed against the pinned artifact and the result observed:
 #
 #   onnxruntime 1.17.3   FAILS  Load model ... model_load_utils.h:56 — the
 #                               graph's opset is newer than this runtime accepts
@@ -92,9 +92,9 @@ trace = ["opentelemetry-api>=1.20"]
 #                               ModelWrapper at line 2580788 column 3
 #   tokenizers 0.20.3    LOADS  and scores
 #
-# So `>=1.17` and `>=0.15` both promised an install that cannot load the model at
-# all: a resolver honouring the old floors produced a hard failure at first scan,
-# not a degraded one. Nano fails OPEN, so that failure was silent.
+# So a floor of `>=1.17` or `>=0.15` would promise an install that cannot load
+# the model at all: a hard failure at first scan, not a degraded one, and because
+# nano fails OPEN, a silent one.
 nano = ["onnxruntime>=1.20", "tokenizers>=0.20", "numpy>=1.24", "huggingface-hub>=0.23"]
 # Local YAML policy loading (local_policy.py) — parses a `./xaidr-policy.yaml`
 # via `yaml.safe_load`. Referenced by the code's own error message
@@ -149,9 +149,9 @@ haystack = ["haystack-ai>=3.0"]
 # hatchling is here as a TEST dependency, not a build one — it is already in
 # `build-system.requires`, but that resolves into an isolated build env the test
 # session never sees. tests/test_sdist_contents.py builds a real sdist and reads
-# the tarball, which is the only way to check the thing that actually broke: the
-# sdist include list shipped no pool and no regenerator while its LISTING showed
-# five pool directories. Without hatchling in the test env that check skips, and
+# the tarball, which is the only way to check what the sdist actually holds: an
+# include list can ship no pool and no regenerator while its LISTING shows five
+# pool directories. Without hatchling in the test env that check skips, and
 # a skipped packaging check is indistinguishable from a passing one.
 #
 # urllib3 and ada-url are TEST ORACLES, never runtime dependencies (non-negotiable
@@ -184,37 +184,19 @@ packages = ["xaidr"]
 
 # --- Sdist: the package, the pools, and the scripts that regenerate figures ---
 #
-# THE SDIST SHIPS THE CORPORA AND THE REGENERATORS. THIS IS A DECISION.
-# Narrowed after 1.20.0: asi_battery/ and heldout/ no longer ship. See EXCEPT
-# below.
+# THE SDIST SHIPS THE BENIGN CORPORA AND THE REGENERATORS. THIS IS A DECISION.
 #
-# It used to be `include = ["xaidr", "README.md", "pyproject.toml"]`, and that
-# list is wrong in two separate ways.
+# Every figure this project publishes (167 of 186, 165 of 277, 265 of 277, the
+# nano false-positive range, the ASI battery baseline) is a measurement over a
+# committed pool, made by a script in scripts/, and each one is required to have
+# a regenerator. An sdist that shipped only the package could reproduce nothing
+# it claimed, so the regenerators and the suite that gates them ship here.
 #
-# 1. IT SHIPPED NO POOL AND NO SCRIPT. Every figure this project publishes —
-#    167 of 186, 165 of 277, 265 of 277, the nano false-positive range, the ASI
-#    battery baseline — is a measurement over a committed pool, made by a script
-#    in scripts/. U-1 requires each of those to have a regenerator. With this
-#    list, the only place a regenerator could run was a git clone; the published
-#    artifact could reproduce nothing it claimed. "Verified from the built
-#    artifact" was therefore never available to say about any of them.
-#
-# 2. IT LOOKED LIKE IT DID. These patterns are gitignore-style, so a bare
-#    `README.md` — no slash — matches at ANY DEPTH. The built sdist listed
-#
-#        xaidr-1.18.0/asi_battery/README.md
-#        xaidr-1.18.0/benign_a2a/README.md
-#        xaidr-1.18.0/benign_longform/README.md
-#        xaidr-1.18.0/benign_toolcalls/README.md
-#        xaidr-1.18.0/heldout/README.md
-#
-#    so every pool directory APPEARED in the listing while holding none of its
-#    data. Reading that listing is how the 1.16.0 body concluded the pools were
-#    present "measured from the built files". The check did not fail; it passed
-#    on evidence that meant nothing.
-#
-# Both halves of the fix matter. The directories are named, AND every pattern is
-# anchored with a leading `/` so no pattern can ever again match at a depth it
+# EVERY PATTERN IS ANCHORED WITH A LEADING `/`. These patterns are
+# gitignore-style, so a bare `README.md`, with no slash, matches at ANY DEPTH: it
+# would pull every pool directory's README into the listing while holding none
+# of its data, so the directory would APPEAR present in a listing of the built
+# sdist while being empty. Anchoring means no pattern can match at a depth it
 # was not written for.
 #
 # COST, MEASURED: +2.7 MB uncompressed (tests 1.8M, pools 588K, scripts 288K),
@@ -227,28 +209,22 @@ packages = ["xaidr"]
 # WHAT THIS DOES NOT REPLACE. `scripts/corpus_diff.py` takes its pools from
 # `--pools` (a clone of the tag) and its CODE from whichever interpreter runs
 # the dump, on purpose: checking out each version and running its own pools
-# compares two pools as well as two sensors. Shipping the pools here does not
-# change that separation. It changes where the pool half can come from — an
-# `sdist` downloaded from PyPI, not only a GitHub clone. NO LONGER TRUE after
-# 1.20.0: corpus_diff.py reads asi_battery/ and heldout/ as well, so its pool
-# half comes from a clone only. See THE COST below.
-#
-# DISCLOSURE — SUPERSEDED, see the next paragraph. This argued that shipping
-# asi_battery/ and heldout/ published nothing new because the repository is
-# public. Both directories are now excluded from the sdist.
+# compares two pools as well as two sensors. It also reads asi_battery/ and
+# heldout/, so its pool half comes from a clone, not from this sdist.
 #
 # EXCEPT /asi_battery, /heldout AND /docs/releasing.md, WHICH ARE EXCLUDED.
-# Decided after 1.20.0. They are maintainer material (the battery's gap analysis
-# and results, the held-out results, the release runbook), and an upload to PyPI
-# cannot be amended afterwards. They stay in the repository.
+# They are maintainer material (the battery's gap analysis and results, the
+# held-out results, the release runbook), and an upload to PyPI cannot be
+# amended afterwards. They stay in the repository.
 #
 # THE COST, STATED. The regenerators that read those pools (asi_battery_report.py,
 # heldout_report.py and others in scripts/) still ship, without the pools, so
 # the ASI-battery and held-out figures reproduce from a clone and not from the
 # sdist. Two scripts lose more than that: corpus_diff.py and fail_closed_cost.py
 # read every pool, these two included, so they cannot run against an extracted
-# sdist at all, not even for the benign pools that do ship. Tests that read asi_battery/ carry the `asi_battery` marker and skip in
-# an extracted sdist (tests/conftest.py); the rest of tests/ runs there as before.
+# sdist at all, not even for the benign pools that do ship. Tests that read
+# asi_battery/ carry the `asi_battery` marker and skip in an extracted sdist
+# (tests/conftest.py); the rest of tests/ runs there as before.
 # tests/test_sdist_contents.py pins both halves: what must ship, and that these
 # three do not.
 #
@@ -262,10 +238,9 @@ packages = ["xaidr"]
 include = [
     # the package itself
     "/xaidr",
-    # the regenerators U-1 requires, and the suite that gates them
+    # the regenerators every published figure requires, and the suite that gates them
     "/scripts",
     "/tests",
-    "/repro_audit.py",
     # the committed benign pools (asi_battery/ and heldout/ are excluded below)
     "/benign_a2a",
     "/benign_longform",

@@ -1,13 +1,13 @@
-"""A-1 + A-2 + A-6: the reporter/telemetry silent-footgun cluster.
+"""The reporter/telemetry silent-footgun cluster.
 
 Each fails silently on an adoption-critical path, so these tests verify the real
 deployment path END-TO-END (capture a real emit / read a real flushed sink), not
 an internal assertion.
 
-- A-1: Sensor(schema=) must propagate to a USER-PASSED reporter, not only the
+- Sensor(schema=) must propagate to a USER-PASSED reporter, not only the
   auto-created one (was silently dropped → wrong SIEM format).
-- A-2: WebhookReporter without httpx must raise a CLEAR xaidr[http] error.
-- A-6: a sync caller must have a working public flush (close() is a coroutine and
+- WebhookReporter without httpx must raise a CLEAR xaidr[http] error.
+- a sync caller must have a working public flush (close() is a coroutine and
   a silent no-op in sync code).
 """
 import builtins
@@ -33,7 +33,7 @@ def _tmp():
     return tempfile.NamedTemporaryFile(delete=False, suffix=".jsonl").name
 
 
-# ── A-1 ──────────────────────────────────────────────────────────────────────
+# ── schema propagation ───────────────────────────────────────────────────────
 
 def test_a1_schema_propagates_to_user_reporter(tmp_path):
     f = str(tmp_path / "e.jsonl")
@@ -76,7 +76,7 @@ def test_a1_auto_reporter_unregressed():
     assert lines and _is_openA2A(lines[0])
 
 
-# ── A-2 ──────────────────────────────────────────────────────────────────────
+# ── missing-httpx error ──────────────────────────────────────────────────────
 
 def test_a2_webhook_without_httpx_clear_error(monkeypatch):
     from xaidr.reporters import WebhookReporter
@@ -102,7 +102,7 @@ def test_a2_webhook_with_httpx_constructs():
     r.close()
 
 
-# ── A-6 ──────────────────────────────────────────────────────────────────────
+# ── sync flush ───────────────────────────────────────────────────────────────
 
 def test_a6_flush_emits_synchronously(tmp_path):
     f = str(tmp_path / "e.jsonl")

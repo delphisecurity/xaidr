@@ -9,12 +9,12 @@ ordinary agent traffic, 700 timed calls per repeat, three repeats:
 |---|---:|---:|
 | Median scan | **0.43 ms** | — |
 | p95 | **0.57 ms** | — |
-| p99 | **0.63 ms** | **3 ms** |
+| p99 | **0.62 ms** | **3 ms** |
 
 The 3 ms p99 is a **ceiling**, about five times the measured p99. It is the
 number to design against; the measured column is what one machine actually did,
-not a promise about yours. The three repeats agree to within 0.03 ms at every
-percentile, and [BENCHMARKS.md](https://github.com/delphisecurity/xaidr/blob/main/BENCHMARKS.md) carries all three, the machine
+not a promise about yours. The three repeats agree to within 0.01 ms at the
+median and 0.03 ms at p95, and [BENCHMARKS.md](https://github.com/delphisecurity/xaidr/blob/main/BENCHMARKS.md) carries all three, the machine
 they ran on, and the per-shape breakdown. Latency scales with input size and is
 bounded by a hard input ceiling and a wall-clock budget, so a pathologically
 large input cannot hang your agent. Measure on your own traffic before enabling
@@ -50,10 +50,10 @@ plus `pytest`, no extras and no framework installed. That is the configuration
 quoted because it is the one that proves the zero-dependency claim, and it runs
 on every pull request as CI's `pytest (py<ver>, base)` job.
 
-**No pass count is published here.** This paragraph carried `7603 passed, 163 skipped` <!-- suite-count-ok: retracted figure, quoted so a reader who met it sees it marked false -->
-until it was roughly 670 passes stale, the same drift that removed the table
-from
+**No pass count is published here.** This paragraph previously stated
+`7603 passed, 163 skipped`; that figure is superseded and withdrawn, as recorded in the retraction record of <!-- suite-count-ok: superseded figure, quoted so a reader who met it sees it marked superseded -->
 [docs/testing.md](https://github.com/delphisecurity/xaidr/blob/main/docs/testing.md).
+A hand-kept count drifts stale with every release, for the reasons given there.
 The current count is printed in the log of every CI run by the job that measured
 it; the argument for reading it there rather than here is in that document. What
 matters for this page is the pass/fail, not the total: a red `base` job means
@@ -64,5 +64,5 @@ Configurations, what CI does and does not build, and the `base` skip breakdown
 are also in
 [docs/testing.md](https://github.com/delphisecurity/xaidr/blob/main/docs/testing.md).
 It is a **source** claim either way, not an install claim: the wheel ships the
-`xaidr` package only. The sdist has carried `tests/` since 1.19.0, so verifying
+`xaidr` package only. The sdist carries `tests/`, so verifying
 it means an extracted sdist or a clone of the repository.

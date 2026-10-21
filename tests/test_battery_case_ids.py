@@ -1,41 +1,41 @@
 """Nothing may cite a battery case id that no longer exists, unframed.
 
-THE DEFECT, found when this branch was rebased onto F9. F9 relabelled the
-held-out battery: 28 cases moved category and their ids moved with them
-(`ASI04-A01..A12` -> `EXH-A01..A12`, `ASI09-A01..A12` -> `ASI06-A13..A24`, and
-four more). Nothing was rewritten — same tool, same args, label only.
+THE DEFECT. Relabelling the held-out battery moved 28 cases to a
+new category, and their ids moved with them (`ASI04-A01..A12` ->
+`EXH-A01..A12`, `ASI09-A01..A12` -> `ASI06-A13..A24`, and four more). Nothing
+was rewritten — same tool, same args, label only.
 
-Every id cited anywhere else in the tree was then a claim about a case that had
-been renamed, and NOTHING NOTICED. Two survived into published prose:
+Every id cited anywhere else in the tree then becomes a claim about a case that
+has been renamed, and NOTHING NOTICES. Two places this shape can land:
 
-  * `asi_battery/BOUNDARY_GAP.md` stated as present-tense fact that the three
-    benign false positives were "unchanged and still the same case IDs:
-    `ASI06-B08`, `ASI08-B10`, `ASI09-B10`". `ASI09-B10` had become `ASI06-B22`.
+  * prose such as `asi_battery/BOUNDARY_GAP.md`, stating as present-tense fact
+    that the three benign false positives are "unchanged and still the same
+    case IDs: `ASI06-B08`, `ASI08-B10`, `ASI09-B10`", when `ASI09-B10` has
+    become `ASI06-B22`;
   * `xaidr/rules/all-l1-rules.json` — a SHIPPED asset, inside the wheel —
-    justified a deliberate rule exclusion with "Two battery attacks (ASI04-A04
-    delegation amplification, ASI04-A11 broadcast storm) are MISSED". Both ids
-    were gone; the cases are `EXH-A04` and `EXH-A11`.
+    justifying a deliberate rule exclusion with "Two battery attacks (ASI04-A04
+    delegation amplification, ASI04-A11 broadcast storm) are MISSED", when both
+    ids were renamed; the cases are `EXH-A04` and `EXH-A11`.
 
-Neither is a typo. Both are a reference to a fact that silently stopped being
-addressable, in documents whose whole purpose is to be checkable — and the
-rebase that created them produced NO textual conflict, so review had nothing to
-look at.
+Neither would be a typo. Both are a reference to a fact that silently stops
+being addressable, in documents whose whole purpose is to be checkable — and a
+relabel produces NO textual conflict in them, so review has nothing to look at.
 
-THE SAME SHAPE ALREADY BIT ONCE, one layer over: F9's own body records
-`tests/test_f7_domain_generality.py` failing with `KeyError: 'ASI04-A02'`
-because it named battery cases by id. That was caught because a dict lookup
-raises. Prose does not raise.
+THE SAME SHAPE one layer over is loud: a test that names battery cases by id
+fails with `KeyError: 'ASI04-A02'` once the id is renamed, because a dict
+lookup raises. Prose does not raise.
 
 WHAT IS AND IS NOT ALLOWED. A citation of a dead id is legitimate when it is
 FRAMED AS HISTORY — "`ASI09-A01..A12` became `ASI06-A13..A24`", "`ASI06-B17`
-was `ASI09-B05` before F9", the case-id map. That framing is what makes it a
-record rather than a stale claim, and F9's README is largely made of it. So the
+was `ASI09-B05` before the relabelling", the case-id map. That framing is what
+makes it a record rather than a stale claim, and the battery README's case-id
+map is largely made of it. So the
 gate requires a historical marker on the citing line or its enclosing markdown
 section, and fails on a BARE dead id — which is exactly what both defects were.
 
 This gate is deliberately not "no dead ids anywhere". A tree that cannot mention
-its own history loses the retraction record, and `~/.claude/CLAUDE.md` requires
-the opposite: retract in place, visibly.
+its own history loses the record of what was renamed; a correction belongs in
+place, visibly.
 """
 from __future__ import annotations
 
@@ -66,10 +66,10 @@ _HISTORICAL = (
 )
 
 #: Formats where each line is a self-contained record, so framing must appear
-#: ON the citing line. A neighbourhood window is WRONG here and was measured to
-#: be: with a +/-5 line window, `xaidr/rules/all-l1-rules.json`'s dead-id defect
-#: went GREEN because an unrelated key five lines away happened to contain the
-#: word "were". Adjacent JSON lines are not context, they are other records.
+#: ON the citing line. A neighbourhood window is WRONG here: with a +/-5 line
+#: window, a dead id in `xaidr/rules/all-l1-rules.json` goes GREEN whenever an
+#: unrelated key five lines away happens to contain the word "were". Adjacent
+#: JSON lines are not context, they are other records.
 _LINE_SCOPED = {".json", ".yml", ".yaml", ".toml", ".cfg"}
 
 #: Extensions worth scanning. Binary and pool files are excluded; the pools are
@@ -103,10 +103,10 @@ def _walk():
     artifact, and the fix would be to re-run a script rather than to correct a
     claim — so it is noise, and a gate that cries about noise gets muted.
 
-    The fallback was written for an EXTRACTED SDIST, which ships `tests/` with
-    no git index and no git binary. That no longer applies: asi_battery/ stopped
-    shipping in the sdist after 1.20.0, so this file is marked `asi_battery` and
-    skips there. The fallback now covers a git-less export of the repository
+    An EXTRACTED SDIST ships `tests/` with no git index and no git binary, but
+    asi_battery/ does not ship in the sdist, so this file is marked
+    `asi_battery` and skips there. The fallback covers a git-less export of the
+    repository
     (`git archive`, say), which has the pools and no index. There are no run
     outputs there either, so the plain walk has the same scope. Same shape as
     `tests/test_sdist_contents.py::_tracked_files`.
@@ -141,7 +141,7 @@ def live_ids():
     # The gate's own scope, asserted. A pool that failed to load would make
     # every id below "dead" and the gate would scream; an EMPTY id set with a
     # silently-empty file list would make it pass over nothing, which is the
-    # failure mode this whole branch is about.
+    # failure mode this whole file guards against.
     assert len(ids) == 240, (
         f"the battery pools define {len(ids)} case ids, not 240; if the pools "
         f"genuinely changed size update this number, but check first that "
@@ -156,9 +156,9 @@ def scanned():
     assert len(files) > 50, (
         f"the repo walk returned only {len(files)} text files to scan. This "
         f"gate would then be passing over an empty-ish set and reporting "
-        f"coverage it is not performing — the exact defect this branch exists "
-        f"to fix. An earlier draft of this scan used `git grep -o`, which this "
-        f"git does not support, matched nothing, and reported a clean tree."
+        f"coverage it is not performing — the exact defect this file exists "
+        f"to catch. A scan built on `git grep -o`, on a git that does not "
+        f"support it, matches nothing and reports a clean tree."
     )
     return files
 
@@ -167,9 +167,9 @@ def _is_break(line):
     """A paragraph boundary: blank, or a blockquote marker carrying no prose.
 
     `>` alone matters — the BOUNDARY_GAP banner is one long blockquote, and
-    without this every line of it would share one context. The stale-id claim
-    that prompted this whole gate sat in that banner five lines below an
-    unrelated "is now", so a blockquote-wide context would have hidden it.
+    without this every line of it would share one context. A stale-id claim in
+    that banner five lines below an unrelated "is now" would be hidden by a
+    blockquote-wide context.
     """
     return not line.strip().lstrip(">").strip()
 
@@ -247,9 +247,10 @@ def test_no_unframed_citation_of_a_case_id_that_no_longer_exists(
         "nothing marking them as historical — so each reads as a live claim "
         "about a case that cannot be looked up:\n"
         + "\n".join(sorted(bad))
-        + "\n\nF9 relabelled 28 cases (see asi_battery/README.md 'Case-id "
-          "map'). Either update the id, or frame the mention as a record of "
-          "the rename the way that map does."
+        + "\n\nThe battery relabelling moved 28 cases (see "
+          "asi_battery/README.md 'Case-id map'). Either update the id, or "
+          "frame the mention as a "
+          "record of the rename the way that map does."
     )
 
 

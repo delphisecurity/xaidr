@@ -1,24 +1,25 @@
 """``direction="tool_result"``: a tool's RETURN is not a principal's INPUT.
 
-WHAT WAS WRONG. The MCP seam scanned a server's ``CallToolResult`` with
-``direction="input"`` (``frameworks.py``, the ``after`` hook on
-``ClientSession.call_tool``). That is the conflation the value-provenance design
-rejects: at the type level a tool result and a human's prompt were the same
-thing, so nothing downstream — no telemetry consumer, no extension, no future
-``value_origin`` — could tell "the user asked me to do this" from "a server I
-called told me to do this". Tool-result poisoning is the headline MCP attack and
-it arrived wearing the label of the one source a deployment trusts most.
+WHY THE LABEL MATTERS. The MCP seam (``frameworks.py``, the ``after`` hook on
+``ClientSession.call_tool``) scans a server's ``CallToolResult`` with
+``direction="tool_result"``, never ``direction="input"``. Labelling it input is
+the conflation the value-provenance design rejects: at the type level a tool
+result and a human's prompt would be the same thing, so nothing downstream — no
+telemetry consumer, no extension, no future ``value_origin`` — could tell "the
+user asked me to do this" from "a server I called told me to do this".
+Tool-result poisoning is the headline MCP attack, and under that label it would
+arrive wearing the label of the one source a deployment trusts most.
 
 WHAT THIS ESTABLISHES, and the split matters:
 
-  * the LABEL changes — an MCP tool result now emits ``direction="tool_result"``
-    and reaches an extension's ``ScanRequest`` as ``"tool_result"``;
-  * the DETECTION does not. Same bytes, same verdict, whichever of the two
-    inbound labels they carry. That is asserted here over a payload set AND at
-    the one place in ``LocalScanner`` that branched on the literal ``"input"``
-    (the nano gate), because a labelling change that silently narrows coverage
-    on the most-attacked surface in the estate would be worse than the
-    conflation it fixes.
+  * the LABEL — an MCP tool result emits ``direction="tool_result"`` and
+    reaches an extension's ``ScanRequest`` as ``"tool_result"``;
+  * the DETECTION is label-independent. Same bytes, same verdict, whichever of
+    the two inbound labels they carry. That is asserted here over a payload set
+    AND at the one place in ``LocalScanner`` that keys on the direction (the
+    nano gate), because a labelling distinction that silently
+    narrowed coverage on the most-attacked surface in the estate would be worse
+    than the conflation it avoids.
 
 The nano assertion is the discriminating one and it is deliberately not written
 as a corpus sweep: nano is OFF by default and needs a 130 MB hash-pinned
@@ -110,11 +111,11 @@ def _wait(cap, n, timeout=5.0):
     return cap.events
 
 
-# ── the label, at the seam that produced the conflation ──────────────────────
+# ── the label, at the MCP seam ───────────────────────────────────────────────
 
 
 def test_an_mcp_tool_result_is_emitted_as_tool_result_not_input():
-    """The telemetry a SIEM sees. Before the fix this direction was "input"."""
+    """The telemetry a SIEM sees: the direction is "tool_result", never "input"."""
     fakes.install_mcp()
     cap = _Cap()
     handle = _protect(cap)
@@ -198,7 +199,7 @@ def test_tool_result_maps_to_a_tool_surface_and_an_inbound_flow():
            "entry in _INTERACTION_DIRECTION. Neither is emitted by anything "
            "today (no `direction=\"mcp\"` or `\"llm\"` exists in the tree), so "
            "the defect is dormant rather than live — but it is the exact shape "
-           "design §4 names: a value in one table keyed on direction and absent "
+           "a two-table design invites: a value in one table keyed on direction and absent "
            "from its sibling, which produces a half-mapped event the first time "
            "something emits it. Fixing it means deciding whether those two "
            "labels should exist at all, which is not this PR's question.",
@@ -309,8 +310,8 @@ def test_nano_still_does_not_run_on_output():
 
 def test_the_haystack_tool_result_gap_advises_the_tool_result_direction():
     """The haystack entry tells an operator to scan a tool result themselves.
-    While it said `direction='input'` it was instructing them to reproduce, by
-    hand, the conflation this PR removes from the MCP seam."""
+    Advising `direction='input'` would instruct them to reproduce, by hand, the
+    conflation the MCP seam avoids."""
     fakes.install_mcp()
     src = (sys.modules["xaidr.autopatch.frameworks"].__file__)
     with open(src, encoding="utf-8") as fh:

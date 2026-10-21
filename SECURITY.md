@@ -86,12 +86,12 @@ to embed:
   discussed and measured in public.
 - **A classify-only rule that does not block is working as designed.** Large
   parts of the ruleset deliberately name an impact class and leave the decision
-  to a policy you write — 95 of the 281 corpus attacks, each one marked
+  to a policy you write — 91 of the 277 corpus attacks, each one marked
   `detection_intent: INTENDED` in `tests/fixtures/shell_corpus.json` with the
   reason written next to the command. `infra_destruction` blocks 0 of 8 corpus
   cases on purpose, because destroying managed infrastructure is
   indistinguishable from a legitimate teardown at the command level:
-  `terraform destroy` is the documented inverse of `terraform apply`. Those 95
+  `terraform destroy` is the documented inverse of `terraform apply`. Those 91
   are excluded from the catch rate above rather than counted as failures. If you
   think a specific entry is marked wrongly, the reason is on the entry — open an
   issue against it.
@@ -127,14 +127,14 @@ alertable marker (`SCAN_FAILED_OPEN`) and a WARN log. A fault you can trigger
 deliberately is very much in scope. The fail-open response to it is not.
 
 **Enforcement is narrower than classification, and the gap is the product.** 267
-of the 281 corpus attacks are assigned a class and tier; 165 are blocked with no
+of the 277 corpus attacks are assigned a class and tier; 165 are blocked with no
 configuration. The families that block well under half their cases are named in
 the README rather than hidden: `escalate` blocks 12 of 37 and `execute` blocks
 28 of 59. The genuinely weakest are `infra_destruction` at 0 of 8 and `discovery`
-at 2 of 11. **Read those as raw counts, not as a detection rate.** Most of the
+at 2 of 7. **Read those as raw counts, not as a detection rate.** Most of the
 difference is deliberate — `infra_destruction` is 0 of 8 by design — which is why
 the headline figure is the catch rate over the 186 we intend to catch and not
-`blocked / 281`. Both are reproduced on every pull request by the `corpus` job in
+`blocked / 277`. Both are reproduced on every pull request by the `corpus` job in
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml), so they are current
 rather than aspirational.
 
@@ -142,19 +142,20 @@ rather than aspirational.
 
 A false positive is not a vulnerability, but it is close to one in effect: the
 failure mode that gets a security tool switched off is the tool blocking work
-that was fine. We treat it as a first-class bug and CI gates on it, at 0 of 74
+that was fine. We treat it as a first-class bug and CI gates on it, at 0 of 78
 benign commands scoring and at most 1 of 89 benign prose passages blocking, with
 that one documented by ID.
 
 It is also where the temptation to fix things the wrong way is strongest, and
-there is a worked example in the history. In `449dff8`, prose that merely quoted
-a dangerous command was blocking: an incident report or a runbook scored exactly
-like the command it described, 30 of 66 passages on the content path. The
-obvious fix was to teach the scanner to recognise a documentary frame and dampen
-on it. That fix was deliberately rejected, because it is a bypass: an attacker
-writes the same frame in front of a live command and is dampened by the same
-code. What shipped instead is structural rather than lexical, and requires
-several independent conditions to hold at once. A frame cue is only ever a
+there is a worked example. Prose that merely quotes a dangerous command, such as
+an incident report or a runbook, scores exactly like the command it describes
+unless the scanner can tell the two apart: without that distinction, 30 of 66
+benign passages block on the content path. The obvious answer is to teach the
+scanner to recognise a documentary frame and dampen on it. That answer is
+deliberately rejected, because it is a bypass: an attacker writes the same frame
+in front of a live command and is dampened by the same code. What ships instead
+is structural rather than lexical, and requires several independent conditions
+to hold at once. A frame cue is only ever a
 corroborator, never the anchor.
 
 So if you report a false positive, the useful thing is not a pattern to suppress.

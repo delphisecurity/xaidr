@@ -2,8 +2,8 @@
 
 Both block paths in ``ProtectedHttpClient._check_destination`` (the operator
 blocked-URL list and the deny-destination policy) raise DelphiBlockedError
-BEFORE any scan_* method runs, so before the fix they produced no audit record
-at all — a blocked exfiltration attempt invisible to the SIEM, contradicting
+BEFORE any scan_* method runs, so they emit their own audit record: without it
+a blocked exfiltration attempt would be invisible to the SIEM, contradicting
 "every scan emits one structured telemetry event".
 
 Discipline:
@@ -164,7 +164,7 @@ def test_allowed_request_still_emits_its_normal_event():
 
 
 def test_allowed_request_emits_no_destination_block_event():
-    """The fix must not fire on the allow path (no phantom block records)."""
+    """The block record must not fire on the allow path (no phantom block records)."""
     s, c, sent, cap = _make()
     assert s.set_policy(DENY_POLICY) is True
 

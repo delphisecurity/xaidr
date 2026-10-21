@@ -1,25 +1,25 @@
-"""Audit F7: the two structural tool-argument detectors outside their five personas.
+"""The two structural tool-argument detectors outside their five personas.
 
-WHAT F7 SAID. `scanner.privilege_action` and `scanner.resource_bound` were tuned
+THE QUESTION. `scanner.privilege_action` and `scanner.resource_bound` are tuned
 against five agent personas — support, devops, data, research, finance — and
-every committed benign tool-call pool contains only those five. The auditor named
-legal, gaming, mathematics and media as domains where they fire on ordinary work.
+every other committed benign tool-call pool contains only those five. Legal,
+gaming, mathematics and media are domains where a detector tuned that way could
+fire on ordinary work.
 
-WHY THE EXISTING TESTS COULD NOT SEE IT, which is the whole point of this file.
+WHY THE OTHER TESTS CANNOT ANSWER IT, which is the whole point of this file.
 `test_privilege_action.py::test_production_benign_corpus_is_clean` and
 `test_resource_bound.py::test_discriminator_pool_flags_only_the_named_residual`
-were GREEN on the pre-fix tree, and stay green if you revert every fix F7 made.
-They read `benign_toolcalls/corpus.jsonl` and `discriminator.jsonl`, and those
+read `benign_toolcalls/corpus.jsonl` and `discriminator.jsonl`, and those
 pools have no film credit in them, no compositing layer, no calculus, no LMS
 enrolment and no pro bono time entry. A pool that cannot contain the shape
-reports 0 on it forever. The same blindness, on the same two detectors, that the
-1.14.1 note recorded for key-vocabulary errors and the 1.15.0 note recorded for
-value-polarity errors — this is the third axis: DOMAIN.
+reports 0 on it forever, so those tests stay green whatever the detectors do
+here. It is the same blindness, on the same two detectors, that hides
+key-vocabulary errors and value-polarity errors — this is the third axis: DOMAIN.
 
 So the discriminating assertion here is not "the detectors are clean". It is
-`test_the_domain_pool_flags_only_the_recorded_residual`, which reads the new
-pool, plus the four mechanism tests below, each of which fails on the pre-fix
-tree with the benign call it fired on in the message.
+`test_the_domain_pool_flags_only_the_recorded_residual`, which reads the domain
+pool, plus the four mechanism tests below, each of which names the benign call
+in its failure message if a detector fires on it.
 
 WHAT IS NOT CLAIMED. 24 of the 120 still flag and they are listed by id in
 `scripts/benign_domain_report.py::DOMAIN_RESIDUAL` with a verdict each. They are
@@ -50,11 +50,11 @@ def _scan(tool, args):
     return scan_priv(tool, args) + scan_bound(tool, args)
 
 
-# ── the five mechanisms, each with the production call that exposed it ────────
+# ── the five mechanisms, each with the production call that exercises it ─────
 #
 # Every case here is a verbatim `args` dict from benign_toolcalls/domains.jsonl,
-# and every one of them flagged before F7. The id is in the test id so a failure
-# names the traffic, not the assertion.
+# and each is ordinary work one of the five mechanisms must not flag. The id
+# is in the test id so a failure names the traffic, not the assertion.
 
 @pytest.mark.parametrize("case_id,args", [
     pytest.param("MED-01", {"comp": "Opening_Title", "layer": "lens_flare",
@@ -166,9 +166,9 @@ def test_the_narrowings_did_not_cost_a_battery_catch():
     Every privilege- and resource-shaped tool-call attack in the battery, after
     all five narrowings.
 
-    The four `EXH-*` ids below read `ASI04-*` when this gate was written; F9
-    relabelled the twelve resource-exhaustion cases off ASI04, which is not an
-    OWASP resource category. Same cases, same args, only the label moved."""
+    The four `EXH-*` ids below read `ASI04-*` when this gate was written; the
+    battery relabelling moved the twelve resource-exhaustion cases off ASI04,
+    which is not an OWASP resource category. Same cases, same args, only the label moved."""
     attacks = {a["id"]: a for a in _jsonl("asi_battery/attacks.jsonl")}
     for case_id in ("ASI02-A03", "ASI02-A05", "ASI02-A10", "ASI03-A02", "ASI03-A03",
                     "ASI03-A06", "ASI03-A09", "EXH-A02", "EXH-A05", "EXH-A09",

@@ -1,19 +1,19 @@
 """The egress family: data leaving the host, expressed structurally.
 
-Ten commands scored 0.00 on published 1.0.1. Nine of them now block and the
-tenth classifies without blocking, which is the more interesting half of the
-result and is why the split below is the point:
+Ten commands score 0.00 without this family. Nine of them block and the tenth
+classifies without blocking, which is the more interesting half of the result
+and is why the split below is the point:
 
-* three rules that ALREADY classified credential_access/critical
+* three rules that classify credential_access/critical
   (cred.sensitive_file, cred.sensitive_file_redirect, cred.metadata_endpoint)
-  simply gained a `detect` block. Nothing was invented: the ruleset already knew
-  `cat ~/.aws/config` was a critical credential read and merely declined to act
-  on it.
+  carry a `detect` block. Nothing is invented: the ruleset classifies
+  `cat ~/.aws/config` as a critical credential read, and the `detect` block is
+  what acts on that classification.
 * cred.secret_manager deliberately did NOT. A managed secret store is the
   sanctioned way to fetch a secret, so it stays classify-only; see
   test_a_managed_secret_store_read_classifies_without_blocking.
-* three rules and four combinations are new, for the shapes no existing rule
-  described: a credential object handed to a remote-copy tool, to object
+* three rules and four combinations exist for the shapes no classification
+  rule describes: a credential object handed to a remote-copy tool, to object
   storage, or to a mail transport; and a sensitive object or an archive stream
   piped into a network sink.
 
@@ -23,9 +23,8 @@ which is what makes these findings BLOCK rather than flag (data_exfiltration is
 flag-default by an explicit earlier decision; see test_batch_c_exfiltration).
 
 WHY STRUCTURAL RATHER THAN A PORTED PATTERN
-The paid tree catches most of these with MCP_sensitive_file_access, a raw-string
-rule whose object alternatives include a bare `/var/log` and `~/.config`. That
-rule fires on `tail -f /var/log/nginx/access.log` with no verb, no sink and no
+The obvious port is a raw-string rule (MCP_sensitive_file_access) whose object
+alternatives include a bare `/var/log` and `~/.config`. That rule fires on `tail -f /var/log/nginx/access.log` with no verb, no sink and no
 pipeline — it cannot tell reading a log from shipping one to an attacker. Every
 rule here requires an OBJECT plus a SINK (or an archive stream plus a sink), so
 the discriminator is the relationship and not the path. The
@@ -284,8 +283,9 @@ def test_the_redirect_spelling_blocks_too(cmd):
 # ── (e) corpus movement, as floors ──────────────────────────────────────────
 
 def test_corpus_exfiltration_class_rose_and_nothing_fell():
-    """Measured 2026-08-16: 146/144 -> 160/160 of 281. Per-class floors, so a
-    rise in one class cannot mask a fall in another.
+    """The egress family lifts detected/blocked from 146/144 to at least
+    160/160. Per-class floors, so a rise in one class cannot mask a fall in
+    another.
 
     credential_access is 35 rather than 45 because cred.secret_manager is
     classify-only by design; see

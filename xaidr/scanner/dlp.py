@@ -48,7 +48,25 @@ def _luhn_valid(text: str) -> bool:
     return total % 10 == 0
 
 
-_VALIDATORS = {"luhn": _luhn_valid}
+def _mixed_body(text: str) -> bool:
+    """True if ``text`` mixes at least two of ASCII lowercase, uppercase and
+    digits. Gates the provider tokens whose length floor is short enough for a
+    placeholder to reach it (``glpat-xxxxxxxxxxxxxxxxxxxx``, ``npm_XXXX…``): an
+    issued token body is random over its whole alphabet, a placeholder is one
+    repeated character or one case of prose. Given the token's BODY (the
+    ``body`` group), never its prefix, whose letters would always count."""
+    lower = upper = digit = False
+    for c in text:
+        if "a" <= c <= "z":
+            lower = True
+        elif "A" <= c <= "Z":
+            upper = True
+        elif "0" <= c <= "9":
+            digit = True
+    return lower + upper + digit >= 2
+
+
+_VALIDATORS = {"luhn": _luhn_valid, "mixed_body": _mixed_body}
 
 
 @dataclass
@@ -152,6 +170,129 @@ DLP_PATTERNS = [
         "category": "secret_aws_key",
         "score": 0.90,
     },
+    # ── Provider tokens that carry their own prefix ──────────────────────────
+    # ONE TABLE, BOTH SEAMS. Output and tool-call arguments both run this table,
+    # so a shape here is enforced wherever a secret can leave. Provider shapes
+    # belong here, not in output-l1-rules.json; tests/test_secret_seam_symmetry.py
+    # fails if one of these ids is added there.
+    #
+    # The four OUT_secret_* entries keep the ids, scores and IGNORECASE they had
+    # as output rules, so the ids reaching telemetry do not change. The DLP_*
+    # entries are new providers. All of them share secret_api_key, one existing
+    # high-confidence category. Every repeat is bounded or anchored on a literal
+    # prefix, over a plain class: linear, nothing quadratic.
+    {
+        # Legacy `sk-` keys and the hyphenated forms, then the base64url bodies of
+        # project, service-account and admin keys, whose `_`/`-` can fall anywhere,
+        # so they cannot be required to end in a 20+ alphanumeric run. The 80
+        # floor keeps `sk-proj-your-api-key-goes-here` out. `(?!ant-)` leaves
+        # Anthropic keys to DLP_anthropic_key, so the record names the provider.
+        "id": "OUT_secret_openai_key",
+        "pattern": re.compile(
+            r"\bsk-(?!ant-)(?:[a-zA-Z0-9]{1,12}-){0,4}[a-zA-Z0-9]{20,}\b"
+            r"|\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{80,255}",
+            re.IGNORECASE,
+        ),
+        "category": "secret_api_key",
+        "score": 0.97,
+    },
+    {
+        "id": "DLP_anthropic_key",
+        "pattern": re.compile(r"\bsk-ant-(?:api|admin)\d{2}-[A-Za-z0-9_-]{80,255}"),
+        "category": "secret_api_key",
+        "score": 0.90,
+    },
+    {
+        "id": "OUT_secret_slack_token",
+        "pattern": re.compile(r"\bxox[bpsa]-[A-Za-z0-9-]{10,}\b", re.IGNORECASE),
+        "category": "secret_api_key",
+        "score": 0.95,
+    },
+    {
+        # App-level token: xapp-<n>-<app id>-<digits>-<secret>.
+        "id": "DLP_slack_app_token",
+        "pattern": re.compile(
+            r"\bxapp-\d-[A-Za-z0-9]{8,16}-\d{8,16}-[A-Za-z0-9]{32,255}"
+        ),
+        "category": "secret_api_key",
+        "score": 0.90,
+    },
+    {
+        # Both segments are base64url, so the last character can be `-`; the
+        # closing lookahead holds after it where `\b` would not.
+        "id": "OUT_secret_sendgrid",
+        "pattern": re.compile(
+            r"\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])",
+            re.IGNORECASE,
+        ),
+        "category": "secret_api_key",
+        "score": 0.96,
+    },
+    {
+        # Live secret keys only. Test-mode keys are DLP_stripe_test_key, which
+        # signals and does not block.
+        "id": "OUT_secret_stripe",
+        "pattern": re.compile(r"\bsk_live_[A-Za-z0-9]{24,}\b", re.IGNORECASE),
+        "category": "secret_api_key",
+        "score": 0.97,
+    },
+    {
+        "id": "DLP_stripe_restricted_key",
+        "pattern": re.compile(r"\brk_live_(?P<body>[A-Za-z0-9]{24,255})\b"),
+        "category": "secret_api_key",
+        "score": 0.90,
+        "validate": "mixed_body",
+    },
+    {
+        "id": "DLP_gitlab_token",
+        "pattern": re.compile(r"\bglpat-(?P<body>[A-Za-z0-9_-]{20,255})"),
+        "category": "secret_api_key",
+        "score": 0.90,
+        "validate": "mixed_body",
+    },
+    {
+        "id": "DLP_huggingface_token",
+        "pattern": re.compile(r"\bhf_(?P<body>[A-Za-z0-9]{34})\b"),
+        "category": "secret_api_key",
+        "score": 0.90,
+        "validate": "mixed_body",
+    },
+    {
+        "id": "DLP_npm_token",
+        "pattern": re.compile(r"\bnpm_(?P<body>[A-Za-z0-9]{36})\b"),
+        "category": "secret_api_key",
+        "score": 0.90,
+        "validate": "mixed_body",
+    },
+    # ── Signal-only: recorded on the tool path, never blocking ───────────────
+    # See SIGNAL_ONLY_SECRET_RULES below. Scored in the flag band, under the
+    # default block threshold, so output does not block them either.
+    {
+        # A Stripe test-mode key is an issued credential, but a
+        # tool call writing one to a local .env is ordinary development, and
+        # this path cannot yet tell a local write from an outbound one.
+        "id": "DLP_stripe_test_key",
+        "pattern": re.compile(r"\b[rs]k_test_(?P<body>[A-Za-z0-9]{24,255})\b"),
+        "category": "secret_api_key",
+        "score": 0.50,
+        "validate": "mixed_body",
+        "signal_only": True,
+    },
+    {
+        # A quoted 20+ character value under a key name that
+        # DLP_api_key does not list (`slack_api_token = "…"`, `client_secret =
+        # "…"`). `token = …` is ordinary config, so a wider name list is a
+        # signal and not a block.
+        "id": "DLP_token_assignment",
+        "pattern": re.compile(
+            r"(?:token|secret)\s*[:=]\s*[\"'](?P<body>[A-Za-z0-9_\-/+.]{20,255})[\"']",
+            re.IGNORECASE,
+        ),
+        "category": "secret_api_key",
+        "score": 0.50,
+        "validate": "mixed_body",
+        "signal_only": True,
+    },
     {
         "id": "DLP_private_key",
         "pattern": re.compile(
@@ -218,6 +359,15 @@ HIGH_CONFIDENCE_SECRET_CATEGORIES = frozenset({
 # acted on alone.
 LOW_CONFIDENCE_SECRET_CATEGORIES = frozenset({"secret_password"})
 
+# SIGNAL-ONLY entries: a shape whose category is high-confidence but whose
+# enforcement is set to signal-only. On the tool-call path
+# a hit is recorded (rule id, score, `flagged`) and never blocks. This is a
+# per-ENTRY decision because the reason is not the shape's confidence: a Stripe
+# test key is unmistakable, and is signal-only because of where it is going.
+SIGNAL_ONLY_SECRET_RULES = frozenset(
+    p["id"] for p in DLP_PATTERNS if p.get("signal_only")
+)
+
 
 def scan_dlp(text: str) -> DLPResult:
     """Run DLP pattern scan."""
@@ -256,8 +406,10 @@ def scan_dlp(text: str) -> DLPResult:
             # Optional value-level validation (e.g. Luhn for cards): a regex match
             # only counts if the validator on the matched span passes. Keeps the
             # FP guard (non-Luhn digit runs) in code, not the pattern.
+            # A pattern with a `body` group is validated on that group alone.
             validator = _VALIDATORS.get(p.get("validate"))
-            if validator and not validator(match.group()):
+            span = match.group("body") if "body" in p["pattern"].groupindex else match.group()
+            if validator and not validator(span):
                 continue
             threats.append(ThreatDetail(
                 rule=p["id"],

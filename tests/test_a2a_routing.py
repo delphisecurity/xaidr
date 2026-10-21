@@ -214,11 +214,11 @@ def test_timing_heuristic_is_gone():
 # a2a-sdk `Message.model_dump()`. CrewAI's A2A client builds exactly this
 # (crewai/a2a/utils/delegation.py) and hands it to the transport.
 #
-# The regression this pins: `_is_a2a_shape` recognised only a JSON-RPC frame or
-# `params.message.parts`, and `A2AStructuralValidator._message` read only
-# `params.message`. A bare Message therefore routed to the GENERIC scan, so its
-# content was still read (nothing failed loudly) while every structural and
-# id-provenance check silently did not run. Silence is the failure mode.
+# The invariant this pins: `_is_a2a_shape` recognises a bare Message as well as
+# a JSON-RPC frame or `params.message.parts`, and `A2AStructuralValidator._message`
+# reads it too. Were a bare Message routed to the GENERIC scan, its content
+# would still be read (nothing would fail loudly) while every structural and
+# id-provenance check would silently not run. Silence is the failure mode.
 
 def _bare_message(text, *, task_id=None, context_id=None):
     """a2a-sdk Message.model_dump(mode="json") — camelCase ids, kind, parts[]."""

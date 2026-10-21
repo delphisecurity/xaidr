@@ -1,18 +1,16 @@
 """The published-suite-count guard.
 
-docs/testing.md published a table of pass counts per install configuration.
-Every row of it was wrong by the time anyone looked: the `full` row was ~670
-passes behind, the `base` skip figure in the table disagreed with the `base`
-skip figure four paragraphs below it, and underneath both sat a retraction of a
-third number that had been published for two minor releases against a CI job
-that was red the whole time. It was hand-corrected three times and went stale
-again after each one, because nobody can build all five configurations on one
-machine and a one-process full run has crashed the machine that comes closest.
+A hand-typed table of pass counts per install configuration in the docs goes
+stale faster than anyone can correct it: rows fall hundreds of passes behind, a
+figure in the table disagrees with the same figure a few paragraphs below, and
+a count can stand against a CI job that is red. Hand corrections go stale again
+after each one, because nobody can build all five configurations on one machine
+and a one-process full run crashes the machine that comes closest.
 
-The table is deleted; the counts live in the CI log of the job that measured
-them. This test is what keeps it deleted. A number that cannot be regenerated
-cannot be checked, so the only place it can be wrong is in front of a reader who
-has no way to notice — which is exactly what happened, three times.
+So there is no such table; the counts live in the CI log of the job that
+measured them. This test is what keeps it that way. A number that cannot be
+regenerated cannot be checked, so the only place it can be wrong is in front of
+a reader who has no way to notice.
 
 The escape hatch is deliberate and deliberately visible: a `<!-- suite-count-ok:
 reason -->` marker on the same line. That is a thing a reviewer sees in the diff

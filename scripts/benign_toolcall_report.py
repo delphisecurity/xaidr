@@ -40,9 +40,9 @@ import warnings
 from collections import defaultdict
 
 # ── which xaidr answered? ────────────────────────────────────────────────────
-# This script is cited as a U-1 regenerator, and until 1.18.0 it was a bare
-# `sys.path.insert(0, REPO)` with nothing printed: run under the published
-# 1.14.1 wheel it reported the 1.18.0 tree and said so nowhere. `bind` puts the
+# This script is cited as the regenerator for a published figure. A bare
+# `sys.path.insert(0, REPO)` with nothing printed would make it report the
+# working tree under any wheel and say so nowhere. `bind` puts the
 # repo root on sys.path (the default, and what every committed figure here was
 # measured against), prints the resolved path and version FIRST, and under
 # XAIDR_FROM_INSTALL=1 leaves sys.path alone and refuses a source tree.
@@ -266,11 +266,9 @@ def main():
     #
     # They exist because the blind corpus cannot exhibit two whole classes of
     # error: it carries twelve booleans and no integer zeros, and the battery
-    # mirror reuses the attack KEYS by construction. Measured at 1.14.0 the
-    # privilege detector flagged 11 of these 50 while both committed pools read
-    # clean; at 1.14.1 it flags 0. (The 1.15.0 candidate flagged 23 of 50 — a
-    # branch measurement, quoted because it is what put this pool here, not a
-    # claim about this tree.)
+    # mirror reuses the attack KEYS by construction. A privilege detector can
+    # flag a large share of these 50 while both committed pools read clean;
+    # that gap is what this pool exists to expose.
     disc_path = os.path.join(REPO, "benign_toolcalls", "discriminator.jsonl")
     disc, disc_fp = [], []
     if os.path.exists(disc_path):

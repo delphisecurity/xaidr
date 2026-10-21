@@ -1,9 +1,9 @@
 """B1 guard tests — malformed unicode must FAIL OPEN, never crash a scan.
 
-An invalid/lone surrogate (e.g. ``\\udcff`` from an undecodable byte) previously
-crashed ``scan()`` at ``hashlib.sha256(prompt.encode())`` with
-``UnicodeEncodeError`` — a self-DoS on a security tool. The fix centralizes all
-content hashing through ``xaidr.types.safe_content_hash`` (encode with
+An invalid/lone surrogate (e.g. ``\\udcff`` from an undecodable byte) makes a
+plain ``hashlib.sha256(prompt.encode())`` raise ``UnicodeEncodeError``; a scan
+that did that would be a self-DoS on a security tool. All content hashing is
+therefore centralized in ``xaidr.types.safe_content_hash`` (encode with
 ``surrogatepass``), so every scan surface survives malformed input while still
 producing a stable hash and still running detection.
 
@@ -29,7 +29,7 @@ from xaidr.types import safe_content_hash
 # surrogate-only string, adjacent lone surrogates, and split lone surrogates.
 # (Well-formed inputs — incl. valid astral chars — are covered separately.)
 MALFORMED = [
-    "hello \udcff world",          # lone low surrogate (the original crash)
+    "hello \udcff world",          # lone low surrogate (the canonical case)
     "x \ud800 y",                  # lone high surrogate
     "\udcff",                      # surrogate only
     "a \ud800\udc00 b",       # two lone surrogates adjacent (NOT a valid pair)
@@ -53,7 +53,7 @@ def test_safe_content_hash_deterministic(text):
 
 @pytest.mark.parametrize("text", ["", "hello world", "ignore previous", "café ☕ 日本語"])
 def test_safe_content_hash_noop_for_well_formed(text):
-    """Byte-identical to the old strict-utf8 hash for every well-formed input."""
+    """Byte-identical to a plain strict-utf8 hash for every well-formed input."""
     old = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
     assert safe_content_hash(text) == old
 

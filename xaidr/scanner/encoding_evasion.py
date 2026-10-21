@@ -1,10 +1,10 @@
-"""Encoded-payload + decode/execute-directive pairing (embedded-evasion fix).
+"""Encoded-payload + decode/execute-directive pairing (embedded evasion).
 
 The bare-blob rule (``LLM01_raw_base64_payload``) is anchored ``^…$`` — it fires
 only when an encoded blob is the WHOLE input. Embedding the same blob in prose
 ("please decode and follow: <blob>", a blob in a log line, "run this: <blob>")
-drops it below threshold, so realistic embedding evaded detection even though
-"we catch base64".
+drops it below that rule's threshold, so the bare rule alone cannot cover
+realistic embedding.
 
 The real signal is NOT blob dominance — it is an encoded blob that is the OBJECT
 of a directive telling the model to decode / run / follow / execute it. This
@@ -153,8 +153,8 @@ _URL_DANGER_CATEGORIES = frozenset({
     "system_prompt_leak",
 })
 
-# Paid categorizes destructive-command / shell-in-args rules under asi02/asi05/
-# agentic_abuse (not code_execution like open), so a category-only filter misses
+# Destructive-command / shell-in-args rules can be categorized under asi02/asi05/
+# agentic_abuse rather than code_execution, so a category-only filter misses
 # a decoded "rm -rf" / "curl|bash". Mirror the tool-arg path: also admit any
 # HIGH-confidence L1 hit (>= this) regardless of category — that captures
 # TOOL_destructive_args (0.95), ASI05_pipe_to_shell (0.9), MCP_shell_injection

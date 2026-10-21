@@ -32,10 +32,10 @@ class _WorkerState:
     A thread whose target is a bound method, or an ``atexit.register(self.…)``
     callback, is itself a strong reference to the queue — and the queue is the
     only thing the thread's own loop waits on, so nothing ever drops that
-    reference. The result was an immortal worker per queue: a Sensor that went
-    out of scope without ``close_sync`` left ``xaidr-telemetry`` running for the
-    life of the process, and a caller that constructed sensors in a loop piled
-    up one live thread per sensor.
+    reference. The result would be an immortal worker per queue: a Sensor that
+    went out of scope without ``close_sync`` would leave ``xaidr-telemetry``
+    running for the life of the process, and a caller that constructed sensors
+    in a loop would pile up one live thread per sensor.
 
     So the thread closes over THIS object, and the queue keeps only a finalizer.
     When the last reference to the queue goes away, the finalizer drains and
@@ -116,12 +116,12 @@ class SyncTelemetryQueue:
         # Exactly once per queue, even across close/restart cycles — a second
         # registration would make shutdown drain the same queue repeatedly.
         #
-        # weakref.finalize replaces the old atexit.register(self.close_sync):
-        # it runs at interpreter exit exactly like atexit did (so the at-exit
-        # flush guarantee is unchanged) AND when this queue is garbage
-        # collected, WITHOUT holding the queue alive the way an atexit callback
-        # bound to it did. _shutdown is a staticmethod for the same reason: a
-        # bound method here would pin the queue and re-create the leak.
+        # weakref.finalize rather than atexit.register(self.close_sync): it
+        # runs at interpreter exit exactly like atexit (so the at-exit flush
+        # guarantee holds) AND when this queue is garbage collected, WITHOUT
+        # holding the queue alive the way an atexit callback bound to it would.
+        # _shutdown is a staticmethod for the same reason: a bound method here
+        # would pin the queue and keep its worker alive forever.
         if not self._atexit_registered:
             self._finalizer = weakref.finalize(
                 self, SyncTelemetryQueue._shutdown, state

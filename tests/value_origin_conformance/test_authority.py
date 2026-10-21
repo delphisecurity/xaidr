@@ -1,6 +1,6 @@
-"""authority_of — the one normaliser (§6 C-6, V-10, V-19..V-23, rulings 3.2 / 3.6) —
-and the linear-time property every pattern behind it must keep: it runs on
-attacker-controlled values (open's ReDoS invariants)."""
+"""authority_of — the one normaliser (docs/value-origin-rulings.md, rulings 3.2 / 3.6)
+— and the linear-time property every pattern behind it must keep: it runs on
+attacker-controlled values (the ReDoS invariants)."""
 from __future__ import annotations
 
 import ipaddress
@@ -29,13 +29,13 @@ def A(key):
 
 
 @pytest.mark.parametrize("value,key", [
-    # email (C-6, V-4, V-23)
+    # email
     ("Bob.Reeves@Northbank.Example", "mailto:bob.reeves@northbank.example"),
     ("bob+x@corp.example", "mailto:bob+x@corp.example"),
     ("Bob <bob@corp.example>", "mailto:bob@corp.example"),
     ("mailto:bob@corp.example?subject=x", "mailto:bob@corp.example"),
     ("ops@münchen.example", "mailto:ops@xn--mnchen-3ya.example"),
-    # URL -> registrable domain (C-6, V-10)
+    # URL -> registrable domain
     ("https://docs.northbank.example/x", "dns:northbank.example"),
     ("https://a.b.github.io/", "dns:b.github.io"),
     ("https://www.example.co.uk/", "dns:example.co.uk"),
@@ -55,7 +55,7 @@ def A(key):
     ("evil.test/x", "dns:evil.test"),
     ("http:evil.test", "dns:evil.test"),               # R4: special scheme, no //
     ("http:///evil.test", "dns:evil.test"),            # R4: WHATWG ignores the slashes
-    # IP (C-6, V-19, V-21)
+    # IP
     ("169.254.169.254/latest", "ip:169.254.169.254"),  # R4: strict literal + path
     ("http://169.254.169.254/", "ip:169.254.169.254"),
     ("http://0xA9FEA9FE/", "ip:169.254.169.254"),
@@ -66,7 +66,7 @@ def A(key):
     ("http://10.1/", "ip:10.0.0.1"),
     ("10.0.0.5", "ip:10.0.0.5"),
     ("::ffff:a9fe:a9fe", "ip:169.254.169.254"),
-    # phone (V-22)
+    # phone
     ("+44 20 7123 4567", "tel:+442071234567"),
     ("+44 (0)20 7123 4567", "tel:+442071234567"),
     ("+1 (415) 555-0142", "tel:+14155550142"),
@@ -119,14 +119,14 @@ def test_q1_authority_of_answers_none_for_a_value_with_two_authorities():
 
 
 def test_idna_failure_in_an_argument_still_yields_the_raw_host():
-    """V-23: never no_destination; it matches only itself."""
+    """An IDNA failure is never no_destination; it matches only itself."""
     assert authority_of("https://a‍b.example/") == A("dns:a‍b.example")
 
 
-# ── V-19 spellings: a differential against urllib.parse (R4, 2026-10-03) ─────
-# The 1.15.0 audit: a URL rule matched the SCHEME LITERAL `http` instead of the
-# address, and nine of fifteen spellings of 169.254.169.254 walked past it. So
-# the spellings R4 adds are not checked against a list of what we expect. Each
+# ── address spellings: a differential against urllib.parse (R4) ──────────────
+# A URL rule that matches the SCHEME LITERAL `http` instead of the address lets
+# nine of fifteen spellings of 169.254.169.254 walk past it. So the spellings R4
+# adds are not checked against a list of what we expect. Each
 # is checked against the host urllib.parse finds, turned into an authority key
 # by the stdlib (ipaddress, then the libc inet_aton a resolver reads hex, octal
 # and short forms with), never by the core.
@@ -148,13 +148,13 @@ _HOSTS = ["evil.test", "EVIL.test", "a.b.evil.test", "169.254.169.254", "0xA9FEA
 _TAILS = ["", "/", "/latest/meta-data/", ":80/latest", "?q=1", "#f", "/a@b.example"]
 
 # No scheme: a strict address literal, then a port, path, query or fragment; and
-# V-19's own `host/path` for a name. urllib reads these with an implied http://.
+# the `host/path` form for a name. urllib reads these with an implied http://.
 _NO_SCHEME = (
     [h + t for h in ("169.254.169.254", "10.0.0.5", "[::ffff:169.254.169.254]", "[2001:db8::1]")
      for t in ("/latest", "/latest/meta-data/", "/", ":80", ":80/latest", "?q=1", "#f")]
     + [h + t for h in ("evil.test", "a.b.evil.test") for t in ("/x", "/latest/meta-data/")])
 
-# The same address with no scheme in a form V-19 confines to a URL host. urllib
+# The same address with no scheme in a form that is an address only in a URL host. urllib
 # with an implied http:// finds 169.254.169.254 in each; the core finds nothing.
 _NO_SCHEME_RESIDUAL = ["0xA9FEA9FE/latest", "2852039166/latest",
                        "0251.0376.0251.0376/latest", "169.254.43518/latest"]
@@ -219,7 +219,7 @@ def test_v19_every_spelling_resolves_to_the_host_urllib_parse_finds():
         if whole != want or walk != ([want] if want else []):
             bad.append(f"{spelling!r}: urllib.parse finds {want}, authority_of gave "
                        f"{whole}, the walk gave {walk}")
-    assert not bad, (f"{len(bad)} of {compared} V-19 spellings disagree with urllib.parse "
+    assert not bad, (f"{len(bad)} of {compared} spellings disagree with urllib.parse "
                      "about the address — a rule matched the spelling, not the address:\n  "
                      + "\n  ".join(bad[:30]))
     # Not vacuous: thousands compared, and both address families, both hostless
@@ -241,8 +241,8 @@ def test_v19_the_two_ruled_spellings_by_name(spelling, oracle_url):
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "found, not fixed (2026-10-03): V-19 confines integer IP forms (hex, decimal, "
-    "octal, short dotted) to a URL host; with no scheme they are not addresses, "
+    "found, not fixed: integer IP forms (hex, decimal, octal, short dotted) are "
+    "addresses only in a URL host; with no scheme they are not addresses, "
     "because `2024/report` is a path. curl, which guesses http://, reaches the "
     "metadata endpoint through every one of these."))
 @pytest.mark.parametrize("spelling", _NO_SCHEME_RESIDUAL)
@@ -255,7 +255,7 @@ def test_v19_residual_integer_forms_with_no_scheme(spelling):
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "found, not fixed (2026-10-03): V-19's `host/path` needs the path straight "
+    "found, not fixed: the `host/path` form needs the path straight "
     "after the name, so a name with a port and no scheme is no_destination."))
 def test_v19_residual_a_name_with_a_port_and_no_scheme():
     want = _oracle("http://evil.test:8080/x")
@@ -281,7 +281,7 @@ def test_residual_empty_hex_part_is_the_zero_address():
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "found, not fixed (2026-10-03): whitespace anywhere in a `scheme://` value is "
+    "found, not fixed: whitespace anywhere in a `scheme://` value is "
     "parse_failure, so a space in the PATH hides the host. WHATWG percent-encodes "
     "it and the host is still evil.test; UNRESOLVED never blocks."))
 def test_residual_whitespace_in_a_url_path_hides_its_host():

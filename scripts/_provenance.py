@@ -16,13 +16,12 @@ insert is SILENT and UNCONDITIONAL, so the script measures the working tree no
 matter which interpreter you point at it.
 
 That turns every one of these into an instrument that cannot be used for the one
-job a release needs it for. Measured 2026-09-20 while cutting 1.18.0:
-`benign_a2a_report.py` run under the published 1.17.0 wheel printed the same
-`A2A nodes walked: 274` as under 1.18.0 — from a wheel whose `a2a_structural.py`
-contains no `_walk_a2a_nodes` at all. The two runs agreeing was the only tell,
-and the 1.18.0 body named two scripts as having this property when eleven did.
-`benign_toolcall_report.py`, cited as a U-1 regenerator, was one of the nine
-unnamed: under the 1.14.1 wheel it reports the 1.18.0 tree, silently.
+job a release needs it for: measuring an installed wheel. Run under an older
+wheel, `benign_a2a_report.py` prints the same `A2A nodes walked: 274` as under
+the tree — even from a wheel whose `a2a_structural.py` contains no
+`_walk_a2a_nodes` at all. Two runs agreeing is the only tell. The same holds
+for every regenerator here, `benign_toolcall_report.py` included: under any
+wheel it reports the working tree, silently.
 
 THE RULE. A report script may resolve `xaidr` however it likes, but it must say
 which one answered. So `bind()` prints the banner ITSELF, once per process, at
@@ -49,17 +48,17 @@ code from the interpreter, data from the tree.
 
 WHAT "A SOURCE TREE" MEANS HERE, AND WHY IT IS NOT "MY REPO". The refusal used
 to ask `commonpath([xaidr.__file__, repo_root]) == repo_root` — is the package
-under THIS checkout. That accepts every source tree except one. Measured
-2026-09-22 on the dev machine, whose venv holds an editable install pointing at
-a DIFFERENT checkout:
+under THIS checkout. That accepts every source tree except one. On a machine
+whose venv holds an editable install pointing at a DIFFERENT checkout, that
+check produced:
 
     $ XAIDR_FROM_INSTALL=1 python scripts/benign_a2a_report.py
-    xaidr    : /Users/…/opena2a/xaidr/__init__.py
-    version  : 1.17.0
-    measuring: an INSTALLED package — not the tree at /Users/…/worktrees/xaidr/main
+    xaidr    : /path/to/other-checkout/xaidr/__init__.py
+    version  : <older version>
+    measuring: an INSTALLED package — not the tree at /path/to/repo
 
-`XAIDR_FROM_INSTALL` was set, the resolved `xaidr` was a source tree at 1.17.0,
-and the banner called it an installed package and ran. That is the substitution
+`XAIDR_FROM_INSTALL` was set, the resolved `xaidr` was a source tree at an
+older version, and the banner called it an installed package and ran. That is the substitution
 the flag exists to prevent, arriving through the door the check left open: the
 question "is this MY tree" has a false negative for every tree that is not, and
 an editable install, a `PYTHONPATH` entry and a sibling worktree all produce

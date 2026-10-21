@@ -1,7 +1,7 @@
 """S9 · subject trust.
 
 Open computes no per-agent trust score. That is not an oversight — it is the
-reason `trust_below` is rejected at policy-parse time (A-11): a condition that
+reason `trust_below` is rejected at policy-parse time: a condition that
 reads a score nobody computes would load cleanly and never fire, which is a
 control that looks enforced and does nothing.
 
@@ -134,7 +134,7 @@ class _TrustAndCondition(SensorExtension):
         return self._score
 
     def policy_conditions(self):
-        # Registering the NAME is what lifts A-11's parse-time rejection. The
+        # Registering the NAME is what lifts the parse-time rejection. The
         # evaluator here is never called: `trust_below` is a BUILT-IN condition,
         # and the built-in comparison reads `request.subject.trust` — which is
         # precisely the value S9 now supplies. Built-in names keep built-in
@@ -144,14 +144,14 @@ class _TrustAndCondition(SensorExtension):
 
 
 def test_trust_below_is_still_rejected_on_a_bare_sensor():
-    """A-11, unchanged. S9 does not loosen it."""
+    """The trust_below rejection, unchanged. S9 does not loosen it."""
     assert Sensor(agent_id="s9-a11").set_policy(_trust_policy()) is False
 
 
 def test_the_tool_path_threads_the_score_into_policy_evaluation():
     """The `sensor.py` tool-call `evaluate_policy` site. Without S9 this rule
     reads trust=None and can never fire, which is exactly the silent no-op
-    A-11 exists to prevent."""
+    the rejection exists to prevent."""
     s = Sensor(agent_id="s9-tool", enforcement_mode="block",
                extensions=[_TrustAndCondition(0.1)])
     assert s.set_policy(_trust_policy()) is True

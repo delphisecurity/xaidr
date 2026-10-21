@@ -1,16 +1,13 @@
-"""F8: a credential in a reporter destination must not reach the logs.
+"""A credential in a reporter destination never reaches the logs.
 
-REPRODUCED ON 1.12.0 before any of this was written. A WebhookReporter whose URL
-carried `?token=<canary>` failed against a mock 500 and the canary appeared
-TWICE on one log line:
+THE TWO SINKS. A failure line carries both the destination and the exception
+text, and httpx's exception text repeats the full request URL:
 
-    WebhookReporter failed to deliver 1 events to https://host/ingest?token=CANARY:
-    Server error '500 Internal Server Error' for url 'https://host/ingest?token=CANARY'
+    WebhookReporter failed to deliver 1 events to <destination>:
+    Server error '500 Internal Server Error' for url '<destination>'
 
-That is the finding the second verifier made, and it is why a partial fix is
-worse than none: THE URL AND THE EXCEPTION ARE SEPARATE SINKS. Redacting
-`self._url` alone leaves the credential in httpx's own message, which repeats the
-full request URL. The COUNT is the assertion here, not the presence: every test
+THE URL AND THE EXCEPTION ARE SEPARATE SINKS, so both are sanitised: redacting
+the destination alone would leave the credential in httpx's own message. The COUNT is the assertion here, not the presence: every test
 below asserts the canary appears ZERO times across logging, stdout and stderr.
 
 Every reporter is covered, not only the webhook one, because the shape is
@@ -42,8 +39,8 @@ USERINFO_URL = f"https://svc:{CANARY}@collector.example.com/ingest"
 
 # The three destinations a WebhookReporter is actually pointed at. On every one
 # of them the credential is the PATH, which is why redacting query values and
-# userinfo alone left the leak in published 1.13.0 and 1.14.0. Real URL shapes,
-# canary substituted for the secret.
+# userinfo alone is not enough. Real URL shapes, canary substituted for the
+# secret.
 SLACK_URL = f"https://hooks.slack.com/services/T0A1B2C3/B9Z8Y7X6/{CANARY}"
 DISCORD_URL = f"https://discord.com/api/webhooks/1104857392017/{CANARY}"
 TEAMS_URL = (
@@ -97,7 +94,8 @@ class _Capture:
     (QUERY_URL, "collector.example.com"),
     (USERINFO_URL, "collector.example.com"),
     (f"https://h.example.com/p?a={CANARY}#frag{CANARY}", "h.example.com"),
-    # THE PATH, which the first fix left carrying the secret. These three are
+    # THE PATH, which query and userinfo redaction alone leave carrying the
+    # secret. These three are
     # the shapes a WebhookReporter is actually pointed at in production, not
     # hypotheticals: on Slack, Discord and Teams the credential IS the path.
     (SLACK_URL, "hooks.slack.com"),

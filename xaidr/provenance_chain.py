@@ -642,7 +642,7 @@ def build_provenance(
     (consumed by schema.to_openA2A via the `provenance` passthrough). Returns
     None only when there is genuinely no provenance (no chain, no principal).
 
-    HONEST BOUNDARY (the fix): if no flow is active AND no principal (on_behalf_of)
+    HONEST BOUNDARY: if no flow is active AND no principal (on_behalf_of)
     was supplied, return None WITHOUT recording a hop. record_hop() seeds the
     chain/correlation contextvars, so calling it here for a bare scan would both
     fabricate provenance for that scan and leak the seeded chain into later
@@ -740,16 +740,15 @@ def extract_context(headers: dict[str, str] | None) -> bool:
     restored. `is_delegated()` then reports "delegation with no provenance",
     which resolves the upstream to tier 4.
 
-    THIS IS THE FIX FOR A MEASURED BYPASS. The mark used to be set on the LAST
-    line, after two early returns — one for absent headers and one for an
-    absent correlation id. So against a `min_chain_tier_above` policy with a
-    tier-4 sender and a tier-1 receiver: valid headers required approval, and
-    stripping ALL headers, or just the correlation id, returned ALLOWED. The
-    computed ceiling fell from 4 to 1, because with nothing marked inbound the
-    action looked local. Removing evidence made the verdict weaker, which
-    inverts the guarantee THREAT_MODEL.md states — "every tampering that REMOVES
-    information tightens the verdict" — and hands an attacker a strictly better
-    move than leaving the headers alone.
+    THE MARK PRECEDES BOTH EARLY RETURNS — one for absent headers and one for
+    an absent correlation id. Set after them, it would make removing evidence
+    pay: against a `min_chain_tier_above` policy with a tier-4 sender and a
+    tier-1 receiver, valid headers require approval, while stripping ALL
+    headers, or just the correlation id, would leave nothing marked inbound, so
+    the action would look local and the computed ceiling would fall from 4 to 1.
+    Setting it first keeps the guarantee THREAT_MODEL.md states — "every
+    tampering that REMOVES information tightens the verdict" — so an attacker
+    never has a better move than leaving the headers alone.
     """
     # A2 M5, V-7c: an inbound request starts a fresh ledger FIRST, before the
     # inbound mark and every early return, so a header-stripped request cannot

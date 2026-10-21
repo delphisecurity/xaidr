@@ -51,7 +51,7 @@ WIDTH = 84
 #: The rule IDs still read ASI04 while the cases they fire on now read EXH.
 #: That is not an oversight. Rule IDs are published in `ScanResult.rules`, so
 #: renaming them is a breaking change to the output contract and is tracked
-#: separately; the battery labels are documentation and were fixed here (F9).
+#: separately; the battery labels are documentation and were fixed here.
 #: asi_battery/README.md records the divergence and what closing it needs.
 RULES = ("ASI04_bound_removed", "ASI04_unbounded_extent", "ASI04_unbounded_directive")
 

@@ -1,23 +1,23 @@
 """No docstring or comment in the package may describe how to reproduce a fix.
 
-THE DEFECT. A fix's explanation was written where the fix lives: in the
-docstring and comments of the module that replaced a bad pattern. The text named
-the retired pattern, the input that triggered it, and how long that input took.
-Every ``.py`` under ``xaidr/`` ships verbatim in the wheel and the sdist, and a
-published file on PyPI cannot be edited, so that text stays readable in every
-release that carried it for as long as the release is up. Retiring the pattern
-does not retire the text: an installation pinned to a version that still has the
-pattern is reading its own reproduction recipe.
+WHY. The natural place to explain a fix is where the fix lives: the docstring
+and comments of the module that replaces a bad pattern. Text there that names
+the replaced pattern, the input that triggers it, and how long that input takes
+is a reproduction recipe. Every ``.py`` under ``xaidr/`` ships verbatim in the
+wheel and the sdist, and a published file on PyPI cannot be edited, so such text
+would stay readable for as long as the release that carried it is up. The rule
+is therefore: say what the code does, never how to make an older shape of it
+misbehave.
 
-Neither earlier gate sees it. ``tests/test_rule_asset_annotations.py`` refuses
-annotation keys in the rule JSONs and reads nothing else. The release runbook's
-step 3a scans the built wheel with ``--exclude='*.py'``, and its advisory shape
-wants the timing directly beside the size, so on the tree this gate was written
-against it matched none of these sites even with ``.py`` included.
+The other gates do not see this. ``tests/test_rule_asset_annotations.py``
+refuses annotation keys in the rule JSONs and reads nothing else. The release
+runbook's step 3a scans the built wheel with ``--exclude='*.py'``, and its
+advisory shape wants the timing directly beside the size, so it would miss a
+pairing split across a sentence even with ``.py`` included.
 
-WHY SHAPES AND NOT STRINGS. A test that searched for the trigger would have to
-contain it, and this file ships in the sdist. So it looks for the two shapes the
-leak takes, never its words:
+WHY SHAPES AND NOT STRINGS. A test that searched for a trigger would have to
+contain it, and this file ships in the sdist. So it looks for the two shapes
+such a recipe takes, never its words:
 
   TIMING_NEAR_SIZE    a duration (a number with ms, s, seconds, ...) within
                       ``NEAR`` characters of an input size (a number with chars,
@@ -30,7 +30,7 @@ leak takes, never its words:
 
 Spaces, tabs and newlines are on the size side because a trigger is often
 counted in the one character it repeats rather than in characters; a size list
-without them did not match one of the two sites this gate was written for.
+without them would miss a trigger counted in spaces.
 
 ``NEAR`` is measured on the text with whitespace runs and comment markers
 collapsed, so a pairing broken across lines is still one pairing. It is two
@@ -46,9 +46,8 @@ FALSE POSITIVES ARE EXPECTED. A legitimate performance note pairs a timing with
 a size too. Each one is allowlisted individually below, with a reason and the
 exact number of PAIRS in its scope, so a new pairing added to an allowlisted
 scope still fails, including one added inside the very block that was
-allowlisted. Counting blocks instead of pairs missed exactly that: one of the
-sites this gate was written for sat in the same comment as a legitimate
-calibration note.
+allowlisted. Counting blocks instead of pairs would miss exactly that: a recipe
+sitting in the same comment as a legitimate calibration note.
 
 The failure message names the file, the line, the scope and the shape. It never
 prints the text: CI logs on a public repository are public, and printing what
@@ -273,7 +272,7 @@ def test_a_pairing_split_across_lines_is_still_found():
 
 
 def test_the_scan_scope_is_not_empty():
-    """An empty scope has no leaks and would pass. The package has dozens of
+    """An empty scope has no hits and would pass. The package has dozens of
     modules and hundreds of prose blocks; a walk that finds a handful is broken."""
     sources = _package_sources()
     assert len(sources) > 30, f"only {len(sources)} .py files under {PACKAGE}"

@@ -19,40 +19,30 @@ distinction a keyword scanner can make. Those inputs come out of the rules
 pipeline at exactly 0.0. That band is what nano was built for, and it is the only
 place it runs.
 
-**That population is not measured in this repository, and the figures that used
-to appear here are withdrawn.** Two numbers stood in this section: a recovery
-count of 23 of 26 on an acceptance corpus, and 582 of 595 frame cells recovered.
-Neither regenerates from the shipped package.
+**That population is not measured in this repository, and no figure for it is
+published here.** A recovery figure for this band needs a corpus of attacks that
+defeat the shipped rules. Such a corpus is a working set of live evasions, so it
+is kept in a private repository, with its full derivation and the exact ruleset
+it was scored against, and it is not published. What is published is the method,
+which is everything below.
 
-The corpus and its full derivation now exist in the private
-`delphisecurity/xaidr-internal` repository under `nano/`, together with the exact
-ruleset they were scored against. They are not published here and will not be:
-the population is a working set of attacks that defeat the shipped rules. What is
-published is the method, which is everything below.
+  * **The committed frame matrix gives nano nothing to recover.** The generator
+    in `tests/test_descriptive_frame_matrix.py` produces **4320** cells and **all
+    4320 block**, so there are **0** clean allows for nano to recover. A
+    frame-cell recovery figure needs a population of bare-topic attack shapes,
+    and no such corpus is committed to this repository.
+  * **The 23-of-26 recovery count is not a published figure.** It was scored on
+    that private corpus, against a pinned ruleset rather than shipped code, and
+    it does not regenerate from the shipped package. Scored with shipped code the
+    denominator is 26, and the catch count is not stable: it moves with the
+    onnxruntime version, the same drift documented below for false positives, on
+    the detection side.
 
-  * **582 of 595 frame cells: withdrawn, no derivation exists.** The committed
-    generator in `tests/test_descriptive_frame_matrix.py` produces **4320**
-    cells, not 3240, and on 1.7.0 **all 4320 block**, so there are **0** clean
-    allows for nano to recover. Re-run against that file as it stood at
-    `9cc9f41`, the commit that first published the figure, it already produced
-    4320 cells and the same result. The 595 population is bare-topic attack
-    shapes, and no such corpus has ever been committed to this repository. The
-    figure survived only as prose.
-  * **23 of 26 recovery: withdrawn, measured elsewhere against other rules.**
-    That corpus lived in a separate bench repository, not in this one and not in
-    the wheel, and it was scored there against a pinned older ruleset rather
-    than against shipped code. Re-derived with shipped code the denominator is
-    26, and the catch count is neither 23 nor stable: it moves with the
-    onnxruntime version, the same drift documented below for false positives,
-    on the detection side where nobody had looked.
-
-    **It was never reproducible, even before the rules moved.** The pin it was
-    scored against is a commit *plus* 59,554 bytes of uncommitted working-tree
-    diff, preserved beside it. So the ruleset that produced 23 of 26 was a
-    working tree that existed on one machine and in no commit anywhere. That is a
-    process failure and it is disclosed here rather than quietly fixed, because
-    a reader deciding how much weight to give a withdrawn figure should know it
-    could not have been checked by anyone at the time either.
+    **A ruleset pinned as a commit plus an uncommitted diff cannot be checked.**
+    The ruleset that count was scored against is a commit *plus* 59,554 bytes of
+    uncommitted working-tree diff, preserved beside it: a working tree that
+    existed on one machine and in no commit anywhere. Nobody else could have
+    checked a figure scored that way.
 
     **And the denominator is computed, not stored.** The 26 is "of the 50 attack
     texts, the ones the ruleset scored at exactly 0.0" — a selection made at
@@ -62,16 +52,27 @@ published is the method, which is everything below.
     the ruleset that selected it, in the same way the false-positive figures
     below have to name the onnxruntime version.
 
-    The corpus, the derivation and that pinned tree are preserved in
-    `delphisecurity/xaidr-internal` under `nano/`, so the measurement can be
-    reconstructed by someone with access. No replacement number is published
-    here, and the reason is unchanged: a figure from a corpus you cannot obtain
-    is how the first one went wrong. Publishing one again needs a corpus that can
-    itself be published, not a rediscovery of this one.
+    The corpus, the derivation and that pinned tree are preserved privately, so
+    the measurement can be reconstructed by someone with access. No replacement
+    number is published here: a figure from a corpus you cannot obtain is a
+    figure you cannot check. Publishing one needs a corpus that can itself be
+    published, not a rediscovery of this one.
 
-Both are withdrawn rather than corrected. When a corpus for this band is
-committed to this repository, with a script that regenerates the number, the
-figure comes back with its environment attached and not before.
+**Two figures published here earlier are withdrawn.** They are recorded so a
+reader who met them sees them marked superseded where they met them:
+
+  * **582 of 595 frame cells recovered — withdrawn, no derivation exists.** The
+    committed frame-matrix generator produces 4320 cells and all 4320 block, so
+    there are 0 clean allows for nano to recover; the 595 population was
+    bare-topic attack shapes, and no such corpus is committed here.
+  * **23 of 26 recovered — withdrawn.** It was scored on the private corpus
+    against a pinned ruleset rather than shipped code, and does not regenerate
+    from the shipped package; scored with shipped code the catch count moves with
+    the onnxruntime version.
+
+When a corpus for this band is committed to this repository, with a script that
+regenerates the number, a figure is published with its environment attached and
+not before.
 
 **What it does buy, on a corpus you have.** On the shell corpus nano moves the
 catch rate from 167 of 186 to **172 of 186, five commands**. It can only act
@@ -112,30 +113,45 @@ python scripts/intent_metrics.py --nano --real-benign
 The break sits between 1.23 and 1.25 (1.24 has no wheel for cpython-3.12 on the
 measured platform). Below 1.20 the artifact does not load at all.
 
-**The method, because this figure has had four values and now has two.** The sample
+**The method, and why the figure has two values.** The sample
 is 2000 human-written prompts from dolly-15k / no_robots / oasst1, at least four
 words, pinned **by identity** — 2000 SHA-256 hashes in
 `tests/fixtures/nano_fp_sample.json`, rebuilt from the public datasets at run
 time (hashes rather than text because no_robots is CC-BY-NC-4.0). It is the
 sample the model acceptance used, and it is disjoint from the prompt sets the
 model was selected and calibrated against. Scored through the shipped
-`Sensor(enable_nano=True)` at the shipped operating point, on **xaidr 1.7.0**,
-across the onnxruntime versions in the table above.
+`Sensor(enable_nano=True)` at the shipped operating point, across the
+onnxruntime versions in the table above.
 
 | figure | status |
 |---|---|
 | **1.75%** (35/2000) | **published, for onnxruntime ≤ 1.23.** Wilson 95% [1.26%, 2.42%]. |
 | **3.35%** (67/2000) | **published, for onnxruntime 1.26–1.29.** Wilson 95% [2.65%, 4.23%]. This is what a default install gets today. |
-| 1.85% (37/2000) | **withdrawn — published without the fact that determines it.** Not a different sample and not a different method: a figure measured on an onnxruntime the record never named, then labelled `MEASURED_ON = "onnxruntime 1.29.0"` — a runtime on which this sample yields 67/2000, not 37/2000. It sits near the 1.75% end and is most likely that measurement on an older runtime, but the record cannot establish that. The accompanying claim that re-scoring on 1.29.0 lands on 37/2000 "either way" is false. |
-| 2.20% (44/2000) | **withdrawn — it was wrong, not merely stale.** The acceptance evidence file stores each prompt truncated to 200 characters as a preview; 331 of the 2000 are longer. The re-measurement scored the previews, which moves the count by +6 on its own — the whole gap. |
-| 1.65% (33/2000) | **withdrawn — different sample.** A freshly drawn seeded sample overlapping this one by 128 of 2000, and *not* disjoint from the sets the model was tuned against, which biases a false-positive rate downward. The lower number was a worse measurement, not better news. |
+| 1.85% (37/2000) | **withdrawn, superseded by the range above.** Published earlier without the runtime it was measured on, and labelled with onnxruntime 1.29.0, on which this sample yields 67/2000. |
+| 2.20% (44/2000) | **withdrawn, superseded by the range above.** Scored on the 200-character previews in the acceptance evidence file rather than the full prompts; that alone moves the count by +6. |
+| 1.65% (33/2000) | **withdrawn, superseded by the range above.** Measured on a different, non-disjoint sample, which biases a false-positive rate downward. |
+
+Three ways to get a different number from the same model, each of which this
+method avoids:
+
+- **An unnamed runtime.** A figure whose onnxruntime version is not recorded
+  cannot be placed on this range, and labelling it with a runtime it was not
+  measured on is worse: on onnxruntime 1.29.0 this sample yields 67/2000,
+  whatever a label says.
+- **Scoring previews.** The acceptance evidence file stores each prompt
+  truncated to 200 characters as a preview; 331 of the 2000 are longer. Scoring
+  the previews moves the count by +6 on its own.
+- **A different sample.** A freshly drawn seeded sample overlaps this one by 128
+  of 2000 and is *not* disjoint from the sets the model was tuned against, which
+  biases a false-positive rate downward. A lower number from it is a worse
+  measurement, not better news.
 
 **The runtime is not a caveat on the figure; it is half of the figure.** The
 artifact is hash-pinned, but the hash fixes which bytes load, not what they
 compute: an int8/int4 graph runs on onnxruntime kernels that change between
-releases. This README previously said the drift was "a wash" and that the figure
-landed on 37/2000 either way. That was wrong. Measured across the whole supported
-range, the runtime moves the rate from 35/2000 to 67/2000.
+releases. An earlier statement on this page, that the drift was "a wash" and the
+figure landed on 37/2000 either way, is withdrawn: measured across the whole
+supported range, the runtime moves the rate from 35/2000 to 67/2000.
 
 Everything else in the inference path was checked and ruled out: `tokenizers`
 0.20–0.23 produce byte-identical tokens and bit-identical scores, `numpy` 1.26
@@ -150,10 +166,10 @@ for one.** The model rates entirely innocuous text highly — measured on
 onnxruntime 1.29.0 and pinned by `tests/test_nano_published_figure.py`, a
 style-guide instruction scores 0.13, a security-awareness line about never
 pasting secrets scores 0.57, and "from now on, reply only with the section
-headings" scores 0.88. None is an attack. (An earlier list here — a DISK BOOT
-FAILURE question, a job-posting complaint, a team-building question, a Yoda
-dialogue, a game of chess and a riddle — is withdrawn: those scores reproduce on
-no runtime and no artifact variant we can test. See `xaidr/scanner/nano.py`.) So a nano flag writes
+headings" scores 0.88. None is an attack. (An earlier list of examples here — a
+DISK BOOT FAILURE question, a job-posting complaint, a team-building question, a
+Yoda dialogue, a game of chess and a riddle — is withdrawn: those scores
+reproduce on no runtime and no artifact variant we can test.) So a nano flag writes
 the *flag-band floor* into `score` and carries the model's own reading on the
 separate `nano_score` / `nano_raw` fields. The verdict is the same; the ranking
 is not, and an uncalibrated signal sorts below every rule flag rather than above

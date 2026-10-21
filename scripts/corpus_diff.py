@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Compare two installed xaidr versions, verdict for verdict, over every committed pool.
 
-This is the regenerator `docs/releasing.md` step 4 asks for and that U-1 says
-must exist before any figure derived from it ships. Six release bodies — v1.9.0
-through v1.14.0 — cite seven hex digests as the proof that detection did not
-move, and not one of those digests has ever appeared in a committed file on any
-branch. This script exists so that the 1.17.0 body does not add an eighth.
+This is the regenerator `docs/releasing.md` step 4 asks for, and that its
+no-figure-without-a-regenerator rule says must exist before any figure derived
+from it ships. A bare hex digest cited as proof that detection did not move is
+a claim nobody can recompute; this script replaces such digests with a
+row-by-row comparison anyone can re-run.
 
     # dump under each interpreter, at a neutral cwd, with -I
     cd / && /tmp/prevvenv/bin/python -I  /path/to/corpus_diff.py --dump /tmp/old.json --pools /path/to/clone
@@ -28,8 +28,8 @@ becomes a claim about the tree you were just editing.
 WHAT IS COMPARED, per row: `action`, `score`, `category`, the ORDERED rule list,
 and the impact class/tier from `classify()` for tool-call rows. Ordered, because
 a rule moving position is a real change in what an operator reading the rule
-list sees, and the 1.16.0 cut had exactly one such row (ASI03-A06) and nothing
-else.
+list sees, and a release can differ from its predecessor by exactly one such
+row and nothing else.
 
 NO DIGEST IS PRINTED AS THE HEADLINE. The row count and the changed rows are
 the evidence; a digest is a summary of evidence you can no longer check. A

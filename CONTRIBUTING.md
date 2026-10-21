@@ -27,7 +27,7 @@ is a case.
 - **A false positive.** Ordinary work that we block or score. These are treated
   as first-class bugs, because the failure mode that gets a security tool
   switched off is the tool blocking something that was fine.
-- **A corpus entry.** `tests/fixtures/shell_corpus.json` holds 281 attacks, 74
+- **A corpus entry.** `tests/fixtures/shell_corpus.json` holds 277 attacks, 78
   benign commands and 89 benign prose passages. Adding to the benign side is as
   valuable as adding to the attack side and is a smaller change.
 - **Documentation.** If a number in `README.md` disagrees with what the code
@@ -75,12 +75,12 @@ commit. A floor lowered to match a regression is a regression with paperwork.
 
 Current shipped behaviour, measured on the committed corpus: **167 of the 186
 attacks we intend to catch are caught — blocked or flagged — 89.8%, and 19 are
-missed.** The other 95 attacks in the corpus are recognised and deliberately left
+missed.** The other 91 attacks in the corpus are recognised and deliberately left
 to a policy you write, so they are not a place to contribute enforcement; the
 reason is written on each one in `tests/fixtures/shell_corpus.json`.
 
-The raw counts behind that, which `corpus_report.py` still prints: 267 of 281
-classified, 165 blocked. Do not quote `165 / 281` as a detection rate — that is
+The raw counts behind that, which `corpus_report.py` still prints: 267 of 277
+classified, 165 blocked. Do not quote `165 / 277` as a detection rate — that is
 the figure this project retired, and it counts `terraform destroy` as a failure.
 
 **The 19 misses are the work.** They are marked `detection_intent: GAP` in the
@@ -96,7 +96,7 @@ If you are looking for somewhere your work will matter:
 | `exfiltration` | 5 of 22 | The clearest misses in the corpus: bulk transfer to a remote destination, and out-of-band channels. Not dual-use in these shapes. |
 | `obfuscation` | 5 of 10 | Forms that hide the object of a command from a rule that would otherwise enforce on it. Sibling shapes in the same family DO block, which shows the family is reachable. |
 | `execute` | 5 of 59 | Non-POSIX interpreters and living-off-the-land binaries, plus fetch in command-substitution position. |
-| `discovery` | 3 of 11 | Enumeration of privileged paths, and chained inspection where the chain is visible in one call and we do not read it. |
+| `discovery` | 3 of 7 | Enumeration of privileged paths, and chained inspection where the chain is visible in one call and we do not read it. |
 | `infra_destruction` | 0 of 8 | **By design, not a gap.** Destroying managed infrastructure is indistinguishable from a legitimate teardown at the command level, so every rule in the family is classify-only and all 8 are marked `INTENDED`. Do not "fix" this by adding a `detect` block. Improving it means better classification, or a worked policy example. |
 
 Note what is *not* on that list. `persist` blocks 17 of 31, above the median,
@@ -105,7 +105,7 @@ assumption that they are weak.
 
 ## The benign gate, and the time it caught us
 
-Every pull request is gated on 0 of 74 benign commands scoring, and on no
+Every pull request is gated on 0 of 78 benign commands scoring, and on no
 undocumented benign prose passage blocking. That gate exists because of this,
 and it is worth reading before you write a pattern.
 
@@ -128,9 +128,8 @@ to flag rather than block to allow, so the passages still surface.
 
 > **Maintainers.** The conditions themselves, the candidates that were measured
 > and rejected, and the numbers behind them are not in this repository. They are
-> in the private `delphisecurity/xaidr-internal` repository under `detection/`.
-> Read that before proposing a change to this area; the public summary above is
-> deliberately not enough to design against.
+> kept in a private repository. Read them before proposing a change to this
+> area; the public summary above is deliberately not enough to design against.
 
 The lesson generalises. **When a rule fires on something benign, the fix is
 almost never a keyword that recognises the benign case**, because the attacker
@@ -157,7 +156,7 @@ change what a pull request is expected to carry:
   that has no published release behind it. That gate reads GitHub's API rather
   than the checkout, so it is the one check here that a green tree cannot make
   pass.
-- **U-1: no figure without a regenerator.** Any number you put in a release
+- **No figure without a regenerator.** Any number you put in a release
   body, in `README.md`, or in `docs/` needs a committed script that recomputes
   it, named alongside it. This applies to your pull request too — it is the same
   rule as [Every detection change is measured](#every-detection-change-is-measured),

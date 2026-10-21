@@ -317,8 +317,8 @@ def test_nothing_installed_still_returns_a_usable_manifest():
     pulled in nothing at all.
     """
     # The expected count is DERIVED from the registry, not written down. A
-    # literal here was wrong the moment a framework was added, and the failure
-    # it produced said nothing about the gate it was guarding.
+    # literal here goes wrong the moment a framework is added, and the failure
+    # it produces says nothing about the gate it is guarding.
     code = (
         "import xaidr, sys;"
         "from xaidr.autopatch.frameworks import TARGETS;"
@@ -777,7 +777,7 @@ def test_4c_a_caller_config_error_raises_by_default():
 
     A control that silently is not running because `enforcement_mode="blcok"`
     was misspelled is the worst outcome available, so this one raises — the same
-    ADV-2 loudness Sensor() itself applies.
+    loud validation Sensor() itself applies.
     """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", XaidrProtectionWarning)

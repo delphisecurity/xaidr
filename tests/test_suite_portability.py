@@ -1,34 +1,34 @@
 """A test must not assume a binary that the machine it runs on happens to have.
 
-This is a gate on the SUITE, not on the package. It exists because the failure
-it catches has now shipped three times, every time the same shape: a test
-written on macOS asserting something true, through a tool that only the author's
-machine had, merged green locally and red on the runner.
+This is a gate on the SUITE, not on the package. The failure it catches always
+has the same shape: a test written on macOS asserting something true, through a
+tool that only the author's machine has, green locally and red on the runner.
+Four concrete instances of that shape:
 
-  1.17.0  `tests/test_install_hints.py` shelled out to `zsh` to prove an install
-          hint is not a shell glob. The property was right. zsh is the default
-          macOS shell and is absent from GitHub's Linux runners, so all six
-          pytest jobs died on `FileNotFoundError: 'zsh'` and main went red.
-  same    the same file did `import tomllib` to read pyproject.toml. tomllib is
-          stdlib from 3.11; pyproject declares `requires-python = ">=3.10"`, so
-          the two py3.10 jobs failed on `No module named 'tomllib'` as well.
-  ee7f901 `tests/test_case_insensitivity_property.py` did
-          `import re._parser as sre_parse` to read a regex parse tree. The
-          parser is private and it MOVED: `re._parser` is 3.11+, and on 3.10 it
-          is the top-level `sre_parse`. Both py3.10 jobs died at collection on
-          `No module named 're._parser'; 're' is not a package`. See the
-          private-stdlib section below for why neither check above saw it.
-  PR #24  `scripts/policy_width_report.py` wrote
-          `f"{f'{r['attacks_gated']} of {r['attacks_n']}':>18}"`. The
-          replacement expression reuses the `'` that opened the f-string, which
-          PEP 701 legalised in 3.12 and 3.10 and 3.11 reject at PARSE time. Both
-          py3.10 jobs and both py3.11 jobs died at collection in 20 seconds on
-          `SyntaxError: f-string: unmatched '['`. See the f-string section at
-          the bottom for why none of the three checks above could see it.
+  binary   a test shells out to `zsh` to prove an install hint is not a shell
+           glob. The property is right. zsh is the default macOS shell and is
+           absent from GitHub's Linux runners, so every pytest job dies on
+           `FileNotFoundError: 'zsh'`.
+  module   a test does `import tomllib` to read pyproject.toml. tomllib is
+           stdlib from 3.11; pyproject declares `requires-python = ">=3.10"`, so
+           the py3.10 jobs fail on `No module named 'tomllib'`.
+  private  a test does `import re._parser as sre_parse` to read a regex parse
+           tree. The parser is private and it MOVED: `re._parser` is 3.11+, and
+           on 3.10 it is the top-level `sre_parse`. The py3.10 jobs die at
+           collection on `No module named 're._parser'; 're' is not a package`.
+           See the private-stdlib section below for why neither check above
+           sees it.
+  syntax   a script writes
+           `f"{f'{r['attacks_gated']} of {r['attacks_n']}':>18}"`. The
+           replacement expression reuses the `'` that opened the f-string, which
+           PEP 701 legalised in 3.12 and 3.10 and 3.11 reject at PARSE time. The
+           py3.10 and py3.11 jobs die at collection on
+           `SyntaxError: f-string: unmatched '['`. See the f-string section at
+           the bottom for why none of the three checks above can see it.
 
-None was a wrong assertion. All four were a right assertion asked through the
-wrong instrument, and in every case the instrument was invisible in review
-because it worked for the person typing it.
+None is a wrong assertion. All four are a right assertion asked through the
+wrong instrument, and in every case the instrument is invisible in review
+because it works for the person typing it.
 
 The rule below is deliberately narrow: `sys.executable` is free, anything else
 must be named here with a reason. Naming is the whole mechanism — it does not
@@ -63,9 +63,9 @@ _OS_EXEC_CALLS = {"system", "execv", "execvp", "execve", "spawnv", "popen"}
 #   WHICH_GUARDED   the function must resolve the binary through shutil.which()
 #                   and skip when it is missing. VERIFIED from the AST below,
 #                   not taken on trust — which is the only reason this gate
-#                   would have caught 1.17.0. That release's call site had this
-#                   same file and this same function name, so an allowlist
-#                   keyed on the name alone would have waved it through.
+#                   catches the zsh case: an unguarded call in an allowlisted
+#                   file and function has the same name as the guarded one, so
+#                   an allowlist keyed on the name alone would wave it through.
 #
 #   ALWAYS_PRESENT  the binary is unconditional and a skip would be WRONG,
 #                   because skipping would convert a failing invariant into a
@@ -106,8 +106,7 @@ _ALLOWED_EXTERNAL_BINARIES = {
         "degradation: a non-zero returncode or empty stdout falls back to a "
         "filesystem walk of the repo root rather than raising or returning "
         "nothing. That path was written for an EXTRACTED SDIST, but asi_battery/ "
-        "stopped shipping in the sdist after 1.20.0 and the file now skips "
-        "there; it serves a git-less export (`git archive`) instead, where "
+        "does not ship in the sdist and the file skips there; it serves a git-less export (`git archive`) instead, where "
         "there is no index to read and also none of the gitignored run "
         "outputs the index was excluding, so the two scopes coincide there. "
         "OSError and SubprocessError are both caught, "
@@ -207,8 +206,8 @@ def test_no_test_silently_shells_out_to_an_unlisted_binary():
     assert not undeclared, (
         "these tests shell out to a binary nobody has promised the CI runner "
         "has:\n" + "\n".join(undeclared) + "\n\n"
-        "GitHub's ubuntu-latest has no zsh, and that exact assumption turned "
-        "main red for all six pytest jobs in 1.17.0. Either resolve the binary "
+        "GitHub's ubuntu-latest has no zsh, and that exact assumption turns "
+        "every pytest job red. Either resolve the binary "
         "with shutil.which() and skip when absent (only if the remaining "
         "coverage still catches the defect — a skip that leaves a vacuous "
         "assertion is worse than the crash, because it is green), or add the "
@@ -220,10 +219,10 @@ def test_no_test_silently_shells_out_to_an_unlisted_binary():
 def test_a_which_guarded_claim_is_actually_which_guarded():
     """The allowlist entry has to be true, not just present.
 
-    This is the clause that would have caught 1.17.0. That release ran
+    This is the clause that catches the zsh case. A
     `subprocess.run([shell, ...])` on a bare "zsh" from the same file and the
-    same function that the entry above names, so a name-keyed allowlist would
-    have approved it. Requiring the shutil.which() call to be THERE is what
+    same function that the entry above names is approved by a name-keyed
+    allowlist. Requiring the shutil.which() call to be THERE is what
     makes the exemption describe the code rather than the intention.
     """
     unguarded = []
@@ -241,8 +240,8 @@ def test_a_which_guarded_claim_is_actually_which_guarded():
         "appears in them:\n" + "\n".join(unguarded) + "\n\n"
         "Either restore the guard, or change the entry's kind to "
         "ALWAYS_PRESENT and argue why the runner cannot be without it. An "
-        "exemption that outlives the guard it describes is how `zsh` reached "
-        "main in 1.17.0."
+        "exemption that outlives the guard it describes is how an unguarded "
+        "`zsh` call reaches main."
     )
 
 
@@ -283,8 +282,9 @@ _GUARDED_IMPORTS = {
 def test_no_test_imports_a_module_newer_than_the_python_we_claim():
     """`import tomllib` is fine on 3.11. pyproject claims 3.10.
 
-    The second half of the 1.17.0 breakage, and unlike the zsh half it is not
-    about a binary — so the check above would never have seen it. The shared
+    The module half of the breakage shape in the module docstring, and unlike
+    the zsh half it is not about a binary — so the check above would never see
+    it. The shared
     shape is what makes them one defect: an instrument the author's environment
     had and the oldest supported runner did not.
 
@@ -601,10 +601,10 @@ def test_the_private_stdlib_allowlist_has_no_stale_entries():
 #       one. Between them no job in the matrix is vacuous.
 #
 # Scope is every first-party .py in the repo, derived rather than listed. The
-# sweep has no allowlist to keep in sync, so breadth is free — and three of the
-# four Python roots here (`xaidr`, `scripts`, `tests`, plus `repro_audit.py`)
-# ship inside the sdist, where a file that will not parse on 3.10 is a broken
-# artifact in a 3.10 user's hands with no CI job watching.
+# sweep has no allowlist to keep in sync, so breadth is free — and all three
+# Python roots here (`xaidr`, `scripts`, `tests`) ship inside the sdist, where
+# a file that will not parse on 3.10 is a broken artifact in a 3.10 user's
+# hands with no CI job watching.
 
 _SKIP_DIRS = {"build", "dist", "__pycache__", "node_modules", "site-packages"}
 

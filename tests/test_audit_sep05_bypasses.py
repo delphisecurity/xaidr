@@ -1,23 +1,23 @@
-"""The four HIGH bypasses from the September 2026 independent audit.
+"""Four HIGH-severity enforcement invariants, each pinned with a canary.
 
-WHAT THESE TESTS DO DIFFERENTLY, because the suite that missed all four had
-thousands of passes. Every case here asserts THE UNDERLYING FUNCTION DID NOT
-RUN, not that a scanner returned "blocked". A canary list is the oracle. The
-audit's own framing: "use side-effect canaries and actual framework return
-types as the oracle" -- a scanner verdict is a claim about a string, and the
-thing that matters is whether the tool executed.
+WHAT THESE TESTS DO DIFFERENTLY: a suite can have thousands of passes and
+still not check whether a tool ran. Every case here asserts THE UNDERLYING
+FUNCTION DID NOT RUN, not that a scanner returned "blocked". A canary list is
+the oracle: "use side-effect canaries and actual framework return types as the
+oracle" -- a scanner verdict is a claim about a string, and the thing that
+matters is whether the tool executed.
 
 The SQL cases go further and use a REAL SQLite database as a semantic oracle:
 each statement is executed against a disposable three-row in-memory table,
 independently of the verdict, so "this deletes every row" is a measured fact
-rather than a reading of a regex. That is how the false positives were found as
-well as the bypasses: DELETE FROM records WHERE note='1=1' was blocked as a
-tautological mutation and removes zero rows.
+rather than a reading of a regex. That checks false positives as well as
+misses: DELETE FROM records WHERE note='1=1' removes zero rows, so it must not
+be gated as a tautological mutation.
 
-  F2  positional calling bypassed a loaded structural policy
-  F3  the first SQL/URL argument won, hiding later dangerous values
-  F4  SQL was lexically unsound in both directions
-  F6  lost provenance made a delegated action look local
+  * positional and keyword calls are gated identically by a structural policy
+  * every SQL/URL argument is checked, not only the first
+  * SQL is read lexically soundly in both directions
+  * lost provenance never makes a delegated action look local
 """
 
 from __future__ import annotations
@@ -67,15 +67,15 @@ def _clean_flow():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# F2  positional calling bypassed a loaded structural policy
+# positional and keyword calls are gated identically
 # ══════════════════════════════════════════════════════════════════════════
 
 TERRAFORM = "terraform destroy -auto-approve"
 
 
 def test_f2_positional_and_keyword_calls_are_equivalent():
-    """HARD GATE, with a canary. Measured on 1.10.0: keyword 0 executions,
-    positional 1."""
+    """HARD GATE, with a canary. Keyword and positional calls must both
+    execute 0 times."""
     executed = []
 
     def run_command(command):
@@ -139,13 +139,12 @@ def test_f2_benign_positional_calls_still_run():
 class _UnreadableSignature:
     """A callable whose signature genuinely cannot be read, on every version.
 
-    DO NOT replace this with a C builtin. Two drafts of this test tried that and
-    both were wrong for the same reason: which builtins expose
+    DO NOT replace this with a C builtin: which builtins expose
     `__text_signature__` is a CPython implementation detail that moves between
-    releases. `len` is readable on 3.12, so the first draft passed vacuously.
-    `time.time` raises ValueError on 3.12 and returns `()` on 3.14, so the second
-    draft passed on the development interpreter and FAILED on the newer end of
-    the CI matrix, which is how it was caught. The behaviour under test is what
+    interpreter versions. `len` is readable on 3.12, so a test built on it
+    passes vacuously. `time.time` raises ValueError on 3.12 and returns `()` on
+    3.14, so a test built on it passes on one interpreter and FAILS on the newer
+    end of the CI matrix. The behaviour under test is what
     the wrapper does when a signature cannot be read, so the fixture should
     guarantee that condition rather than borrow it from the interpreter.
     """
@@ -202,7 +201,7 @@ def test_f2_binding_degraded_names_only_the_tools_that_failed():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# F3  the first SQL/URL argument won
+# every SQL/URL argument is checked, not only the first
 # ══════════════════════════════════════════════════════════════════════════
 
 SQL_TAUTOLOGY = "DELETE FROM records WHERE 1=1"
@@ -262,7 +261,7 @@ def test_f3_all_benign_values_still_allow():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# F4  SQL, against a real SQLite oracle
+# SQL, against a real SQLite oracle
 # ══════════════════════════════════════════════════════════════════════════
 
 
@@ -281,7 +280,7 @@ def _rows_after(statement: str) -> int:
     return db.execute("SELECT COUNT(*) FROM records").fetchone()[0]
 
 
-#: Each deletes EVERY row, and each returned allowed at score 0.00 on 1.10.0.
+#: Each deletes EVERY row, so each must be gated, never allowed at score 0.00.
 UNRESTRICTED_DELETES = [
     "DELETE FROM records RETURNING 'where id=7'",
     "WITH x AS (SELECT 1) DELETE FROM records",
@@ -289,7 +288,7 @@ UNRESTRICTED_DELETES = [
     "DELETE FROM records",
 ]
 
-#: Each deletes at most one row, and each was gated on 1.10.0.
+#: Each deletes at most one row, so gating it is a false positive.
 BOUNDED_DELETES = [
     "DELETE FROM records WHERE note='1=1'",
     "DELETE FROM records WHERE id=7 AND 1=1",
@@ -343,7 +342,7 @@ def test_f4_every_statement_is_inspected_not_only_the_first():
 
 
 def test_f4_a_tautology_in_one_conjunct_does_not_unbind_the_predicate():
-    """The auditor's criterion, as boolean structure rather than a longer regex."""
+    """The boundedness criterion, as boolean structure rather than a longer regex."""
     from xaidr.scanner.sql_parse import parse_sql
 
     assert parse_sql(
@@ -368,7 +367,7 @@ def test_f4_an_unsettleable_predicate_fails_closed():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# F6  lost provenance made a delegated action look local
+# lost provenance never makes a delegated action look local
 # ══════════════════════════════════════════════════════════════════════════
 
 TIER_POLICY = _policy({"tools": ["deploy_prod"]}, "require_approval",
@@ -406,8 +405,8 @@ def test_f6_valid_headers_gate_the_action():
 def test_f6_stripping_provenance_never_weakens_the_verdict(strip):
     """THREAT_MODEL's guarantee, as a test: removing evidence must tighten.
 
-    Stripping everything, or just the correlation id, used to return allowed --
-    an attacker who deleted the headers ended up better off than one who left
+    If stripping everything, or just the correlation id, returned allowed, an
+    attacker who deleted the headers would end up better off than one who left
     them alone.
     """
     headers = _delegation_headers()
@@ -441,7 +440,7 @@ def test_f6_context_survives_a_thread_only_when_propagated():
 
     `contextvars` do not cross a raw thread; that is Python, not this package.
     So the plain form is asserted to lose the context (which is why the README
-    no longer says threads propagate automatically) and the helper is asserted
+    does not say threads propagate automatically) and the helper is asserted
     to keep it.
     """
     headers = _delegation_headers()
@@ -468,13 +467,14 @@ def test_f6_context_survives_a_thread_only_when_propagated():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# STEP 4  the denominator claim the audit found false
+# STEP 4  the denominator claim, derived from the corpus
 # ══════════════════════════════════════════════════════════════════════════
 
-#: Measured, not asserted from memory: these four are marked `INTENDED` — a
-#: deliberate decision not to fire — while `classify()` returns `unknown`, so
-#: they carry no impact class and no policy can match them. "Recognised and
-#: handed to your policy" was true of 91 of the 95, not all 95.
+#: Measured, not asserted from memory: marked `INTENDED` — a deliberate
+#: decision not to fire — these four would carry no impact class, because
+#: `classify()` returns `unknown` for them, and no policy could match them.
+#: "Recognised and handed to your policy" holds for 91 attack entries, not 95,
+#: so these four live in the benign pool.
 NEITHER_DETECTED_NOR_CLASSIFIED = {
     "aws sts get-caller-identity",
     "netstat -antp",
@@ -494,17 +494,15 @@ def _corpus():
 
 
 def test_step4_every_remaining_exclusion_is_actually_classified():
-    """What the audit finding became once the corpus was corrected.
+    """Every exclusion from the denominator is genuinely classified.
 
-    The finding was that four INTENDED entries returned `unknown` from
-    classify(), so they carried no impact class, nothing existed for a policy to
-    match, and calling them "recognised and handed to your policy" was false.
-    1.12.0 resolved that by MOVING them rather than by rewording it: they are
-    benign commands now, not attacks.
+    Four commands that classify() returns `unknown` for carry no impact class,
+    so nothing exists for a policy to match, and calling them "recognised and
+    handed to your policy" would be false. They are carried as benign
+    commands, not attacks.
 
-    So the invariant is no longer "exactly four are unclassifiable". It is the
-    stronger one that the move was supposed to buy: EVERY exclusion that remains
-    is genuinely recognised. If a future entry is excluded on the strength of a
+    So the invariant is not "exactly four are unclassifiable". It is the
+    stronger one: EVERY exclusion that remains is genuinely recognised. If a future entry is excluded on the strength of a
     classification it does not have, this fails.
     """
     from xaidr.authz.classifier import classify
@@ -522,10 +520,10 @@ def test_step4_every_remaining_exclusion_is_actually_classified():
 
 
 def test_step4_the_four_are_now_benign_and_stay_silent():
-    """The other half of the move, asserted where it now lives.
+    """The other half of the classification, asserted where it lives.
 
-    They were reclassified into the benign pool because they score zero, so the
-    thing to hold is that they keep scoring zero. That is a real assertion: it
+    They are in the benign pool because they score zero, so the thing to hold
+    is that they keep scoring zero. That is a real assertion: it
     fails if a future discovery rule starts firing on ordinary operational
     inspection, which is the false positive the benign gate exists to catch.
     """
@@ -553,12 +551,11 @@ def test_step4_the_four_are_now_benign_and_stay_silent():
 def test_step4_the_published_exclusion_count_matches_the_corpus():
     """The number in the documentation is the number in the fixture.
 
-    This guard exists because the merge that brought 1.11.0's README onto this
-    branch silently reintroduced "95 corpus attacks are recognised", a sentence
-    that was false when it was written and false again when it came back. A
-    claim about the corpus that is typed rather than derived will drift every
-    time a branch crosses another, so it is pinned here in both directions: the
-    stale count must be absent, and the live one must be present.
+    A claim about the corpus that is typed rather than derived (such as "95
+    corpus attacks are recognised") drifts every time a branch crosses another,
+    and a merge can silently reintroduce it. So it is pinned here in both
+    directions: the stale count must be absent, and the live one must be
+    present.
     """
     import os
 
@@ -593,18 +590,18 @@ def test_step4_the_published_exclusion_count_matches_the_corpus():
 
 
 # ── THE MERGE CASE: async AND positional AND dangerous ───────────────────────
-# This is the case that neither branch could have written, and it is the reason
-# the 1.12.0 merge was resolved rather than decided.
+# Two independent properties meet here:
 #
-#   1.11.0 fixed the ASYNC half: protect_tools had never wrapped a coroutine
-#          function, so an async tool ran unscanned.
-#   The audit fixed the POSITIONAL half: arguments were labelled arg0/arg1, and
-#          every structural extractor keys on the parameter name, so a policy
-#          matched run_command(command=...) and missed run_command(...).
+#   The ASYNC half: protect_tools must wrap a coroutine function, or an async
+#          tool runs unscanned.
+#   The POSITIONAL half: arguments must be bound to parameter names, not
+#          labelled arg0/arg1, because every structural extractor keys on the
+#          parameter name; otherwise a policy matches run_command(command=...)
+#          and misses run_command(...).
 #
-# On 1.11.0 the async+positional call is unscanned because it is async. On the
-# audit branch it is unscanned because... there is no async wrapper at all. Only
-# a tree carrying both fixes can even reach the question, and the answer is only
+# Without the async half the async+positional call is unscanned because it is
+# async; without the positional half it is unscanned because it is positional.
+# Only a tree carrying both can even reach the question, and the answer is only
 # correct if they compose in the right ORDER: bind the arguments, then decide.
 # Bind after deciding, or in only one of the two wrappers, and this file goes
 # red while every other test in the suite stays green.
@@ -723,17 +720,17 @@ def test_merge_both_paths_produce_the_identical_refusal():
 # ══════════════════════════════════════════════════════════════════════════
 # SILENT TRUNCATION: every bound that DROPS is a bypass with a long enough input
 # ══════════════════════════════════════════════════════════════════════════
-# Four caps dropped what they had not reached, which reports the same thing as an
-# input that contained nothing: a caller cannot tell "there was no DELETE" from
-# "we stopped before the DELETE". Two were exploitable on 1.12.0-rc with nothing
-# more than padding, and both were measured deleting every row while the policy
-# returned a non-halting verdict.
+# A cap that drops what it has not reached reports the same thing as an input
+# that contained nothing: a caller cannot tell "there was no DELETE" from "we
+# stopped before the DELETE". Four caps are in scope. With nothing more than
+# padding, a dropping cap lets a statement that deletes every row through while
+# the policy returns a non-halting verdict.
 #
-# The root cause was one level below the caps. parse_sql already reported
-# predicate="unknown" when its token cap or its lexer gave out, and its docstring
-# promised callers treated unknown as an unrestricted mutation -- but no
-# classifier rule matched "unknown", so every fail-closed path in that module was
-# a fail-open wearing a fail-closed comment. That is asserted directly below,
+# The root cause sits one level below the caps. parse_sql reports
+# predicate="unknown" when its token cap or its lexer gives out, and its
+# docstring promises callers treat unknown as an unrestricted mutation -- so a
+# classifier rule must match "unknown", or every fail-closed path in that module
+# is a fail-open wearing a fail-closed comment. That is asserted directly below,
 # because if it regresses these tests keep passing for the wrong reason.
 
 from xaidr.scanner.sql_parse import (          # noqa: E402
@@ -769,8 +766,8 @@ def _gated(query):
 
 def test_an_unsettled_predicate_is_treated_as_unrestricted():
     """The promise parse_sql's docstring makes, asserted at the layer that has
-    to keep it. Before this, a DELETE with predicate='unknown' classified as
-    None, so every 'fail closed to unknown' path in the parser gated nothing."""
+    to keep it. If a DELETE with predicate='unknown' classified as None, every
+    'fail closed to unknown' path in the parser would gate nothing."""
     shape = SqlShape(statement="delete", object_kind=None, object="records",
                      predicate="unknown", raw="DELETE ...")
     assert _classify_sql_statement(shape) is not None, (
@@ -793,9 +790,9 @@ def test_the_unparsed_shape_is_gated():
     pytest.param("SELECT '" + "y" * MAX_SQL_CHARS + "'; ", id="literal-padding"),
 ])
 def test_a_long_prefix_cannot_hide_the_statement_after_it(prefix):
-    """Truncating text cuts the value in half and loses the remainder. Same
-    bypass as the statement cap, reached with a long prefix instead of many
-    statements. The SQLite oracle proves the payload is real before the verdict
+    """Truncating text would cut the value in half and lose the remainder: the
+    same failure shape a dropping statement cap would have, reached with a long
+    prefix instead of many statements. The SQLite oracle proves the payload is real before the verdict
     is read."""
     query = prefix + DESTRUCTIVE
     assert len(query) > MAX_SQL_CHARS
@@ -854,8 +851,8 @@ def test_the_statement_cap_boundary_is_exact():
 
 
 def test_the_statement_cap_is_enforced_in_exactly_one_place():
-    """Three enforcement points for one constant was the smell that hid a dead
-    one. Parsed statements stay capped; the markers are extra."""
+    """One enforcement point for one constant: several copies of a bound let
+    one go dead unnoticed. Parsed statements stay capped; the markers are extra."""
     shapes = parse_sql("; ".join(["SELECT 1"] * 500))
     parsed = [s for s in shapes if s.statement != UNPARSED_STATEMENT]
     assert len(parsed) <= MAX_STATEMENTS, len(parsed)
@@ -896,7 +893,7 @@ def test_ordinary_sql_under_both_caps_is_untouched(query):
 
 
 def test_a_large_but_ordinary_batch_under_the_caps_is_untouched():
-    """The false-positive guard for the fix itself: a realistic migration that
+    """The false-positive guard for the caps themselves: a realistic migration that
     sits under both caps must not acquire an unparsed marker."""
     query = "; ".join([f"UPDATE t SET c = {i} WHERE id = {i}"
                        for i in range(MAX_STATEMENTS - 1)])

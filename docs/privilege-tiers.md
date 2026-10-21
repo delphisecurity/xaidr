@@ -19,9 +19,9 @@ perform the action and the receiver may. That is a property of your deployment,
 not of the message, so the control is a **control**: a privilege lattice you
 configure, enforced by policy.
 
-## The privileged-action shape detector (new in 1.14.0)
+## The privileged-action shape detector
 
-Separately from the tier lattice and the policy engine, the tool boundary now
+Separately from the tier lattice and the policy engine, the tool boundary
 checks tool arguments for the *shapes* a privilege subversion takes, by default,
 with no configuration. It is structural: it walks the argument key/value pairs
 (the same way the command, SQL and URL parsers already do), so it reads the
@@ -35,8 +35,7 @@ is silent, so an approved scoped grant, a scheduled credential rotation and a
 payroll run produce nothing.
 
 **Each of those is a RELATION between two keys, not a keyword anywhere in the
-call — corrected in 1.14.1, where reading them as unrelated facts flagged
-ordinary work.** A self-directed principal is a self-*grant* only when the call
+call — reading them as unrelated facts flags ordinary work.** A self-directed principal is a self-*grant* only when the call
 also names what is granted: `get_profile(user="self")` is a read and is silent,
 `grant_role(principal="agent://self", role="org-admin")` fires. An admin-shaped
 role is an escalation only when nothing in the call makes it a query: beside a
@@ -47,9 +46,9 @@ value is a disabled control only when a disabling value sits in the same setting
 record — `set_flag(flag="enforce_approvals", value=false)` fires,
 `plot_series(panel="monitoring", offset=0)` is pagination and does not.
 
-The correction only ever removes flags. Nothing that was silent before became
-loud, and the detector fires on the same set of held-out battery shapes it fired
-on at 1.14.0.
+Reading relations rather than unrelated facts only ever removes flags. Nothing
+the unrelated-facts reading leaves silent becomes loud, and the detector fires on
+the same set of held-out battery shapes under either reading.
 
 It flags; it does not block, and the reason matters. Every governance marker it
 reads is app-supplied and unsigned, so a fabricated approval reference on a
@@ -88,8 +87,9 @@ Regenerate with `python scripts/benign_domain_report.py`:
 | education / LMS | 20 | 5 | 25.0% |
 | **total** | **120** | **24** | **20.0%** |
 
-That is after five defects the pool exposed were fixed; before them it was 40 of
-120 (33.3%). The 24 that remain are **not** defects, and they fall into three
+Five predicates each reading a single fact would make it 40 of 120 (33.3%);
+this pool is what shows they need narrowing, and they are narrowed. The 24 that
+remain are **not** defects, and they fall into three
 kinds. All of them FLAG, none blocks.
 
 **1. The bound is a game, pedagogy or clinical rule, not a spend.** The caller

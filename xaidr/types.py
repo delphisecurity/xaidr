@@ -46,11 +46,11 @@ def safe_content_hash(text: str) -> str:
 
     Encodes with ``errors="surrogatepass"`` so lone/paired surrogates (e.g. a
     ``\\udcff`` that arrived from an undecodable byte) hash losslessly instead of
-    raising ``UnicodeEncodeError``. This is the B1 fail-open fix: a malformed
-    byte in user content must never crash a scan (a self-DoS on a security
-    tool). ``surrogatepass`` only changes how surrogate code points encode —
-    which under the previous strict UTF-8 path *raised* — so for every
-    well-formed input the digest is byte-identical to the old
+    raising ``UnicodeEncodeError``. A malformed byte in user content must never
+    crash a scan (that would be a self-DoS on a security tool, and a scan that
+    raises fails open). ``surrogatepass`` only changes how surrogate code points
+    encode — which a strict UTF-8 encode would *raise* on — so for every
+    well-formed input the digest is byte-identical to
     ``sha256(text.encode()).hexdigest()[:16]``.
 
     Every content-hash call site (sensor prompt/output/tool/A2A hashes and the
@@ -121,10 +121,8 @@ class ScanResult:
     #
     # THE FIGURE LIVES IN ONE PLACE: `nano.MEASURED_FP_RANGE` is canonical and
     # this comment restates it; `nano.MEASURED_IN` records the environment each
-    # end was measured in. If they disagree, nano.py wins. Three other figures
-    # have existed for this quantity — 1.85%, 2.20% and 1.65% — and all three are
-    # withdrawn; "FOUR FIGURES HAVE EXISTED" in nano.py says what each was and
-    # why none survived.
+    # end was measured in. If they disagree, nano.py wins. "WHAT THE FIGURE
+    # HOLDS CONSTANT" in nano.py says what moves it.
     #
     # What that rate looks like in practice — benign text above the operating
     # point, measured on onnxruntime 1.29.0 and pinned by
@@ -138,10 +136,7 @@ class ScanResult:
     #             controlled"
     #     0.0706  "switch to the reviewer role and critique this design"
     #
-    # An earlier list here (0.8648 DISK BOOT FAILURE, 0.7773 "putting together a
-    # team", and four others) is WITHDRAWN: those scores reproduce on no runtime
-    # and no artifact variant, and their provenance cannot be reconstructed. See
-    # nano.py. The replacements above are reproducible and regression-tested.
+    # These examples are reproducible and regression-tested.
     #
     # DO NOT rank, sort, or triage an alert queue by this number, and do not
     # present it to a reviewer as confidence: a queue sorted by it puts trivia at

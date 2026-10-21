@@ -23,8 +23,8 @@ performed against this working tree.
 | processor | `arm` |
 | cpu count | 10 |
 | python | CPython 3.12.2 |
-| package | `/Users/anirudhkotaru/opena2a/xaidr/__init__.py` (the repository tree, not an installed copy) |
-| version | 1.4.1 |
+| package | the repository tree (`xaidr/__init__.py`), not an installed copy |
+| version | not the current release; rerun `python scripts/benchmark.py` to measure the one you have |
 
 ## What was tested
 
@@ -87,48 +87,48 @@ python scripts/corpus_report.py      # the raw counts and the benign gates
 ```
 
 **Detection.** A catch is `blocked` **or** `flagged`, and the denominator is the
-attacks we intend to catch — the corpus minus the 95 entries marked
+attacks we intend to catch — the corpus minus the 91 entries marked
 `detection_intent: INTENDED`, which are recognised, genuinely dual-use, and
-deliberately left to a policy the deployer writes. Every one of those 95 carries
+deliberately left to a policy the deployer writes. Every one of those 91 carries
 its reason in the fixture, and `intent_metrics.py` prints them all before it
 prints a percentage.
 
 | | denominator | catches |
 |---|---:|---|
 | rules only, tool path | 186 | **165** (88.7%) |
-| rules only, content path | 186 | **105** (56.5%) |
+| rules only, content path | 186 | **106** (57.0%) |
 | rules only, either path | 186 | **167** (89.8%) |
 | with `nano`, either path | 186 | **172** (92.5%) |
 
 **The `nano` row is the whole of what this repository measures about nano's
 detection.** The five it adds are 5 of the 21 `GAP` entries; the other 16 either
 never reach it or are not recovered, and `intent_metrics.py --nano` names each
-one. Two larger recovery figures were previously published for nano (23 of 26 on
-an acceptance corpus, and 582 of 595 frame cells). Both are **withdrawn**:
+one. Two larger recovery figures published here earlier (23 of 26 on an
+acceptance corpus, and 582 of 595 frame cells) are **withdrawn and superseded**:
 neither regenerates from the shipped package, the corpora behind them are not in
-this repository, and one of them was scored against an older pinned ruleset. No
-replacement figures are given, for the same reason 1.85% below was not simply
-adjusted. The prompt-shaped band nano was built for is **not currently measured
+this repository, and one was scored against a pinned ruleset rather than shipped
+code. No replacement figure is published: a recovery figure on a corpus that is
+not in this repository says nothing a reader can check about the shipped rules. The prompt-shaped band nano was built for is **not currently measured
 here**; see
 [the nano section](README.md#the-optional-ml-signal-for-the-rules-silent-band-nano-experimental).
 
 **Raw counts, unchanged, from `corpus_report.py`.** These are the evidence and
-they stay. They are *not* a detection rate: `blocked / 281` counts every
+they stay. They are *not* a detection rate: `blocked / 277` counts every
 deliberately classify-only entry as a failure, which is why it is no longer
 published as one.
 
 | | n | result |
 |---|---:|---|
-| shell attacks classified | 281 | **267** |
-| shell attacks detected (score > 0) | 281 | **165** |
-| shell attacks blocked | 281 | **165** |
+| shell attacks classified | 277 | **267** |
+| shell attacks detected (score > 0) | 277 | **165** |
+| shell attacks blocked | 277 | **165** |
 
 **False positives, same run, same sensor.**
 
 | | n | result |
 |---|---:|---|
-| benign commands scoring above zero | 74 | **0** |
-| benign commands blocked | 74 | **0** |
+| benign commands scoring above zero | 78 | **0** |
+| benign commands blocked | 78 | **0** |
 | benign prose blocked, content path | 89 | **1** (`bp-055`, documented by ID in `tests/test_benign_prose.py`) |
 | benign prose blocked, tool-argument path | 89 | **0** |
 | benign prose **flagged**, content path | 89 | **50** (with `nano` on: 56 on onnxruntime ≤ 1.23, 60 on 1.26–1.29) |
@@ -140,7 +140,7 @@ published as one.
 | real benign prompts flagged, `nano` on, onnxruntime ≤ 1.23 | 2000 | **35** (1.75%, Wilson 95% [1.26%, 2.42%]) |
 | real benign prompts flagged, `nano` on, onnxruntime 1.26–1.29 | 2000 | **67** (3.35%, Wilson 95% [2.65%, 4.23%]) |
 
-So the false-block rate to read beside 167 of 186 is **0 of 74** on commands,
+So the false-block rate to read beside 167 of 186 is **0 of 78** on commands,
 **1 of 89** on prose, **0 of 12** on templates and **0 of 38** on ordinary
 DevOps operations. The one prose blocker is named rather than absorbed into a
 percentage, so a second one shows up as a new entry instead of as a rounding
@@ -159,7 +159,7 @@ includes reading security documents will generate flag volume at that rate;
 see [monitor mode](README.md#deployment-modes-and-tuning). Everything else —
 commands, templates, ordinary DevOps operations — is 0 on both columns.
 
-The 2000-prompt rows were measured on **xaidr 1.7.0** across four onnxruntime
+The 2000-prompt rows were measured across four onnxruntime
 versions with `python scripts/intent_metrics.py --nano --real-benign`:
 
 | onnxruntime | flagged | rate | Wilson 95% |
@@ -177,27 +177,31 @@ oasst1 at run time (hashes rather than text because no_robots is CC-BY-NC-4.0).
 It is the sample the model acceptance used, and it is disjoint from the prompt
 sets the model was selected and calibrated against.
 
-**This quantity has had four published values and now has two, because the
-runtime is part of it.** 1.75% and 3.35% are the same sample, artifact and code
-measured on different onnxruntime versions, and the spread between them is larger
-than any of the corrections below.
+**This quantity has two values, because the runtime is part of it.** 1.75% and
+3.35% are the same sample, artifact and code measured on different onnxruntime
+versions, and the spread between them is larger than any of the method effects
+below. A false-positive rate for this model that does not name its onnxruntime
+version is not a figure: runtime drift is not a rounding effect here, and across
+1.20 → 1.29 the count goes 35 → 67.
 
-**1.85% (37/2000) is withdrawn** — not for a bad sample or a bad method, but for
-being published without the fact that determines it. It was measured on an
-onnxruntime the record never named, then labelled `MEASURED_ON = "onnxruntime
-1.29.0"`, a runtime on which this sample yields 67/2000. This document previously
-asserted that runtime drift moved 15 of 2000 raw scores, that only 2 crossed the
-operating point, and that the figure was "37/2000 either way ... this sample
-being lucky." That is false: across 1.20 → 1.29 the count goes 35 → 67.
+**Three earlier figures are withdrawn and superseded by the range above:**
 
-**2.20% (44/2000) is withdrawn and was wrong, not merely stale**: the acceptance
-evidence file stores each prompt truncated to 200 characters as a preview, 331 of
-the 2000 are longer, and the re-measurement that produced 2.20% scored the
-previews — worth +6 on its own, which is that figure's whole gap.
+- **1.85% (37/2000)** was published without the runtime it was measured on and
+  labelled with onnxruntime 1.29.0, on which this sample yields 67/2000. An
+  accompanying statement that the figure was "37/2000 either way" under runtime
+  drift is withdrawn with it: across the supported range the count goes 35 → 67.
+- **2.20% (44/2000)** scored the 200-character previews rather than the full
+  prompts; scoring previews alone moves the count by +6 on this sample.
+- **1.65% (33/2000)** came from a different, non-disjoint sample.
 
-**1.65% (33/2000) is withdrawn** as a different sample: a freshly drawn seeded one
-overlapping this by 128 of 2000 and not disjoint from the tuning sets, which
-biases the rate downward.
+Two method choices move the figure on their own, and both are avoided here:
+
+- **Scoring previews instead of prompts.** The acceptance evidence file stores
+  each prompt truncated to 200 characters as a preview, and 331 of the 2000 are
+  longer. Scoring the previews adds +6 to the count on this sample.
+- **A different sample.** A freshly drawn seeded sample overlaps this one by only
+  128 of 2000 and is not disjoint from the tuning sets, which biases the rate
+  downward.
 
 Everything else in the inference path was measured and ruled out: `tokenizers`
 0.20–0.23 give byte-identical tokens and bit-identical scores, `numpy` 1.26 and
@@ -216,7 +220,7 @@ payload — a named-persona jailbreak, a developer-mode request, a system-prompt
 extraction turn, an encoding-evasion payload, a rate-limit log that reads as
 denial of service, and a forged tool result. That second group exists because the
 first cannot exercise the
-five families the 1.2.0 tool-argument scan newly admitted at flag level: every one
+five families the tool-argument scan admits at flag level: every one
 of the 66 is a shell quotation, so the tool-path prose gate read 0 of 66 by never
 being tested on them. Each of the 7 carries its payload in plain prose rather than
 inside backticks, because the documentary-prose cap only lifts fenced quotations
@@ -247,7 +251,7 @@ layer was NOT changed.
 Reported by family and not per command, the same discipline the README's
 [Coverage and limitations](README.md#coverage-and-limitations) section follows.
 Read that section for what 167 of 186 does and does not mean — in particular,
-which 95 attacks are excluded from that 186 and why.
+which 91 attacks are excluded from that 186 and why.
 
 **What none of these numbers cover.** The corpus is shell commands. It says
 nothing about prompt-shaped attacks, nothing about the A2A path, and nothing
@@ -291,13 +295,13 @@ checkout, because it is not in the wheel:
 
 ```bash
 python -m venv /tmp/xaidr-verify
-/tmp/xaidr-verify/bin/pip install 'xaidr[nano]==1.7.0'
+/tmp/xaidr-verify/bin/pip install 'xaidr[nano]==<version>'
 cd /                                                  # a neutral working directory
 /tmp/xaidr-verify/bin/python /path/to/xaidr/scripts/intent_metrics.py --installed --nano
 ```
 
-Done on **published 1.7.0, Python 3.14, onnxruntime 1.29.0**, the
-output below the provenance header is byte-identical to the working-tree run.
+Done on **Python 3.14, onnxruntime 1.29.0**, the output below the provenance
+header is byte-identical to the working-tree run.
 
 ## Getting your own
 

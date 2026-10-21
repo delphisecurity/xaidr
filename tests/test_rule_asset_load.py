@@ -1,22 +1,26 @@
 """Rule assets must load from a SHALLOW stack, and exactly once.
 
-Two guards, both written against a defect that shipped.
+Two guards, both for one invariant: a transient fault while some caller has
+``json.loads`` patched must never disable a detection layer for the rest of the
+process.
 
-THE DEFECT. ``scanner/normalizer.py`` re-read ``typo-keywords.json`` on every
-``TypoNormalizer()``, i.e. every ``LocalScanner``, i.e. every ``Sensor``. The
-read went through ``json.load``, which is a thin wrapper that calls the MODULE
-GLOBAL ``json.loads`` — so each Sensor construction re-entered whatever
-``json.loads`` was bound to at that instant. The loader's ``except Exception``
-then turned any fault in that window into "normalization disabled", recorded in
-the process-global registry in ``failclosed`` that nothing ever clears.
+WHAT THEY PREVENT. If ``scanner/normalizer.py`` re-read ``typo-keywords.json``
+on every ``TypoNormalizer()``, i.e. every ``LocalScanner``, i.e. every
+``Sensor``, the read would go through ``json.load``, which is a thin wrapper
+that calls the MODULE GLOBAL ``json.loads`` — so each Sensor construction would
+re-enter whatever ``json.loads`` was bound to at that instant. The loader's
+``except Exception`` would then turn any fault in that window into
+"normalization disabled", recorded in the process-global registry in
+``failclosed`` that nothing ever clears.
 
-One transient fault therefore disabled the typo normaliser for the REST OF THE
-PROCESS, and made every later Sensor report a degradation it had nothing to do
-with. On CI, where the whole suite is a single process,
+One transient fault would therefore disable the typo normaliser for the REST OF
+THE PROCESS, and make every later Sensor report a degradation it had nothing to
+do with. On CI, where the whole suite is a single process,
 ``tests/test_cleanup_a9_a5.py`` (which patches ``json.loads`` to raise, to prove
 the A2A extractor survives it, and builds a Sensor inside the patched window)
-poisoned ``test_open_posture_is_the_default_and_unchanged`` several thousand
-tests later — reporting a ``RecursionError`` that nothing in the scanner raised.
+would poison ``test_open_posture_is_the_default_and_unchanged`` several thousand
+tests later — reporting a ``RecursionError`` that nothing in the scanner
+raised.
 
 WHAT DISABLING THE NORMALISER COSTS, measured by running with ``_TYPO_CONFIG``
 emptied — the exact value ``_read_typo_config`` returns when the asset fails to
@@ -411,7 +415,7 @@ def test_the_asset_is_read_once_at_import_not_per_sensor():
 
 
 def test_building_a_sensor_under_a_broken_json_does_not_disable_normalization():
-    """THE REGRESSION. Reproduces the CI failure in one test.
+    """The cross-test poisoning described above, in one test.
 
     A caller whose ``json.loads`` raises — a test patching it, an
     ``orjson``-style monkeypatch, a tracing shim — must not cost us the

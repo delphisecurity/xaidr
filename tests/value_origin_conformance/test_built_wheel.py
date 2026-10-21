@@ -1,4 +1,4 @@
-"""V-5: the PSL ships in a BUILT wheel and works from outside the source tree.
+"""The PSL ships in a BUILT wheel and works from outside the source tree.
 
 P1 and L1 run in-tree and cannot see a packaging omission: a data file left out
 of the wheel faults every ``authority_of`` in production while every in-tree

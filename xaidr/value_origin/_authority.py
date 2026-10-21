@@ -1,18 +1,18 @@
-"""Per-scheme authority — the one normaliser (§6 C-6, V-19..V-23, rulings 3.2/3.6,
-R1/R4 of 2026-10-03).
+"""Per-scheme authority — the one normaliser (rulings 3.2 and 3.6 in
+docs/value-origin-rulings.md).
 
     mailto:<local@domain>   the full mailbox, local part .lower(), domain as
                             UTS-46 A-labels. No plus-stripping, no dot removal:
                             both collide genuinely distinct mailboxes (S18).
     dns:<registrable>       a URL host's registrable domain by the PSL algorithm,
                             both sections, default ``*`` rule. A host that is
-                            itself a suffix, or one label, is kept whole (V-10).
+                            itself a suffix, or one label, is kept whole.
     ip:<canonical>          every literal form (hex, octal, decimal, short
                             dotted, IPv4-mapped IPv6), mapped addresses
-                            unwrapped BEFORE rendering (V-21).
-    tel:+<digits>           ``+``-prefixed phones only (V-22). A national
+                            unwrapped BEFORE rendering.
+    tel:+<digits>           ``+``-prefixed phones only. A national
                             number needs a region to normalise, and there is no
-                            right default region (C-6, OPEN).
+                            right default region (an open question).
 
 Every pattern is bounded with no nested unbounded quantifier: this runs on
 attacker-controlled values. Nothing here raises; nothing here does I/O.
@@ -55,7 +55,7 @@ def _public_suffix_len(labels: List[str]) -> int:
 
 def registrable_domain(host: str) -> str:
     """The registrable domain of an A-label ``host``; the whole host when it
-    is itself a public suffix or a single label (V-10)."""
+    is itself a public suffix or a single label."""
     labels = host.split(".")
     if len(labels) < 2:
         return host
@@ -79,10 +79,10 @@ _OCT_DIGITS = frozenset("01234567")
 def coerce_ip(host: str):
     """The IP address ``host`` denotes across every literal form, or None.
 
-    Moved here from ``scanner/url_parse._coerce_ip`` (§4.1): the one normaliser
+    Moved here from ``scanner/url_parse._coerce_ip``: the one normaliser
     lives inside the vendored unit. Integer forms (hex / octal / decimal / short
     dotted) are what ``inet_aton`` accepts; they apply ONLY inside a URL host
-    (V-19) — ``"4417"`` as a bare value is not an address.
+    — ``"4417"`` as a bare value is not an address.
     """
     if not host:
         return None
@@ -135,7 +135,7 @@ def coerce_ip(host: str):
 
 def ip_key(ip) -> str:
     """Canonical text of an address: mapped v6 unwrapped first, then IPv4
-    dotted or IPv6 ``.compressed`` — the same on every interpreter (V-21)."""
+    dotted or IPv6 ``.compressed`` — the same on every interpreter."""
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
     if isinstance(ip, ipaddress.IPv6Address):
@@ -162,7 +162,7 @@ def _host_authority(raw_host: str, *, arg_fallback: bool) -> Optional[Authority]
 
     WHATWG order: percent-decode, then UTS-46, then (if the result is an
     address in any spelling) IP. On a UTS-46 failure an ARGUMENT host still
-    yields ``dns:<raw host lowercased>`` (V-23), which matches only itself and is
+    yields ``dns:<raw host lowercased>``, which matches only itself and is
     never ``no_destination``; a prose candidate is dropped.
     """
     host = raw_host.strip()
@@ -200,19 +200,19 @@ def _host_authority(raw_host: str, *, arg_fallback: bool) -> Optional[Authority]
 
 # ── URLs ─────────────────────────────────────────────────────────────────────
 _SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]{0,31})://")
-# R4 (2026-10-03): a WHATWG special scheme other than file: (C-6) takes its
+# A WHATWG special scheme other than file: takes its
 # authority after ANY run of '/' and '\', so `http:evil.test`, `http:/evil.test`,
 # `http:\\evil.test` and `http:///evil.test` all name evil.test. Such a value is
 # rewritten to `scheme://` and parsed as one. A non-special scheme with no `//`
 # has no host (`gopher:evil.test`), as WHATWG and urllib.parse agree.
 _SPECIAL_RE = re.compile(r"^(https?|wss?|ftp):[/\\]*(?=[^\s/\\])", re.IGNORECASE)
-# V-19: `host/path` with no scheme — ≥2 labels, alphabetic final label, and a
+# `host/path` with no scheme — ≥2 labels, alphabetic final label, and a
 # path. Labels are \w so a Unicode host is accepted here too (ruling 3.6).
 _IMPLIED_RE = re.compile(r"^((?:[\w\-]{1,63}\.){1,126}[^\W\d_]{1,63})/")
-# R4 (2026-10-03): no scheme, a STRICT address literal (a dotted quad, or IPv6 in
+# No scheme, a STRICT address literal (a dotted quad, or IPv6 in
 # brackets), then a port, path, query or fragment — `169.254.169.254/latest`.
-# Strict because V-19 confines the integer spellings (hex, decimal, octal, short
-# dotted) to a URL host: `2024/report` is a path, not 0.0.7.232.
+# Strict because the integer spellings (hex, decimal, octal, short dotted)
+# count only inside a URL host: `2024/report` is a path, not 0.0.7.232.
 _IMPLIED_IP_RE = re.compile(r"^(\[[0-9A-Fa-f:.]{2,45}\]|[0-9]{1,3}(?:\.[0-9]{1,3}){3})"
                             r"(?::[0-9]{1,5}(?![^/?#])|(?=[/?#]))")
 _NON_DESTINATION_SCHEMES = frozenset({"file", "data"})
@@ -228,7 +228,7 @@ NOT_A_DESTINATION = None
 class ParseFailure:
     """Destination-shaped and unparseable: UNRESOLVED, never no_destination.
 
-    ``parsed`` holds the parts of a mailbox list that DID parse (R1, 2026-10-03):
+    ``parsed`` holds the parts of a mailbox list that DID parse:
     the value is still UNRESOLVED as a whole, and each of them is its own finding.
     """
 
@@ -494,7 +494,7 @@ def url_authority(value: str, *, arg_mode: bool, written: Optional[str] = None):
 
 
 def implied_url_authority(value: str, *, arg_mode: bool):
-    """V-19's one exception: ``host/path`` counts as a URL with an implied scheme."""
+    """The one scheme-less exception: ``host/path`` counts as a URL with an implied scheme."""
     m = _IMPLIED_RE.match(value)
     if not m:
         return NOT_A_DESTINATION
@@ -504,7 +504,7 @@ def implied_url_authority(value: str, *, arg_mode: bool):
     return a
 
 
-# ── mailboxes (V-4, rulings 3.2 / 3.6) ──────────────────────────────────────
+# ── mailboxes (rulings 3.2 / 3.6) ───────────────────────────────────────────
 _LOCAL_RE = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~\-]{1,64}")
 _ASCII_DOMAIN_RE = re.compile(r"[A-Za-z0-9\-]{1,63}(?:\.[A-Za-z0-9\-]{1,63}){1,126}")
 _DISPLAY_RE = re.compile(r"^(?P<display>[^<>]{0,256})<(?P<addr>[^<>]{1,320})>$")
@@ -529,7 +529,7 @@ def mailbox_authority(addr: str) -> Optional[Authority]:
 
 
 def _split_mailbox_list(value: str) -> Optional[List[str]]:
-    """Split on ``,`` and ``;`` outside ``<…>`` and ``"…"`` (V-4). None if the
+    """Split on ``,`` and ``;`` outside ``<…>`` and ``"…"``. None if the
     quoting does not balance."""
     parts, cur = [], []
     in_quote = in_angle = False
@@ -568,7 +568,7 @@ def mailbox_list(value: str):
     part must parse, or the WHOLE value is a ParseFailure. Empty parts (a
     trailing separator) are skipped.
 
-    R1 (2026-10-03): the failure carries every part that DID parse, and each is
+    The failure carries every part that DID parse, and each is
     its own finding, so an untrusted part decides the wire. Without it,
     `evil@x.example, junk` is UNRESOLVED, and UNRESOLVED never blocks. Quoting
     that does not balance is junk too: the value fails, and its separators are
@@ -591,7 +591,7 @@ def mailbox_list(value: str):
     return out
 
 
-# ── phones (V-22) ────────────────────────────────────────────────────────────
+# ── phones ───────────────────────────────────────────────────────────────────
 # `+`, then digits with single separators (space . -) and parenthesised groups
 # between them. Bounded repetition; the digit count is checked afterwards.
 _PHONE_BODY = r"\+(?:\([0-9]{1,4}\)|[0-9])(?:[ .\-]?(?:\([0-9]{1,4}\)|[0-9])){0,40}"
@@ -612,13 +612,12 @@ def classify_value(value: str, *, arg_mode: bool):
     """The whole-value classifier behind ``authority_of`` and the argument walk.
 
     Returns NOT_A_DESTINATION (None), a ParseFailure (whose ``parsed`` may hold
-    the parts of a mailbox list that did parse, R1), an Authority, or — for a
-    mailbox list — a list of Authorities. Order (ruling 3.2 as settled
-    2026-09-24): a URL is tried first, so a URL carrying '@' is still a URL —
+    the parts of a mailbox list that did parse), an Authority, or — for a
+    mailbox list — a list of Authorities. Order (ruling 3.2, URLs
+    first): a URL is tried first, so a URL carrying '@' is still a URL —
     including a special scheme with no `//` and a strict IP literal followed by
-    a port or path (R4); otherwise a value with '@' is a mailbox list; then a
-    phone; then a bare strict IP. Bare hostnames are never destinations here
-    (V-19).
+    a port or path; otherwise a value with '@' is a mailbox list; then a
+    phone; then a bare strict IP. Bare hostnames are never destinations here.
     """
     v = value.strip()
     if not v or len(v) > MAX_LEAF_CHARS:
@@ -626,7 +625,7 @@ def classify_value(value: str, *, arg_mode: bool):
     if v[:7].lower() == "mailto:":
         addr = v[7:].split("?", 1)[0]
         if not addr:
-            return NOT_A_DESTINATION           # mailto: with no address (C-6)
+            return NOT_A_DESTINATION           # mailto: with no address
         return mailbox_list(addr) if arg_mode else _single(mailbox_list(addr))
     written = v
     m = _SPECIAL_RE.match(v)
@@ -666,7 +665,7 @@ def _single(res):
 
 
 def authority_of(value: str) -> Authority | None:
-    """The per-scheme normaliser (§6 C-6). ``None`` = not a destination.
+    """The per-scheme normaliser. ``None`` = not a destination.
 
     Accepts one addr-spec mailbox (optionally ``display <addr>`` or
     ``mailto:``), a ``scheme://host…`` URL (a special scheme without the ``//``
@@ -692,7 +691,7 @@ def authority_of(value: str) -> Authority | None:
         return None
 
 
-# ── prose candidates (C-7, V-19, V-20, V-22, V-23, ruling 3.4) ───────────────
+# ── prose candidates (ruling 3.4) ────────────────────────────────────────────
 _P_URL_RE = re.compile(r"(?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]{0,31}://[^\s\"'<>]{1,3968}")
 _P_EMAIL_RE = re.compile(
     r"(?<![A-Za-z0-9.!#$%&'*+/=?^_`{|}~\-@])"
@@ -717,7 +716,7 @@ def _blank(text: str, spans: List[Tuple[int, int]]) -> str:
 def prose_candidates(text: str, counter: Optional[List[int]] = None) -> List[Tuple[int, Authority]]:
     """Every destination candidate in prose, as (position, authority), in text
     order. URLs first and blanked; then mailboxes, blanked so a mailbox never
-    authorizes its own domain (V-20); then bare hosts (ruling 3.4: ICANN TLD or
+    authorizes its own domain; then bare hosts (ruling 3.4: ICANN TLD or
     reserved name only), phones and strict IPs. A candidate for which
     normalisation fails is dropped. ``counter``, if given, is incremented once per
     candidate EXAMINED, accepted or not -- what the work budget charges for (a

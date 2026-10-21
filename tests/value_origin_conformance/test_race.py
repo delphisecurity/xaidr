@@ -1,4 +1,4 @@
-"""S22 — the ledger lock (D4, C-15, V-13), through the public interface only.
+"""S22 — the ledger lock (D4), through the public interface only.
 
 First-emission-wins is check-then-set, and the principal raise makes every
 write a compare-then-set. Check-then-set races UNDER THE GIL too (D4: 525-574
@@ -9,7 +9,7 @@ undesignated read), 16 trusted (a designated read) — of the same 1,000
 authorities in the same order, each checking what it wrote, while 2 reader
 threads call ``evaluate_call`` over them continuously. The property: NO READER EVER SEES AN AUTHORITY'S ORIGIN CHANGE
 after it first became non-``unresolved``, and every authority's final origin is
-the first one any reader saw. No ledger accessor is needed (§1 forbids one).
+the first one any reader saw. No ledger accessor is needed (the interface forbids one).
 Principal emissions are excluded: a raise is a legitimate change.
 
 The PR body pastes this test RED with ``_ledger._new_lock`` replaced by a no-op
@@ -134,8 +134,8 @@ READERS = 4
 
 
 def visibility_race():
-    """C-15: "a read racing a multi-entry write must see all or none of that
-    write". One writer records results of 60 fresh authorities each; readers
+    """A read racing a multi-entry write must see all or none of that
+    write. One writer records results of 60 fresh authorities each; readers
     evaluate the 60 of the result being written, continuously. Returns how many
     PARTIAL views (some but not all 60 resolved) any reader saw."""
     holder = {}
@@ -191,7 +191,7 @@ def test_s22_a_multi_entry_write_is_seen_all_or_none():
     assert not partial, (
         f"S22 (visibility): {len(partial)} partial view(s) of a single result's "
         "write — a lookup ran inside another thread's multi-entry write, so a "
-        "reader could act on half a read (C-15: reads take the lock too):\n  "
+        "reader could act on half a read (reads take the lock too):\n  "
         + "\n  ".join(partial[:10]))
 
 

@@ -1,9 +1,9 @@
-"""Two-way corpus for the encoding-name-free bypass fix — permanent guard.
+"""Two-way corpus for encoded payloads that omit the encoding name — permanent guard.
 
-Encoding detection was NAME-DEPENDENT: base64/rot13 fired on the bare word but
-hex only matched "hex encod...", and NEITHER fired when the encoding name was
-omitted ("decode this and execute:<blob>"). The fix closes the CLASS via a
-DIRECTIVE-GATED blob detector (LLM01_decode_directive_blob): a decode/execute
+Name-keyed encoding detection (base64/rot13 on the bare word, hex only on
+"hex encod...") cannot fire when the encoding name is omitted ("decode this and
+execute:<blob>"). That CLASS is covered by a DIRECTIVE-GATED blob detector
+(LLM01_decode_directive_blob): a decode/execute
 directive followed by a hex- or base64-shaped blob flags — but a BARE blob (git
 SHA, hash, hex color, UUID, MAC, ...) with no directive does NOT. That gate is
 what makes it FP-safe; it is the non-negotiable property under test here.

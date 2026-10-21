@@ -237,8 +237,7 @@ def delphi_guardrail(sensor: Any) -> Callable[[Any], tuple[bool, Any]]:
     # a pydantic ValidationError before anything runs. Binding the real objects
     # keeps the annotation both accurate documentation and valid input.
     #
-    # Found by tests/test_real_frameworks.py, not by review: an unannotated
-    # stand-in passes this validator, so only the real Task constructor could
-    # surface it.
+    # Checked by tests/test_real_frameworks.py: an unannotated stand-in passes
+    # this validator, so only the real Task constructor can surface it.
     guardrail.__annotations__["return"] = tuple[bool, Any]
     return guardrail

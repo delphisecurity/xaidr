@@ -1,12 +1,15 @@
-"""Inert-stubs audit: no silent-inert paid-tier feature ships on the open surface.
+"""Inert-stubs audit: no silently-inert stub of a feature reserved for an
+extension package ships on the open surface.
 
-A-11 trust_below: a policy condition needing a per-agent trust score (platform
-tier) must be LOUDLY REJECTED at load in open, never silently no-op.
-A-12 quarantine: the paid-tier quarantine state has no open setter and its dead
-checks are removed — the sensor exposes no quarantine attribute implying it.
-A-3 AGT evaluator: the always-allow AGT stub (_evaluate_policy) and its
-_action_policy/_trust_score state are removed; only the local YAML policy is the
-open authorization mechanism (and it still enforces).
+trust_below: a policy condition needing a per-agent trust score (computed
+only by an extension) must be LOUDLY REJECTED at load in open, never silently
+no-op.
+quarantine: the quarantine state, reserved for an extension package, has
+no open setter and no dead checks — the sensor exposes no quarantine attribute
+implying it.
+AGT evaluator: there is no always-allow AGT stub (_evaluate_policy) and no
+_action_policy/_trust_score state; only the local YAML policy is the open
+authorization mechanism (and it enforces).
 """
 import logging
 
@@ -16,7 +19,7 @@ from xaidr import Sensor
 from xaidr.authz.policy import parse_action_policy
 
 
-# ── A-11 ─────────────────────────────────────────────────────────────────────
+# ── trust_below rejection ────────────────────────────────────────────────────
 
 def test_trust_below_policy_is_rejected_not_silently_ignored():
     policy = {
@@ -52,14 +55,15 @@ def test_local_yaml_policy_still_enforces_without_trust():
     assert s.scan_tool_call("get_weather", {"city": "Toronto"}).action == "allowed"
 
 
-# ── A-11 regression: trust_below is rejected in EITHER placement ─────────────
+# ── trust_below is rejected in EITHER placement ──────────────────────────────
 #
-# The load-time guard originally inspected only `conditions:`. A rule that put
-# trust_below under `match:` loaded fine, and at evaluation time
-# rule["conditions"].get("trust_below") returned None — so the trust check never
-# ran and the policy looked enforced while doing nothing. `match:` is the
-# placement the README documents, so it was the common case. These tests drive
-# the public API (Sensor.set_policy) so they exercise the real user path.
+# The load-time guard inspects `match:` as well as `conditions:`. A guard that
+# read only `conditions:` would load a rule with trust_below under `match:`, and
+# at evaluation time rule["conditions"].get("trust_below") would return None — so
+# the trust check would never run and the policy would look enforced while doing
+# nothing. `match:` is the placement the README documents, so it is the common
+# case. These tests drive the public API (Sensor.set_policy) so they exercise
+# the real user path.
 
 def _sensor():
     return Sensor(agent_id="a11-regression", enforcement_mode="block")
@@ -78,7 +82,7 @@ def test_trust_below_under_conditions_rejected_via_set_policy():
 
 
 def test_trust_below_under_match_alone_rejected_via_set_policy():
-    """(b) trust_below under `match:` alone → policy rejected (the bug)."""
+    """(b) trust_below under `match:` alone → policy rejected (the documented placement)."""
     assert _sensor().set_policy({
         "version": "1", "defaults": {"effect": "allow"},
         "rules": [{
@@ -118,15 +122,15 @@ def test_policy_without_trust_below_still_accepted_via_set_policy():
     }) is True
 
 
-# ── ADV-2 / ADV-3: an unknown match/conditions key disarms the rule ──────────
-# Same failure class as trust_below above, found by an artifact audit: a typo'd
-# match key (`tool` for `tools`) parsed as a VALID policy, set_policy returned
-# True, and the rule then matched nothing. The operator sees a loaded policy and
-# believes the rule is enforcing. Unknown keys now join trust_below in being
+# ── an unknown match/conditions key disarms the rule ─────────────────────────
+# Same failure class as trust_below above: were a typo'd match key (`tool` for
+# `tools`) parsed as a VALID policy, set_policy would return True and the rule
+# would then match nothing. The operator would see a loaded policy and believe
+# the rule is enforcing. Unknown keys therefore join trust_below in being
 # rejected loudly at load rather than silently ignored.
 
 UNKNOWN_MATCH_KEYS = [
-    ("tool", "tools"),                  # (a) singular typo — the one that was found
+    ("tool", "tools"),                  # (a) singular typo — the most likely one
     ("tool_name", "tools"),             # (b) the internal request key, not the match field
     ("mcp_servers", "mcp_server"),      # (c) plural typo
     ("destination", "destination_type"),
@@ -254,15 +258,15 @@ def test_all_documented_match_fields_together_still_load_and_fire():
     ({"id": "empty", "effect": "block", "match": {}, "conditions": {}}, "empty blocks"),
 ])
 def test_rule_with_nothing_to_match_on_is_rejected(rule, label, caplog):
-    """CONTRACT CHANGE (F5 (d)): these two used to assert `is True`.
+    """CONTRACT: these two must NOT load.
 
-    They were written as A-11 scope guards — "an empty block is not an unknown
-    key" — and the assertion they reached for was "still loads". That is the
-    wrong half of the statement. `_rule_matches` returns False for a rule with
-    no matchers and no conditions, so both of these ARE the accepted-and-inert
-    shape A-11 exists to eliminate; the guards were pinning the bug in place.
+    As the trust_below rejection's scope guard says — "an empty block is not an unknown key" — the
+    tempting assertion is "still loads". That is the wrong half of the
+    statement. `_rule_matches` returns False for a rule with no matchers and no
+    conditions, so both of these ARE the accepted-and-inert shape the rejection exists
+    to eliminate; asserting that they load would pin the bug in place.
 
-    What the scope guard actually needed to say is preserved below: an empty
+    What the scope guard actually needs to say is kept below: an empty
     block must not be reported as an UNKNOWN KEY. It is rejected for being
     unable to fire, which is a different error with a different message.
     """
@@ -274,22 +278,26 @@ def test_rule_with_nothing_to_match_on_is_rejected(rule, label, caplog):
     assert rule["id"] in caplog.text
     assert "NEVER fire" in caplog.text
     assert "unknown key" not in caplog.text, (
-        "an empty block is not an unknown key — the A-11 scope guard this test "
-        f"replaced was protecting exactly this: {caplog.text!r}"
+        "an empty block is not an unknown key — the trust_below rejection's scope guard "
+        f"protects exactly this: {caplog.text!r}"
     )
 
 
-def test_unknown_keys_outside_match_are_still_ignored():
-    """Scope guard: only match:/conditions: keys disarm a rule, so only they are
-    rejected. An unknown key at rule or top level stays ignored as documented."""
-    assert _sensor().set_policy({
-        "version": "1", "defaults": {"effect": "allow"}, "some_future_field": 1,
-        "rules": [{"id": "x", "effect": "block", "match": {"tools": ["t"]},
-                   "description": "unknown rule-level key, harmless"}],
-    }) is True
+def test_unknown_keys_outside_match_are_refused_too():
+    """An unknown key at rule or top level is refused like one under match:.
+
+    Ignoring such keys as harmless would be wrong: an ignored key is a part of
+    the policy that was written and not enforced. Per-field cases are in
+    test_policy_refuse_never_drop.py."""
+    base = {"version": "1", "defaults": {"effect": "allow"},
+            "rules": [{"id": "x", "effect": "block", "match": {"tools": ["t"]}}]}
+    assert _sensor().set_policy(base) is True
+    assert _sensor().set_policy({**base, "some_future_field": 1}) is False
+    assert _sensor().set_policy({**base, "rules": [
+        {**base["rules"][0], "description": "unknown rule-level key"}]}) is False
 
 
-# ── A-12 ─────────────────────────────────────────────────────────────────────
+# ── quarantine ───────────────────────────────────────────────────────────────
 
 def test_no_quarantine_state_on_open_sensor():
     s = Sensor(agent_id="a12")
@@ -319,10 +327,10 @@ def test_bare_sensor_adds_nothing_to_the_destination_decision():
 
 
 def test_bare_sensor_has_no_escalation_chain():
-    """A-12/S3: open is a THREE-STATE local scanner and stays one.
+    """S3: open is a THREE-STATE local scanner and stays one.
 
-    "No escalation in open" used to be provable by the absence of the concept.
-    S3 adds the seam a link plugs into, so it is now provable only by the chain
+    "No escalation in open" is not provable by the absence of the concept:
+    S3 adds the seam a link plugs into, so it is provable only by the chain
     being EMPTY — which is what makes `scan()` skip the escalation block
     entirely and return the local verdict object unchanged.
     """
@@ -336,7 +344,7 @@ def test_bare_sensor_has_no_escalation_chain():
 
 
 def test_bare_sensor_supplies_no_policy_conditions():
-    """A-11, restated for the S2 seam.
+    """The trust_below rejection, restated for the S2 seam.
 
     `trust_below` is rejected in open because nothing computes a trust score.
     S2 makes the condition NAME set extensible, so "open rejects trust_below" is
@@ -349,10 +357,10 @@ def test_bare_sensor_supplies_no_policy_conditions():
 
 
 def test_no_gate_other_than_the_circuit_gate_on_a_bare_sensor():
-    """A-12, restated for the S5 gate chain.
+    """Quarantine, restated for the S5 gate chain.
 
-    Quarantine is the enterprise package's GATE. Open now has the seam that a
-    gate plugs into, so "no quarantine in open" is no longer provable by the
+    Quarantine is an extension package's GATE. Open has the seam that a
+    gate plugs into, so "no quarantine in open" is not provable by the
     absence of the concept — it is provable by the absence of anything
     REGISTERED. A bare sensor must carry an empty extension tuple, which is what
     makes the gate chain a single ``_circuit_is_blocking()`` call and nothing
@@ -363,7 +371,7 @@ def test_no_gate_other_than_the_circuit_gate_on_a_bare_sensor():
     assert s._extension_faults == set()
 
 
-# ── A-3 ──────────────────────────────────────────────────────────────────────
+# ── AGT evaluator ────────────────────────────────────────────────────────────
 
 def test_no_agt_stub_or_state_on_open_sensor():
     s = Sensor(agent_id="a3")

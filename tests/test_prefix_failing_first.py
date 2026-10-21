@@ -1,36 +1,38 @@
-"""Failing-first proofs for 1.12.0 and 1.13.0, written to RUN ON THE PRE-FIX TREE.
+"""Failing-first checks for the invariants below, using the public surface only.
 
 WHY THIS FILE EXISTS SEPARATELY FROM tests/test_audit_sep05_bypasses.py AND
 tests/test_audit_f8_reporter_redaction.py / tests/test_audit_f9_tool_telemetry.py.
 
 Those three files are the regression suites, and they are good ones -- side-effect
-canaries, a real SQLite oracle, a count rather than a presence assertion. But not
-one of them can be RUN against the state it was written to catch, because each
-imports a symbol the fix introduced:
+canaries, a real SQLite oracle, a count rather than a presence assertion. Each
+imports a symbol that implements the invariant it checks:
 
     test_audit_sep05_bypasses.py       from xaidr import propagate_context
     test_audit_f8_reporter_redaction.py  from xaidr.reporters import redact_url, ...
     test_audit_f9_tool_telemetry.py      from xaidr.sensor import _canonical_arguments
 
-On the pre-fix tree each of those is an ImportError at COLLECTION. An ImportError
-is not a failing-first proof: it says the fix is absent, which is already known,
+On a tree without that symbol each of those is an ImportError at COLLECTION. An
+ImportError is not a failing-first proof: it says the implementation is absent,
 and its message names no consequence. A test whose red says "cannot import name
 'redact_url'" is indistinguishable from a typo.
 
-Every test in this file therefore imports ONLY the public surface that existed
-BEFORE the fix, and asserts the CONSEQUENCE rather than the mechanism:
+Every test in this file therefore imports ONLY the long-standing public surface
+(Sensor, begin_flow, clear_flow, extract_context, inject_context), and asserts
+the CONSEQUENCE rather than the mechanism:
 
-    F2   the tool function ran        (a canary list, not a verdict string)
-    F3   the tool function ran
-    F4   the rows are gone            (a real SQLite table, counted first)
-    F6   a delegated action read as local
-    caps a padded statement deleted every row and the tool still ran
-    F8   the credential appears N times in the log      (a count)
-    F9   three different commands produce one hash      (a collision)
+    -    positional and keyword calls get one verdict  (a canary list records
+                                                        whether the tool ran)
+    -    a dangerous later argument is examined         (the tool never runs)
+    -    the verdict follows the rows a statement removes
+                                                        (a real SQLite table)
+    -    a delegated action never reads as local
+    -    a padded statement that deletes every row is still gated
+    -    the credential appears zero times in the log  (a count)
+    -    three different commands produce three hashes (no collision)
 
-Run against the pre-fix tree, each of these goes red with a message that names
-what an operator loses. Run against main, each goes green. That is the proof
-obligation; the files above are what keeps it.
+On any tree where one of these invariants does not hold, its check goes red with
+a message that names what an operator would lose; where it holds, the check is
+green. That is the proof obligation; the files above are what keeps it.
 """
 
 from __future__ import annotations
@@ -90,7 +92,7 @@ def _clean_flow():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 1.12.0  F2 -- a loaded policy was bypassed by calling the tool positionally
+# positional and keyword calls get the same policy verdict
 # ══════════════════════════════════════════════════════════════════════════
 
 TERRAFORM = "terraform destroy -auto-approve"
@@ -125,7 +127,7 @@ def test_f2_a_positional_call_does_not_execute_what_a_keyword_call_refuses():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 1.12.0  F3 -- only the first SQL/URL-shaped argument was ever examined
+# every SQL/URL-shaped argument is examined, not only the first
 # ══════════════════════════════════════════════════════════════════════════
 
 SQL_TAUTOLOGY = "DELETE FROM records WHERE 1=1"
@@ -183,7 +185,7 @@ def test_f3_ordinary_multi_argument_calls_still_run():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 1.12.0  F4 -- SQL was string-matched, and wrong in BOTH directions
+# SQL predicates are read, not string-matched, in BOTH directions
 # ══════════════════════════════════════════════════════════════════════════
 
 def _rows_left(statement: str) -> int:
@@ -226,7 +228,7 @@ def test_f4_a_statement_that_empties_the_table_is_gated(statement):
     assert _rows_left(statement) == 0, "the fixture does not actually delete everything"
     assert _gated(statement) in ("blocked", "approval_required"), (
         f"{statement!r} removes all three rows and was returned as allowed -- "
-        "the predicate reader was matching text, so a RETURNING clause, a CTE "
+        "the predicate reader is matching text, so a RETURNING clause, a CTE "
         "or a leading comment is enough to make a full table delete read as bounded"
     )
 
@@ -243,7 +245,7 @@ def test_f4_a_genuinely_bounded_statement_is_not_refused(statement):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 1.12.0 (fifth class)  the caps -- a bound that DROPPED what it had not read
+# (fifth class)  the caps -- a bound never DROPS what it has not read
 # ══════════════════════════════════════════════════════════════════════════
 
 DESTRUCTIVE = "DELETE FROM records"
@@ -275,9 +277,10 @@ def test_caps_a_batch_at_the_statement_cap_cannot_hide_what_follows():
 
 def test_caps_a_value_past_the_candidate_walk_cannot_hide():
     # DISTINCT pad values, deliberately. Two hundred copies of one string trips
-    # the LLM04 repeat-loop rules, and the call then comes back flagged on EVERY
-    # version -- so a padded-with-identical-values form of this test is green on
-    # the pre-fix tree for a reason that has nothing to do with the candidate cap.
+    # the LLM04 repeat-loop rules, and the call then comes back flagged whatever
+    # the argument walk does -- so a padded-with-identical-values form of this
+    # test would be green for a reason that has nothing to do with the candidate
+    # cap.
     args = {f"pad{i}": f"note number {i} about the quarterly report" for i in range(100)}
     args["query"] = DESTRUCTIVE
     assert _sensor(CRITICAL).scan_tool_call("run_sql", args).action in (
@@ -288,7 +291,7 @@ def test_caps_a_value_past_the_candidate_walk_cannot_hide():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 1.12.0  F6 -- lost provenance made a delegated action read as local
+# lost provenance never makes a delegated action read as local
 # ══════════════════════════════════════════════════════════════════════════
 
 TIER_POLICY = _policy({"tools": ["deploy_prod"]}, "require_approval",
@@ -340,7 +343,7 @@ def test_f6_stripping_provenance_never_weakens_the_verdict(strip):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 1.13.0  F8 -- a credential in a reporter destination reached the logs
+# a credential in a reporter destination never reaches the logs
 # ══════════════════════════════════════════════════════════════════════════
 
 CANARY = "s3cr3t-CANARY-token-9f2a"
@@ -421,7 +424,7 @@ def test_f8_the_destination_is_still_named():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 1.13.0  F9 -- tool telemetry reported content and cost it had not measured
+# tool telemetry reports only content and cost it has measured
 # ══════════════════════════════════════════════════════════════════════════
 
 def _tool_event(tool="run_command", arguments=None):
@@ -450,10 +453,11 @@ def test_f9_three_different_commands_do_not_share_one_content_hash():
 def test_f9_argument_order_does_not_change_the_hash_of_an_identical_call():
     """NOT A DISCRIMINATING TEST, and it is marked so rather than counted.
 
-    It passes on the pre-fix tree too, trivially: a hash of the tool NAME is
-    order-independent because it reads no arguments at all. It pins a property
-    of the fix (canonicalisation) that could regress later; it does not prove
-    the fix was needed. The test above it is the one that discriminates.
+    It would pass even if the hash covered only the tool NAME, trivially: a
+    hash of the name is order-independent because it reads no arguments at
+    all. It pins canonicalisation, a property that could regress; it does not
+    show that hashing the arguments is needed. The test above it is the one
+    that discriminates.
     """
     a = _tool_event("run_sql", {"query": "SELECT 1", "db": "prod"}).get("promptHash")
     b = _tool_event("run_sql", {"db": "prod", "query": "SELECT 1"}).get("promptHash")
@@ -481,7 +485,7 @@ def test_f9_scan_time_is_measured_not_zero():
 
 
 def test_f9_the_openA2A_mapping_carries_the_privilege_tier_fields():
-    """The third half of 1.13.0: the decision was carried and its reason was not."""
+    """Telemetry's third half: the decision is carried and its reason must be too."""
     from xaidr.schema import to_openA2A
 
     cap = _Capture()
@@ -500,9 +504,9 @@ def test_f9_the_openA2A_mapping_carries_the_privilege_tier_fields():
 
     mapped = to_openA2A({"type": "scan", "agentId": "f9", "data": data})
     flat = mapped.get("attributes", mapped)
-    # NOT a substring test on "authz": gen_ai.security.authz.impact_tier was
-    # already carried before the fix, so `any(k for k in flat if "authz" in k)`
-    # is green on the pre-fix tree and proves nothing. Name the four.
+    # NOT a substring test on "authz": gen_ai.security.authz.impact_tier is
+    # carried independently of these four, so `any(k for k in flat if "authz" in k)`
+    # would be green with all four missing and proves nothing. Name the four.
     want = {
         "gen_ai.security.authz.privilege_tier",
         "gen_ai.security.authz.privilege_tier_configured",

@@ -7,8 +7,8 @@
 External reviewers name fail-open as a weakness. Fail-open is the right
 *default* for an in-process control: a scanner bug must not take down the host's
 production traffic. The gap is that the operator has no choice. This document
-enumerates the sites (§a), proposes the grouping (§b), and measures what each
-group would cost on the committed benign pools (§e) — including, and mostly,
+enumerates the sites (section a), proposes the grouping (section b), and measures what each
+group would cost on the committed benign pools (section e) — including, and mostly,
 where that measurement is not possible.
 
 **The default does not change.** Every group is opt-in and defaults to open.
@@ -34,7 +34,7 @@ deploy log, not in a customer incident.
 | A4 | `scanner/normalizer.py:66-78` | `typo-keywords.json` corrupt | `print`; normalization silently disabled | refuse to construct |
 | A5 | `l1.py:342`, `l2.py:62`, `classifier.py:68,82,94,106` | ONE regex fails to compile | `print`; that rule is dropped, the other ~159 load | raise, as `UnknownRuleCategory` already does at `l1.py:289` |
 | A6 | `local_policy.py:107-132` | PyYAML absent / file unreadable / policy malformed | `logger.warning`; `None`; **detection-only** | refuse to construct when a policy was *named* |
-| A7 | `local_policy.py:150-153` | `set_policy()` handed a malformed dict | warning; `None`; returns `False` | already semi-closed — the return value is readable |
+| A7 | `local_policy.py` `adopt_policy` | `set_policy()` handed a malformed dict | refused at ERROR; the policy already in force keeps enforcing; returns `False` | already closed — keep-last-good (`tests/test_policy_keep_last_good.py`) |
 | A8 | `scanner/nano.py:837-840`, `scanner/local.py:1089-1092` | nano inference raises / non-finite probability | `p_raw=0.0`, family `none` — the signal the operator enabled is silently absent | block, or refuse to construct on repeat |
 | A9 | `scanner/local.py:390-398` | an escalator's `health()` reports unhealthy or raises | logged; **the link is kept anyway** | refuse to construct |
 
@@ -54,7 +54,7 @@ Per-call. Zero of these sites are live on a bare sensor.
 | B4 | `sensor.py:2710-2713` | `blocked_urls()` raises | that extension's destinations are **absent from the blocklist** | refuse the call |
 | B5 | `sensor.py:3521-3526` | `destination_policy()` raises | skip; operator blocklist still runs | refuse the request |
 | B6 | `escalation.py:135-170` | escalator raises or exceeds `timeout_ms` | local verdict stands, `ESCALATION_SKIPPED` + reason | refuse the call |
-| B7 | `sensor.py:883-890, 896-902, 939-948, 1140-1141, 1186-1187, 1215-1217` | breaker state read or counter raises | `"closed"` / counter inert — `circuit_state` keeps reporting health | refuse the call (**not** open the circuit — see §b) |
+| B7 | `sensor.py:883-890, 896-902, 939-948, 1140-1141, 1186-1187, 1215-1217` | breaker state read or counter raises | `"closed"` / counter inert — `circuit_state` keeps reporting health | refuse the call (**not** open the circuit — see section b) |
 | B8 | `autopatch/core.py:126-160` | a patched framework hook raises | `logger.warning`; **the tool/HTTP call proceeds unscanned** | refuse the call |
 | B9 | `autopatch/core.py:375-390`, `frameworks.py:615` | a seam cannot be patched | `unpatchable()` manifest record; that boundary is never scanned | refuse to construct |
 
@@ -153,7 +153,7 @@ broken, only a wall of blocks. And it is dishonest: a `blocked` verdict asserts
 whatever about the content. **Any grouping that put rule-asset loading into a
 traffic-verdict group is wrong and I would reject it.**
 
-G1 is also the ADV-2 posture the codebase already uses everywhere else in the
+G1 is also the loud-validation posture the codebase already uses everywhere else in the
 constructor — `enforcement_mode` (`enforcement.py:resolve`), `privilege_tier`
 (`sensor.py:487`), `circuit_breaker` (`652`), `extensions` (`541`), the nano
 artifact hash (`nano.py:745`), a duplicate policy-condition key (`784`). A
@@ -196,7 +196,7 @@ past depth 8 converts whatever sat at level 9 into a 0.35 flag.
 
 It must not be merged with G2 because it is the only group with a real
 false-positive cost on honest traffic: a large document, a long migration, a
-deep task envelope. That cost is measured in §e — and mostly cannot be.
+deep task envelope. That cost is measured in section e — and mostly cannot be.
 
 G3 should **compose with the policy engine, not duplicate it.** C7/C8 already
 classify at `critical` with `detect: None`, so an operator with
@@ -301,8 +301,8 @@ within that one, three of its thirteen sites.**
 reporter=_NullReporter())`. Measured: `circuit_breaker=None`, `extensions=()`,
 `escalators=()`, `enable_nano=False`, no policy file, autopatch never called.
 Every G2 and G4 site is off before the first item is scanned. Reporting "G2
-costs 0 false positives" from that harness would have been the eighth instance
-of the shape `benign_a2a/README.md` documents.
+costs 0 false positives" from that harness would be the blind-population shape
+`benign_a2a/README.md` documents.
 
 That is what the two shipping conditions were for. Both are now closed.
 
@@ -336,15 +336,15 @@ without a test here:
 | B8′ | autopatch tool seam | call runs | refusal string |
 | D1–D3 | scan / scan_output / scan_a2a / scan_tool_call | `SCAN_FAILED_OPEN` | refusal ×4 |
 | D4 | `_check_destination` raises | blocklist skipped | `DelphiBlockedError` |
-| D5 | wrong-typed input | `not_scannable` | **stays open** (§f7) |
+| D5 | wrong-typed input | `not_scannable` | **stays open** (section f7) |
 
-**Three things the sabotage found that a corpus could not have.**
+**Three things the sabotage checks that a corpus could not.**
 
-1. **`_extension_failed` deduplicated its fault handling, not just its log.**
+1. **`_extension_failed` deduplicates its log, never its refusal.**
    The ERROR line is once per (extension, hook) — correct, a broken hook should
-   not produce fifty lines. But the dedup `return`ed EARLY, so a refusal placed
-   after it would have fired on call 1 and silently allowed calls 2..N. Logging
-   and refusing are different questions and now have different lifetimes;
+   not produce fifty lines. A dedup that `return`ed EARLY would make a refusal
+   placed after it fire on call 1 and silently allow calls 2..N. Logging and
+   refusing are different questions with different lifetimes;
    `test_B1_gate_closed_refuses_EVERY_call_not_just_the_first` is the gate.
 2. **The first draft of the harness sabotaged the wrong thing.** It set
    `sensor._scanner.scan = _boom` for all four entry points — but the tool path
@@ -399,12 +399,12 @@ was run against" is.
     not refused                             7
 ```
 
-**These numbers replace an earlier set (4 covered / 15 truncated / 12 clean /
-7 refused-and-unread, and `refused-but-FULLY-READ 2` under the naive signal).**
-The earlier figures were measured with the three L1 wall-clock bounds live, so
-they described the machine that ran them rather than the corpus; see
-`benign_longform/README.md` for the full retraction. **The zero did not move** —
-refused-but-fully-read is 0 under either measurement, which is the claim this
+**These numbers are measured with the three L1 wall-clock bounds pinned.**
+Measured with the bounds live, the same pool gives figures that describe the
+machine that ran them rather than the corpus (on one laptop: 4 covered / 15
+truncated / 12 clean / 7 refused-and-unread, and `refused-but-FULLY-READ 2`
+under the naive signal); see `benign_longform/README.md`. **The zero does not
+move** — refused-but-fully-read is 0 under either measurement, which is the claim this
 section exists to support.
 
 **Two caveats that ship with that zero.**
@@ -499,9 +499,9 @@ closed;** what follows records what they produced.
 
 * **G2 / G4 — a corpus of FAULTS, not of inputs.**
   `tests/test_fail_closed_sabotage.py`, 52 tests, one per site, each asserted
-  twice: open still fails open, closed hands back a usable refusal. See §e.
+  twice: open still fails open, closed hands back a usable refusal. See section e.
 * **G3/C4 — a benign large-document pool.** `benign_longform/`, 24 items from
-  90 KB to 900 KB. It found a design defect before ship; see §e and
+  90 KB to 900 KB. It found a design defect before ship; see section e and
   `benign_longform/README.md`.
 * **G3/C1-C3 — `benign_a2a` items at depth 6–8, not 2–4.** NOT done. The
   present pool proves the bound is clear of honest A2A; it still cannot price
@@ -518,12 +518,13 @@ A fail-closed decision produces an ordinary `ScanResult` — `action="blocked"`,
 `input_status="fail_closed"` — and travels the refusal path each boundary
 **already has**. Not one new return path is added anywhere in the package.
 
-That is not minimalism, it is the lesson from 1.9.0 read correctly. A LangGraph
-`ToolNode` calls `tool.invoke(tool_call)`, requires a `ToolMessage` back, and
-raises `TypeError: Tool <name> returned unexpected type: <class 'str'>` on
-anything else; its default `handle_tool_errors` re-raises, so a **correctly
-blocked call took the whole graph down**. The bug was not the verdict. The bug
-was a verdict travelling a return path whose type contract it did not satisfy.
+That is not minimalism, it is the lesson of the `ToolNode` return type read
+correctly. A LangGraph `ToolNode` calls `tool.invoke(tool_call)`, requires a
+`ToolMessage` back, and raises `TypeError: Tool <name> returned unexpected type:
+<class 'str'>` on anything else; its default `handle_tool_errors` re-raises, so
+a refusal of the wrong type means a **correctly blocked call takes the whole
+graph down**. The failure is not the verdict. It is a verdict travelling a
+return path whose type contract it does not satisfy.
 
 The lesson people usually take from that is "be careful with the new type". The
 lesson that actually prevents it is **do not add one**. Every boundary in this
@@ -545,8 +546,8 @@ required exactly one edit to the refusal machinery — a branch in
 `refusal_text()` so the transcript says something useful.
 
 `tests/test_fail_closed_sabotage.py::assert_usable_refusal` asserts
-`isinstance(result, ScanResult)` on every site with the 1.9.0 shape named in
-the failure message, so a future change that reaches for a new type fails on 30
+`isinstance(result, ScanResult)` on every site with the `ToolNode` wrong-type
+failure named in the failure message, so a future change that reaches for a new type fails on 30
 tests at once.
 
 ### The one thing the refusal text must say differently
@@ -624,7 +625,7 @@ claimed:
   the population that can see the code this work touched (`iter_scan_windows`
   now yields a third element; `_scan_tail` counts coverage).
 * The committed pools: **814 benign rows, 0 refused at the default**, and the
-  per-pool block counts are identical to the pre-change run (§e).
+  per-pool block counts are identical to the pre-change run (section e).
 
 Mechanically, `fail_closed=()` resolves to a shared empty `FailClosedConfig`,
 every `group in self._fail_closed` is a lookup in an empty dict, and every new
@@ -640,7 +641,7 @@ defaulting to `None`. If it ever changes it is its own major release with its
 own notes, and the notes lead with the `approval_required`/breaker interaction
 above.
 
-### Release note content (1.18.0)
+### Release note content
 
 * **New, opt-in, default off:** `Sensor(fail_closed=...)`, four independent
   groups. Nothing changes unless you pass it.
@@ -652,12 +653,12 @@ above.
   against" were the same rule, and only the second is a security fact.
 * **New, on by default:** `Sensor.degradations` — asset load failures,
   unhealthy escalators, faulted extension hooks and inert breaker counters, as
-  a list. Previously four `print` calls to stdout and two ERROR log lines.
-* **Behaviour change, small:** a fault inside the gate chain
-  (`_run_gates`) now fails open with `SCAN_FAILED_OPEN` instead of propagating
-  to the host. This closes a hole in the "no scan entry point can crash the
-  host" contract that `test_operational_resilience.py` already asserted for
-  every other part of the entry point.
+  a list, rather than `print` calls to stdout and ERROR log lines.
+* **Gate-chain faults fail open:** a fault inside the gate chain
+  (`_run_gates`) fails open with `SCAN_FAILED_OPEN` and never propagates to the
+  host, so the gate chain keeps the same "no scan entry point can crash the
+  host" contract that `test_operational_resilience.py` asserts for every other
+  part of the entry point.
 * **Not changed:** the default posture, every threshold, every rule asset, and
   every verdict on all 814 committed benign rows.
 
@@ -751,14 +752,14 @@ that reaches them.
 
 ## Failing-first proof
 
-Both defects below were found DURING this work, by the two instruments the
-shipping conditions required. Each is proved red against the pre-fix state with
-its message, then green.
+Each gate below comes from one of the two instruments the shipping conditions
+required. Each is shown red under a sabotage that produces the failure it
+guards against, with its message, then green.
 
-### 1. The `bounds` signal refused on SIZE, not on coverage
+### 1. The `bounds` signal refuses on coverage, not on SIZE
 
-Sabotage: `_BOUND_SIGNAL_RULES` reverted to name `_OVERSIZED_INPUT_RULE`
-instead of `_SCAN_INCOMPLETE_RULE` — the design as originally written.
+Sabotage: `_BOUND_SIGNAL_RULES` set to name `_OVERSIZED_INPUT_RULE`
+instead of `_SCAN_INCOMPLETE_RULE` — the naive design.
 
 ```
 $ PYTHONPATH=. python -m pytest tests/test_benign_longform.py::test_a_fully_read_long_document_is_NOT_refused -q
@@ -785,10 +786,10 @@ truncated document is also oversized. Nothing that only tested the truncated
 case could have found this. The discriminating input is the one that is
 oversized and NOT truncated, and no committed pool contained one.
 
-### 2. `_extension_failed` deduplicated the refusal, not just the log
+### 2. `_extension_failed` deduplicates the log, never the refusal
 
-Sabotage: the original early-`return` dedup restored, so the fail-closed raise
-placed after it fires on the first call only.
+Sabotage: an early-`return` dedup in `_extension_failed`, so the fail-closed
+raise placed after it fires on the first call only.
 
 ```
 $ PYTHONPATH=. python -m pytest tests/test_fail_closed_sabotage.py::test_B1_gate_closed_refuses_EVERY_call_not_just_the_first -q
@@ -884,20 +885,16 @@ D. no verdict was produced; the failure is at construction, not on traffic
 Three things that check establishes and no in-tree test could:
 
 * **`import xaidr` still succeeds on a corrupt asset.** The contract
-  `l1._load_and_compile` has always kept is preserved. §f1's split between the
+  `l1._load_and_compile` has always kept is preserved. Section f1's split between the
   fault point and the fail-closed point is real, not a comment.
-* **The degradation is now visible without opting in.** `Sensor.degradations`
-  names the asset on a default sensor. Before this change the only trace was a
-  `print` to stdout.
+* **The degradation is visible without opting in.** `Sensor.degradations`
+  names the asset on a default sensor, rather than leaving a `print` to stdout
+  as the only trace.
 * **It costs a verdict, measurably.** The same obvious injection scores
   `blocked 0.88` on a healthy install and `flagged 0.65` on the corrupt one.
   That is what `artifact` exists to stop a deployment from running into
   unknowingly — and it stops it at construction, with the file named, not by
   refusing traffic.
-
-`/milestone-verify` is referenced by the operating notes but is not installed
-in this environment (`~/.claude/commands/` has no such command), so the checks
-above were run directly.
 
 ### Still unverified, and what would settle it
 
@@ -906,4 +903,4 @@ above were run directly.
   pool comes near the bound, but the FP cost of *moving* the bound is
   unmeasured. Settled by extending that pool, not by anything here.
 * **Four of nine `bounds` sites remain blind** (C9, C11, C12, C13) — see the
-  §e table. Each needs an input class no committed pool contains.
+  section e table. Each needs an input class no committed pool contains.

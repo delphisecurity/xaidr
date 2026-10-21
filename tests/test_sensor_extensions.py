@@ -94,7 +94,7 @@ def test_attach_order_is_the_order_given():
 
 @pytest.mark.parametrize("bad", [object(), "not-an-extension", 42, SensorExtension])
 def test_a_non_extension_raises_naming_the_type(bad):
-    """ADV-2: a control handed something it does not understand must not be inert."""
+    """Loud validation: a control handed something it does not understand must not be inert."""
     with pytest.raises(ValueError) as exc:
         _sensor(extensions=[bad])
     assert type(bad).__name__ in str(exc.value)

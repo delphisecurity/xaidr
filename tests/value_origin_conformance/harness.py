@@ -1,5 +1,5 @@
 """Level-1 flow runner: replays flow scripts through ``xaidr.value_origin``'s
-PUBLIC interface only (§5.3). Vendored with the suite, so it imports nothing
+PUBLIC interface only. Vendored with the suite, so it imports nothing
 from ``xaidr`` except ``xaidr.value_origin``'s ``__all__``.
 """
 from __future__ import annotations
@@ -51,7 +51,7 @@ CONFIGS = {"A": (True, CONFIG_A), "B": (False, CONFIG_A), "C": (True, ())}
 
 
 def run_corpus_flow(flow, config):
-    """§5.1's flow script, events replayed in ``event_order``."""
+    """One corpus flow script, events replayed in ``event_order``."""
     declare_spans, designations = CONFIGS[config]
     bind_fresh_ledger()
     outcomes = []

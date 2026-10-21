@@ -1,5 +1,5 @@
-"""The call verdict, its wire value and its row (§1.4 evaluate_call, verdict_of,
-should_block, row_text; §3.4)."""
+"""The call verdict, its wire value and its row (``evaluate_call``,
+``verdict_of``, ``should_block``, ``row_text``)."""
 from __future__ import annotations
 
 import logging
@@ -74,8 +74,8 @@ def should_block(verdict: CallVerdict, *, mode: Mode) -> bool:
         return False
 
 
-# §3.4, normative. The Brain's src/value-origin.ts and blank-canvas's waterfall
-# are checked against a JSON export of this table (row_text.json).
+# Normative. Other implementations of this table are checked against a JSON
+# export of it (row_text.json).
 _ROWS = {
     "no_flow": (RowState.NOT_RECORDED,
                 "Intent: not evaluated — no flow context was visible to this call "
@@ -141,8 +141,8 @@ _UNRECOGNISED_MAX = 64
 
 
 def row_text(wire: str | None, scan_mode: str | None) -> tuple[RowState, str]:
-    """The normative §3.4 mapping, including ``None`` (the field is absent) and
-    any other string (V-29: truncated to 64 chars FIRST, then backticks escaped,
+    """The normative wire-value-to-row mapping, including ``None`` (the field is absent) and
+    any other string (truncated to 64 chars FIRST, then backticks escaped,
     so an escape is never cut in half)."""
     if scan_mode != "tool_call":
         return _NOT_TOOL_CALL
@@ -168,7 +168,7 @@ def _finding_wire(f: DestinationFinding) -> WireValue:
     if f.origin is Origin.PRINCIPAL:
         return WireValue.PRINCIPAL if f.span_declared else WireValue.PRINCIPAL_UNDECLARED_SPAN
     if f.origin is Origin.TRUSTED_SOURCE:
-        # C-3a: a trusted read authorized only by an undeclared span is undeclared.
+        # A trusted read authorized only by an undeclared span is undeclared.
         return (WireValue.TRUSTED_SOURCE if f.span_declared
                 else WireValue.PRINCIPAL_UNDECLARED_SPAN)
     if f.origin is Origin.UNTRUSTED_SOURCE:
@@ -178,7 +178,7 @@ def _finding_wire(f: DestinationFinding) -> WireValue:
 
 def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
                   flow_active: bool) -> CallVerdict | None:
-    """Pure with respect to the ledger — reads only, never writes (C-10).
+    """Pure with respect to the ledger — reads only, never writes.
     ``flow_active`` is the host's own ``is_flow_active()``. Returns None ONLY on
     an internal fault; the seam then omits the wire field.
 

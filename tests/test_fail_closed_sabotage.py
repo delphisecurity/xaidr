@@ -16,11 +16,11 @@ EVERY SITE IS ASSERTED TWICE, and the second half is the one that matters:
   CLOSED                        the caller gets a USABLE refusal — an ordinary
         ScanResult, action blocked, category `fail_closed`, naming the group —
         and NOT an exception, a None, or a value of some new type. See
-        docs/fail-closed-design.md §c: a correct verdict of the wrong type
-        crashed a LangGraph host in 1.9.0 and the lesson was "do not add a
-        return path", so these tests assert the TYPE as well as the verdict.
+        docs/fail-closed-design.md, section c: a correct verdict of the wrong
+        type crashes a LangGraph host, and the lesson is "do not add a return
+        path", so these tests assert the TYPE as well as the verdict.
 
-The site list is derived from §a of the design doc. `test_every_control_site_
+The site list is derived from section a of the design doc. `test_every_control_site_
 is_covered` and `test_every_internal_site_is_covered` fail if a site is added
 to the doc's group and not sabotaged here, so the harness cannot silently fall
 behind the implementation.
@@ -57,10 +57,10 @@ def _boom(*a, **k):
 # ── the refusal contract, asserted once and reused ───────────────────────────
 
 def assert_usable_refusal(result, group):
-    """What a closed group must hand back. The §c contract, in one place."""
+    """What a closed group must hand back. The section-c contract, in one place."""
     assert isinstance(result, ScanResult), (
         f"fail-closed returned {type(result).__name__}, not a ScanResult. This "
-        "is the 1.9.0 LangGraph shape: a correct verdict travelling a return "
+        "is the LangGraph wrong-type shape: a correct verdict travelling a return "
         "path whose type contract it does not satisfy."
     )
     assert result.action == "blocked"
@@ -205,7 +205,7 @@ def test_B5_destination_policy_open_fails_open():
 def test_B5_destination_policy_closed_raises_blocked_error():
     """The transport boundary has NO in-band refusal, so it raises.
 
-    This is the §c split and it is deliberate: `scan_text_boundary` already
+    This is the section-c split and it is deliberate: `scan_text_boundary` already
     documents that entrypoint and transport seams raise `DelphiBlockedError`
     because there is no ToolMessage to return on an HTTP send. Fail-closed
     reuses that exception rather than inventing a second one, so a host that
@@ -263,8 +263,8 @@ def test_B6_precondition_escalatable_input_reaches_the_link():
     """The sabotage above is only a measurement if the link is consulted.
 
     Asserted as its own test rather than as a skip inside the others: a skip
-    reports green and proves nothing, and this repo has already shipped a green
-    suite hiding seven CANCELLED tests.
+    reports green and proves nothing, and a green suite can hide tests that
+    never ran.
     """
     consulted = []
 
@@ -333,7 +333,7 @@ def test_B7_breaker_open_fails_open(method, call):
     setattr(s._breaker, method, _boom)
     r = call(s)
     assert r.category != FAIL_CLOSED_CATEGORY
-    assert s.circuit_state == "closed"       # the accessor never raises. §f.
+    assert s.circuit_state == "closed"       # the accessor never raises. Section f.
     s.close_sync()
 
 
@@ -346,7 +346,7 @@ def test_B7_breaker_closed_refuses(method, call):
 
 
 def test_B7_circuit_state_property_never_raises_even_closed():
-    """§f: `circuit_state` is an accessor, not a control decision.
+    """Section f: `circuit_state` is an accessor, not a control decision.
 
     A host polls it. Raising out of a property read would be a worse surprise
     than a stale answer, and the READ that decides anything —
@@ -437,7 +437,7 @@ def test_B8prime_autopatch_hook_closed_refuses():
     INSIDE the sensor converts to a verdict at the entry point and the hook
     returns a refusal through `scan_tool_boundary` as usual. A fault in the
     hook's OWN body (a bug in our patch code, not in the sensor) is an
-    `internal` matter with no sensor call to hang a verdict on — see §f entry
+    `internal` matter with no sensor call to hang a verdict on — see section f entry
     "the patch wrapper body".
     """
     from xaidr.autopatch.core import scan_tool_boundary

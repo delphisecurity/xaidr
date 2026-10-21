@@ -70,11 +70,10 @@ MAX_STATEMENTS = 32
 # Every bound in this module is a place where the parser stops. A bound that
 # DROPS what it did not reach reports the same thing as an input that contained
 # nothing: a caller cannot tell "there was no DELETE" from "we stopped before the
-# DELETE". Both of those bypasses were measured on 1.12.0-rc, one by padding past
-# MAX_SQL_CHARS and one by preceding the payload with MAX_STATEMENTS harmless
-# statements; in both the destructive statement ran.
+# DELETE", whether the payload sits past MAX_SQL_CHARS or behind MAX_STATEMENTS
+# harmless statements.
 #
-# So every bound now emits this shape IN ADDITION to whatever it did manage to
+# So every bound emits this shape IN ADDITION to whatever it did manage to
 # parse, and `sql.unparsed_input` in impact-classes.json gates it. The shape is
 # deliberately NOT a fabricated DELETE: it says "a SQL value exceeded what this
 # parser can read", which is true, and the rule that gates it says why. The
@@ -111,12 +110,11 @@ _STATEMENT_RE = re.compile(
     r"^\s*(" + "|".join(_STATEMENTS) + r")\b", re.IGNORECASE
 )
 
-# THE LEADING VERB IS NOT ENOUGH, and finding that out cost a real regression.
-# `truncate`, `create`, `replace`, `call` and `execute` are SQL statements AND
-# ordinary shell binaries. `truncate -s 0 /var/log/audit.log` is how an audit log
-# is wiped; it begins with a SQL verb and is not remotely SQL. Reading it as SQL
-# reclassified it from `evade` to `infra_destruction` and lost the fact that
-# something was covering its tracks.
+# THE LEADING VERB IS NOT ENOUGH. `truncate`, `create`, `replace`, `call` and
+# `execute` are SQL statements AND ordinary shell binaries. `truncate -s 0
+# /var/log/audit.log` is how an audit log is wiped; it begins with a SQL verb and
+# is not remotely SQL. Reading it as SQL would reclassify it from `evade` to
+# `infra_destruction` and lose the fact that something is covering its tracks.
 #
 # So a value has to look like SQL GRAMMAR, not just start with a SQL word. Two
 # gates, both cheap:
@@ -188,11 +186,11 @@ _ALTER_DROP_RE = re.compile(
     r"\bdrop\s+(column|constraint|index|partition|default)\b", re.IGNORECASE
 )
 
-# NOTE: the regex tautology table that used to live here is gone rather than
-# kept "in case". It was already unreachable — `_predicate_state_tokens` reads
-# the token stream — and an unreachable second recogniser for the load-bearing
-# field is the shape this module has twice been bitten by (see the three
-# enforcement points for MAX_STATEMENTS in `_split_token_statements`).
+# NOTE: there is deliberately no regex tautology table here, not even "in
+# case". `_predicate_state_tokens` reads the token stream, and an unreachable
+# second recogniser for the load-bearing field is a shape this module avoids
+# (see the single enforcement point for MAX_STATEMENTS in
+# `_split_token_statements`).
 
 # Comments and string literals, removed before any structural question is asked
 # so that a literal containing the word WHERE, or a commented-out DROP, cannot
@@ -217,28 +215,28 @@ class SqlShape(NamedTuple):
 # THE LEXER, and why this is a lexer and not either a regex layer or a parser
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# An independent audit measured three bypasses and two false positives that all
-# have ONE cause: string and comment boundaries were decided by regexes run over
-# raw text, so a quoted literal changed the structural reading of routine valid
-# SQL. Against a real SQLite oracle, each of these deleted every row while the
-# scanner returned allowed at score 0.00 under a critical-tier approval policy:
+# String and comment boundaries decided by regexes run over raw text would let
+# a quoted literal change the structural reading of routine valid SQL. Each of
+# these deletes every row against a real SQLite oracle, and each must classify
+# as the unbounded mutation it is:
 #
-#   DELETE FROM records RETURNING 'where id=7'   the WHERE inside a STRING made
-#                                                the statement look bounded
-#   WITH x AS (SELECT 1) DELETE FROM records     the leading CTE was classified
-#                                                instead of the real mutation
-#   SELECT '--'; DELETE FROM records WHERE 1=1   the `--` inside a STRING was
-#                                                read as a comment, swallowing
-#                                                the statement that followed
+#   DELETE FROM records RETURNING 'where id=7'   a WHERE inside a STRING must
+#                                                not make it look bounded
+#   WITH x AS (SELECT 1) DELETE FROM records     the real mutation, not the
+#                                                leading CTE, is classified
+#   SELECT '--'; DELETE FROM records WHERE 1=1   a `--` inside a STRING is not a
+#                                                comment and cannot swallow the
+#                                                statement that follows
 #
-# and two the other way, blocking work that deletes 0 and 1 row respectively:
+# and two the other way, which delete 0 and 1 row respectively and must not
+# block:
 #
 #   DELETE FROM records WHERE note='1=1'         `1=1` inside a STRING
 #   DELETE FROM records WHERE id=7 AND 1=1       a tautology as one CONJUNCT of
 #                                                an otherwise bounded predicate
 #
-# WHY A LEXER RATHER THAN FAILING CLOSED ON THE CURRENT RECOGNISER. Failing
-# closed was the alternative considered, and on its own it does not work: to
+# WHY A LEXER RATHER THAN FAILING CLOSED ON A REGEX RECOGNISER. Failing closed
+# alone does not work: to
 # decide "I cannot confidently parse this" you must ALREADY know where strings
 # and comments end. `SELECT '--'; DELETE ...` cannot even be split into
 # statements without that, so a fail-closed rule bolted onto the regex layer
@@ -355,16 +353,16 @@ def tokenize(text: str) -> list:
             continue
         if ch == "$":
             # A DOLLAR QUOTE OPENS WITH $$ OR $tag$, AND `tag` IS AN IDENTIFIER.
-            # Taking "the next $ within 64 chars" as the closing delimiter is
-            # what turned every two-placeholder Postgres query into one opaque
-            # string: in `UPDATE p SET n = $2 WHERE lower(email) = lower($1)`
-            # the tag became `$2 WHERE lower(email) = lower($`, that tag never
-            # recurs, and the scan ran to end-of-input — so the WHERE clause was
-            # INSIDE a string literal and the statement read `predicate=none`,
-            # an unbounded mutation. Measured at 5 of 50 realistic benign DML
-            # statements. The same swallow hides a following `;` and everything
-            # after it, which is the statement-splitting bypass this module
-            # already fixed once for `--` inside a literal.
+            # Taking "the next $ within 64 chars" as the closing delimiter would
+            # turn every two-placeholder Postgres query into one opaque string:
+            # in `UPDATE p SET n = $2 WHERE lower(email) = lower($1)` the tag
+            # would be `$2 WHERE lower(email) = lower($`, that tag never recurs,
+            # and the scan would run to end-of-input — putting the WHERE clause
+            # INSIDE a string literal, so the statement reads `predicate=none`,
+            # an unbounded mutation (5 of 50 realistic benign DML statements
+            # have this shape). The same swallow would hide a following `;` and
+            # everything after it — the statement-splitting evasion the lexer
+            # also guards against for `--` inside a literal.
             #
             # `$1`, `$2` are PARAMETER PLACEHOLDERS, not quotes, and they fall
             # through to punctuation + number below, which is what leaves the
@@ -413,21 +411,19 @@ def _split_token_statements(tokens: list) -> tuple:
     """Split on `;` at depth 0 -> (statements, over_cap).
 
     Comments are dropped; strings are kept opaque. Statement splitting on TOKENS
-    is what fixes `SELECT '--'; DELETE ...`: the `--` is inside a string token,
+    is what handles `SELECT '--'; DELETE ...`: the `--` is inside a string token,
     so it is not a comment, so the `;` after it is still a statement boundary and
     the DELETE is still inspected.
 
-    THE SECOND RETURN VALUE IS THE POINT. This used to return a short list when
-    it hit MAX_STATEMENTS, and a short list is indistinguishable from a short
-    input: "we stopped looking" read as "there was nothing there". A batch of
-    MAX_STATEMENTS harmless statements followed by an unbounded DELETE parsed to
-    harmless statements only, and the DELETE ran. The cap is now reported, and
-    parse_sql turns the report into a shape the classifier must gate.
+    THE SECOND RETURN VALUE IS THE POINT. A bare short list at MAX_STATEMENTS
+    would be indistinguishable from a short input: "we stopped looking" would
+    read as "there was nothing there", and a batch of MAX_STATEMENTS harmless
+    statements followed by an unbounded DELETE would parse to harmless
+    statements only. The cap is reported, and parse_sql turns the report into a
+    shape the classifier must gate.
 
-    This is also the ONLY place MAX_STATEMENTS is enforced. It was enforced here,
-    again as a slice in parse_sql, and a third time in a string splitter that the
-    token rewrite had already made unreachable. One constant with three
-    enforcement points is a constant nobody can reason about.
+    This is also the ONLY place MAX_STATEMENTS is enforced. One constant with
+    several enforcement points is a constant nobody can reason about.
     """
     stmts, cur, depth = [], [], 0
     for tok in tokens:
@@ -528,10 +524,10 @@ _TAUTOLOGY, _BOUNDED, _UNKNOWN = "tautology", "bounded", "unknown"
 def _split_top(toks, word):
     """Split on a top-level keyword, skipping the AND that belongs to BETWEEN.
 
-    `x BETWEEN 1 AND 5` is ONE comparison. Splitting it on AND produced the
-    conjuncts `x BETWEEN 1` and `5`, which is not wrong for the bounded case
+    `x BETWEEN 1 AND 5` is ONE comparison. Splitting it on AND would produce
+    the conjuncts `x BETWEEN 1` and `5`, which is not wrong for the bounded case
     (the first conjunct still names a column) and is wrong for the constant
-    case, where both halves become unreadable fragments of a predicate that was
+    case, where both halves become unreadable fragments of a predicate that is
     in fact decidable. The BETWEEN is consumed here so the term reaches
     `_term_state` whole.
     """
@@ -602,8 +598,8 @@ def _qualified(toks, i):
 def _has_column_ref(toks) -> bool:
     """Does this term's truth depend on the ROW?
 
-    THIS IS THE QUESTION THAT REPLACED "IS THIS A TAUTOLOGY", and the swap is
-    the whole fix. "Is this always true" is an OPEN question — `2>1`,
+    THIS IS THE QUESTION ASKED INSTEAD OF "IS THIS A TAUTOLOGY", and the choice
+    is the whole guarantee. "Is this always true" is an OPEN question — `2>1`,
     `NOT FALSE`, `coalesce(1,0)=1`, `1 BETWEEN 0 AND 2`, `1<>0` and every other
     constant expression a dialect can evaluate are members, and no table of
     forms is ever complete. "Does this reference a column" is CLOSED and
@@ -684,9 +680,9 @@ def _clause_state(toks) -> str:
               all disjuncts bounded -> bounded
               otherwise             -> unknown
 
-    The `otherwise -> unknown` rows are the fix. They used to be `bounded`,
-    which is a claim — "this predicate restricts the rows" — made about a
-    predicate the recogniser had failed to read.
+    The `otherwise -> unknown` rows are the point. Answering `bounded` there
+    would be a claim — "this predicate restricts the rows" — made about a
+    predicate the recogniser failed to read.
     """
     toks = _strip_group(toks)
     if not toks:
@@ -713,19 +709,18 @@ def _clause_state(toks) -> str:
 def _predicate_state_tokens(tokens: list) -> str:
     """"none" | "bounded" | "tautology" | "unknown", from TOKENS.
 
-    Three things the regex version could not do, all three measured:
+    Three properties a regex reading cannot give, all three measured:
 
       * a WHERE inside a string literal is not a WHERE, and `1=1` inside a
         string literal is not a tautology. String tokens are opaque here, so
         neither can be seen.
       * a tautology as ONE CONJUNCT of a predicate does not make the predicate
         unrestricted. `WHERE id=7 AND 1=1` deletes one row; calling it
-        tautological was a false positive.
-      * A PREDICATE THIS RECOGNISER CANNOT READ IS NOT "BOUNDED". The function
-        used to end `return "bounded"`, which turned every unread predicate into
-        a claim that it restricted the rows. Against a real SQLite oracle, six
-        one-line predicates deleted every row while the shape said bounded and
-        the call scored 0.00:
+        tautological would be a false positive.
+      * A PREDICATE THIS RECOGNISER CANNOT READ IS NOT "BOUNDED". Defaulting to
+        `return "bounded"` would turn every unread predicate into a claim that
+        it restricts the rows. Against a real SQLite oracle, each of these
+        one-line predicates deletes every row, and none may read as bounded:
 
             WHERE (1=1)                  the group was opaque
             WHERE 2>1                    a constant comparison, not `=`
@@ -734,15 +729,15 @@ def _predicate_state_tokens(tokens: list) -> str:
             WHERE 1 BETWEEN 0 AND 2      constant range membership
             WHERE 1<>0                   a constant inequality
 
-        That set is not a list of six bugs, it is one bug with six spellings:
-        the recogniser enumerated TAUTOLOGY FORMS, an open class, and treated
-        "not one of my forms" as "restricts the rows". It now decides the
-        opposite way round — a term is bounded when it REFERENCES A COLUMN, a
-        closed lexical property (`_has_column_ref`) — and anything it cannot
+        That set is one class with six spellings: TAUTOLOGY FORMS are an open
+        class, so a recogniser that enumerates them and treats "not one of my
+        forms" as "restricts the rows" can never be complete. This one decides
+        the opposite way round — a term is bounded when it REFERENCES A COLUMN,
+        a closed lexical property (`_has_column_ref`) — and anything it cannot
         settle returns "unknown", which `sql.unbounded_mutation` matches.
 
-    WHAT THIS STILL CANNOT EXPRESS, stated because the point of the rewrite is
-    that the residual is now a NAMED class rather than an open one. A predicate
+    WHAT THIS CANNOT EXPRESS, stated because the point of this design is that
+    the residual is a NAMED class rather than an open one. A predicate
     that does reference a column and is nonetheless unrestricted reads bounded:
     `WHERE id IS NOT NULL OR id IS NULL`, `WHERE id > -1`, `WHERE name LIKE
     '%'`, `WHERE id IN (SELECT id FROM users)`. Deciding those needs EVALUATION
@@ -831,7 +826,7 @@ def looks_like_sql(text: str) -> bool:
 def parse_sql(text: str) -> list:
     """Return a list of SqlShape, one per statement. Empty when this is not SQL.
 
-    TOKEN-DRIVEN since the audit. Every statement is inspected, not just the
+    TOKEN-DRIVEN. Every statement is inspected, not just the
     first; a leading CTE is skipped so the real verb is classified; strings and
     comments are opaque, so neither their contents nor a `--` inside a literal
     can change the structural reading.

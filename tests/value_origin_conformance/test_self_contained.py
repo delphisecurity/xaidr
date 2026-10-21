@@ -1,8 +1,8 @@
-"""§4.5: the core imports the standard library and its own modules, nothing else.
+"""The core imports the standard library and its own modules, nothing else.
 
-Without this, open can add ``from ..sensor import X`` and paid's next vendor
-breaks with an ImportError far from the cause. Parsed with ``ast`` so a lazy
-import inside a function is caught too.
+Without this, a change here can add ``from ..sensor import X`` and the next
+re-vendor into a downstream package breaks with an ImportError far from the
+cause. Parsed with ``ast`` so a lazy import inside a function is caught too.
 """
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ def test_every_module_imports_only_stdlib_or_package_relative():
             elif mod.split(".")[0] not in STDLIB_ALLOWED:
                 bad.append(f"{f.name}:{line}: import {mod} — not stdlib-allowed")
     assert not bad, ("xaidr/value_origin must import only the stdlib and itself, or "
-                     "paid's vendored copy breaks:\n  " + "\n  ".join(bad))
+                     "a vendored copy breaks:\n  " + "\n  ".join(bad))
 
 
 def test_allowed_modules_really_are_stdlib():
@@ -65,8 +65,8 @@ def test_allowed_modules_really_are_stdlib():
 
 
 def test_no_package_data_outside_python_modules():
-    """V-5: paid's wheel ships ``xaidr/**/*.py`` only. A non-.py file in the
-    core would ship in open's wheel and silently not in paid's."""
+    """A vendoring package's wheel may ship ``xaidr/**/*.py`` only. A non-.py
+    file in the core would ship in this wheel and silently not in that one."""
     extra = [p.name for p in PKG.iterdir()
              if p.is_file() and p.suffix != ".py"]
     assert not extra, f"non-.py files in xaidr/value_origin: {extra}"

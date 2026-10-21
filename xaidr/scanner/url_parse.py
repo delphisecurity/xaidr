@@ -1,26 +1,22 @@
 """Structural shape of a URL, for impact classification.
 
-WHY THIS EXISTS, and why it is not a regex. The only URL awareness the product
-had was ``SHELL_cloud_metadata_credentials``, a string list of four metadata
-addresses behind a binary-name alternation:
+WHY THIS EXISTS, and why it is not a regex. A shell rule such as
+``SHELL_cloud_metadata_credentials`` is a string list of metadata addresses
+behind a binary-name alternation:
 
     \\b(?:curl|wget|fetch|http|httpie|nc|ncat|python\\d?|node|ruby|perl)\\b …
 
-That alternation was written to name the HTTPie binary ``http``. What actually
-satisfied it in ``http_get(url="http://169.254.169.254/…")`` is the literal
-SCHEME — ``http`` followed by ``:``, and ``:`` is a word boundary. The rule
-reached tool arguments by accident, and the accident was one character wide:
-``https`` has no word boundary after ``http``, so
+That alternation names the HTTPie binary ``http``. Matching it against
+``http_get(url="http://169.254.169.254/…")`` would succeed only through the
+literal SCHEME — ``http`` followed by ``:``, and ``:`` is a word boundary — an
+accident one character wide: ``https`` has no word boundary after ``http``, so
+the ``https://`` spelling of the same address would not match at all.
 
-    http://169.254.169.254/latest/meta-data/    blocked 0.90
-    https://169.254.169.254/latest/meta-data/   allowed 0.00
-
-Repairing the alternation would have kept the design that produced the bug — a
-list of spellings, where every form nobody thought to write down is a bypass.
-Nine of fifteen forms of the SAME address were allowed: hex, decimal, octal, no
-scheme, and every non-http scheme. So URLs get their own reader, sitting
-ALONGSIDE the shell and SQL ones, exactly as ``sql_parse`` does: an agent fetches
-a URL by calling ``http_get(url=…)``, not by running a shell.
+A list of spellings is the wrong design for a destination: every form nobody
+thought to write down is a bypass, and the SAME address has many — hex,
+decimal, octal, no scheme, and every non-http scheme. So URLs get their own
+reader, sitting ALONGSIDE the shell and SQL ones, exactly as ``sql_parse`` does:
+an agent fetches a URL by calling ``http_get(url=…)``, not by running a shell.
 
 WHAT IT EXTRACTS, and nothing more. This is not a URL library and must never grow
 into one. It answers three questions a classification rule needs:

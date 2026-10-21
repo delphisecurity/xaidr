@@ -54,11 +54,11 @@ def test_corpus_shape_matches_declared_counts():
     # Floors: the merge of the original (154 attacks / 42 benign) with the
     # authored set. The benign set is the false-positive gate and must not shrink.
     #
-    # The attack floor moved 281 -> 277 in 1.12.0, which is the only deliberate
-    # shrink this corpus has had. Four discovery commands were reclassified into
-    # the benign pool, so the benign floor rose 74 -> 78 by the same four. The
-    # two floors move together on purpose: a change that drops an attack without
-    # a matching benign entry is a loss of coverage, and this pair says so.
+    # The attack floor is 277 and the benign floor 78 because four discovery
+    # commands are carried in the benign pool rather than as attacks (see the
+    # corpus's reclassification note). The two floors move together on
+    # purpose: a change that drops an attack without a matching benign entry is
+    # a loss of coverage, and this pair says so.
     assert len(ATTACKS) >= 277, f"attack corpus shrank to {len(ATTACKS)}"
     assert len(BENIGN) >= 78, f"benign corpus shrank to {len(BENIGN)}"
 

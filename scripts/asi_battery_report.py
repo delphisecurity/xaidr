@@ -18,9 +18,9 @@ category, because the held-out nano set showed that is where detection is blind.
 See asi_battery/README.md for provenance and the technique breakdown.
 
 THE CATEGORY COUNTS ARE NOT EQUAL, and the table says so rather than implying
-otherwise. The battery was relabelled onto the official OWASP Agentic Top 10
-(finding F9); relabelling moved cases between categories and left several with
-fewer than twelve. A denominator below twelve is printed under the table, and a
+otherwise. The battery was relabelled onto the official OWASP Agentic Top 10;
+relabelling moved cases between categories and left several with fewer than
+twelve. A denominator below twelve is printed under the table, and a
 denominator of one is called out as not a rate at all.
 
 WHAT IT REPORTS

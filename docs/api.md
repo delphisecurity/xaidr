@@ -17,8 +17,8 @@ from xaidr.integrations.langchain import delphi_middleware
 ```
 
 Sensors are designed to be long-lived — construct one per agent, not per
-request. If you do construct them per request, the telemetry worker now stops
-when the sensor is collected (1.3.0); `close_sync()` remains the explicit way to
+request. If you do construct them per request, the telemetry worker stops
+when the sensor is collected; `close_sync()` remains the explicit way to
 flush and stop one early.
 
 | Method | Purpose |

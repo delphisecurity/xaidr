@@ -22,9 +22,9 @@ those bounds is the L1 scan window at `L1_MAX_SCAN_CHARS = 100 000`.
   shell.template         max_len=44
 ```
 
-So "0 benign items block on the over-length path" was never a measurement. It
-was absent test data, and shipping the group on the strength of it would have
-been the eighth instance of the blind-population failure
+So "0 benign items block on the over-length path", read off those pools, would
+not be a measurement. It would be absent test data, and shipping the group on
+the strength of it would be the blind-population failure
 `benign_a2a/README.md` documents.
 
 ## What's here
@@ -41,11 +41,9 @@ been the eighth instance of the blind-population failure
 **The text is not committed, and the manifest is why that is safe.** 24 items
 totalling 10 100 008 characters is 10.5 MB of JSONL against a tracked tree that
 is otherwise 4.4 MB — committing it would more than triple the repository, for
-bytes that are reproducible from a 4.1 KB manifest. (Measured 2026-09-20; this
-paragraph previously said "25 MB against 8 MB" and both figures were wrong. The
-ratio they were arguing from, 3.1x, was if anything an UNDERSTATEMENT of the
-real 3.4x, so the conclusion stands — but the numbers are now ones a reader can
-reproduce with `git ls-files -z | xargs -0 du -ch | tail -1`.)
+bytes that are reproducible from a 4.1 KB manifest. (Measured 2026-09-20; a
+reader can reproduce the tracked-tree figure with
+`git ls-files -z | xargs -0 du -ch | tail -1`.)
 What is committed is the generator plus a sha256 per item, and
 `test_manifest_pins_the_generated_corpus` regenerates and checks every hash —
 so an edit to a word list fails loudly instead of quietly detaching the numbers
@@ -81,9 +79,10 @@ generator rather than the bound.
 | 400k | Over the cap, still inside the eight-window coverage — **covered completely** |
 | 900k | Past `7 × (100000 − 512) + 100000 = 796 416`, so the **window cap** stops the scan on any machine |
 
-The 400k row used to read "near the WALL-CLOCK budget rather than the window
-count". That was true of the box it was measured on and of no other; see
-[the caveat](#the-caveat-that-must-ship-with-the-number) for what replaced it.
+The 400k row is defined by the window count, not by the wall-clock budget:
+where the clock lands is a property of the box it runs on, not of the text; see
+[the caveat](#the-caveat-that-must-ship-with-the-number) for how the measurement
+handles it.
 
 ---
 
@@ -95,7 +94,7 @@ windowed scan then covers completely. A 150 000-character contract is two
 windows out of an eight-window budget — fully read — and carried the identical
 rule to a 900 000-character one whose tail was never reached.
 
-The first design of `bounds` refused on that rule. Measured on this pool, over
+The naive design of `bounds` refuses on that rule. Measured on this pool, over
 the 9 items that are clean at the default posture:
 
 ```
@@ -105,7 +104,7 @@ SHIPPED (refuse on LLM01_input_tail_unscanned)   refused-and-unread 2   refused-
 
 **Four fully-read documents refused under the naive signal; zero under the
 shipped one, with no loss of coverage on the truncated items.** That is why
-`scanner/l1.py` now carries a second rule, `LLM01_input_tail_unscanned`, fired
+`scanner/l1.py` carries a second rule, `LLM01_input_tail_unscanned`, fired
 by `LocalScanner._scan_tail` when the windows run out before the text does, and
 why `_BOUND_SIGNAL_RULES` in `sensor.py` names that one and not the other.
 
@@ -130,12 +129,13 @@ is the gate; it fails against the naive signal.
     not refused                             7
 ```
 
-**These numbers replace an earlier set (4 covered / 15 truncated / 12 clean /
-7 refused-and-unread) that was measured with the wall clock live.** Every one of
-those figures was a property of the machine that produced it, not of the text —
-which is what the next section used to describe as a caveat and now describes as
-the reason the measurement changed. The one figure that did NOT move is the one
-the group is justified by: **refused-but-fully-read is 0 either way.**
+**These numbers are measured with the wall clock pinned.** Measured with the
+clock live, one laptop gave 4 covered / 15 truncated / 12 clean / 7
+refused-and-unread on the same pool — every one of those figures a property of
+the machine that produced it, not of the text, which is why the next section
+treats the clock as the reason to pin the measurement. The one figure that does
+NOT move is the one the group is justified by: **refused-but-fully-read is 0
+either way.**
 
 ### The caveat that must ship with the number
 
@@ -149,11 +149,12 @@ refused on a loaded host and allowed on an idle one, and on a host loaded enough
 it reaches **inputs under the 100 000-character cap**, which the table above
 calls the deterministic control case.
 
-That is not hypothetical and it is not only an operator's problem. It is what
-made the gates on this pool unreliable, and it turned six CI jobs red:
+That is not hypothetical and it is not only an operator's problem. With the
+clocks live it makes the gates on this pool unreliable; on a loaded CI runner it
+turns six CI jobs red:
 
 ```
-GitHub ubuntu-latest runner, 2026-09-20, before this change
+GitHub ubuntu-latest runner, 2026-09-20, wall clocks live
   LF-*-90k (UNDER the cap)   LLM04_scan_budget_exceeded  -> bounds refused it
   every over-cap item        LLM01_input_tail_unscanned  -> nothing was "fully read"
   => test_oversized_and_tail_unread_are_different_signals failed its OWN vacuity
@@ -161,17 +162,17 @@ GitHub ubuntu-latest runner, 2026-09-20, before this change
      signals apart.
 ```
 
-**What changed is the MEASUREMENT, not the behaviour.** The numbers above are
-now produced with the three clocks pinned (`scripts/longform_bounds.py`), so an
+**Pinning changes the MEASUREMENT, not the behaviour.** The numbers above are
+produced with the three clocks pinned (`scripts/longform_bounds.py`), so an
 item's bucket follows from its length and `MAX_SCAN_WINDOWS` — the two things
 `manifest.json` pins — and the same table comes out of a laptop and a loaded
 runner. `tests/test_benign_longform.py` does the same, which is what makes it a
 regression gate rather than a benchmark of the CI fleet.
 
-The earlier version of this section presented the machine-dependence purely as
-something to disclose. It is that, but it is also a measurement error, and the
-disclosure was doing the work of an excuse: the figures it qualified were
-reported as findings about the corpus when they were findings about one laptop.
+The machine-dependence is something to disclose, but left unpinned it is also a
+measurement error: figures measured with the clocks live read as findings about
+the corpus when they are findings about one laptop, and a disclosure next to
+them does the work of an excuse.
 
 **Still true, still the operator's business:** under the cap is deterministic
 *only while the host keeps up*, past 796 416 characters is deterministic on any
@@ -189,10 +190,10 @@ nothing to do with `bounds`:
 | `LF-log_tail-*` | `INTENT_exfiltrate_data` |
 | `LF-policy_document-150k/400k/900k` | `INTENT_exfiltrate_data`, `INTENT_destroy_resources`, `INTENT_escalate_privileges`, `COMPOSITE_trust_exploit_data_access`, `COMPOSITE_cascading_failure`, `authority_override` |
 
-**The `policy_document` row is new, and it is an artefact of measuring
-honestly.** It was 12 items, not 15, while the wall clock cut those scans short
-after about two windows; with the full eight windows actually scanned, the rules
-fire on text that was always in the document and never previously reached. A
+**The `policy_document` row appears only when the scan is complete.** While a
+live wall clock cuts those scans short after about two windows, the count is 12
+items, not 15; with the full eight windows actually scanned, the rules fire on
+text that is in the document and is otherwise never reached. A
 pasted policy document discussing data handling, privilege and deletion trips
 six rules on its own content — the same finding as the rows below, at a size
 the truncated measurement had hidden. It is excluded from the bounds cost for
@@ -205,7 +206,7 @@ Two distinct causes, both length-correlated:
   and *some* target word co-occur with near certainty (`action=relay
   target=records` in the log tail, `action=export target=Data` in the
   transcript). The longer the honest document, the likelier the pair. This
-  fires on all twelve.
+  fires on all fifteen scoring items when the scan is complete.
 * **DLP digit-run patterns span whitespace.** The SSN and phone patterns match
   across a newline, so a log line ending in a bare number followed by a line
   starting with a timestamp matched `DLP_ssn`. The generator now terminates such

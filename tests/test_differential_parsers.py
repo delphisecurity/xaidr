@@ -7,20 +7,21 @@
 WHY THIS FILE EXISTS AND WHY IT IS NOT MORE UNIT TESTS. A fixed expectation list
 encodes what we THINK the parser does. It is written by the same person, at the
 same moment, out of the same mental model as the parser — so when the model is
-wrong, the test agrees with the bug. Two HIGH findings landed exactly there, and
-both had passing test files sitting next to them:
+wrong, the test agrees with the bug. Two HIGH-severity shapes live exactly
+there, and a passing unit-test file cannot see either:
 
-    the sensor's host is not the transport's host
-        `_extract_host` read the whole AUTHORITY with a regex, so
-        `https://user@blocked.invalid/path` produced `user@blocked.invalid`. A
-        deny-destination rule naming `blocked.invalid` matched nothing and the
-        request went out. Every existing test asserted the regex's own output.
+    the sensor's host must be the transport's host
+        A parser that read the whole AUTHORITY with a regex would turn
+        `https://user@blocked.invalid/path` into `user@blocked.invalid`. A
+        deny-destination rule naming `blocked.invalid` would match nothing and
+        the request would go out, while every test asserting the regex's own
+        output stayed green.
 
-    unparseable SQL predicates read as bounded
-        `_predicate_state_tokens` ended `return "bounded"`, so six one-line
-        predicates — `(1=1)`, `2>1`, `NOT FALSE`, `coalesce(1,0)=1`,
-        `1 BETWEEN 0 AND 2`, `1<>0` — deleted every row in a table while the
-        scanner called them bounded and scored the call 0.00.
+    an unsettled SQL predicate must never read as bounded
+        A predicate reader that defaulted to `return "bounded"` would call six
+        one-line predicates — `(1=1)`, `2>1`, `NOT FALSE`, `coalesce(1,0)=1`,
+        `1 BETWEEN 0 AND 2`, `1<>0` — bounded, and score at 0.00 a call that
+        deletes every row in a table.
 
 Neither is findable by asking "does the parser return what I expect". Both are
 findable in one line by asking "does the parser agree with the thing that
@@ -235,16 +236,16 @@ def test_a_deny_destination_policy_blocks_every_spelling_of_its_host(url):
 # `ProtectedHttpClient.__new__` — no sensor, no extensions, and it never enters
 # `_check_destination` at all. The four operator-policy cases above DO enter
 # `_check_destination`, but the S10 branch is guarded by
-# `if self._sensor._extensions:` and they attach none, so across this entire
-# file `DestinationView` was constructed ZERO times (measured, not assumed).
+# `if self._sensor._extensions:` and they attach none, so without this section
+# `DestinationView` would be constructed ZERO times across this entire file
+# (measured, not assumed).
 #
-# That guard is the gap. `DestinationView.host` is built from `_extract_host`,
-# so an authority-reading parser hands an enterprise control
+# That guard is why this section is needed. `DestinationView.host` is built from
+# `_extract_host`, so an authority-reading parser would hand an enterprise control
 # `user:pw@blocked.invalid` as "the host" — and a control keyed on its own host
-# then DECLINES, silently, and the operator blocklist below it never sees a
-# reason to fire either. S10 shipped against the regex version and its own test
-# file uses only bare hosts, so the userinfo × extension-policy combination had
-# no coverage on either side of the merge.
+# would then DECLINE, silently, and the operator blocklist below it would never
+# see a reason to fire either. The S10 test file uses only bare hosts, so the
+# userinfo × extension-policy combination is covered here and nowhere else.
 _S10_USERINFO_URLS = [
     "http://user@blocked.invalid/path",
     "http://user:pw@blocked.invalid/path",
@@ -410,7 +411,7 @@ def _predicate_of(stmt: str):
 
 #: Constant predicates, generated rather than enumerated: every one of these is
 #: decided without reading a row, so NONE of them may be reported bounded. The
-#: six named in the finding are members of this set, not the whole of it.
+#: six named in the module docstring are members of this set, not the whole of it.
 _CONSTANT_PREDICATES = [
     "1=1", "(1=1)", "((1=1))", "2>1", "1<>0", "1!=0", "NOT FALSE", "NOT 1=0",
     "TRUE", "1", "'a'='a'", "coalesce(1,0)=1", "length('ab')=2",
@@ -422,7 +423,7 @@ _CONSTANT_PREDICATES = [
 
 #: Predicates whose truth depends on the ROW. SQLite decides how many rows each
 #: one touches; the assertion below only forbids calling an ALL-ROWS statement
-#: bounded, so these are here to prove the fix did not simply answer "unknown"
+#: bounded, so these are here to prove the parser does not simply answer "unknown"
 #: to everything.
 _ROW_DEPENDENT_PREDICATES = [
     "id=7", "id=1", "id IN (1,2)", "id=7 AND 1=1", "note='1=1'", "deleted=1",
@@ -495,7 +496,7 @@ def test_sql_differential_is_not_vacuous():
 #: shrink rather than rot.
 @pytest.mark.xfail(strict=True, reason=(
     "column-referencing always-true predicates need evaluation, not parsing; "
-    "named residual of the F2 fix"))
+    "a named residual of the closed lexical predicate test"))
 @pytest.mark.parametrize("pred", [
     "id IS NOT NULL OR id IS NULL",
     "id > -1",

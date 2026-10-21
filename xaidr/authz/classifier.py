@@ -23,7 +23,7 @@ IMPACT_CLASSES = {
     "send", "delete", "transfer", "deploy", "publish",
     "share", "authenticate", "read", "unknown",
     # Stage 2: derived from the PARSED STRUCTURE of a shell command rather than
-    # from the tool name, so `run_command` stops being a blind spot.
+    # from the tool name, so `run_command` is classified by what it runs.
     "execute", "credential_access",
     # Stage 3: the remaining shell classes. Most of these rules CLASSIFY without
     # blocking — `terraform destroy`, `systemctl enable` and `sudo` are real
@@ -565,7 +565,7 @@ def extract_sql(arguments: dict) -> Optional[str]:
     UNLIKE ``_extract_command`` this looks at EVERY key, because there is no
     conventional name for the one that carries SQL. ``query``, ``sql``,
     ``statement`` and ``q`` are all ordinary, a custom tool may use anything, and
-    the reviewer's reproducer, ``run_sql(query=...)``, is how real agents are
+    ``run_sql(query=...)`` is how real agents are
     written. A key allowlist here would be a gate the attacker chooses the
     combination to.
 
@@ -612,7 +612,7 @@ def _walk_was_truncated(node) -> bool:
     Counted independently rather than returned alongside the values, because
     `extract_sql_all` and `extract_url_all` are called from five places
     including the sensor, and widening their return type to carry one boolean
-    would be a larger change than the defect warrants. The walk is bounded and
+    would be a larger change than one boolean warrants. The walk is bounded and
     cheap, and this one exits as soon as the answer is known.
     """
     seen = 0
@@ -643,10 +643,10 @@ def _walk_was_truncated(node) -> bool:
 def extract_sql_all(arguments: dict) -> list:
     """EVERY SQL-looking value in the arguments, as (path, statement).
 
-    The singular form stopped at the FIRST match, so a tool taking more than one
-    relevant value lost structural enforcement to dictionary order:
-    `{"first": "SELECT 1", "query": "DELETE FROM records WHERE 1=1"}` allowed and
-    the same pair in the other order blocked. Measured on 1.10.0. Enforcement
+    A singular form that stopped at the FIRST match would make structural
+    enforcement depend on dictionary order for a tool taking more than one
+    relevant value: `{"first": "SELECT 1", "query": "DELETE FROM records WHERE
+    1=1"}` allowed and the same pair in the other order blocked. Enforcement
     that depends on key order is not enforcement.
 
     Every candidate is returned, with the path it was found at, so the caller can
@@ -665,8 +665,8 @@ def extract_sql_all(arguments: dict) -> list:
 # ── URL carried in a tool argument ───────────────────────────────────────────
 # The peer of the SQL block above, for the same reason and with the same
 # contract. An agent fetches a URL by calling `http_get(url=...)`; the shell
-# reader asks "what binary is this" and never reaches it, and the only URL rule
-# that DID reach it got there by a regex accident one character wide (see
+# reader asks "what binary is this" and never reaches it, and a text rule that
+# reached it would do so by a regex accident one character wide (see
 # scanner/url_parse). First match wins, only rules carrying a `detect` block
 # enforce, nothing raises.
 
@@ -859,8 +859,9 @@ def extract_url(arguments: dict) -> Optional[str]:
 def extract_url_all(arguments: dict) -> list:
     """EVERY URL-looking value in the arguments, as (path, url).
 
-    Same defect and same fix as `extract_sql_all`: a benign URL sitting before
-    the metadata address in the same dict hid it, and reversing the keys blocked.
+    Same reasoning as `extract_sql_all`: a first-match form would let a benign
+    URL sitting before the metadata address in the same dict hide it, so the
+    verdict would depend on key order.
     """
     try:
         from ..scanner.url_parse import looks_like_url
@@ -968,10 +969,10 @@ def classify(
 
         # THE CANDIDATE WALK HAS A BOUND, AND A BOUND THAT DROPS IS A BYPASS.
         # _walk_values stops at _MAX_CANDIDATE_VALUES string leaves, so an
-        # argument tree with more than that hid everything past the cap from
-        # both the SQL and the URL reader above. Dropping them reports the same
-        # thing as arguments that contained nothing dangerous. Same defect as
-        # the SQL parser's caps, same fix: say we stopped, and fail closed.
+        # argument tree with more than that has leaves past the cap that
+        # neither the SQL nor the URL reader above sees. Dropping them would
+        # report the same thing as arguments that contained nothing dangerous.
+        # Same rule as the SQL parser's caps: say we stopped, and fail closed.
         #
         # Ordered AFTER the SQL and URL blocks on purpose. If a value BEFORE the
         # cap already classified at critical, that answer is more specific than

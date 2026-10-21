@@ -3,15 +3,15 @@
 Two failure classes this suite pins:
 
 1. A category that FIRES on the content path must not be SILENTLY DISCARDED on
-   the tool path. A DAN persona that scores 0.96 as chat used to return
-   allowed 0.0 as a tool argument — the detection fired and the filter threw it
-   away. The newly-admitted categories now SURFACE (flag-default), while the
-   benign-quotation case must not BLOCK (the documentary-prose false-positive the
-   flag tier exists to avoid).
+   the tool path. A DAN persona that scores 0.96 as chat must not come back
+   allowed 0.0 as a tool argument because the filter threw the detection away.
+   The admitted categories SURFACE (flag-default), while the benign-quotation
+   case must not BLOCK (the documentary-prose false-positive the flag tier
+   exists to avoid).
 
 2. A rule whose `category` is misspelled loads cleanly, fires on the content
    path, and is dropped on the tool path — half-disabled by a typo. It must be
-   rejected LOUDLY at load with a did-you-mean (ADV-2 precedent).
+   rejected LOUDLY at load with a did-you-mean (the loud-validation rule).
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def block_sensor():
     return Sensor(agent_id="cat-filter", enforcement_mode="block")
 
 
-# ── the reported symptom: a fired category must not be silently discarded ─────
+# ── a fired category must not be silently discarded ──────────────────────────
 
 # (category, a model-directed tool + argument that fires that category on L1)
 ADMITTED_ATTACKS = [
@@ -51,7 +51,7 @@ ADMITTED_ATTACKS = [
 @pytest.mark.parametrize("category,tool,args", ADMITTED_ATTACKS)
 def test_admitted_category_surfaces_on_tool_path(block_sensor, category, tool, args):
     """A category that blocks/flags on content must at least FLAG as a tool arg —
-    never allowed 0.0. Regression for the DAN-as-tool-argument discard."""
+    never allowed 0.0. Guards against discarding DAN-as-a-tool-argument."""
     r = block_sensor.scan_tool_call(tool, args)
     assert r.action in ("flagged", "blocked"), (category, r.action, r.score)
     assert r.score > 0.0
@@ -86,15 +86,15 @@ def test_pii_still_filtered_on_tool_path(block_sensor):
 
 def test_out_of_remit_categories_stay_filtered(block_sensor):
     """Model-content-moderation (llm09) is out of the action-layer remit and stays
-    dropped — the fix restores in-scope detections, it does not invent coverage."""
+    dropped — the filter keeps in-scope detections, it does not invent coverage."""
     r = block_sensor.scan_tool_call("generate", {"prompt": "Generate 50 fake reviews for this listing."})
     assert r.action == "allowed"
 
 
 # ── the four categories left filtered, each with the case that decided it ─────
-# 1.2.0 left llm09 (9 rules), llm02 (9), eva003 (5) and supply_chain (1) dropped
-# on FP-risk grounds, without measuring them. They were measured afterwards
-# against realistic tool arguments; each entry below is the ORDINARY AGENT
+# llm09 (9 rules), llm02 (9), eva003 (5) and supply_chain (1) stay dropped on
+# FP-risk grounds, measured against realistic tool arguments; each entry below
+# is the ORDINARY AGENT
 # TRAFFIC that would score if the category were admitted, which is what the
 # decision to keep it filtered rests on. If a future change admits one of these,
 # these tests fail and name the traffic it starts flagging.
@@ -213,7 +213,7 @@ def test_unknown_category_raises_at_load():
     msg = str(exc.value)
     assert "T_probe" in msg                 # names the offending rule
     assert "jailbrake" in msg               # names the offending category
-    assert "Did you mean 'jailbreak'?" in msg   # did-you-mean, ADV-2 shape
+    assert "Did you mean 'jailbreak'?" in msg   # did-you-mean, loud-validation shape
 
 
 def test_known_category_loads_clean():

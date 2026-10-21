@@ -320,3 +320,54 @@ def test_classify_never_raises_on_odd_command_values(value):
 def test_classify_command_returns_none_when_nothing_matches():
     assert classify_command("git status") is None
     assert classify_command("") is None
+
+
+# ── flag-spelling consistency ────────────────────────────────────────────────
+# The parser tokenises the clustered (`-rf`), split (`-r -f`) and long
+# (`--recursive --force`) spellings identically, and the action-layer
+# destructive rule recognises the verb independent of spelling.
+#
+# The property under test is CONSISTENCY ACROSS SPELLINGS, not a target policy:
+# every spelling gets the verdict the `-rf` form gets for that target, and
+# `_RM_RECONCILE_SAFE` pins safe in-project targets passing. The dangerous
+# targets are ones only the action-layer rule carries — the structural
+# `destroy.sensitive_path` rule is flag-agnostic for its own curated set
+# (`/etc`, `~`, `$HOME`), so a sensitive target would not discriminate.
+
+_RM_FLAG_SPELLINGS = ["-rf", "-r -f", "-f -r", "--recursive --force",
+                      "--force --recursive", "-r --force"]
+
+# Targets the `-rf` baseline already blocks, where ONLY the action-layer rule
+# (not the structural one) carries the verdict — so these discriminate the fix.
+_RM_RECONCILE_DANGEROUS = ["/tmp/xaidr-scratch/guardfall-target", "~/proj/node_modules-cache"]
+
+# Safe in-project cleanup: the baseline `-rf` form already PASSES these, so every
+# spelling must keep passing. This is the carve-out the target branch protects.
+_RM_RECONCILE_SAFE = ["./build", "build/", "dist", "node_modules"]
+
+
+@pytest.mark.parametrize("flags", _RM_FLAG_SPELLINGS)
+@pytest.mark.parametrize("target", _RM_RECONCILE_DANGEROUS)
+def test_recursive_rm_verdict_is_the_same_for_every_flag_spelling(flags, target):
+    """`rm <flags> <dangerous target>` blocks whether the flags are one cluster,
+    split, or long-form — the `-rf` verdict, independent of spelling."""
+    s = _null_sensor("block")
+    cmd = f"rm {flags} {target}"
+    r = _quiet(s.scan_tool_call, "run_command", {"command": cmd})
+    assert r.action == "blocked", (
+        f"recursive rm to a dangerous target ALLOWED for this flag spelling "
+        f"(score={r.score}, rules={r.rules}): {cmd!r}")
+
+
+@pytest.mark.parametrize("flags", _RM_FLAG_SPELLINGS)
+@pytest.mark.parametrize("target", _RM_RECONCILE_SAFE)
+def test_reconciliation_leaves_safe_in_project_cleanup_passing(flags, target):
+    """The discriminating case for D1: flag recognition is spelling-independent
+    and the target set is unchanged, so a relative in-project target passes
+    every spelling."""
+    s = _null_sensor("block")
+    cmd = f"rm {flags} {target}"
+    r = _quiet(s.scan_tool_call, "run_command", {"command": cmd})
+    assert r.action != "blocked", (
+        f"safe in-project cleanup BLOCKED "
+        f"(score={r.score}, rules={r.rules}): {cmd!r}")

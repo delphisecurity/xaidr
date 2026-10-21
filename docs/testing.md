@@ -4,38 +4,33 @@ _Part of the [xaidr](https://github.com/delphisecurity/xaidr/blob/main/README.md
 
 The suite is verified with `python -m pytest -q`.
 
-**This page used to publish a table of pass counts, one row per install
-configuration. The table is gone. It is not coming back, and the reason is the
-table itself.**
+**This page publishes no table of pass counts, one row per install
+configuration, and the reason is what such a table does.**
 
-Every published number in it was wrong. The `full` row said 7664; the last
-branch that actually measured that configuration got 8432 — about 670 passes
-behind. The `base` row said `163 skipped` <!-- suite-count-ok: retracted figure, quoted to show the page contradicting itself --> while a paragraph four screens
-down explained "the 159 `base` skips", so the page contradicted itself. Underneath
-both sat a third paragraph retracting a fourth number (7453) that had been
-published for two minor releases against a CI job that was red the whole time.
-Three separate fix-it-by-hand passes were applied to this table and it was stale
-again by the next release.
+A hand-maintained count table goes stale by the next release, however often it
+is corrected by hand: a `full` row can trail the real count by hundreds of
+passes, and a skip figure in the table can disagree with the skip breakdown
+further down the same page.
 
-That is not a discipline problem, it is a measurability problem: the table
-claimed five configurations, nobody can build all five on one machine, and a
+That is not a discipline problem, it is a measurability problem: such a table
+claims five configurations, nobody can build all five on one machine, and a
 one-process `full` run has crashed the machine that comes closest. **A number
-nobody can regenerate is a number nobody can check, and this one was wrong in
-every row while looking like evidence.**
+nobody can regenerate is a number nobody can check, and it can be wrong in every
+row while looking like evidence.**
 
-## The argument for deleting it rather than generating it
+## Why not generate it
 
-The obvious alternative was to have CI write the measured counts back into this
-file. It was rejected for four reasons, in descending order of how much they
+The obvious alternative is to have CI write the measured counts back into this
+file. It is rejected for four reasons, in descending order of how much they
 matter:
 
 1. **CI cannot measure three of the five rows.** The `test` job builds exactly
    two configurations, `base` and `full` (`.github/workflows/ci.yml`). No job
    installs langchain, langgraph, deepagents, llama-index-core, crewai or
    haystack-ai. A write-back would refresh two rows and freeze three, inside a
-   table newly advertising itself as machine-generated. That is worse than the
-   stale table it replaced: it reads as coverage while performing none on the
-   majority of its own rows.
+   table advertising itself as machine-generated. That is worse than a stale
+   hand-kept table: it reads as coverage while performing none on the majority
+   of its own rows.
 2. **Writing back needs credentials this workflow deliberately refuses.** CI
    declares `permissions: contents: read` explicitly, and triggers on
    `pull_request` rather than `pull_request_target` with a written rationale
@@ -45,8 +40,8 @@ matter:
    all, so the number would only refresh after merge — never in the diff the
    reviewer is reading.
 3. **Even for `base` and `full`, there is no single number to write.** CI runs
-   on `ubuntu-latest` across a Python matrix derived from `pyproject.toml`. The
-   figures this page used to publish were CPython 3.12.2 on macOS arm64.
+   on `ubuntu-latest` across a Python matrix derived from `pyproject.toml`, while
+   a hand-measured figure comes from one interpreter on one machine.
    Auto-writing means either picking one cell of that matrix and publishing it
    as "the" count, or publishing two counts per supported Python and rewriting
    the table every time a classifier changes in `pyproject.toml`.
@@ -54,16 +49,16 @@ matter:
    release step compares against it. The things that are actually contracts —
    the suite passes, `base` passes with zero third-party dependencies, the
    corpus gates exit 0 — are asserted by CI on every pull request and turn the
-   run red when broken. The literal asserted nothing and went wrong anyway.
+   run red when broken. A literal asserts nothing and goes wrong anyway.
 
-A guard keeps it deleted: `tests/test_docs_no_published_suite_counts.py` fails
+A guard keeps such counts out: `tests/test_docs_no_published_suite_counts.py` fails
 if a bare `NNNN passed` literal reappears in `README.md` or `docs/*.md`. It runs
 in the same `test` job as everything else, so it is red on the PR that
 reintroduces the figure rather than discovered a release later. The one escape
 hatch is an explicit `<!-- suite-count-ok: reason -->` on the same line, which
 is a thing a reviewer sees in the diff and has to agree with.
 
-## Where the counts are, now
+## Where the counts are
 
 In the log of every CI run, printed by the job that measured them.
 
@@ -103,10 +98,9 @@ for c in /tmp/chunk_*; do python -m pytest $(cat $c | tr '\n' ' ') -q --no-heade
 
 **Read framework configurations against each other, not one at a time.** The
 property worth checking is that installing a framework extra moves numbers only
-in the configuration where that framework is installed. When the Haystack
-integration landed, every other configuration gained skips and not a single
-pass — that is `TestRealHaystack` skipping cleanly where `haystack-ai` is
-absent. An integration that changed the pass count of a configuration whose
+in the configuration where that framework is installed. The Haystack
+integration adds skips to every other configuration and not a single pass —
+that is `TestRealHaystack` skipping cleanly where `haystack-ai` is absent. An integration that changed the pass count of a configuration whose
 framework is not installed would be an integration that leaked out of its own
 extra, and comparing a single configuration against its own past cannot show
 you that.
@@ -116,7 +110,7 @@ you that.
 A large skip count should never be left vague. Every `base` skip is "this
 configuration does not have the thing", not a disabled test, and each one names
 what to install. Counts are omitted on purpose — they move with the suite and
-this page has already proved it cannot keep them honest. `python -m pytest -q
+a hand-kept count cannot stay honest. `python -m pytest -q
 -rs` prints the current ones with their reasons.
 
 | why | how to run them |
@@ -147,8 +141,8 @@ tests that do not depend on this configuration.
 
 ## Reproducing any of this from an install
 
-Not from the wheel: it ships the `xaidr` package only. The sdist has carried
-`tests/` since 1.19.0, so the suite runs from an extracted sdist without a
+Not from the wheel: it ships the `xaidr` package only. The sdist carries
+`tests/`, so the suite runs from an extracted sdist without a
 clone. It is a subset there, not the whole run: an sdist built from this tree
 leaves `asi_battery/` out, and the tests that read it skip with a reason that
 says so (`tests/conftest.py`). A clone runs all of it, and the CI logs are the
@@ -156,21 +150,29 @@ record of that run.
 
 ## Retraction record
 
-Kept in place rather than deleted, because the belief is the artifact and a
-reader who met one of these numbers needs to see it marked false where they met
-it.
+Kept in place rather than deleted: a reader who met one of these figures needs
+to see it marked superseded where they met it.
 
-- **`base` 7603 passed / 163 skipped, `full` 7664 passed / 137 skipped, and the three framework rows** <!-- suite-count-ok: retracted figures, quoted so a reader who met them sees them marked false -->
-  — published here through 1.17.0. Stale by roughly 670
-  passes on the `full` row at the time of removal, and internally inconsistent
-  with this page's own skip breakdown. The same `base` figure was also published
-  in `docs/performance.md`; it is removed there too.
-- **"no optional extras installed: 7453 passed, 6 skipped"** <!-- suite-count-ok: retracted figure, quoted so the false claim stays visible where it was made --> — published through 1.6.1. Two things
-  were untrue. The number came from `.[http,trace,dev]`, not from an
-  extras-free venv. And an extras-free venv did not report that at all — it
-  reported **21 failures**, because httpx-dependent tests imported `httpx`
-  unguarded instead of skipping. CI's `base` job had been failing on every push
-  since 1.5.0 and nobody noticed, because the `corpus` job stayed green. Those
-  tests now skip, which is what the job's contract always said they should do.
-  The fix was never to add httpx to `base`: that job is the only standing proof
-  of the zero-dependency claim, and it is what caught this.
+- **`base` 7603 passed / 163 skipped, `full` 7664 passed / 137 skipped, and the three framework rows** <!-- suite-count-ok: superseded figures, quoted so a reader who met them sees them marked superseded -->
+  — superseded and withdrawn. These were published on this page in an earlier
+  release. The `full` row trailed the measured count by roughly 670 passes, and
+  the table disagreed with this page's own skip breakdown. The same `base`
+  figure, also published in `docs/performance.md`, is withdrawn there too. The
+  current counts are in the CI logs; see "Where the counts are".
+- **"no optional extras installed: 7453 passed, 6 skipped"** <!-- suite-count-ok: superseded figure, quoted so it stays visible where it was made --> — superseded and
+  withdrawn. That figure was measured with `.[http,trace,dev]` installed, not in
+  an extras-free venv, so it described a different configuration from the one
+  it named. The extras-free count is the one CI's `base` job prints.
+
+## Counting an extras-free install
+
+- **An extras-free count comes from an extras-free venv.** A count measured
+  with `.[http,trace,dev]` installed says nothing about a venv with no extras.
+  In an extras-free venv, a test that imports `httpx` unguarded fails instead of
+  skipping; httpx-dependent tests skip there, which is what the `base` job's
+  contract says they should do.
+- **The fix for such a failure is never to add httpx to `base`.** That job is
+  the only standing proof of the zero-dependency claim, and it is what catches
+  an unguarded import.
+- **A green `corpus` job says nothing about `base`.** Read each job's own
+  result; one job staying green does not show another one is.

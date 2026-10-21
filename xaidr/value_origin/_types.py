@@ -1,7 +1,7 @@
-"""The value-origin core's enums, value types and constants (§1.1-§1.3).
+"""The value-origin core's enums, value types and constants.
 
-Every name here is part of the interface paid vendors. Changing one is a
-breaking change to paid and is called out in the PR that makes it (§4.5).
+Every name here is part of the vendored interface. Changing one is a
+breaking change and is called out in the PR that makes it.
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ class WireValue(str, enum.Enum):
     same ruling, 2026-10-05: Q18's unread I/O-backed result is a bound too)."""
 
     PRINCIPAL = "principal"                                   # a DECLARED principal span
-    PRINCIPAL_UNDECLARED_SPAN = "principal_undeclared_span"   # rests on C-1's default
+    PRINCIPAL_UNDECLARED_SPAN = "principal_undeclared_span"   # whole input assumed principal
     TRUSTED_SOURCE = "trusted_source"
     UNTRUSTED_SOURCE = "untrusted_source"
     UNRESOLVED = "unresolved"
@@ -56,7 +56,7 @@ class WireValue(str, enum.Enum):
 
 
 class RowState(str, enum.Enum):
-    """Exactly blank-canvas StageState's spellings."""
+    """Row-state spellings. Fixed: consumers of the row table match them exactly."""
 
     DECIDED = "decided"
     RAN_EVIDENCE = "ran_evidence"
@@ -80,7 +80,7 @@ class Mode(str, enum.Enum):
 
 
 class MatchKind(str, enum.Enum):
-    """How a designation matches a read's source argument (V-17)."""
+    """How a designation matches a read's source argument."""
 
     ANY = "any"                # the tool itself is the source (e.g. order_lookup)
     URL_PREFIX = "url_prefix"  # scheme + exact host + port + segment-wise path prefix
@@ -103,7 +103,7 @@ class UnresolvedReason(str, enum.Enum):
     ATOM_BUDGET = "atom_budget"      # past a bound, the atom pass hit its WORK budget (2026-10-06)
 
 
-# Wire strength, weakest first (ruling 2026-09-24). The wire is the weakest
+# Wire strength, weakest first. The wire is the weakest
 # per-destination value, so an authorization that rests on the undeclared-span
 # assumption is never hidden behind a stronger one on the same call.
 WIRE_STRENGTH: Mapping[WireValue, int] = MappingProxyType({
@@ -134,9 +134,9 @@ class Span:
 
 @dataclass(**_DC)
 class Authority:
-    """The normalised authority of a destination (§6 C-6). The ONLY
+    """The normalised authority of a destination. The ONLY
     representation of a destination the core exposes; the raw argument value
-    is never stored on any returned object (C-12)."""
+    is never stored on any returned object."""
 
     scheme: Literal["mailto", "dns", "ip", "tel"]
     value: str
@@ -152,7 +152,7 @@ class SourceDesignation:
     match: MatchKind
     source_arg: str | None = None          # required unless match is ANY
     pattern: str | None = None             # required unless match is ANY
-    key_args: tuple[str, ...] = ()         # arguments whose VALUES select what is read (C-3)
+    key_args: tuple[str, ...] = ()         # arguments whose VALUES select what is read
     label: str                             # operator-facing name; appears in row detail
 
 
@@ -185,9 +185,9 @@ class CallVerdict:
     wire: WireValue
     verdict: Verdict
     row_state: RowState
-    detail: str                                    # the normative row text, §3.4
+    detail: str                                    # the normative row text (row_text)
     findings: tuple[DestinationFinding, ...]       # empty for every absence state
-    truncated: bool                                # argument walk hit its bound (C-8)
+    truncated: bool                                # argument walk hit its bound
 
 
 # (No per-feature generation constant — ruling 2026-09-24; see C-21.)

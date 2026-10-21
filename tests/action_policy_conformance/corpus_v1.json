@@ -1,0 +1,6194 @@
+{
+ "corpus": "xaidr ActionPolicy v1 conformance",
+ "schema": 1,
+ "policy_version": "1",
+ "authority": "xaidr.authz.policy.explain_action_policy (open distribution, no extension conditions)",
+ "encoding": "Plain JSON. A non-finite number inside a document is written {\"$float\": \"inf\"} or {\"$float\": \"nan\"} and decodes to that float.",
+ "verdicts": {
+  "accept": "expect.normalized is the parser's output, compared with ==; each expect.probes[] request is evaluated against it and must give decision and policy_id.",
+  "refuse": "the parser returns no policy; expect.reason is the refusal code and expect.field the path of the refused part (\"\" is the document)."
+ },
+ "ordering": "Rules are evaluated in document order and the first match decides. Deny-first is a writing convention: a block placed after a matching allow does not win (see the accept/order-* cases).",
+ "cases": [
+  {
+   "id": "accept/minimal-block",
+   "covers": [
+    "version",
+    "rules",
+    "effect.block",
+    "match.tools"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "no-deploy",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "no-deploy"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "read_file",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "read_file"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/version-int",
+   "covers": [
+    "version"
+   ],
+   "document": {
+    "version": 1,
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "no-deploy",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": []
+   }
+  },
+  {
+   "id": "accept/version-1.0-string",
+   "covers": [
+    "version"
+   ],
+   "document": {
+    "version": "1.0",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1.0",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "no-deploy",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": []
+   }
+  },
+  {
+   "id": "accept/every-rule-effect",
+   "covers": [
+    "effect.allow",
+    "effect.block",
+    "effect.monitor",
+    "effect.require_approval"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "a",
+      "effect": "allow",
+      "match": {
+       "tools": [
+        "t_allow"
+       ]
+      }
+     },
+     {
+      "id": "b",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "t_block"
+       ]
+      }
+     },
+     {
+      "id": "m",
+      "effect": "monitor",
+      "match": {
+       "tools": [
+        "t_monitor"
+       ]
+      }
+     },
+     {
+      "id": "r",
+      "effect": "require_approval",
+      "match": {
+       "tools": [
+        "t_approve"
+       ]
+      }
+     }
+    ],
+    "defaults": {
+     "effect": "block"
+    }
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "block",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "a",
+       "effect": "allow",
+       "match": {
+        "tools": [
+         "t_allow"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      },
+      {
+       "id": "b",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "t_block"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      },
+      {
+       "id": "m",
+       "effect": "monitor",
+       "match": {
+        "tools": [
+         "t_monitor"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      },
+      {
+       "id": "r",
+       "effect": "require_approval",
+       "match": {
+        "tools": [
+         "t_approve"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t_allow",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t_allow"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": "a"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t_block",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t_block"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "b"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t_monitor",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t_monitor"
+       },
+       "context": {}
+      },
+      "decision": "monitor",
+      "policy_id": "m"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t_approve",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t_approve"
+       },
+       "context": {}
+      },
+      "decision": "approval_required",
+      "policy_id": "r"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "other",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "other"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/defaults-allow-unclassified-block",
+   "covers": [
+    "defaults.effect",
+    "defaults.unclassified",
+    "effect.allow",
+    "effect.block"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": {
+     "effect": "allow",
+     "unclassified": "block"
+    }
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "block"
+     },
+     "rules": [
+      {
+       "id": "no-deploy",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "other",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "other"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "other",
+        "impact_class": "unknown",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "other"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": null
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "unknown",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "no-deploy"
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/defaults-block-unclassified-allow",
+   "covers": [
+    "defaults.effect",
+    "defaults.unclassified",
+    "effect.block",
+    "effect.allow"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": {
+     "effect": "block",
+     "unclassified": "allow"
+    }
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "block",
+      "unclassified": "allow"
+     },
+     "rules": [
+      {
+       "id": "no-deploy",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "other",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "other"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": null
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "other",
+        "impact_class": "unknown",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "other"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "unknown",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "no-deploy"
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/defaults-monitor-unclassified-require_approval",
+   "covers": [
+    "defaults.effect",
+    "defaults.unclassified",
+    "effect.monitor",
+    "effect.require_approval"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": {
+     "effect": "monitor",
+     "unclassified": "require_approval"
+    }
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "monitor",
+      "unclassified": "require_approval"
+     },
+     "rules": [
+      {
+       "id": "no-deploy",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "other",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "other"
+       },
+       "context": {}
+      },
+      "decision": "monitor",
+      "policy_id": null
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "other",
+        "impact_class": "unknown",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "other"
+       },
+       "context": {}
+      },
+      "decision": "approval_required",
+      "policy_id": null
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "unknown",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "no-deploy"
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/defaults-require_approval-unclassified-monitor",
+   "covers": [
+    "defaults.effect",
+    "defaults.unclassified",
+    "effect.require_approval",
+    "effect.monitor"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": {
+     "effect": "require_approval",
+     "unclassified": "monitor"
+    }
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "require_approval",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "no-deploy",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "other",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "other"
+       },
+       "context": {}
+      },
+      "decision": "approval_required",
+      "policy_id": null
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "other",
+        "impact_class": "unknown",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "other"
+       },
+       "context": {}
+      },
+      "decision": "monitor",
+      "policy_id": null
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "unknown",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "no-deploy"
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/defaults-partial-effect-only",
+   "covers": [
+    "defaults.effect"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": {
+     "effect": "block"
+    }
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "block",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "no-deploy",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "other",
+        "impact_class": "unknown",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "other"
+       },
+       "context": {}
+      },
+      "decision": "monitor",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/defaults-partial-unclassified-only",
+   "covers": [
+    "defaults.unclassified"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": {
+     "unclassified": "block"
+    }
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "block"
+     },
+     "rules": [
+      {
+       "id": "no-deploy",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "other",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "other"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "other",
+        "impact_class": "unknown",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "other"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/defaults-empty-mapping",
+   "covers": [
+    "defaults"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": {}
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "no-deploy",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": []
+   }
+  },
+  {
+   "id": "accept/defaults-only-no-rules-key",
+   "covers": [
+    "defaults",
+    "rules"
+   ],
+   "document": {
+    "version": "1",
+    "defaults": {
+     "effect": "block"
+    }
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "block",
+      "unclassified": "monitor"
+     },
+     "rules": []
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "anything",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "anything"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/empty-rules-list",
+   "covers": [
+    "rules"
+   ],
+   "document": {
+    "version": "1",
+    "rules": []
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": []
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "anything",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "anything"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "anything",
+        "impact_class": "unknown",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "anything"
+       },
+       "context": {}
+      },
+      "decision": "monitor",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/match-tools",
+   "covers": [
+    "match.tools",
+    "effect.block"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "m-tools",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "x-hit"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "m-tools",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "x-hit"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "x-hit",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "x-hit"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "m-tools"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "x-miss",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "x-miss"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/match-agents",
+   "covers": [
+    "match.agents",
+    "effect.block"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "m-agents",
+      "effect": "block",
+      "match": {
+       "agents": [
+        "x-hit"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "m-agents",
+       "effect": "block",
+       "match": {
+        "agents": [
+         "x-hit"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "x-hit",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "m-agents"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "x-miss",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/match-impact_class",
+   "covers": [
+    "match.impact_class",
+    "effect.block"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "m-impact_class",
+      "effect": "block",
+      "match": {
+       "impact_class": [
+        "x-hit"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "m-impact_class",
+       "effect": "block",
+       "match": {
+        "impact_class": [
+         "x-hit"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "x-hit",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "m-impact_class"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "x-miss",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/match-impact_tier",
+   "covers": [
+    "match.impact_tier",
+    "effect.block"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "m-impact_tier",
+      "effect": "block",
+      "match": {
+       "impact_tier": [
+        "x-hit"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "m-impact_tier",
+       "effect": "block",
+       "match": {
+        "impact_tier": [
+         "x-hit"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "read",
+        "impact_tier": "x-hit",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "m-impact_tier"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "read",
+        "impact_tier": "x-miss",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/match-destination_type",
+   "covers": [
+    "match.destination_type",
+    "effect.block"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "m-destination_type",
+      "effect": "block",
+      "match": {
+       "destination_type": [
+        "x-hit"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "m-destination_type",
+       "effect": "block",
+       "match": {
+        "destination_type": [
+         "x-hit"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "x-hit",
+        "destination_identifier": "t"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "m-destination_type"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "x-miss",
+        "destination_identifier": "t"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/match-destination_identifier",
+   "covers": [
+    "match.destination_identifier",
+    "effect.block"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "m-destination_identifier",
+      "effect": "block",
+      "match": {
+       "destination_identifier": [
+        "x-hit"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "m-destination_identifier",
+       "effect": "block",
+       "match": {
+        "destination_identifier": [
+         "x-hit"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "x-hit"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "m-destination_identifier"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "x-miss"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/match-mcp_server",
+   "covers": [
+    "match.mcp_server",
+    "effect.block"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "m-mcp_server",
+      "effect": "block",
+      "match": {
+       "mcp_server": [
+        "x-hit"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "m-mcp_server",
+       "effect": "block",
+       "match": {
+        "mcp_server": [
+         "x-hit"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t"
+       },
+       "context": {
+        "mcp_server": "x-hit"
+       }
+      },
+      "decision": "blocked",
+      "policy_id": "m-mcp_server"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t"
+       },
+       "context": {
+        "mcp_server": "x-miss"
+       }
+      },
+      "decision": "allowed",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/match-category",
+   "covers": [
+    "match.category",
+    "effect.block"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "m-category",
+      "effect": "block",
+      "match": {
+       "category": [
+        "x-hit"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "m-category",
+       "effect": "block",
+       "match": {
+        "category": [
+         "x-hit"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": "x-hit"
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "m-category"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": "x-miss"
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/match-mcp-server-absent-context",
+   "covers": [
+    "match.mcp_server"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "m",
+      "effect": "block",
+      "match": {
+       "mcp_server": [
+        "*"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "m",
+       "effect": "block",
+       "match": {
+        "mcp_server": [
+         "*"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t"
+       },
+       "context": {
+        "mcp_server": "any"
+       }
+      },
+      "decision": "blocked",
+      "policy_id": "m"
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/match-category-absent",
+   "covers": [
+    "match.category"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "c",
+      "effect": "block",
+      "match": {
+       "category": [
+        "*"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "c",
+       "effect": "block",
+       "match": {
+        "category": [
+         "*"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": "jailbreak"
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "c"
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/match-fields-are-anded",
+   "covers": [
+    "match.tools",
+    "match.agents"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "and",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ],
+       "agents": [
+        "ci"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "and",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ],
+        "agents": [
+         "ci"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "ci",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "and"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "dev",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "ci",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "read",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "read"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/match-patterns-are-ored-and-globbed",
+   "covers": [
+    "match.tools",
+    "glob"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "glob",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "delete_*",
+        "drop_?",
+        "rm[ab]"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "glob",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "delete_*",
+         "drop_?",
+         "rm[ab]"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "delete_user",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "delete_user"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "glob"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "drop_x",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "drop_x"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "glob"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "drop_xy",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "drop_xy"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "rmb",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "rmb"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "glob"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "rmc",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "rmc"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/match-is-case-insensitive",
+   "covers": [
+    "match.tools",
+    "glob"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "ci",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "Deploy_*"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "ci",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "Deploy_*"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "DEPLOY_PROD",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "DEPLOY_PROD"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "ci"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy_prod",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy_prod"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "ci"
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/match-numeric-pattern-kept",
+   "covers": [
+    "match.impact_tier"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "n",
+      "effect": "block",
+      "match": {
+       "impact_tier": [
+        4
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "n",
+       "effect": "block",
+       "match": {
+        "impact_tier": [
+         4
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "read",
+        "impact_tier": "4",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "n"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "t",
+        "impact_class": "read",
+        "impact_tier": "3",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "t"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/condition-min-chain-tier-above-int",
+   "covers": [
+    "conditions.min_chain_tier_above"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "tier",
+      "effect": "require_approval",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditions": {
+       "min_chain_tier_above": 1
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "tier",
+       "effect": "require_approval",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {
+        "min_chain_tier_above": 1
+       },
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {
+        "least_privileged_tier": 1
+       }
+      },
+      "decision": "allowed",
+      "policy_id": null
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {
+        "least_privileged_tier": 2
+       }
+      },
+      "decision": "approval_required",
+      "policy_id": "tier"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {
+        "least_privileged_tier": 4
+       }
+      },
+      "decision": "approval_required",
+      "policy_id": "tier"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/condition-min-chain-tier-above-numeric-string",
+   "covers": [
+    "conditions.min_chain_tier_above"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "tier",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditions": {
+       "min_chain_tier_above": "2"
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "tier",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {
+        "min_chain_tier_above": "2"
+       },
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {
+        "least_privileged_tier": 2
+       }
+      },
+      "decision": "allowed",
+      "policy_id": null
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {
+        "least_privileged_tier": 3
+       }
+      },
+      "decision": "blocked",
+      "policy_id": "tier"
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/condition-min-chain-tier-above-float",
+   "covers": [
+    "conditions.min_chain_tier_above"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "tier",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditions": {
+       "min_chain_tier_above": 1.5
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "tier",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {
+        "min_chain_tier_above": 1.5
+       },
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {
+        "least_privileged_tier": 1
+       }
+      },
+      "decision": "allowed",
+      "policy_id": null
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {
+        "least_privileged_tier": 2
+       }
+      },
+      "decision": "blocked",
+      "policy_id": "tier"
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/condition-only-rule",
+   "covers": [
+    "conditions.min_chain_tier_above"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "tier",
+      "effect": "block",
+      "conditions": {
+       "min_chain_tier_above": 3
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "tier",
+       "effect": "block",
+       "match": {},
+       "conditions": {
+        "min_chain_tier_above": 3
+       },
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "anything",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "anything"
+       },
+       "context": {
+        "least_privileged_tier": 4
+       }
+      },
+      "decision": "blocked",
+      "policy_id": "tier"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "anything",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "anything"
+       },
+       "context": {
+        "least_privileged_tier": 3
+       }
+      },
+      "decision": "allowed",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/empty-match-mapping-with-condition",
+   "covers": [
+    "match",
+    "conditions.min_chain_tier_above"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "tier",
+      "effect": "block",
+      "match": {},
+      "conditions": {
+       "min_chain_tier_above": 3
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "tier",
+       "effect": "block",
+       "match": {},
+       "conditions": {
+        "min_chain_tier_above": 3
+       },
+       "message": null
+      }
+     ]
+    },
+    "probes": []
+   }
+  },
+  {
+   "id": "accept/rule-id-int-is-stringified",
+   "covers": [
+    "rule.id"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": 7,
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "7",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "7"
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/rule-id-absent",
+   "covers": [
+    "rule.id"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": null,
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/rule-message",
+   "covers": [
+    "rule.message"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "message": "deploys are not permitted"
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "no-deploy",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": "deploys are not permitted"
+      }
+     ]
+    },
+    "probes": []
+   }
+  },
+  {
+   "id": "accept/duplicate-rule-ids",
+   "covers": [
+    "rule.id"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     },
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy2"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "no-deploy",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      },
+      {
+       "id": "no-deploy",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy2"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": []
+   }
+  },
+  {
+   "id": "accept/every-key-at-once",
+   "covers": [
+    "version",
+    "defaults",
+    "rules",
+    "rule.id",
+    "rule.effect",
+    "rule.message",
+    "match.tools",
+    "conditions.min_chain_tier_above"
+   ],
+   "document": {
+    "version": "1",
+    "defaults": {
+     "effect": "allow",
+     "unclassified": "monitor"
+    },
+    "rules": [
+     {
+      "id": "r",
+      "effect": "block",
+      "message": "m",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditions": {
+       "min_chain_tier_above": 1
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "r",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {
+        "min_chain_tier_above": 1
+       },
+       "message": "m"
+      }
+     ]
+    },
+    "probes": []
+   }
+  },
+  {
+   "id": "accept/order-deny-first-convention",
+   "covers": [
+    "ordering"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "deny",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy*"
+       ]
+      }
+     },
+     {
+      "id": "exception",
+      "effect": "allow",
+      "match": {
+       "tools": [
+        "deploy_docs"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "deny",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy*"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      },
+      {
+       "id": "exception",
+       "effect": "allow",
+       "match": {
+        "tools": [
+         "deploy_docs"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy_docs",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy_docs"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "deny"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy_prod",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy_prod"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "deny"
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/order-allow-before-block-wins",
+   "covers": [
+    "ordering"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "exception",
+      "effect": "allow",
+      "match": {
+       "tools": [
+        "deploy_docs"
+       ]
+      }
+     },
+     {
+      "id": "deny",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy*"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "exception",
+       "effect": "allow",
+       "match": {
+        "tools": [
+         "deploy_docs"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      },
+      {
+       "id": "deny",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy*"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy_docs",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy_docs"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": "exception"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy_prod",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy_prod"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": "deny"
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/order-approval-before-block-wins",
+   "covers": [
+    "ordering"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "review",
+      "effect": "require_approval",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     },
+     {
+      "id": "deny",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "review",
+       "effect": "require_approval",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      },
+      {
+       "id": "deny",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {}
+      },
+      "decision": "approval_required",
+      "policy_id": "review"
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/order-monitor-before-block-wins",
+   "covers": [
+    "ordering"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "watch",
+      "effect": "monitor",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     },
+     {
+      "id": "deny",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "watch",
+       "effect": "monitor",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      },
+      {
+       "id": "deny",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {}
+      },
+      "decision": "monitor",
+      "policy_id": "watch"
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/order-rule-beats-unclassified-default",
+   "covers": [
+    "ordering",
+    "defaults.unclassified"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "ok",
+      "effect": "allow",
+      "match": {
+       "tools": [
+        "mystery"
+       ]
+      }
+     }
+    ],
+    "defaults": {
+     "unclassified": "block"
+    }
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "block"
+     },
+     "rules": [
+      {
+       "id": "ok",
+       "effect": "allow",
+       "match": {
+        "tools": [
+         "mystery"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "mystery",
+        "impact_class": "unknown",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "mystery"
+       },
+       "context": {}
+      },
+      "decision": "allowed",
+      "policy_id": "ok"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "other",
+        "impact_class": "unknown",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "other"
+       },
+       "context": {}
+      },
+      "decision": "blocked",
+      "policy_id": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "accept/order-non-matching-condition-falls-through",
+   "covers": [
+    "ordering",
+    "conditions.min_chain_tier_above"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "tier",
+      "effect": "allow",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditions": {
+       "min_chain_tier_above": 3
+      }
+     },
+     {
+      "id": "deny",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "accept",
+    "normalized": {
+     "version": "1",
+     "defaults": {
+      "effect": "allow",
+      "unclassified": "monitor"
+     },
+     "rules": [
+      {
+       "id": "tier",
+       "effect": "allow",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {
+        "min_chain_tier_above": 3
+       },
+       "message": null
+      },
+      {
+       "id": "deny",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       },
+       "conditions": {},
+       "message": null
+      }
+     ]
+    },
+    "probes": [
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {
+        "least_privileged_tier": 4
+       }
+      },
+      "decision": "allowed",
+      "policy_id": "tier"
+     },
+     {
+      "request": {
+       "subject": {
+        "agent_id": "a",
+        "trust": null
+       },
+       "action": {
+        "tool_name": "deploy",
+        "impact_class": "read",
+        "impact_tier": "low",
+        "category": null
+       },
+       "resource": {
+        "destination_type": "tool_call",
+        "destination_identifier": "deploy"
+       },
+       "context": {
+        "least_privileged_tier": 2
+       }
+      },
+      "decision": "blocked",
+      "policy_id": "deny"
+     }
+    ]
+   }
+  },
+  {
+   "id": "refuse/document-is-list",
+   "covers": [
+    "document"
+   ],
+   "document": [
+    {
+     "id": "no-deploy",
+     "effect": "block",
+     "match": {
+      "tools": [
+       "deploy"
+      ]
+     }
+    }
+   ],
+   "expect": {
+    "verdict": "refuse",
+    "reason": "document_not_a_mapping",
+    "field": ""
+   }
+  },
+  {
+   "id": "refuse/document-is-string",
+   "covers": [
+    "document"
+   ],
+   "document": "version: 1",
+   "expect": {
+    "verdict": "refuse",
+    "reason": "document_not_a_mapping",
+    "field": ""
+   }
+  },
+  {
+   "id": "refuse/document-is-null",
+   "covers": [
+    "document"
+   ],
+   "document": null,
+   "expect": {
+    "verdict": "refuse",
+    "reason": "document_not_a_mapping",
+    "field": ""
+   }
+  },
+  {
+   "id": "refuse/document-is-number",
+   "covers": [
+    "document"
+   ],
+   "document": 1,
+   "expect": {
+    "verdict": "refuse",
+    "reason": "document_not_a_mapping",
+    "field": ""
+   }
+  },
+  {
+   "id": "refuse/version-2",
+   "covers": [
+    "version"
+   ],
+   "document": {
+    "version": "2",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unsupported_version",
+    "field": "version"
+   }
+  },
+  {
+   "id": "refuse/version-v1",
+   "covers": [
+    "version"
+   ],
+   "document": {
+    "version": "v1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unsupported_version",
+    "field": "version"
+   }
+  },
+  {
+   "id": "refuse/version-int-2",
+   "covers": [
+    "version"
+   ],
+   "document": {
+    "version": 2,
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unsupported_version",
+    "field": "version"
+   }
+  },
+  {
+   "id": "refuse/version-bool-true",
+   "covers": [
+    "version"
+   ],
+   "document": {
+    "version": true,
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unsupported_version",
+    "field": "version"
+   }
+  },
+  {
+   "id": "refuse/version-null",
+   "covers": [
+    "version"
+   ],
+   "document": {
+    "version": null,
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unsupported_version",
+    "field": "version"
+   }
+  },
+  {
+   "id": "refuse/version-list",
+   "covers": [
+    "version"
+   ],
+   "document": {
+    "version": [
+     "1"
+    ],
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unsupported_version",
+    "field": "version"
+   }
+  },
+  {
+   "id": "refuse/version-mapping",
+   "covers": [
+    "version"
+   ],
+   "document": {
+    "version": {
+     "v": "1"
+    },
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unsupported_version",
+    "field": "version"
+   }
+  },
+  {
+   "id": "refuse/version-missing",
+   "covers": [
+    "version"
+   ],
+   "document": {
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unsupported_version",
+    "field": "version"
+   }
+  },
+  {
+   "id": "refuse/top-level-unknown-key",
+   "covers": [
+    "document"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "some_future_field": 1
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unknown_key",
+    "field": "some_future_field"
+   }
+  },
+  {
+   "id": "refuse/top-level-typo-rule",
+   "covers": [
+    "document",
+    "rules"
+   ],
+   "document": {
+    "version": "1",
+    "rule": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unknown_key",
+    "field": "rule"
+   }
+  },
+  {
+   "id": "refuse/top-level-typo-default",
+   "covers": [
+    "document",
+    "defaults"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "default": {
+     "effect": "block"
+    }
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unknown_key",
+    "field": "default"
+   }
+  },
+  {
+   "id": "refuse/rules-is-mapping",
+   "covers": [
+    "rules"
+   ],
+   "document": {
+    "version": "1",
+    "rules": {
+     "id": "no-deploy",
+     "effect": "block",
+     "match": {
+      "tools": [
+       "deploy"
+      ]
+     }
+    }
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "rules_not_a_list",
+    "field": "rules"
+   }
+  },
+  {
+   "id": "refuse/rules-is-string",
+   "covers": [
+    "rules"
+   ],
+   "document": {
+    "version": "1",
+    "rules": "no-deploy"
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "rules_not_a_list",
+    "field": "rules"
+   }
+  },
+  {
+   "id": "refuse/rules-is-null",
+   "covers": [
+    "rules"
+   ],
+   "document": {
+    "version": "1",
+    "rules": null
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "rules_not_a_list",
+    "field": "rules"
+   }
+  },
+  {
+   "id": "refuse/rule-is-string",
+   "covers": [
+    "rules"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     },
+     "no-deploy"
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "rule_not_a_mapping",
+    "field": "rules[1]"
+   }
+  },
+  {
+   "id": "refuse/rule-is-list",
+   "covers": [
+    "rules"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     },
+     [
+      {
+       "id": "no-deploy",
+       "effect": "block",
+       "match": {
+        "tools": [
+         "deploy"
+        ]
+       }
+      }
+     ]
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "rule_not_a_mapping",
+    "field": "rules[1]"
+   }
+  },
+  {
+   "id": "refuse/rule-is-null",
+   "covers": [
+    "rules"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     },
+     null
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "rule_not_a_mapping",
+    "field": "rules[1]"
+   }
+  },
+  {
+   "id": "refuse/rule-unknown-key-description",
+   "covers": [
+    "rule"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "description": "d"
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unknown_key",
+    "field": "rules[0].description"
+   }
+  },
+  {
+   "id": "refuse/rule-unknown-key-conditons",
+   "covers": [
+    "rule"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditons": {
+       "min_chain_tier_above": 2
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unknown_key",
+    "field": "rules[0].conditons"
+   }
+  },
+  {
+   "id": "refuse/rule-unknown-key-enabled",
+   "covers": [
+    "rule"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "enabled": false
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unknown_key",
+    "field": "rules[0].enabled"
+   }
+  },
+  {
+   "id": "refuse/rule-unknown-key-priority",
+   "covers": [
+    "rule"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "priority": 5
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unknown_key",
+    "field": "rules[0].priority"
+   }
+  },
+  {
+   "id": "refuse/rule-unknown-key-trust_below",
+   "covers": [
+    "rule"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "trust_below": 0.5
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unknown_key",
+    "field": "rules[0].trust_below"
+   }
+  },
+  {
+   "id": "refuse/rule-unknown-key-tools",
+   "covers": [
+    "rule"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "tools": [
+       "deploy"
+      ]
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unknown_key",
+    "field": "rules[0].tools"
+   }
+  },
+  {
+   "id": "refuse/rule-typo-effct",
+   "covers": [
+    "rule.effect"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "x",
+      "effct": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unknown_key",
+    "field": "rules[0].effct"
+   }
+  },
+  {
+   "id": "refuse/effect-deny",
+   "covers": [
+    "rule.effect"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "deny",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_effect",
+    "field": "rules[0].effect"
+   }
+  },
+  {
+   "id": "refuse/effect-uppercase",
+   "covers": [
+    "rule.effect"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "BLOCK",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_effect",
+    "field": "rules[0].effect"
+   }
+  },
+  {
+   "id": "refuse/effect-list",
+   "covers": [
+    "rule.effect"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": [
+       "block"
+      ],
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_effect",
+    "field": "rules[0].effect"
+   }
+  },
+  {
+   "id": "refuse/effect-null",
+   "covers": [
+    "rule.effect"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": null,
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_effect",
+    "field": "rules[0].effect"
+   }
+  },
+  {
+   "id": "refuse/effect-bool",
+   "covers": [
+    "rule.effect"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": true,
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_effect",
+    "field": "rules[0].effect"
+   }
+  },
+  {
+   "id": "refuse/effect-missing",
+   "covers": [
+    "rule.effect"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "x",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_effect",
+    "field": "rules[0].effect"
+   }
+  },
+  {
+   "id": "refuse/match-null",
+   "covers": [
+    "match"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "x",
+      "effect": "block",
+      "match": null,
+      "conditions": {
+       "min_chain_tier_above": 1
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "empty_block",
+    "field": "rules[0].match"
+   }
+  },
+  {
+   "id": "refuse/conditions-null",
+   "covers": [
+    "conditions"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditions": null
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "empty_block",
+    "field": "rules[0].conditions"
+   }
+  },
+  {
+   "id": "refuse/match-is-string",
+   "covers": [
+    "match"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": "tools: [deploy]"
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "block_not_a_mapping",
+    "field": "rules[0].match"
+   }
+  },
+  {
+   "id": "refuse/match-is-list",
+   "covers": [
+    "match"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": [
+       [
+        "deploy"
+       ]
+      ]
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "block_not_a_mapping",
+    "field": "rules[0].match"
+   }
+  },
+  {
+   "id": "refuse/match-is-number",
+   "covers": [
+    "match"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": 1
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "block_not_a_mapping",
+    "field": "rules[0].match"
+   }
+  },
+  {
+   "id": "refuse/conditions-is-string",
+   "covers": [
+    "conditions"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditions": "min_chain_tier_above: 1"
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "block_not_a_mapping",
+    "field": "rules[0].conditions"
+   }
+  },
+  {
+   "id": "refuse/trust-below-under-conditions",
+   "covers": [
+    "conditions.trust_below"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditions": {
+       "trust_below": 0.5
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unsupported_condition",
+    "field": "rules[0].conditions.trust_below"
+   }
+  },
+  {
+   "id": "refuse/trust-below-under-match",
+   "covers": [
+    "conditions.trust_below"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ],
+       "trust_below": [
+        0.5
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unsupported_condition",
+    "field": "rules[0].match.trust_below"
+   }
+  },
+  {
+   "id": "refuse/trust-below-precedes-unknown-key",
+   "covers": [
+    "conditions.trust_below"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tool": [
+        "deploy"
+       ]
+      },
+      "conditions": {
+       "trust_below": 0.5
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unsupported_condition",
+    "field": "rules[0].conditions.trust_below"
+   }
+  },
+  {
+   "id": "refuse/match-unknown-key-tool",
+   "covers": [
+    "match"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tool": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unknown_key",
+    "field": "rules[0].match.tool"
+   }
+  },
+  {
+   "id": "refuse/match-unknown-key-agent",
+   "covers": [
+    "match"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "agent": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unknown_key",
+    "field": "rules[0].match.agent"
+   }
+  },
+  {
+   "id": "refuse/match-unknown-key-destination",
+   "covers": [
+    "match"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "destination": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unknown_key",
+    "field": "rules[0].match.destination"
+   }
+  },
+  {
+   "id": "refuse/match-unknown-key-trust",
+   "covers": [
+    "match"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "trust": [
+        "deploy"
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unknown_key",
+    "field": "rules[0].match.trust"
+   }
+  },
+  {
+   "id": "refuse/condition-unknown-key",
+   "covers": [
+    "conditions"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditions": {
+       "min_chain_tier_abov": 1
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unknown_key",
+    "field": "rules[0].conditions.min_chain_tier_abov"
+   }
+  },
+  {
+   "id": "refuse/unknown-key-precedes-bad-value",
+   "covers": [
+    "match"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tool": "deploy",
+       "tools": "deploy"
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unknown_key",
+    "field": "rules[0].match.tool"
+   }
+  },
+  {
+   "id": "refuse/match-tools-scalar",
+   "covers": [
+    "match.tools"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "x",
+      "effect": "block",
+      "match": {
+       "tools": "x-hit"
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_match_value",
+    "field": "rules[0].match.tools"
+   }
+  },
+  {
+   "id": "refuse/match-agents-scalar",
+   "covers": [
+    "match.agents"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "x",
+      "effect": "block",
+      "match": {
+       "agents": "x-hit"
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_match_value",
+    "field": "rules[0].match.agents"
+   }
+  },
+  {
+   "id": "refuse/match-impact_class-scalar",
+   "covers": [
+    "match.impact_class"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "x",
+      "effect": "block",
+      "match": {
+       "impact_class": "x-hit"
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_match_value",
+    "field": "rules[0].match.impact_class"
+   }
+  },
+  {
+   "id": "refuse/match-impact_tier-scalar",
+   "covers": [
+    "match.impact_tier"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "x",
+      "effect": "block",
+      "match": {
+       "impact_tier": "x-hit"
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_match_value",
+    "field": "rules[0].match.impact_tier"
+   }
+  },
+  {
+   "id": "refuse/match-destination_type-scalar",
+   "covers": [
+    "match.destination_type"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "x",
+      "effect": "block",
+      "match": {
+       "destination_type": "x-hit"
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_match_value",
+    "field": "rules[0].match.destination_type"
+   }
+  },
+  {
+   "id": "refuse/match-destination_identifier-scalar",
+   "covers": [
+    "match.destination_identifier"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "x",
+      "effect": "block",
+      "match": {
+       "destination_identifier": "x-hit"
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_match_value",
+    "field": "rules[0].match.destination_identifier"
+   }
+  },
+  {
+   "id": "refuse/match-mcp_server-scalar",
+   "covers": [
+    "match.mcp_server"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "x",
+      "effect": "block",
+      "match": {
+       "mcp_server": "x-hit"
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_match_value",
+    "field": "rules[0].match.mcp_server"
+   }
+  },
+  {
+   "id": "refuse/match-category-scalar",
+   "covers": [
+    "match.category"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "x",
+      "effect": "block",
+      "match": {
+       "category": "x-hit"
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_match_value",
+    "field": "rules[0].match.category"
+   }
+  },
+  {
+   "id": "refuse/match-value-empty-list",
+   "covers": [
+    "match.tools"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": []
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_match_value",
+    "field": "rules[0].match.tools"
+   }
+  },
+  {
+   "id": "refuse/match-value-null",
+   "covers": [
+    "match.tools"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": null
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_match_value",
+    "field": "rules[0].match.tools"
+   }
+  },
+  {
+   "id": "refuse/match-value-mapping",
+   "covers": [
+    "match.tools"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": {
+        "a": 1
+       }
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_match_value",
+    "field": "rules[0].match.tools"
+   }
+  },
+  {
+   "id": "refuse/match-value-bool-element",
+   "covers": [
+    "match.tools"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        true
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_match_value",
+    "field": "rules[0].match.tools"
+   }
+  },
+  {
+   "id": "refuse/match-value-nested-list",
+   "covers": [
+    "match.tools"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        [
+         "deploy"
+        ]
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_match_value",
+    "field": "rules[0].match.tools"
+   }
+  },
+  {
+   "id": "refuse/match-value-null-element",
+   "covers": [
+    "match.tools"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        null
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_match_value",
+    "field": "rules[0].match.tools"
+   }
+  },
+  {
+   "id": "refuse/match-value-bool-scalar",
+   "covers": [
+    "match.tools"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": false
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_match_value",
+    "field": "rules[0].match.tools"
+   }
+  },
+  {
+   "id": "refuse/match-value-number-scalar",
+   "covers": [
+    "match.tools"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": 4
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_match_value",
+    "field": "rules[0].match.tools"
+   }
+  },
+  {
+   "id": "refuse/match-null-field-beside-a-good-one",
+   "covers": [
+    "match.tools",
+    "match.agents"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "x",
+      "effect": "block",
+      "match": {
+       "agents": [
+        "billing"
+       ],
+       "tools": null
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_match_value",
+    "field": "rules[0].match.tools"
+   }
+  },
+  {
+   "id": "refuse/min-chain-tier-above-word",
+   "covers": [
+    "conditions.min_chain_tier_above"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditions": {
+       "min_chain_tier_above": "high"
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_condition_value",
+    "field": "rules[0].conditions.min_chain_tier_above"
+   }
+  },
+  {
+   "id": "refuse/min-chain-tier-above-null",
+   "covers": [
+    "conditions.min_chain_tier_above"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditions": {
+       "min_chain_tier_above": null
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_condition_value",
+    "field": "rules[0].conditions.min_chain_tier_above"
+   }
+  },
+  {
+   "id": "refuse/min-chain-tier-above-bool",
+   "covers": [
+    "conditions.min_chain_tier_above"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditions": {
+       "min_chain_tier_above": true
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_condition_value",
+    "field": "rules[0].conditions.min_chain_tier_above"
+   }
+  },
+  {
+   "id": "refuse/min-chain-tier-above-list",
+   "covers": [
+    "conditions.min_chain_tier_above"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditions": {
+       "min_chain_tier_above": [
+        1
+       ]
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_condition_value",
+    "field": "rules[0].conditions.min_chain_tier_above"
+   }
+  },
+  {
+   "id": "refuse/min-chain-tier-above-mapping",
+   "covers": [
+    "conditions.min_chain_tier_above"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditions": {
+       "min_chain_tier_above": {
+        "gt": 1
+       }
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_condition_value",
+    "field": "rules[0].conditions.min_chain_tier_above"
+   }
+  },
+  {
+   "id": "refuse/min-chain-tier-above-inf",
+   "covers": [
+    "conditions.min_chain_tier_above"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditions": {
+       "min_chain_tier_above": {
+        "$float": "inf"
+       }
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_condition_value",
+    "field": "rules[0].conditions.min_chain_tier_above"
+   }
+  },
+  {
+   "id": "refuse/min-chain-tier-above-nan",
+   "covers": [
+    "conditions.min_chain_tier_above"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditions": {
+       "min_chain_tier_above": {
+        "$float": "nan"
+       }
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_condition_value",
+    "field": "rules[0].conditions.min_chain_tier_above"
+   }
+  },
+  {
+   "id": "refuse/min-chain-tier-above-inf-string",
+   "covers": [
+    "conditions.min_chain_tier_above"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditions": {
+       "min_chain_tier_above": "inf"
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_condition_value",
+    "field": "rules[0].conditions.min_chain_tier_above"
+   }
+  },
+  {
+   "id": "refuse/min-chain-tier-above-float-string",
+   "covers": [
+    "conditions.min_chain_tier_above"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      },
+      "conditions": {
+       "min_chain_tier_above": "1.5"
+      }
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_condition_value",
+    "field": "rules[0].conditions.min_chain_tier_above"
+   }
+  },
+  {
+   "id": "refuse/rule-without-match-or-conditions",
+   "covers": [
+    "rule"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "x",
+      "effect": "block"
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "rule_matches_nothing",
+    "field": "rules[0]"
+   }
+  },
+  {
+   "id": "refuse/rule-with-empty-match-and-conditions",
+   "covers": [
+    "rule",
+    "match",
+    "conditions"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "x",
+      "effect": "block",
+      "match": {},
+      "conditions": {}
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "rule_matches_nothing",
+    "field": "rules[0]"
+   }
+  },
+  {
+   "id": "refuse/second-rule-is-the-bad-one",
+   "covers": [
+    "rules"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     },
+     {
+      "id": "y",
+      "effect": "allow"
+     }
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "rule_matches_nothing",
+    "field": "rules[1]"
+   }
+  },
+  {
+   "id": "refuse/defaults-null",
+   "covers": [
+    "defaults"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": null
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "empty_defaults",
+    "field": "defaults"
+   }
+  },
+  {
+   "id": "refuse/defaults-is-string",
+   "covers": [
+    "defaults"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": "block"
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "defaults_not_a_mapping",
+    "field": "defaults"
+   }
+  },
+  {
+   "id": "refuse/defaults-is-list",
+   "covers": [
+    "defaults"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": [
+     "block"
+    ]
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "defaults_not_a_mapping",
+    "field": "defaults"
+   }
+  },
+  {
+   "id": "refuse/defaults-is-number",
+   "covers": [
+    "defaults"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": 0
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "defaults_not_a_mapping",
+    "field": "defaults"
+   }
+  },
+  {
+   "id": "refuse/defaults-unknown-key",
+   "covers": [
+    "defaults"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": {
+     "efect": "block"
+    }
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "unknown_key",
+    "field": "defaults.efect"
+   }
+  },
+  {
+   "id": "refuse/defaults-effect-deny",
+   "covers": [
+    "defaults.effect"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": {
+     "effect": "deny"
+    }
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_default_effect",
+    "field": "defaults.effect"
+   }
+  },
+  {
+   "id": "refuse/defaults-effect-uppercase",
+   "covers": [
+    "defaults.effect"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": {
+     "effect": "Block"
+    }
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_default_effect",
+    "field": "defaults.effect"
+   }
+  },
+  {
+   "id": "refuse/defaults-effect-list",
+   "covers": [
+    "defaults.effect"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": {
+     "effect": [
+      "block"
+     ]
+    }
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_default_effect",
+    "field": "defaults.effect"
+   }
+  },
+  {
+   "id": "refuse/defaults-effect-null",
+   "covers": [
+    "defaults.effect"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": {
+     "effect": null
+    }
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_default_effect",
+    "field": "defaults.effect"
+   }
+  },
+  {
+   "id": "refuse/defaults-unclassified-deny",
+   "covers": [
+    "defaults.unclassified"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": {
+     "unclassified": "deny"
+    }
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_default_effect",
+    "field": "defaults.unclassified"
+   }
+  },
+  {
+   "id": "refuse/defaults-unclassified-uppercase",
+   "covers": [
+    "defaults.unclassified"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": {
+     "unclassified": "Block"
+    }
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_default_effect",
+    "field": "defaults.unclassified"
+   }
+  },
+  {
+   "id": "refuse/defaults-unclassified-list",
+   "covers": [
+    "defaults.unclassified"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": {
+     "unclassified": [
+      "block"
+     ]
+    }
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_default_effect",
+    "field": "defaults.unclassified"
+   }
+  },
+  {
+   "id": "refuse/defaults-unclassified-null",
+   "covers": [
+    "defaults.unclassified"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "block",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": {
+     "unclassified": null
+    }
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_default_effect",
+    "field": "defaults.unclassified"
+   }
+  },
+  {
+   "id": "refuse/rule-error-precedes-defaults-error",
+   "covers": [
+    "rules",
+    "defaults"
+   ],
+   "document": {
+    "version": "1",
+    "rules": [
+     {
+      "id": "no-deploy",
+      "effect": "deny",
+      "match": {
+       "tools": [
+        "deploy"
+       ]
+      }
+     }
+    ],
+    "defaults": "block"
+   },
+   "expect": {
+    "verdict": "refuse",
+    "reason": "invalid_effect",
+    "field": "rules[0].effect"
+   }
+  }
+ ]
+}

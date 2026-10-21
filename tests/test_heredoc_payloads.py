@@ -80,8 +80,9 @@ def test_an_interpreter_heredoc_body_becomes_nested_segments(cmd, interp):
 
 @pytest.mark.parametrize("cmd,_i", INTERPRETER_HEREDOCS, ids=_IDS)
 def test_body_lines_never_become_top_level_segments(cmd, _i):
-    """The bug: the newline splitter turned every body line into its own
-    top-level command, and the delimiter into a command called `eof`."""
+    """A heredoc body is not a list of commands: a plain newline splitter would
+    turn every body line into its own top-level command, and the delimiter into
+    a command called `eof`."""
     top = _top(cmd)
     assert len(top) == 1, f"body leaked into top level: {top}"
     assert "eof" not in [t.lower() for t in top]
@@ -93,7 +94,7 @@ def test_interpreter_heredoc_attacks_are_caught(cmd, _i):
     assert r.action == "blocked", f"{cmd!r} -> {r.action}/{r.score} {r.rules}"
 
 
-# The property that says the fix is right: the two forms of the same act must
+# The property that says the parse is right: the two forms of the same act must
 # produce the same verdict.
 PARITY = [
     ("import pathlib; print(pathlib.Path('/etc/shadow').read_text())", "python"),
@@ -313,19 +314,19 @@ def test_is_program_is_recorded_on_each_heredoc():
 
 
 # ── the per-segment heredoc cap ─────────────────────────────────────────────
-# Past _MAX_HEREDOCS_PER_SEGMENT the header used to stop being recognised as a
-# heredoc: it fell through to the ordinary `<<` redirect path, which left the
-# BODIES to the newline splitter. Every body line then became its own top-level
-# segment with a pseudo-name — `filler`, `d8`, `d9` — and, alone among every
-# bound in the module, parse_degraded was NOT set. Since a degraded segment is
-# precisely what may not produce a finding or drive a critical tier alone, the
-# fabrications arrived labelled as authoritative.
+# Past _MAX_HEREDOCS_PER_SEGMENT the header must still be recognised as a
+# heredoc. Were it to fall through to the ordinary `<<` redirect path, the
+# BODIES would go to the newline splitter: every body line would become its own
+# top-level segment with a pseudo-name — `filler`, `d8`, `d9` — and, unless
+# parse_degraded were set like every other bound in the module, those
+# fabrications would arrive labelled as authoritative. A degraded segment is
+# precisely what may not produce a finding or drive a critical tier alone.
 #
-# Measured before the fix: `cat <<D0 … <<D11 > notes.md` carrying the line
-# `rm important.db` in its twelfth body returned a CRITICAL
-# destructive_filesystem finding (destroy.sensitive_path, blocked/0.90) on a
-# command that WRITES a file. The same command with eight heredocs was
-# allowed/0.00. The cap crossing was the only difference.
+# The concrete case: `cat <<D0 … <<D11 > notes.md` carrying the line
+# `rm important.db` in its twelfth body must not return a CRITICAL
+# destructive_filesystem finding on a command that WRITES a file. The same
+# command with eight heredocs is allowed/0.00, and crossing the cap must not
+# change that.
 
 from xaidr.scanner.command_parse import _MAX_HEREDOCS_PER_SEGMENT  # noqa: E402
 
@@ -379,11 +380,12 @@ def test_the_captured_heredocs_are_the_first_n_not_an_arbitrary_subset():
                                _MAX_HEREDOCS_PER_SEGMENT + 1,
                                _MAX_HEREDOCS_PER_SEGMENT + 4])
 def test_a_data_body_past_the_cap_does_not_manufacture_a_finding(n):
-    """THE REGRESSION. A file being WRITTEN must not be read as a command run.
+    """THE INVARIANT. A file being WRITTEN must not be read as a command run.
 
     `rm important.db` is chosen deliberately: it is structurally destructive but
     carries no famous literal, so a raw-string rule does not fire on it and the
-    verdict is decided by structure alone — which is what the leak corrupted.
+    verdict is decided by structure alone — which is what a body leaking into
+    the top level would corrupt.
     """
     r = _run(_many_heredocs(n, payload="rm important.db", at=n - 1))
     assert r.action == "allowed", (

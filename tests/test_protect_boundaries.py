@@ -263,7 +263,7 @@ def _attack_crewai_agent_tool():
     ``Crew.kickoff`` drives the tool call the way the real executor does:
     build the hook context, run the before-tool-call hooks, then
     ``to_structured_tool().invoke()``. A patch on ``BaseTool.run`` is invisible
-    here, which is exactly the bug this boundary exists to catch.
+    here, which is exactly the mistake this boundary case exists to catch.
     """
     import crewai
 

@@ -32,11 +32,8 @@ README for what that measured.
 WHAT IS COMMITTED, AND WHY IT IS NOT THE TEXT. The corpus is 24 items whose
 whole point is being enormous; as JSONL it is 10.5 MB against a tracked tree
 that is otherwise 4.4 MB, so committing it would more than triple the
-repository. (Measured 2026-09-20. This said "25 MB against 8 MB" and both
-figures were wrong — see `benign_longform/README.md` for the correction and why
-the argument survives it.) So what is committed is this GENERATOR plus
-`manifest.json` —
-per item, its id, shape, length and the sha256 of its text — and the corpus is
+repository. So what is committed is this GENERATOR plus `manifest.json` — per
+item, its id, shape, length and the sha256 of its text — and the corpus is
 materialised on demand.
 
 The manifest is not a convenience, it is the anti-drift device. A generated

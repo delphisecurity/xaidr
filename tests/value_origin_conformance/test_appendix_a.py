@@ -1,5 +1,5 @@
-"""Acceptance 4: each of the 34 verifier findings (docs/value-origin-architecture.md
-Appendix A) has a test here, or a "not testable in A1, because" line.
+"""Acceptance 4: each of the 34 verifier findings against the value-origin
+specification has a test here, or a "not testable in A1, because" line.
 
 The table is checked, not trusted: every named test must exist (a function in
 this suite, or a supplementary case id), so a renamed or deleted test turns this
@@ -32,7 +32,7 @@ APPENDIX_A = {
     7: (T, ["S5", "R31-bind-ledger-noop-on-implicit", "R31-fresh-replaces"],
         "the core half (ledger_absent iff flow visible and nothing bound; the binding "
         "primitives). Which host paths call them — record_hop, extract_context's first "
-        "statement, paid's build_provenance — is A2"),
+        "statement, a vendoring package's build_provenance — is A2"),
     8: (T, ["S26a-apostrophe", "S26a-wildcard", "S26a-five-tokens", "S26a-ok", "S26b",
             "S26c-int", "S26c-bool", "S26c-float", "S26d", "S26e", "S26f"], ""),
     9: (T, ["S2c", "R35-flagged-ngrams", "R35-unscanned-input"], ""),
@@ -44,7 +44,7 @@ APPENDIX_A = {
     13: (T, ["test_race.test_s22_no_reader_sees_a_first_emission_overwritten",
              "test_race.test_s22_a_multi_entry_write_is_seen_all_or_none"],
          "public interface only; no ledger accessor"),
-    14: (N, [], "P1 is paid's vendoring gate (tests/test_value_origin_pin.py in paid). Open's "
+    14: (N, [], "P1 is the vendoring package's own gate. This package's "
          "part — no generated files inside the vendored dirs — is test_self_contained"),
     15: (T, ["test_procedural.test_v15_result_shapes",
              "test_procedural.test_v15_result_leaf_cap_is_64k_not_the_argument_cap"],
@@ -55,7 +55,7 @@ APPENDIX_A = {
     17: (T, ["S28a-userinfo", "S28a-backslash-userinfo", "S28b-segment", "S28b-dot-segment",
              "S28c-port", "S28c-default-port", "S28-ok", "S28d-relative", "S28d-abs",
              "S28d-dotdot", "S28-exact-strip", "S28-exact-nonstring"], ""),
-    18: (N, [], "should_block's placement in scan_tool_call (V-18) is seam wiring, A2. The "
+    18: (N, [], "should_block's placement in scan_tool_call is seam wiring, A2. The "
          "core half — should_block itself — is test_interface.test_should_block_only_on_enforce_unauthorized"),
     19: (T, ["V19-int-string", "V19-dotted-3", "V19-bare-host", "V19-version-path",
              "V19-strict-ip", "V19-ipv6", "V19-implied-scheme", "V19-bare-host-reserved",
@@ -67,26 +67,27 @@ APPENDIX_A = {
              "V23-local-part-lower", "R36-homoglyph-read", "R36-unicode-principal"],
          "IDNA per ruling 3.6 (UTS-46 nontransitional, Unicode 13.0), not the stdlib codec"),
     24: (T, ["S2", "S2-two-inputs", "S2-read-first", "S26e"], ""),
-    25: (N, [], "L3 is paid's differential over two L2 drivers; neither driver exists "
-         "until A2 (V-25's `python -m tests.value_origin_seams_driver`)"),
+    25: (N, [], "L3 is a downstream differential over two L2 drivers; neither driver "
+         "exists until A2 (`python -m tests.value_origin_seams_driver`)"),
     26: (T, ["C2-no-designation"], "the core half: a read no designation can match is "
          "untrusted. Which directions call record_* at all (manual tool_result, outbound "
          "a2a, output) is the seams' (A2)"),
     27: (T, ["R31-implicit-replaced", "R31-explicit-persists"],
          "ruling 3.1 at the core; S30 (two requests on one worker thread) is L2 (A2)"),
-    28: (N, [], "the waterfall row is blank-canvas code (C-27). What open owes it — the "
+    28: (N, [], "the waterfall row is rendered by a downstream dashboard. What this package "
+         "owes it — the "
          "row_text.json it is checked against — is test_core.test_row_text_matches_the_committed_export"),
     29: (T, ["test_core.test_row_text_matches_the_committed_export"],
-         "row_text.json carries three unrecognised samples (V-29)"),
-    30: (N, [], "R1 sabotages paid's protect_tools wiring; there is no paid wiring in A1"),
-    31: (N, [], "the rule id intent.value_origin_untrusted is added by the seam's block path "
-         "(V-31), A2"),
+         "row_text.json carries three unrecognised samples"),
+    30: (N, [], "R1 sabotages a downstream protect_tools wiring; there is no such wiring in A1"),
+    31: (N, [], "the rule id intent.value_origin_untrusted is added by the seam's block path, "
+         "A2"),
     32: (T, ["test_procedural.test_after_fork_the_inherited_ledger_is_not_bound"], ""),
-    33: (T, ["test_interface.test_strength_tables"], "the §1.1 half; the §4.3 half is paid's pin "
-         "file placement, not testable in open"),
+    33: (T, ["test_interface.test_strength_tables"], "the strength-table half; the other half is a vendoring "
+         "package's pin file placement, not testable here"),
     34: (T, ["test_interface.test_all_is_exactly_the_interface"],
          "the core's surface; Sensor(value_origin=, value_origin_sources=) and "
-         "ScanResult.value_origin are A2; the vendoring script is paid's"),
+         "ScanResult.value_origin are A2; the vendoring script is downstream"),
 }
 
 SUPPLEMENTARY_IDS = {c["id"] for c in load_jsonl("supplementary.jsonl")}

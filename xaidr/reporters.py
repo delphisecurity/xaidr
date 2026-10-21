@@ -25,8 +25,10 @@ import json
 import logging
 import re
 import sys
+import threading
+import weakref
 from typing import Any, Protocol, runtime_checkable
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import unquote, unquote_plus, urlsplit, urlunsplit
 
 logger = logging.getLogger("xaidr.reporters")
 
@@ -34,32 +36,31 @@ logger = logging.getLogger("xaidr.reporters")
 # ── CREDENTIALS MUST NOT REACH THE LOGS ──────────────────────────────────────
 # A webhook destination is user-supplied and routinely carries its own
 # authentication in the URL: `?token=...`, `?api_key=...`, or `user:pass@host`.
-# On a delivery failure this module logged the destination and the exception,
-# and the credential appeared in BOTH. That is worth spelling out because it is
-# the thing that made the first fix incomplete: the URL and the exception are
-# SEPARATE SINKS. httpx puts the full request URL inside the text of
-# HTTPStatusError ("Server error '500 ...' for url '<url>'"), so redacting
-# `self._url` and interpolating `exc` still emits the secret, once instead of
-# twice. Measured on 1.12.0 with a canary in the query: two occurrences on one
-# line, and two again with the credential in userinfo.
+# A failed delivery is logged with the destination and the exception, and the
+# URL and the exception are SEPARATE SINKS. httpx puts the full request URL
+# inside the text of HTTPStatusError ("Server error '500 ...' for url '<url>'"),
+# so redacting `self._url` and interpolating `exc` would still emit the secret.
+# Both are sanitised.
 #
 # The logs are the wrong place for this to land. They are the artefact most
 # likely to be shipped to a third party, retained longest, and read by the
 # widest audience, and a reporter failure is exactly when an operator pastes one
 # into a ticket.
 #
-# THE PATH IS ALSO A CREDENTIAL SINK, and the first fix missed it. Query values
-# and userinfo are where a credential goes when the URL is an API endpoint; they
-# are NOT where it goes on the destinations this reporter is actually pointed at.
-# The three most common webhook sinks carry the whole secret in the PATH:
+# THE PATH IS ALSO A CREDENTIAL SINK. Query values and userinfo are where a
+# credential goes when the URL is an API endpoint; they are NOT where it goes on
+# the destinations this reporter is actually pointed at. The three most common
+# webhook sinks carry the whole secret in the PATH:
 #
 #   Slack     https://hooks.slack.com/services/T0A1B2C3/B9Z8Y7X6/<token>
 #   Discord   https://discord.com/api/webhooks/<id>/<token>
 #   Teams     https://<org>.webhook.office.com/webhookb2/<guid>@<guid>/IncomingWebhook/<guid>/<guid>
 #
-# Measured on published 1.13.0 and 1.14.0 and on the 1.15.0 candidate: a Slack
-# webhook URL put the token on the log line FOUR times (the reporter's own line
-# and httpx's exception text, each seen by the handler and again on stderr).
+# THERE IS A THIRD SINK THAT IS NOT OURS: httpx logs every request it sends as
+# ``HTTP Request: POST <full url> "<status>"`` at INFO on the ``httpx`` logger,
+# success or failure. `_DestinationLogFilter` rewrites that line for every live
+# WebhookReporter destination, so a host that enables INFO logging sees the
+# destination named and its credential redacted, as in every other sink.
 #
 # WHAT IS KEPT, AND THE ARGUMENT FOR IT.
 #
@@ -116,14 +117,18 @@ def _redact_path(path: str) -> str:
     return out + "/" if trailing else out
 
 
+def _is_port(text: str) -> bool:
+    return text.isdigit() and len(text) <= 5
+
+
 def redact_url(url: Any) -> str:
     """A URL safe to log: the destination named, every secret-bearing part gone.
 
     Keeps what an operator needs to identify the destination (scheme, host, port,
     and the NUMBER of path segments) and removes what only an attacker benefits
     from (userinfo, path segment text, query VALUES, fragment). Query KEYS are
-    kept: knowing the call carried a `token` parameter is diagnostic, knowing its
-    value is a leak.
+    kept: knowing the call carried a `token` parameter is diagnostic; its value
+    is the credential itself and is never logged.
 
     The path is redacted in full. The canonical WebhookReporter destinations —
     Slack, Discord, Teams — carry the entire secret in path segments, and there
@@ -142,6 +147,9 @@ def redact_url(url: Any) -> str:
         netloc = parts.netloc
         if "@" in netloc:                    # strip userinfo entirely
             netloc = f"{_REDACTED}@{netloc.rsplit('@', 1)[1]}"
+        host, sep, port = netloc.rpartition(":")
+        if sep and "]" not in port and not _is_port(port):
+            netloc = f"{host}:{_REDACTED}"   # not a port, so it is content
         query = parts.query
         if query:
             out = []
@@ -358,6 +366,146 @@ class FileReporter:
             pass
 
 
+#: A literal piece of the destination shorter than this is not scrubbed out of
+#: free text: it collides with ordinary words in the message ("api", "v1") and
+#: carries no credential strength. URL-shaped occurrences are redacted whole by
+#: `redact_url` whatever their length.
+_MIN_FRAGMENT = 4
+
+
+def _destination_forms(url: str) -> list[str]:
+    """The whole destination as it may be spelled in a message: as configured,
+    and as httpx normalises it for its request line and its error text."""
+    forms = {url}
+    try:
+        import httpx
+        forms.add(str(httpx.URL(url)))
+    except Exception:
+        pass
+    return sorted((f for f in forms if f), key=len, reverse=True)
+
+
+def _destination_fragments(url: str) -> list[str]:
+    """Every piece of the destination that may carry its credential, longest
+    first: userinfo, a non-numeric port, each path segment, each query value,
+    the fragment. A value with no scheme is treated as all path.
+
+    These are what survive when a message spells the destination in a way the
+    URL pattern does not take apart: a library that drops the scheme, quotes
+    one component on its own ("Invalid port: '<token>'"), or puts a character
+    the pattern stops at in the middle of the path.
+    """
+    parts = urlsplit(url)
+    frags: set[str] = set()
+    netloc = parts.netloc
+    if "@" in netloc:
+        userinfo, netloc = netloc.rsplit("@", 1)
+        frags.add(userinfo)
+        frags.update(userinfo.split(":"))
+    _, sep, port = netloc.rpartition(":")
+    if sep and "]" not in port and not _is_port(port):
+        frags.add(port)
+    path = parts.path if (parts.scheme or parts.netloc) else url
+    for seg in path.split("/"):
+        frags.update((seg, unquote(seg)))
+    for pair in parts.query.split("&"):
+        if "=" in pair:
+            value = pair.split("=", 1)[1]
+            frags.update((value, unquote_plus(value)))
+    frags.add(parts.fragment)
+    return sorted((f for f in frags if len(f) >= _MIN_FRAGMENT),
+                  key=len, reverse=True)
+
+
+def _redact_destination(url: Any) -> str:
+    """The destination as it may appear in our own log line. A value without a
+    scheme and host is not passed through as `redact_url` would pass a file
+    path: a webhook destination is a credential however it is spelled."""
+    try:
+        text = url if isinstance(url, str) else str(url)
+        parts = urlsplit(text)
+        if parts.scheme and parts.netloc:
+            return redact_url(text)
+        return _REDACTED
+    except Exception:
+        return "<unloggable-url>"
+
+
+def _scrub_destination(value: Any, url: Any) -> str:
+    """`value` with every spelling of the destination `url` removed.
+
+    Three passes, in order. The whole URL, in each form a message may spell it,
+    becomes the redacted URL, so the host stays as the diagnostic. Then every
+    secret-bearing fragment of it becomes ``<redacted>`` wherever it appears.
+    Then `redact_text` takes apart anything else URL-shaped. The first two are
+    what make this complete for a destination we KNOW: they do not depend on
+    where a pattern happens to stop.
+    """
+    try:
+        text = value if isinstance(value, str) else str(value)
+        dest = url if isinstance(url, str) else str(url)
+        if dest:
+            safe = _redact_destination(dest)
+            for form in _destination_forms(dest):
+                text = text.replace(form, safe)
+            for frag in _destination_fragments(dest):
+                text = text.replace(frag, _REDACTED)
+        return redact_text(text)
+    except Exception:
+        return "<unloggable>"
+
+
+_LIVE_LOCK = threading.Lock()
+#: Every open WebhookReporter, so the httpx log filter knows which
+#: destinations are ours. Weak, so an unclosed reporter does not live forever.
+_LIVE_WEBHOOKS: "weakref.WeakSet[WebhookReporter]" = weakref.WeakSet()
+
+
+class _DestinationLogFilter(logging.Filter):
+    """Removes a WebhookReporter's destination from httpx's own request log.
+
+    httpx logs ``HTTP Request: POST <url> "<status>"`` at INFO for every request
+    a client sends. The reporter's client is ours but the logger is httpx's, and
+    no client option turns that line off, so the line is rewritten here.
+
+    SCOPED TO OUR DESTINATIONS. A record is changed only when it spells the full
+    URL of a live WebhookReporter; every other httpx record, including another
+    client's request to another URL in the same process, passes through
+    untouched. A changed record keeps its level and logger and says the same
+    thing with the destination redacted, so it is never dropped.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        with _LIVE_LOCK:
+            live = [r._url for r in _LIVE_WEBHOOKS]
+        if not live:
+            return True
+        try:
+            message = record.getMessage()
+            scrubbed = message
+            for url in live:
+                if any(form in scrubbed for form in _destination_forms(url)):
+                    scrubbed = _scrub_destination(scrubbed, url)
+            if scrubbed != message:
+                record.msg, record.args = scrubbed, None
+        except Exception:
+            pass
+        return True
+
+
+_DESTINATION_LOG_FILTER = _DestinationLogFilter()
+
+
+def _httpx_request_logger(httpx: Any) -> logging.Logger:
+    """The logger httpx emits its request line on: its client module's own
+    logger when it exposes one, else the ``httpx`` logger it has used since
+    0.24. A logger filter sees only records created on that exact logger."""
+    candidate = getattr(getattr(httpx, "_client", None), "logger", None)
+    if isinstance(candidate, logging.Logger):
+        return candidate
+    return logging.getLogger("httpx")
+
+
 class WebhookReporter:
     """POSTs each batch as JSON to a user-controlled URL (SIEM, collector, etc.).
 
@@ -404,6 +552,11 @@ class WebhookReporter:
             self._client._xaidr_exempt = True
         except Exception:  # pragma: no cover — httpx.Client accepts attributes
             pass
+        # Registered before the first request, so httpx's request line for it
+        # is already filtered. addFilter is idempotent for the one instance.
+        with _LIVE_LOCK:
+            _LIVE_WEBHOOKS.add(self)
+        _httpx_request_logger(httpx).addFilter(_DESTINATION_LOG_FILTER)
 
     def report(self, events: list[dict[str, Any]]) -> None:
         try:
@@ -414,10 +567,11 @@ class WebhookReporter:
         except Exception as exc:
             # BOTH arguments are sanitised. The URL because the destination
             # carries the credential, and the exception because httpx repeats
-            # the full URL inside its own message.
+            # the URL, or a piece of it, inside its own message.
             logger.warning(
-                "WebhookReporter failed to deliver %d events to %s: %s",
-                len(events), redact_url(self._url), safe_exc(exc),
+                "WebhookReporter failed to deliver %d events to %s: %s: %s",
+                len(events), _redact_destination(self._url),
+                type(exc).__name__, _scrub_destination(exc, self._url),
             )
 
     def close(self) -> None:
@@ -425,6 +579,8 @@ class WebhookReporter:
             self._client.close()
         except Exception:
             pass
+        with _LIVE_LOCK:
+            _LIVE_WEBHOOKS.discard(self)
 
 
 class OTelReporter:

@@ -1,12 +1,12 @@
-"""The two HIGH findings that are not parser differentials.
+"""Two relational properties that are not parser differentials.
 
-F1 (URL host) and F2 (SQL predicate boundedness) are pinned in
+The URL-host and SQL-predicate-boundedness cases are pinned in
 tests/test_differential_parsers.py, against the transport and against SQLite —
 they are exactly the shape that file exists for. The two here are relations
 between facts, not readings of a string, so their oracle is behaviour:
 
-    F4  a filter key ANYWHERE suppressed privilege detection
-    F3  a second sensor inherited the first sensor's wrapper and enforced nothing
+    *  a filter key ANYWHERE suppressed privilege detection
+    *  a second sensor inherited the first sensor's wrapper and enforced nothing
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def _rules(args, tool="grant_role"):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# F4a. A SUPPRESSOR MUST BE A SIBLING
+# A SUPPRESSOR MUST BE A SIBLING
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # `_FILTER_KEYS` holds fourteen of the commonest key names in any API — `state`,
@@ -56,13 +56,13 @@ def test_a_filter_or_governance_key_in_another_record_does_not_excuse_a_grant(ar
     {"role": "admin", "approval": "AP-4471"},
 ])
 def test_a_filter_or_governance_key_in_the_SAME_record_still_excuses_it(args):
-    """The 1.14.1 carve-outs are relations between SIBLING arguments and they
-    still hold. Narrowing the scope must not have deleted them."""
+    """The false-positive carve-outs are relations between SIBLING arguments
+    and they still hold. Narrowing the scope must not have deleted them."""
     assert "ASI03_admin_escalation" not in _rules(args)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# F4b. A READ-ONLY WORD EXCUSES ITS OWN SCOPE, NOT THE STRING
+# A READ-ONLY WORD EXCUSES ITS OWN SCOPE, NOT THE STRING
 # ═══════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.parametrize("value", [
@@ -96,7 +96,7 @@ def test_the_battery_widening_shape_still_fires():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# F4c. camelCase IS THE SAME KEY
+# camelCase IS THE SAME KEY
 # ═══════════════════════════════════════════════════════════════════════════
 
 @pytest.mark.parametrize("camel, snake, rule", [
@@ -121,7 +121,7 @@ def test_camel_and_snake_spellings_of_one_key_get_one_answer(camel, snake, rule)
     assert _rules(camel) == _rules(snake), f"{camel} != {snake}"
 
 
-# ── the 1.14.1 false-positive carve-outs, unchanged ─────────────────────────
+# ── the false-positive carve-outs, unchanged ────────────────────────────────
 
 @pytest.mark.parametrize("tool, args", [
     ("get_agent_profile", {"user": "self"}),
@@ -135,7 +135,7 @@ def test_the_1_14_1_false_positives_stay_silent(tool, args):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# F3. A SECOND SENSOR MUST NOT INHERIT THE FIRST SENSOR'S WRAPPER
+# A SECOND SENSOR MUST NOT INHERIT THE FIRST SENSOR'S WRAPPER
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # This is the staged rollout docs/rollout.md recommends, in two lines: run in

@@ -1,9 +1,9 @@
-"""Acceptance 1: §1's public interface exists with exact signatures, as
+"""Acceptance 1: the specified public interface exists with exact signatures, as
 corrected by ruling 3.3 (``extract_destinations -> tuple[tuple[Finding, ...], bool]``).
 
-Anything paid needs that is not exported is a defect; anything exported that §1
-does not list is an interface widening paid would start to depend on. Both
-directions are asserted.
+Anything a vendoring package needs that is not exported is a defect; anything
+exported that the interface does not list is a widening that package would start
+to depend on. Both directions are asserted.
 """
 from __future__ import annotations
 
@@ -15,24 +15,24 @@ import pytest
 import xaidr.value_origin as vo
 
 EXPECTED_ALL = {
-    # §1.1
+    # enums and strength tables
     "Origin", "WIRE_STRENGTH", "ORIGIN_STRENGTH", "Verdict", "WireValue", "RowState",
     "Writer", "Mode", "MatchKind", "RecordOutcome",
     "UnresolvedReason",                    # ruling 3.3 (reason: walk_bound | parse_failure)
-    # §1.2
+    # value types
     "Span", "Authority", "SourceDesignation", "DestinationFinding", "CallVerdict",
     "Finding",                             # ruling 3.3
-    # §1.3
+    # constants
     "LEDGER_MAX_ENTRIES", "MAX_ARG_LEAVES", "MAX_ARG_DEPTH", "MAX_LEAF_CHARS",
     "MAX_KEY_TOKENS", "PSL_SNAPSHOT_DATE",
-    # §1.4
+    # functions
     "validate_designations", "validate_mode", "bind_ledger", "bind_fresh_ledger",
     "unbind_ledger", "ledger_bound", "record_principal_input", "record_tool_result",
     "evaluate_call", "should_block", "authority_of", "extract_destinations",
     "verdict_of", "row_text",
 }
 
-SIGNATURES = {                 # §1.4 as written, extract_destinations as corrected by 3.3
+SIGNATURES = {                 # as specified, extract_destinations as corrected by 3.3
     "validate_designations": "(designations: 'Iterable[SourceDesignation]') -> 'tuple[SourceDesignation, ...]'",
     "validate_mode": "(mode: 'Mode | str') -> 'Mode'",
     "bind_ledger": "() -> 'None'",
@@ -104,11 +104,11 @@ def test_value_type_is_frozen_slotted_kw_only(name):
     assert "__slots__" in cls.__dict__
     fs = dataclasses.fields(cls)
     assert [f.name for f in fs] == FIELDS[name]
-    assert all(f.kw_only for f in fs), f"{name}: every field keyword-only (V-6)"
+    assert all(f.kw_only for f in fs), f"{name}: every field keyword-only"
 
 
 def test_positional_construction_is_refused():
-    """V-6: paid writing SourceDesignation("directory_lookup", MatchKind.EXACT, ...)
+    """A caller writing SourceDesignation("directory_lookup", MatchKind.EXACT, ...)
     must fail loudly, not bind label to the wrong position."""
     with pytest.raises(TypeError):
         vo.SourceDesignation("directory_lookup", vo.MatchKind.EXACT, "directory",
@@ -143,7 +143,7 @@ def test_authority_key_is_the_only_digested_string():
 
 
 def test_no_ledger_accessor_is_exported():
-    """§1: no accessor that returns ledger contents, no direct origin write, no
+    """No accessor that returns ledger contents, no direct origin write, no
     function taking a correlation id — each is a laundering/disclosure primitive."""
     for name in vo.__all__:
         obj = getattr(vo, name)

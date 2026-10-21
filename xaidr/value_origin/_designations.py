@@ -1,4 +1,4 @@
-"""Source designations: construction-time validation and read matching (C-3, V-8f, V-17)."""
+"""Source designations: construction-time validation and read matching."""
 from __future__ import annotations
 
 import fnmatch
@@ -14,7 +14,7 @@ def validate_designations(designations: Iterable[SourceDesignation]
     """Validate at construction, loudly. Raises ValueError naming the offending
     field. A designation WITHOUT ``key_args`` trusts its result unconditionally:
     that is an operator claim, because which arguments select content cannot be
-    inferred (C-3)."""
+    inferred."""
     out = []
     seen = set()
     if isinstance(designations, (str, bytes)) or designations is None:
@@ -78,7 +78,7 @@ _DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 def _url_prefix_match(value: str, pattern: str) -> bool:
-    """V-17 URL_PREFIX. No userinfo; equal lowercased schemes; equal lowercased
+    """URL_PREFIX matching. No userinfo; equal lowercased schemes; equal lowercased
     hosts, exactly; equal ports after mapping 80/443 to absent; the pattern's
     path segments a SEGMENT-WISE prefix of the value's. Query and fragment
     ignored. A value path with a dot segment never matches: ``/public/../x``

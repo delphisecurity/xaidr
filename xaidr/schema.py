@@ -95,13 +95,9 @@ _INTERACTION_DIRECTION = {
     # MCP seam emitted this as "input" it was counted there, which is the same
     # number by accident and the wrong attribution on purpose.
     "tool_result": "inbound",
-    # KNOWN GAP, NOT INTRODUCED HERE: `mcp` and `llm` appear in
-    # _INTERACTION_TYPE above with no entry in this map. Nothing emits either
-    # today — there is no `direction="mcp"` or `direction="llm"` anywhere in the
-    # tree — so the defect is dormant, but it is the shape design §4 warns about:
-    # a value in one table keyed on direction and missing from its sibling.
-    # Asserted as a strict xfail in tests/test_tool_result_direction.py so it
-    # cannot be rediscovered from scratch.
+    # `mcp` and `llm` appear in _INTERACTION_TYPE above with no entry in this
+    # map. Nothing emits either direction, so no event is affected; the two
+    # tables are compared in tests/test_tool_result_direction.py.
 }
 
 
@@ -241,17 +237,17 @@ def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
 
     # THE TIMESTAMP IS THE EVENT'S OWN, not this function's idea of "now".
     #
-    # Minting it here was wrong and quietly so. Mapping runs in the telemetry
-    # flush worker, which wakes every flush_interval_sec (5.0 by default) and
-    # maps a batch of up to 50 events in one pass, so every event in a batch
-    # received all-but-identical stamps, offset from the moment it actually
-    # happened by however long it had sat in the queue. Ordering within a batch
-    # was lost entirely. The sensor now stamps at creation and this reads that.
+    # Mapping runs in the telemetry flush worker, which wakes every
+    # flush_interval_sec (5.0 by default) and maps a batch of up to 50 events in
+    # one pass. A stamp minted here would give every event in a batch
+    # all-but-identical times, offset by however long each sat in the queue, and
+    # lose ordering within the batch. So the sensor stamps at creation and this
+    # reads that.
     #
-    # The fallback still exists because this function is public and callers pass
+    # The fallback exists because this function is public and callers pass
     # hand-built dicts (the test-suite does). An event with no timestamp of its
-    # own gets map time, which is the old behaviour and the best available
-    # answer for a record that never carried one.
+    # own gets map time, the best available answer for a record that never
+    # carried one.
     ts = data.get("timestamp")
     out["gen_ai.security.timestamp"] = (
         ts if isinstance(ts, str) and ts else utc_now_rfc3339()

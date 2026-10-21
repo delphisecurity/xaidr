@@ -9,7 +9,7 @@ a new mode to be forgotten, and the failure mode is silent: an unrecognised
 string compares unequal to ``"block"`` everywhere, so a typo or an unhandled
 third mode does not raise, it quietly enforces nothing. A security control that
 fails to a no-op when misconfigured is the one shape this codebase refuses (see
-the ADV-2 note in ``privilege_tiers.py``).
+the loud-validation note in ``privilege_tiers.py``).
 
 So the rule lives here once, and the call sites ask it questions instead of
 comparing strings. There are exactly two questions, and that is not an

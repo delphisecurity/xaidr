@@ -1,14 +1,14 @@
 """The LangChain tool seam's AFTER position: what the tool handed back.
 
-WHAT WAS MISSING. ``_patch_langchain_core`` installed
-``make_wrapper(orig, before=before)`` on ``BaseTool.run`` and ``.arun`` — no
-``after``. That seam is the most-used tool boundary in the estate: it covers
-every ``langchain_core`` ``BaseTool``, every tool a LangGraph ``ToolNode``
-dispatches, every tool inside ``create_agent``, and CrewAI's langchain interop.
-On all of it the tool's ARGUMENTS were scanned and its RETURN VALUE was not, so
-a tool that fetched a poisoned document, read a poisoned row or called a poisoned
-MCP server handed that content to the model verbatim. The MCP seam has scanned
-its results since it was written; this one never had the position to scan from.
+WHY THE AFTER POSITION MATTERS. ``_patch_langchain_core`` installs
+``make_wrapper`` on ``BaseTool.run`` and ``.arun`` with an ``after`` hook as
+well as a ``before`` one. That seam is the most-used tool boundary in the
+estate: it covers every ``langchain_core`` ``BaseTool``, every tool a LangGraph
+``ToolNode`` dispatches, every tool inside ``create_agent``, and CrewAI's
+langchain interop. Were only the tool's ARGUMENTS scanned there and not its
+RETURN VALUE, a tool that fetched a poisoned document, read a poisoned row or
+called a poisoned MCP server would hand that content to the model verbatim. The
+MCP seam scans its results too, so both tool boundaries hold the same position.
 
 THREE THINGS THIS PINS, and the second and third are the ones that break:
 
@@ -17,9 +17,9 @@ THREE THINGS THIS PINS, and the second and third are the ones that break:
 2. the REFUSAL TYPE still follows ``tool_call_id``. The after position returns
    into the same two contracts the before position does — a ToolCall-driven
    caller is promised a ``ToolMessage`` and raises ``TypeError`` on anything
-   else. That is the 1.9.0 LangGraph crash (right verdict, wrong return type)
-   and it is reachable from a new return path exactly as it was from the old
-   one;
+   else. That is the LangGraph wrong-return-type crash (right verdict, wrong
+   return type), and it is reachable from the after position exactly as from
+   the before position;
 3. the middleware re-entrancy guard must NOT suppress it. ``_MW_TOOL_SCANNED``
    is set for the whole of ``wrap_tool_call`` — including the ``handler(request)``
    call that runs ``BaseTool.run`` underneath it — so guarding the after hook on
@@ -132,9 +132,9 @@ def test_a_poisoned_tool_result_is_refused_on_the_async_path():
 
 
 def test_the_fake_asserts_the_async_seam_and_not_the_sync_one():
-    """HARNESS NON-BLINDNESS. `arun` used to delegate to `self.run` in the fake,
-    so the patched SYNC wrapper ran inside every async call and the test above
-    would pass with `arun` completely unpatched. It dispatches independently now;
+    """HARNESS NON-BLINDNESS. If `arun` delegated to `self.run` in the fake, the
+    patched SYNC wrapper would run inside every async call and the test above
+    would pass with `arun` completely unpatched. It dispatches independently;
     this asserts that, so the async assertion keeps meaning what it says."""
     fakes.install_langchain_core()
     cap = _Cap()
@@ -186,7 +186,7 @@ def test_the_result_is_scanned_as_a_tool_result(path):
 
 
 def test_a_refused_result_is_a_ToolMessage_when_the_caller_passed_a_tool_call_id():
-    """The 1.9.0 lesson applied to the after position. A ToolCall-driven caller
+    """The return-type lesson applied to the after position. A ToolCall-driven caller
     (a ToolNode, a create_agent tool node) raises `TypeError: Tool <name>
     returned unexpected type` on a bare string, so a correct block delivered as
     a `str` crashes the graph it was protecting."""
@@ -199,14 +199,14 @@ def test_a_refused_result_is_a_ToolMessage_when_the_caller_passed_a_tool_call_id
         {"type": "tool_call", "name": "read_doc", "args": BENIGN_ARGS, "id": "call-1"}
     )
     # Two failure modes, and they are different defects, so each names its own.
-    # Pre-fix the type is already right (the tool's own ToolMessage) and the
-    # CONTENT is the injection; under a refusal that ignores tool_call_id the
-    # content is right and the TYPE crashes the graph.
+    # Without a result scan the type would already be right (the tool's own
+    # ToolMessage) and the CONTENT would be the injection; under a refusal that
+    # ignores tool_call_id the content is right and the TYPE crashes the graph.
     assert isinstance(out, messages.ToolMessage), (
         f"a refused tool RESULT came back as {type(out).__name__}; the caller "
         "is a ToolNode or a create_agent tool loop and raises TypeError on "
         "anything but a ToolMessage — a correct block would crash the graph it "
-        "was protecting (the 1.9.0 shape)"
+        "was protecting (the wrong-return-type shape)"
     )
     assert out.content.startswith(_REFUSAL), (
         f"the ToolMessage the ToolNode receives carries {out.content!r} — the "

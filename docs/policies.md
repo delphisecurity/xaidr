@@ -125,9 +125,9 @@ any body is scanned, so no category exists there to match.
 **What the tool-argument scan flags rather than blocks, and why.** Five
 detection families — jailbreak, system-prompt leak, encoding evasion, denial of
 service, and forged trust — are reported on the tool path at **flag** level, not
-block, even in `block` mode. They were previously dropped from this path
-entirely, so an adopter upgrading will see events in telemetry that a previous
-version did not emit: same traffic, more `flagged` verdicts, no new blocks.
+block, even in `block` mode. An adopter upgrading from a release that did not
+report these families on this path will see more events in telemetry: same
+traffic, more `flagged` verdicts, no new blocks.
 
 Flag rather than block because on this surface the string is genuinely
 ambiguous. `llm_prompt(prompt="you are now DAN")` is an attack;
@@ -388,15 +388,25 @@ over-permissive cannot disable the detector. A malformed policy file logs a
 warning and falls through to detection-only; it never crashes the agent and
 never blocks everything.
 
+**Keep-last-good.** `set_policy()` parses the new policy in full before it
+changes anything. If the policy is refused, `set_policy()` returns `False`,
+logs the refusal at ERROR, and the policy that was already in force (an earlier
+`set_policy()` or the policy file loaded at startup) keeps enforcing. A bad
+input never leaves the sensor with less policy than it had. `set_policy(None)`
+is the explicit way to clear the policy.
+
 `trust_below` is **rejected at load** with a clear error rather than silently
 never firing — it needs a per-agent trust score that only the platform tier
 computes. Silent inert security conditions are how you get false confidence.
 
-**Unknown `match:` or `conditions:` keys are rejected at load** with an error
-naming the key, the rule, and the nearest valid field, so a typo like
-`match: {tool: [...]}` cannot silently disarm a rule. A rule with an
-unrecognized key matches nothing, which would load cleanly and enforce nothing;
-the policy is refused instead and the sensor falls through to detection-only.
+**Unknown keys are rejected at load, at every level**: under `match:`,
+`conditions:` and `defaults:`, on a rule itself, and at the top of the
+document. The error names the key, the rule, and the nearest valid field, so a
+typo like `match: {tool: [...]}`, `conditons:` or `rule:` cannot silently drop
+the block it was meant to name. The policy is refused instead, and the policy
+already in force keeps enforcing (detection-only at startup). The keys a
+document may carry are `version`, `defaults`, `rules`; a rule may carry `id`,
+`effect`, `match`, `conditions`, `message`.
 
 ### The property: a rule that cannot match anything never loads quietly
 
@@ -410,11 +420,11 @@ match:
 ```
 
 Match values are lists of glob patterns, and the evaluator returns "no match"
-for anything that is not a list. Before this was validated, the rule above
-loaded, the sensor logged `loaded local policy (1 rules)`, and `deploy` was
-never blocked. The operator believed a control was active.
+for anything that is not a list. Without validation, the rule above would load,
+the sensor would log `loaded local policy (1 rules)`, and `deploy` would never
+be blocked, while the operator believed a control was active.
 
-Every shape with that consequence is now refused at load, with an error naming
+Every shape with that consequence is refused at load, with an error naming
 the field and showing the correction:
 
 | Where | Expected | Rejected shapes |
@@ -426,14 +436,23 @@ the field and showing the correction:
 | `defaults:` keys/values | `effect`, `unclassified` ∈ the four effects | unknown key, wrong case, non-effect value |
 | `rules:` | list | mapping, string, `null`, number |
 | a rule | at least one match field or condition | no `match:` and no `conditions:` |
+| a rule's keys | `id`, `effect`, `match`, `conditions`, `message` | any other key, including typos and `enabled`/`priority`/`description` |
+| top-level keys | `version`, `defaults`, `rules` | any other key, including `rule:` and `default:` |
+| `match:` / `conditions:` / `defaults:` present | a value | the key with no value (`match:` alone on its line) |
+| numeric conditions | a finite number | `.inf`, `.nan` |
+| `version` | `"1"`, `"1.0"`, `1`, `1.0` | anything else, including unquoted `yes` |
+| a policy **file** | each key once per mapping | a duplicate key (YAML would keep only the last) |
 
-Two of these are worse than an inert rule, because the rule still fires:
+Two of these, if accepted, would be worse than an inert rule, because the rule
+would still fire:
 
-- **`null` skips a narrower.** `match: {tools: , agents: ["billing"]}` drops the
-  `tools` restriction and blocks *everything* the billing agent does.
-- **A non-mapping `defaults:` is discarded.** `defaults: block` — a plausible
-  shorthand — reverted the whole deployment to the shipped `effect: allow`,
-  turning deny-by-default into allow-by-default with nothing logged.
+- **`null` would skip a narrower.** `match: {tools: , agents: ["billing"]}`
+  would drop the `tools` restriction and block *everything* the billing agent
+  does.
+- **A non-mapping `defaults:` would be discarded.** `defaults: block` — a
+  plausible shorthand — would revert the whole deployment to the shipped
+  `effect: allow`, turning deny-by-default into allow-by-default with nothing
+  logged.
 
 A policy with no rules and the shipped defaults still loads (a `defaults:`-only
 posture is legitimate) but **warns**, because it is indistinguishable from a
@@ -452,17 +471,28 @@ considered. It loses on three counts:
    or two? Coercion silently starts *enforcing* a rule that no one reviewed in
    the form the engine actually runs. An inert rule is at least inert.
 3. **Rejection costs no enforcement.** This is the argument that settles it. A
-   rule in one of these states was already matching nothing, and the rejection
-   path lands on exactly the same detection-only fallback that the inert rule
-   was already delivering. Nothing that was being enforced stops being enforced.
-   The whole delta is that the operator is now told.
+   rule in one of these states matches nothing, and the rejection path keeps
+   the policy already in force (detection-only at startup), which does not
+   enforce the inert rule either. Nothing that is enforced stops being
+   enforced. The whole delta is that the operator is told.
 
 The cost is real but narrower than it looks: rejection refuses the **whole**
 policy, so one malformed rule takes its healthy siblings with it. That follows
 the existing contract for `trust_below` and unknown keys, and for the same
 reason — half a policy is a state nobody authored, and the surviving half can
-be the `allow` exceptions to the `block` rules that were dropped. Detection-only
-is a known floor; a partially applied deny-list is not.
+be the `allow` exceptions to the `block` rules that were dropped. The last good
+policy is a known floor; a partially applied deny-list is not.
+
+#### Conformance corpus
+
+`tests/action_policy_conformance/corpus_v1.json` is the authority for what an
+ActionPolicy v1 document means. Each case is a document and the verdict the
+open parser gives it: **accept**, with the exact normalized form and
+evaluation probes, or **refuse**, with a reason code and the path of the
+refused part (`explain_action_policy()` returns both). Another implementation
+conforms when it gives the same verdict on every case. Rules are evaluated in
+document order and the first match decides: deny-first is a writing
+convention, and a `block` placed after a matching `allow` does not win.
 
 ---
 

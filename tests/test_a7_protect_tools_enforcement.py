@@ -1,4 +1,4 @@
-"""A-7: protect_tools must run REAL enforcement (scan args + blocked-tools +
+"""protect_tools must run REAL enforcement (scan args + blocked-tools +
 local policy) before invoking a wrapped tool — not gate on an always-allow stub.
 
 Canary discipline: the wrapped tool DELETES a real temp file when it runs. A

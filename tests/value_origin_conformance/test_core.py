@@ -1,4 +1,4 @@
-"""Level 1 — the core against expected.jsonl (§5.3). Vendored: byte-identical in paid.
+"""Level 1 — the core against expected.jsonl. Vendored byte-identically downstream.
 
 Every corpus case under configs A, B and C, and every supplementary case, is
 replayed through ``xaidr.value_origin``'s public interface and compared with
@@ -104,7 +104,7 @@ def test_no_false_authorization_in_config_a(results):
 
 
 def test_every_config_b_false_authorization_is_labelled(results):
-    """Ruling 2026-09-24 / C-3a: in B, an authorized attack must carry
+    """The config-B ruling: in B, an authorized attack must carry
     principal_undeclared_span — including all 30 attacker_keyed_lookup."""
     bad, n = [], 0
     for cid, (flow, got, _) in results["B"].items():
@@ -115,7 +115,7 @@ def test_every_config_b_false_authorization_is_labelled(results):
                            f"resolved to {got['wire']} — an UNLABELLED false "
                            "authorization, the failure the config-B ruling forbids")
     assert not bad, "\n".join(bad)
-    assert n == 63, f"config B false authorizations: {n}, §5.2 as amended says 63 (33 + 30 D1)"
+    assert n == 63, f"config B false authorizations: {n}, the amended mapping says 63 (33 + 30 D1)"
 
 
 def test_tripwire(results):
@@ -139,7 +139,7 @@ def test_supplementary_case(case):
     assert not problems, f"{case['id']} ({case['rule']}):\n  " + "\n  ".join(problems)
 
 
-# R1 (2026-10-03) is a ruling about BLOCKING, so it is pinned at should_block
+# R1 is a ruling about BLOCKING, so it is pinned at should_block
 # under ENFORCE, not only at the wire: an untrusted part beside junk blocks, and
 # a trusted or principal part beside junk does not newly block.
 R1_BLOCKS = {
@@ -201,7 +201,7 @@ def test_q1_a_poisoned_result_records_every_reading_of_its_url():
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "found, not fixed (2026-10-03): junk in the SAME part as the address. R1 works "
+    "found, not fixed: junk in the SAME part as the address. R1 works "
     "on the parts of a ','/';' split; `evil@x.example <` has one part, and it fails. "
     "email.utils.getaddresses reads [('', 'evil@x.example'), ('', '')] out of it."))
 def test_r1_residual_junk_inside_the_part_still_hides_an_untrusted_mailbox():
@@ -214,9 +214,9 @@ def test_r1_residual_junk_inside_the_part_still_hides_an_untrusted_mailbox():
 
 
 def test_row_text_matches_the_committed_export():
-    """§5.3: row_text() over WireValue x {tool_call, input, None}, None, and the
-    V-29 unrecognised samples equals row_text.json — the same JSON the Brain's
-    and the waterfall's TypeScript tables are checked against."""
+    """row_text() over WireValue x {tool_call, input, None}, None, and the
+    unrecognised samples equals row_text.json — the same JSON a remote verdict
+    service's and the waterfall's TypeScript tables are checked against."""
     rows = json.loads((HERE / "row_text.json").read_text(encoding="utf-8"))
     assert {r["wire"] for r in rows if r["scan_mode"] == "tool_call"} >= (
         {w.value for w in WireValue} | {None})

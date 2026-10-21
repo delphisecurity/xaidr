@@ -1,5 +1,5 @@
-"""Stage 3: the remaining shell classes, plus the parser-reconstruction and
-tool-argument-secrets fixes folded in with them.
+"""Stage 3: the remaining shell classes, plus parser reconstruction and
+tool-argument secret scanning, which share their benign gate.
 
 Three things are under test here and they pull against each other, which is why
 they share a file:

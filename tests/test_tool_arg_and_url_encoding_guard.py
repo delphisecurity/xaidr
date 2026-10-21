@@ -1,18 +1,18 @@
-"""Guard suite — §11 tool-arg normalizer (FIX A) + URL/percent-encoding (FIX B).
+"""Guard suite — tool-arg normalizer (FIX A) + URL/percent-encoding (FIX B).
 
-FIX A (open-only): scan_tool_call ran raw L1 on joined args with NO unicode
-normalizer, so a zero-width / homoglyph-obfuscated command or injection in a tool
-ARGUMENT evaded open (paid already normalized its arg path). The Port-1 normalizer
-is now applied to tool-arg content before L1, so obfuscated args are caught while
-benign args (Russian/Greek/U.S.A./paths) still pass — the normalizer only folds
-obfuscation.
+FIX A: raw L1 on joined args with NO unicode normalizer lets a zero-width /
+homoglyph-obfuscated command or injection in a tool ARGUMENT evade
+scan_tool_call. The unicode normalizer is applied to tool-arg content before
+L1, so obfuscated args are caught while benign args (Russian/Greek/U.S.A./paths)
+still pass — the normalizer only folds obfuscation.
 
-FIX B (both sensors): percent-encoding evaded detection (score 0.0), asymmetric
-with base64/hex. Partial encoding ("ignore%20all%20previous%20instructions",
-"rm%20-rf") in particular breaks raw keyword matching. Percent-escapes are now
-decoded and re-scanned against L1, so a url-encoded dangerous command / injection
-is caught ratio-independently — while benign %20/%2F URLs decode to benign text
-and stay allowed (the decoded DANGER is the signal, not the presence of %XX).
+FIX B: percent-encoding evades raw detection (score 0.0), asymmetric with
+base64/hex. Partial encoding ("ignore%20all%20previous%20instructions",
+"rm%20-rf") in particular breaks raw keyword matching. Percent-escapes are
+decoded and re-scanned against L1, so a url-encoded dangerous command /
+injection is caught ratio-independently — while benign %20/%2F URLs decode to
+benign text and stay allowed (the decoded DANGER is the signal, not the
+presence of %XX).
 """
 
 from __future__ import annotations

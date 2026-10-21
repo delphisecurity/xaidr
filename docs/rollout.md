@@ -91,11 +91,10 @@ watched = monitor_sensor.protect_tools([query_db, send_email])
 enforced = block_sensor.protect_tools([query_db, send_email])   # not `watched`
 ```
 
-Up to and including 1.15.0 the second call returned the first sensor's wrapper
-unchanged, so
-`block_sensor`'s enforcement mode, blocked-tool list and policy applied to
-nothing and every call stayed in monitor mode under the first sensor's
-`agent_id`. If you staged a cutover that way, re-check it.
+If you staged a cutover by passing one sensor's wrappers to another, check that
+the second sensor's events appear under its own `agent_id`. If every call stays
+in monitor mode under the first sensor's `agent_id`, `block_sensor`'s
+enforcement mode, blocked-tool list and policy are applying to nothing.
 
 If a genuinely benign input lands in the `blocked` band, that's a bug worth
 reporting.

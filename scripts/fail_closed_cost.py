@@ -5,11 +5,11 @@
     cd / && /path/to/venv/bin/python -I \
         /path/to/scripts/fail_closed_cost.py --pools /path/to/clone
 
-This is the regenerator U-1 (``docs/releasing.md``) requires for the 814-row
-table in ``docs/fail-closed-design.md`` §e. Those numbers were measured by a
-harness that was described in prose and never committed, which is the same
-state the seven unreproducible corpus digests were in: a figure that reads as
-rigour and cannot be recomputed. This script is that harness, committed.
+This is the regenerator ``docs/releasing.md`` requires (no figure without a
+regenerator) for the 814-row table in ``docs/fail-closed-design.md`` section e.
+A figure measured by a harness that is described in prose and never committed
+reads as rigour and cannot be recomputed. This script is that harness,
+committed.
 
 WHAT IS COUNTED. A **refusal** is a verdict whose ``category`` is
 ``fail_closed`` — not any block. ``asi.benign``, ``heldout.benign`` and
@@ -20,10 +20,10 @@ would blame the option for verdicts it did not produce. The per-config
 
 WHICH GROUPS. ``artifact`` is absent by construction and that is not an
 oversight: it refuses to CONSTRUCT the sensor and never produces a verdict on
-traffic, so it has no per-row cost to measure. See §f1 and
+traffic, so it has no per-row cost to measure. See section f1 and
 ``failclosed.resolve()``, which rejects ``{'artifact': 'approval_required'}``
 for the same reason. Its cost is measured by emptying rule assets one at a time
-(§e, "What fail-open costs today"), not here.
+(section e, "What fail-open costs today"), not here.
 
 THE POOLS: the benign half of the ``scripts/corpus_diff.py`` pool list, plus
 ``benign_a2a/nested.jsonl``, which ``corpus_diff`` does not carry. 814 rows over

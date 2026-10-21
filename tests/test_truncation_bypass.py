@@ -1,11 +1,11 @@
-"""P0 truncation-bypass: content past L1_MAX_SCAN_CHARS must not be silently
-unscanned, WITHOUT reintroducing the unbounded-latency (ReDoS) the cap guarded.
+"""Truncation: content past L1_MAX_SCAN_CHARS must not be silently unscanned,
+WITHOUT giving up the latency bound (ReDoS) the cap provides.
 
-The fix: an over-length input is (1) ALWAYS flagged (never a silent pass) and
+The design: an over-length input is (1) ALWAYS flagged (never a silent pass) and
 (2) tail-scanned in bounded overlapping windows under a total wall-clock budget,
 so a payload just past the cap is caught while a megabyte-class input stays within
 a fixed latency ceiling. "Caught" means flagged OR blocked — the guarantee is
-that the total silent bypass (allowed, score 0) is gone.
+that no over-length input passes silently (allowed, score 0).
 """
 import random
 import time
@@ -44,7 +44,7 @@ def _caught(result):
     return result.action in ("flagged", "blocked")
 
 
-# ── 1. The live-confirmed bypass is closed ───────────────────────────────────
+# ── 1. A payload past the cap is never silently allowed ──────────────────────
 
 def test_past_cap_injection_no_longer_silently_allowed(sensor):
     payload = _filler(CAP + 5000) + " " + INJECTION
@@ -57,7 +57,7 @@ def test_injection_alone_still_blocks(sensor):
     assert sensor.scan(INJECTION).action == "blocked"
 
 
-# ── 2. Boundary-straddle closed by the window overlap ────────────────────────
+# ── 2. Boundary-straddle covered by the window overlap ───────────────────────
 
 def test_injection_straddling_the_cap_is_caught(sensor):
     pre = _filler(CAP - len(INJECTION) // 2)
@@ -65,7 +65,7 @@ def test_injection_straddling_the_cap_is_caught(sensor):
     assert _caught(r)
 
 
-# ── 3. All truncating boundaries fixed ───────────────────────────────────────
+# ── 3. Every truncating boundary is covered ──────────────────────────────────
 
 def test_output_boundary_past_cap_caught(sensor):
     r = sensor.scan_output(_filler(CAP + 2000) + " " + INJECTION)

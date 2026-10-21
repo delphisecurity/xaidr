@@ -1,29 +1,27 @@
 """Every runnable report in `scripts/` must say which `xaidr` answered it.
 
-THE DEFECT. Eleven scripts in `scripts/` did
+THE DEFECT. A report script that does
 
     REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     sys.path.insert(0, REPO)
     from xaidr.sensor import DelphiSensor
 
-and printed nothing about it. The insert itself is right — run as documented,
+and prints nothing about it. The insert itself is right — run as documented,
 `sys.path[0]` is `scripts/`, the repo root never reaches the path, and an
-unrelated site-packages `xaidr` answers instead. What was wrong is that it was
-SILENT and UNCONDITIONAL: point any interpreter at these scripts and they
-measure the working tree regardless, while the table says nothing about it.
+unrelated site-packages `xaidr` answers instead. What is wrong is that it is
+SILENT and UNCONDITIONAL: point any interpreter at such a script and it
+measures the working tree regardless, while the table says nothing about it.
 
-That makes every one of them useless for the job a release needs them for.
-Measured 2026-09-20: `benign_a2a_report.py` under the published 1.17.0 wheel
-printed the same `A2A nodes walked: 274` as under 1.18.0 — from a wheel whose
-`a2a_structural.py` has no `_walk_a2a_nodes` at all. The 1.18.0 body named TWO
-scripts as having this property. Eleven did, and `benign_toolcall_report.py` —
-cited in the same body as a U-1 regenerator — was among the nine it did not
-name.
+That makes it useless for the job a release needs it for. Run under an older
+wheel, `benign_a2a_report.py` in that form prints the same
+`A2A nodes walked: 274` as under the tree — even from a wheel whose
+`a2a_structural.py` has no `_walk_a2a_nodes` at all. Every regenerator for a
+published figure, `benign_toolcall_report.py` included, has the same exposure.
 
-WHY THIS FILE IS ENUMERATED AND NOT A LIST. "Two, when it was eleven" is the
-same failure as tests/test_install_hints.py's "nine, when it was ten" and the
-five the detectors have had: a count that is a property of a hand-kept list
-rather than of the thing being counted. So the scope here is derived — every
+WHY THIS FILE IS ENUMERATED AND NOT A LIST. A hand-kept list of affected
+scripts undercounts — the same failure as tests/test_install_hints.py's "nine,
+when it was ten": a count that is a property of a hand-kept list rather than of
+the thing being counted. So the scope here is derived — every
 `scripts/*.py` that BOTH touches `xaidr` and is runnable (`__main__`) — and a
 script added tomorrow is covered the day it lands.
 
@@ -220,13 +218,13 @@ def test_from_install_refuses_the_cwd_shadowing_a_checkout_creates():
     Setting the variable is not enough on its own — with a checkout on
     `sys.path`, Python imports `./xaidr/` in preference to the installed wheel,
     and a mode that trusted the variable would print the version of the
-    artifact over a measurement of the tree. That is the 1.17.0-vs-1.18.0
-    failure one layer up, so the refusal is checked, not the flag.
+    artifact over a measurement of the tree. That is the wheel-vs-tree
+    substitution above, one layer up, so the refusal is checked, not the flag.
 
-    THE INVOCATION IS LOAD-BEARING, and this test used to get it wrong. It ran
-    `python scripts/benign_a2a_report.py` with `cwd=REPO` and asserted a
-    refusal, on the stated grounds that "Python imports ./xaidr/ ahead of
-    site-packages here". It does not. For a script run BY PATH, `sys.path[0]`
+    THE INVOCATION IS LOAD-BEARING. Running
+    `python scripts/benign_a2a_report.py` with `cwd=REPO` and asserting a
+    refusal, on the grounds that "Python imports ./xaidr/ ahead of
+    site-packages here", is wrong: it does not. For a script run BY PATH, `sys.path[0]`
     is the script's own directory — `scripts/` — and the repo root never
     reaches the path at all. Measured on 3.12.14 in a container with a plain
     `pip install .`:
@@ -235,12 +233,12 @@ def test_from_install_refuses_the_cwd_shadowing_a_checkout_creates():
         xaidr    : /usr/local/lib/python3.12/site-packages/xaidr/__init__.py
         measuring: an INSTALLED package — not the tree at /w
 
-    The wheel genuinely answered, so exiting 0 was CORRECT and the assertion
-    was wrong about its own setup. It only passed on a dev machine because the
+    The wheel genuinely answered, so exiting 0 is CORRECT and such an assertion
+    is wrong about its own setup; it can pass on a dev machine only because the
     venv there holds an editable install, i.e. for a reason unrelated to what
-    it claimed to test. `python -c` is the form that actually puts the cwd on
+    it claims to test. `python -c` is the form that actually puts the cwd on
     `sys.path` (`sys.path[0]` is `''`), which is why the banner test above uses
-    it and why this one now does too.
+    it and why this one does too.
     """
     env = dict(os.environ, XAIDR_FROM_INSTALL="1")
     p = subprocess.run(
@@ -272,18 +270,18 @@ def test_from_install_refuses_a_checkout_that_is_not_this_one(tmp_path):
     The refusal used to ask `commonpath([xaidr.__file__, repo_root]) ==
     repo_root` — is the package under THIS checkout. That question has a false
     negative for every checkout that is not, and an editable install, a
-    PYTHONPATH entry or a sibling worktree each produce one. Measured
-    2026-09-22 on the dev machine, whose venv holds an editable install
-    pointing at a different checkout:
+    PYTHONPATH entry or a sibling worktree each produce one. On a machine
+    whose venv holds an editable install pointing at a different checkout,
+    that check produced:
 
         $ XAIDR_FROM_INSTALL=1 python -m pytest …
-        xaidr    : /Users/…/opena2a/xaidr/__init__.py
-        version  : 1.17.0
-        measuring: an INSTALLED package — not the tree at /Users/…/xaidr/main
+        xaidr    : /path/to/other-checkout/xaidr/__init__.py
+        version  : <older version>
+        measuring: an INSTALLED package — not the tree at /path/to/repo
 
-    A source tree at 1.17.0, under the release flag, announced as an installed
-    package, and not refused. The old test could not see it: the tree it
-    reasoned about was this one, and this one was not the problem.
+    A source tree at an older version, under the release flag, announced as an
+    installed package, and not refused. A test that reasons only about this
+    checkout cannot see it, because this checkout is not the problem.
 
     So the tree here is deliberately FOREIGN — a fresh checkout in tmp_path
     with nothing to do with REPO — and the assertion is that the refusal

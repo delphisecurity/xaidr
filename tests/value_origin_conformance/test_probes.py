@@ -1,8 +1,8 @@
-"""The discriminating reds, against the REAL core (§5.4; ruling 2026-09-24).
+"""The discriminating reds, against the REAL core.
 
-``reference_ledger.py`` in delphi-sentinel is an executable spec of C-18 and C-3
-alone. Its gate step 9 proves each probe class goes red under one sabotage —
-against the ORACLE. That proves the corpus can discriminate, not that this core
+``reference_ledger.py`` in the upstream corpus is an executable spec of a few
+ledger rules alone. Its gate step 9 proves each probe class goes red under one
+sabotage — against the ORACLE. That proves the corpus can discriminate, not that this core
 does. So each sabotage here breaks exactly one rule inside ``xaidr.value_origin``
 itself (one private function replaced for the duration of a test) and requires:
 
@@ -13,9 +13,9 @@ itself (one private function replaced for the duration of a test) and requires:
       the oracle becomes what is tested and the core never is.
 
 Scope of (c): the oracle does no normalisation, so it answers ``unresolved`` for
-``format_variance`` and ``subdomain_path_drift`` where the core's §5.2
-expectation differs by design; gate step 9's ORACLE_EXPECT says so for exactly
-those two classes, and they are the only ones excluded.
+``format_variance`` and ``subdomain_path_drift`` where the core's expectation
+(convert.py's mapping table) differs by design; gate step 9's ORACLE_EXPECT says
+so for exactly those two classes, and they are the only ones excluded.
 
 These tests go GREEN when the probes discriminate. The PR body pastes the other
 direction: the same sabotages applied to the core's SOURCE, and test_core.py
@@ -77,7 +77,7 @@ SABOTAGES = {
     "any_raise": ("_merge", _any_raise),
     "ignore_input_scan": ("_principal_clean", lambda input_clean: True),
     "ignore_key_args": ("_keys_authorized", lambda lg, keys: (True, True)),
-    # C-3a: the read inherits its weakest key's flag. Removed: every read declared.
+    # The read inherits its weakest key's flag. Removed: every read declared.
     "c3a_propagation": ("_read_declared", lambda bases: True),
 }
 _REAL_MERGE = L._merge
@@ -149,7 +149,7 @@ def test_each_probe_class_goes_red_under_its_sabotage_in_the_real_core(baseline,
 
 
 def test_c3a_propagation_is_what_labels_config_b_d1(baseline):
-    """C-3a in the real core: remove the propagation and config B's 30
+    """Key-flag propagation in the real core: remove it and config B's 30
     attacker_keyed_lookup report plain trusted_source — D1, unlabelled."""
     with sabotaged("c3a_propagation"):
         got = _wires("B")

@@ -5,13 +5,12 @@ The ASI03 row of README.md's OWASP Agentic Top 10 table publishes:
     it fires on **14 of the battery's 48 tool-call steps** (30 whole
     `tool_call` cases plus the 18 tool-call steps inside `sequence` cases)
 
-Four figures: 14, 48, 30 and 18. Until `scripts/privilege_step_report.py` none
-of them had a regenerator, and no other instrument in the tree could produce
-them. `scripts/asi_battery_report.py` measures whole CASES and stops a sequence
+Four figures: 14, 48, 30 and 18. `scripts/privilege_step_report.py` is their
+regenerator, and no other instrument in the tree can produce them. `scripts/asi_battery_report.py` measures whole CASES and stops a sequence
 at its first detection, so it cannot see a tool-call step that sits after the
-catching step, nor one inside a case some other rule already caught. The ratio
-was therefore unrecomputable, which is what U-1 forbids — and it is the shape
-this branch fixed four times over.
+catching step, nor one inside a case some other rule already caught. Without
+the report script the ratio would be unrecomputable, which is what the release
+rule forbids: no published figure without a regenerator.
 
 THE DIRECTION THIS TEST RUNS IN MATTERS, and it is the same device
 `tests/test_policy_width.py` uses for the policy table: the numbers are PARSED
@@ -21,19 +20,20 @@ So it fails in both directions:
   * a detector narrowing that moves the count and leaves the README alone -> red
   * a README edit that changes the count with no re-measurement           -> red
 
-The second is the one that gets skipped, and the second is the one F7 made
-likely: F7 narrowed four predicates in this exact detector. The claim survived
-it, which is a fact worth having a check behind rather than a sentence.
+The second is the one that gets skipped, and the second is the one a narrowing
+makes likely: the domain narrowings changed four predicates in this exact
+detector. The claim survived them, which is a fact worth having a check behind
+rather than a sentence.
 
 THE DENOMINATOR IS ALSO PINNED, separately from the ratio. 30 + 18 = 48 is
 asserted against the battery file itself, because a denominator that silently
 became "the steps we expected to fire on" would turn a 14/48 reach claim into a
 14/14 tautology while every number in the sentence still looked plausible.
 
-AND IT IS PINNED AS RELABEL-INVARIANT. F9 moved 28 cases between categories
-without touching a single `tool` or `args`, so a whole-battery step count cannot
-move under a relabelling. The README says as much in prose; the last test here
-is that sentence made checkable.
+AND IT IS PINNED AS RELABEL-INVARIANT. The OWASP relabelling moved 28 cases
+between categories without touching a single `tool` or `args`, so a
+whole-battery step count cannot move under a relabelling. The README says as
+much in prose; the last test here is that sentence made checkable.
 """
 from __future__ import annotations
 
@@ -139,13 +139,13 @@ def test_the_denominator_is_every_tool_call_step_not_the_firing_ones(measured):
 
 
 def test_the_step_count_does_not_depend_on_the_category_labels(measured):
-    """F9 relabelled 28 cases and moved no `tool` and no `args`.
+    """Relabelling battery cases moves no `tool` and no `args`.
 
-    So this figure is invariant under the relabelling, and the README says so.
+    So this figure is invariant under a relabelling, and the README says so.
     Re-deriving the total from the per-category breakdown is the cheap check
-    that nothing here is secretly keyed on a category name — the failure that
-    broke `test_f7_domain_generality.py` with `KeyError: 'ASI04-A02'` when the
-    two branches first met.
+    that nothing here is secretly keyed on a category name — a test keyed that
+    way fails with a `KeyError` such as `'ASI04-A02'` the moment a case changes
+    category.
     """
     from_categories = sum(v["steps"] for v in measured["per_category"].values())
     assert from_categories == measured["total_steps"], (

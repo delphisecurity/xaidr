@@ -23,16 +23,16 @@ tests run against the real library through ``httpx.MockTransport``. For
 LangChain and CrewAI, ``tests/test_real_frameworks.py`` runs against the real
 library when it is installed and skips cleanly when it is not.
 
-WHAT A FAKE COSTS WHEN IT IS WRONG, because this file has already paid it once.
-The CrewAI fake defined ``BaseTool.run`` as the tool implementation. The real
-framework binds ``CrewStructuredTool(func=self._run)`` and routes every
-agent-driven call through ``_run``, stepping over ``run`` entirely. 107 tests
-passed against that fiction while the shipped patch caught nothing and the
-manifest claimed full coverage. A fake is worth exactly its fidelity to the
-call path, and the question to ask of each one is not "does this method exist"
-but "is it on the path the framework itself takes".
+WHAT A FAKE COSTS WHEN IT IS WRONG. A CrewAI fake that defines
+``BaseTool.run`` as the tool implementation is a fiction: the real framework
+binds ``CrewStructuredTool(func=self._run)`` and routes every agent-driven call
+through ``_run``, stepping over ``run`` entirely. A whole suite can pass against
+such a fiction while the patch catches nothing and the manifest claims full
+coverage. A fake is worth exactly its fidelity to the call path, and the
+question to ask of each one is not "does this method exist" but "is it on the
+path the framework itself takes".
 
-AUDIT, 2026-08-26 — every seam below checked against the real library at the
+SEAM FIDELITY — every seam below is checked against the real library at the
 version named. "on-path" is the second question, asked explicitly:
 
   requests 2.34.2        Session.send exists; Session.request routes through
@@ -155,8 +155,8 @@ def install_langchain_core() -> types.ModuleType:
             # `_format_output` returns a ToolMessage iff tool_call_id is not
             # None, and the raw content otherwise. Omitting it here would leave
             # the seam's type-discrimination untested in the default suite —
-            # the same "fake with the wrong fidelity" trap the CrewAI seam fell
-            # into. Verified against langchain-core 1.6.1.
+            # the same "fake with the wrong fidelity" trap the module docstring
+            # describes for CrewAI. Verified against langchain-core 1.6.1.
             result = (
                 self.func(**tool_input)
                 if isinstance(tool_input, dict)
@@ -169,9 +169,9 @@ def install_langchain_core() -> types.ModuleType:
 
         async def arun(self, tool_input, **kwargs):
             # NOT `return self.run(...)`, and the difference is load-bearing.
-            # `arun` used to delegate to `run`, which meant the PATCHED `run`
-            # wrapper ran inside every async call and any assertion about the
-            # async seam could be satisfied by the sync one. The real
+            # If `arun` delegated to `run`, the PATCHED `run` wrapper would run
+            # inside every async call and any assertion about the async seam
+            # could be satisfied by the sync one. The real
             # `BaseTool.arun` goes `arun -> _arun -> coroutine` and never touches
             # `run` (langchain-core 1.6.1), so a fake that delegates is a fake
             # that cannot tell a patched `arun` from an unpatched one — the exact
@@ -394,8 +394,7 @@ def install_crewai() -> types.ModuleType:
     """CrewAI's REAL tool path — which does not go through ``BaseTool.run``.
 
     Shape verified by reading the installed ``crewai==1.15.17``, not the docs.
-    The three facts that matter, and that an earlier version of this fake got
-    wrong:
+    The three facts that matter, each of which a fake can easily get wrong:
 
     1. ``BaseTool._run`` is the implementation; ``BaseTool.run`` is a public
        wrapper that only DEVELOPER code calls directly.
@@ -411,11 +410,11 @@ def install_crewai() -> types.ModuleType:
        the tool. See ``crewai/utilities/tool_utils.py::execute_tool_and_check_finality``
        and ``crewai/hooks/tool_hooks.py::run_before_tool_call_hooks``.
 
-    The previous fake defined ``BaseTool.run`` as the implementation and had no
-    hook registry at all, so it modelled a CrewAI that has never existed. It
-    certified the ``BaseTool.run`` patch green while ``rm -rf /`` ran on the
-    real framework. Keeping the divergence written down here is the point: the
-    fake is only worth what its fidelity to these call paths is worth.
+    A fake that defines ``BaseTool.run`` as the implementation and has no hook
+    registry models a CrewAI that does not exist: it would certify a
+    ``BaseTool.run`` patch green while ``rm -rf /`` ran on the real framework.
+    Keeping the divergence written down here is the point: the fake is only
+    worth what its fidelity to these call paths is worth.
     """
     mod = _mod("crewai")
     tools = _mod("crewai.tools")

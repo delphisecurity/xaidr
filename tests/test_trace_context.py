@@ -11,8 +11,9 @@ order wire -> OTel active span -> None, and NEVER provisions its own:
     still scanned by the router.
   - INTEROP EXTERNAL: a standard, externally-produced W3C traceparent parses
     case-insensitively.
-  - NO SELF-OWNED CONTEXTVAR: the paid `_agent_context` parent-stack pattern is
-    absent from the whole repo.
+  - NO SELF-OWNED CONTEXTVAR: an `_agent_context` parent-stack pattern (a
+    ContextVar the sensor owns and pushes parents onto) is absent from the
+    whole repo.
   - NO SDK / NO GLOBAL PROVIDER: no set_tracer_provider / opentelemetry.sdk /
     exporter / BatchSpanProcessor anywhere; pyproject pins opentelemetry-api.
   - BACKWARD-COMPAT + NULL-IDENTICAL: scan / scan_a2a with no parent behave
@@ -191,13 +192,13 @@ def test_router_attaches_wire_parent_to_scan_a2a():
     assert parent.source == "wire"
 
 
-# ── NO SELF-OWNED CONTEXTVAR (paid pattern absent) ────────────────────────────
+# ── NO SELF-OWNED CONTEXTVAR (_agent_context pattern absent) ──────────────────
 def test_no_self_owned_agent_context_contextvar():
     offenders = []
     for path in (REPO_ROOT / "xaidr").rglob("*.py"):
         if "_agent_context" in path.read_text(encoding="utf-8"):
             offenders.append(str(path))
-    assert offenders == [], f"paid _agent_context parent stack present in: {offenders}"
+    assert offenders == [], f"self-owned _agent_context parent stack present in: {offenders}"
 
 
 # ── NO SDK / NO GLOBAL PROVIDER ───────────────────────────────────────────────

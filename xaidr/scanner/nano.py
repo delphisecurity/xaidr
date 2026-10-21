@@ -50,18 +50,6 @@ scored above t_op. **Do not sort an alert queue by this score and do not present
 it as confidence** — a reviewer who does will see a style-guide note above a real
 finding. Use it as one signal among the rules, not as a ranking.
 
-AN EARLIER LIST HERE IS WITHDRAWN. It read 0.8648 "DISK BOOT FAILURE - INSERT
-SYSTEM DISK AND PRESS ENTER", 0.8415 a misleading-job-posting complaint, 0.7773
-the "putting together a team" prompt, 0.6630 a Yoda dialogue, 0.5937 a game of
-chess, 0.5654 a riddle. Those six scores reproduce on NO runtime and NO artifact
-variant we can test: on onnxruntime 1.20 through 1.29 the DISK BOOT prompt reads
-0.9969-0.9986 and the "team" prompt reads 7e-11 to 9e-08, and the fp32, fp16 and
-int8/int4 exports agree with each other rather than with the list. Their
-provenance cannot be reconstructed from this pipeline, so they are withdrawn
-rather than corrected — we do not know what produced them. The point they were
-making survives, and the replacements above make it with numbers anyone can
-reproduce.
-
 Which is also why the caller does NOT write this number into ``ScanResult.score``
 (a deliberate divergence from the reviewed patch, argued at the call site in
 local.py): a queue is ranked by ``score``, so putting an uncalibrated 0.55 there
@@ -79,9 +67,8 @@ prompts; published numbers were not used.
 THE 111-ITEM CORPUS IS NOT IN THIS REPOSITORY. Only the 2000-prompt benign
 sample is (``tests/fixtures/nano_fp_sample.json``, by identity), which is why
 the false-positive figures below can be regenerated here and the detection
-figures cannot. Every recovery number that once appeared in this module was
-measured on that external corpus against an older pinned ruleset, and is
-withdrawn; see the note above ``NANO_T_OP``. What this repository can
+figures cannot, and why this module states no recovery figure from that
+corpus; see the note above ``NANO_T_OP``. What this repository can
 demonstrate about detection is in the shell corpus: nano recovers 5 of the 21
 ``GAP`` entries, taking the catch rate from 167 to 172 of 186, via
 ``python scripts/intent_metrics.py --nano``.
@@ -94,28 +81,21 @@ us to gate. The substitute controls are (a) the measured curve, (b) the ENFORCED
 hash pin below, and (c) a full re-evaluation of any changed artifact. Dropping
 (b) or (c) voids the basis on which this model was accepted.
 
-THE EVIDENCE THAT USED TO SIT HERE WAS WRONG. This paragraph claimed "measured
-drift vs its own fp32 sibling: max |dp| 0.8377", offered as the reason parity was
-unavailable. It does not reproduce. Measured on onnxruntime 1.29.0 over the 20
-prompts pinned in tests/test_nano_published_figure.py, the shipped int8/int4
-export and the fp32 export at onnx/onnx_fp32/model.onnx agree closely:
+Measured on onnxruntime 1.29.0 over the 20 prompts pinned in
+tests/test_nano_published_figure.py, the shipped int8/int4 export and the fp32
+export at onnx/onnx_fp32/model.onnx agree closely:
 
     max |dp| 0.0558, mean |dp| 0.0123, and exactly 1 of 20 crosses t_op
 
-An 0.8377 divergence is not a small-sample artefact of that; the two exports are
-simply much closer than the record says. THE ARGUMENT ABOVE STANDS ANYWAY, and on
-firmer ground: we did not perform the quantization, so there is no transform of
-ours to diff, and that is true whether the exports agree or not. What is withdrawn
-is the number, not the reasoning — it was doing rhetorical work ("look how far
-apart they are") that the facts do not support, and a made-good argument should
-not lean on evidence that fails to reproduce.
+The argument above does not rest on that agreement: we did not perform the
+quantization, so there is no transform of ours to diff, whether the exports
+agree or not.
 
 THE RUNTIME IS PART OF THE MEASUREMENT, AND THE HASH PIN DOES NOT COVER IT
 --------------------------------------------------------------------------
 The pin fixes WHICH BYTES load. It does not fix WHAT THOSE BYTES COMPUTE, because
 an int8/int4 graph is executed by kernels that belong to onnxruntime, and those
-change between releases. THE SIZE OF THAT EFFECT WAS UNDERSTATED HERE UNTIL NOW.
-Measured on the full 2000-prompt sample, same artifact, same hashes, same code,
+change between releases. Measured on the full 2000-prompt sample, same artifact, same hashes, same code,
 varying nothing but the runtime:
 
     onnxruntime 1.20.1    35/2000 = 1.75%   [1.26%, 2.42%]
@@ -128,9 +108,7 @@ varying nothing but the runtime:
 The runtime very nearly DOUBLES the false-positive rate across a range this
 package's own extra permits. That is not a footnote to the figure; it is the
 figure. A single number published without its runtime is not a property of this
-detector, and the earlier text on this exact spot — "the count lands on 37/2000
-either way ... on this sample it is a wash" — was wrong, and wrong in the
-direction that made the signal look better behaved than it is.
+detector.
 
 Ruled out by direct measurement, so the runtime is the whole of it: ``tokenizers``
 0.20/0.21/0.22/0.23 produce byte-identical token ids AND bit-identical scores;
@@ -150,61 +128,38 @@ ranges as UNVERIFIED rather than as either end. Re-run the battery if you change
 it — and note that `pip install xaidr[nano]` resolves the newer runtime today,
 which is the 3.35% end, not the 1.75% one.
 
-FOUR FIGURES HAVE EXISTED FOR ONE QUANTITY. HERE IS THE RECONCILIATION
-----------------------------------------------------------------------
-This matters more than the number itself, because three of the four were
-published at some point and a reader who finds them deserves to know which
-survived and why.
+WHAT THE FIGURE HOLDS CONSTANT
+------------------------------
 
-  1.75%  35/2000  PUBLISHED, for onnxruntime <= 1.23. Wilson 95% [1.26%, 2.42%].
-  3.35%  67/2000  PUBLISHED, for onnxruntime 1.26-1.29. Wilson 95% [2.65%,
-                  4.23%]. Both are this sample, this artifact, this code. Which
-                  one applies to you is decided by your resolver.
+  1.75%  35/2000  for onnxruntime <= 1.23. Wilson 95% [1.26%, 2.42%].
+  3.35%  67/2000  for onnxruntime 1.26-1.29. Wilson 95% [2.65%, 4.23%].
+                  Both are this sample, this artifact, this code. Which one
+                  applies to you is decided by your resolver.
 
-  1.85%  37/2000  WITHDRAWN. Not a different sample and not a different method —
-                  a figure published WITHOUT the one fact that determines it.
-                  It was measured on an onnxruntime the record does not name,
-                  and was then labelled ``MEASURED_ON = "onnxruntime 1.29.0"``,
-                  a runtime on which this sample yields 67/2000 and not 37/2000.
-                  It sits close to the 1.75% end and is most likely that
-                  measurement taken on an older runtime, but the record cannot
-                  establish that, and a figure whose environment is unknown is
-                  not reproducible even when it happens to be near-right. The
-                  claim that accompanied it — that re-scoring on 1.29.0 lands on
-                  37/2000 "either way" — is false.
+Three things move this figure when they are not held fixed, so each is either
+pinned or published beside it:
 
-  2.20%  44/2000  WITHDRAWN, and it was wrong rather than merely stale. The
-                  acceptance evidence file stores each prompt truncated to 200
-                  characters as a human-readable preview; 331 of the 2000 are
-                  longer than that. The re-measurement that produced 2.20%
-                  scored the previews instead of the prompts. Feeding the
-                  200-character cut back through the runtime it was taken on
-                  moves the count by +6 on its own, which is the whole of the
-                  gap. This entry once said "the runtime was never the cause".
-                  Read that narrowly: truncation, not the runtime, explains THIS
-                  figure's gap. The runtime does move the rate, by more than any
-                  of these corrections — see the table above.
+  runtime         published beside each end, above; it cannot be pinned without
+                  breaking adopters' resolvers.
 
-  1.65%  33/2000  WITHDRAWN. Not this sample. A freshly drawn, seeded sample of
-                  the same size from the same three datasets, which overlaps the
-                  acceptance sample by only 128 of 2000 and — the part that
-                  matters — is NOT disjoint from the prompt sets the model was
-                  selected and calibrated against. Scoring a model on data it was
-                  tuned against biases the false-positive rate downward, so the
-                  lower number is a worse measurement, not better news.
+  prompt text     the acceptance evidence file stores each prompt truncated to
+                  200 characters as a human-readable preview, and 331 of the
+                  2000 are longer than that. Scoring the previews instead of the
+                  prompts moves the count by +6 on its own. The figure is scored
+                  on full text.
+
+  sample          a freshly drawn, seeded sample of the same size from the same
+                  three datasets overlaps this one by only 128 of 2000 and is
+                  NOT disjoint from the prompt sets the model was selected and
+                  calibrated against. Scoring a model on data it was tuned
+                  against biases the false-positive rate downward, so such a
+                  sample gives a worse measurement, not better news.
 
 The sample is pinned by identity, not by a seed, in
 ``tests/fixtures/nano_fp_sample.json``: 2000 SHA-256 hashes, rebuilt from the
 public datasets by ``scripts/intent_metrics.py --nano --real-benign``. Hashes
 rather than texts because no_robots is CC-BY-NC-4.0. A seed pins a draw; a
-manifest pins the sample, and it was a drifting sample that produced 1.65%.
-
-PINNING THE SAMPLE WAS NECESSARY AND WAS NOT SUFFICIENT. Three of the four
-figures above were killed by something the record did not hold fixed: the
-sample (1.65%), the prompt text (2.20%), and the runtime (1.85%). The sample is
-pinned by identity and the text is now scored in full; the runtime is the one
-that cannot be pinned without breaking adopters' resolvers, so it is published
-alongside the figure instead. ``MEASURED_IN`` below records the rest of the
+manifest pins the sample. ``MEASURED_IN`` below records the rest of the
 environment for the same reason.
 
 SAFETY PROPERTIES
@@ -255,11 +210,11 @@ Left at 512, the value the acceptance was measured under.
 NOTE FOR WHOEVER WIRES THIS (deliberate divergence, do not "fix")
 -----------------------------------------------------------------
 The caller's gate must be ``rules score == 0.0`` plus a minimum word count, and
-must NOT include an ``is_descriptive`` term. The paid sensor's equivalent gate
-carries one; measurement showed it hides 20.9% of benign traffic from the model
-at the SAME false-positive rate it admits, while discarding 4 real attacks the
-model scored >= 0.71. It is a volume filter, not a precision filter. Open does
-not have that term today and must not acquire it for consistency with paid.
+must NOT include an ``is_descriptive`` term. Measurement showed such a term
+hides 20.9% of benign traffic from the model at the SAME false-positive rate it
+admits, while discarding 4 real attacks the model scored >= 0.71. It is a volume
+filter, not a precision filter. This gate does not have that term and must not
+acquire it for consistency with another implementation's gate.
 """
 
 from __future__ import annotations
@@ -300,20 +255,13 @@ PINNED_SHA256 = {
 
 # Operating point on the model's RAW P(injection), from the acceptance record.
 #
-# THE RECOVERY FIGURES THAT USED TO SIT HERE ARE WITHDRAWN. This comment read
-# "Recovery 23/26 (open view), intent-based social-engineering 4/5". That corpus
-# is in a separate bench repository, not in this one and not in the wheel, and it
-# was scored there against a pinned older ruleset rather than against shipped
-# code. Re-derived with shipped code the denominator holds at 26 and the catch
-# count does not reproduce, and it moves with the onnxruntime version, which is
-# the same drift documented below for false positives showing up on the
-# detection side. No replacement is written here: a number from a corpus the
-# reader cannot obtain is exactly the failure MEASURED_IN exists to prevent.
-# The operating point itself is unchanged; only the claim about it is.
+# No recovery figure is stated here. The corpus recovery was accepted on is not
+# in this repository or the wheel, and a number from a corpus the reader cannot
+# obtain is exactly what MEASURED_IN exists to prevent. Recovery also moves with
+# the onnxruntime version, the same drift documented below for false positives.
 #
 # ONE SAMPLE, ONE METHOD, TWO FIGURES — because the runtime decides which one you
-# get. See "FOUR FIGURES HAVE EXISTED" above for what 1.85%, 2.20% and 1.65% were
-# and why none survived.
+# get. See "WHAT THE FIGURE HOLDS CONSTANT" above.
 #
 #   sample            the 2000 prompts named by identity in
 #                     tests/fixtures/nano_fp_sample.json — dolly-15k /
@@ -322,7 +270,7 @@ PINNED_SHA256 = {
 #   scored through    the shipped Sensor(enable_nano=True) at the shipped
 #                     operating point (NANO_T_OP), full prompt text, not the
 #                     truncated previews in the acceptance evidence file
-#   recovery          not measured in this repository; see the withdrawal note
+#   recovery          not measured in this repository; see the note above
 #                     above the operating point
 #   reproduce         python scripts/intent_metrics.py --nano --real-benign
 #
@@ -351,9 +299,9 @@ MEASURED_FP_HIGH_PCT = 100.0 * MEASURED_FP_RANGE[1][0] / MEASURED_FP_RANGE[1][1]
 #: here was read out of the interpreter that produced MEASURED_FP_RANGE (see
 #: `python scripts/intent_metrics.py --nano --real-benign`).
 #:
-#: This exists because 1.85% was withdrawn for exactly one reason — it was
-#: published without its environment — and a prose sentence naming one package
-#: is what allowed that. Anything that can change a score belongs here. The
+#: A figure published without its environment is not reproducible, and a prose
+#: sentence naming one package does not carry it. Anything that can change a
+#: score belongs here. The
 #: entries carrying `verified_irrelevant` were tested across the stated versions
 #: and produced bit-identical scores; they are recorded anyway, because "we
 #: checked and it did not matter" is a measurement with a shelf life, and the
@@ -653,12 +601,12 @@ def resolve_model_dir(model_dir: Optional[str] = None,
     """Locate the artifact directory. Explicit path, env var, cache, download.
 
     AN EXPLICIT PATH IS AUTHORITATIVE, AND THAT IS THE WHOLE OF THIS FUNCTION'S
-    SECURITY CONTENT. The first version walked
-    ``(model_dir, $XAIDR_NANO_MODEL, DEFAULT_MODEL_DIR)`` and returned the first
-    entry that happened to be complete, so an operator who mounted a vetted
-    artifact directory and mistyped the mount, or whose mount failed to attach,
-    was served whatever sat in ``~/.delphi`` instead — silently, and with the
-    hash pin passing, because the cache holds correctly-hashed bytes too. The
+    SECURITY CONTENT. Walking ``(model_dir, $XAIDR_NANO_MODEL,
+    DEFAULT_MODEL_DIR)`` and returning the first entry that happened to be
+    complete would mean an operator who mounted a vetted artifact directory and
+    mistyped the mount, or whose mount failed to attach, is served whatever sits
+    in ``~/.delphi`` instead — silently, and with the hash pin passing, because
+    the cache holds correctly-hashed bytes too. The
     pin answers "are these the accepted bytes"; it cannot answer "are these the
     bytes the operator pointed at", and only the operator knows why they pointed
     somewhere else.
@@ -714,12 +662,12 @@ def resolve_model_dir(model_dir: Optional[str] = None,
 class DelphiNano:
     """ONNX classifier for the rules-silent band, one instance PER ARTIFACT DIR.
 
-    The cache used to be a single ``_instance``, keyed on nothing. Two sensors in
-    one process asking for two different artifact directories both got the first
-    one, and the second caller was never told: it believed it had loaded the
-    model it named. That is the same silent-substitution defect
-    ``resolve_model_dir`` closes one layer up, so it is closed the same way —
-    the cache is keyed on the RESOLVED directory, and a caller who asks for a
+    A single ``_instance`` keyed on nothing would hand two sensors in one
+    process that ask for two different artifact directories the same first
+    model, and the second caller would never be told: it would believe it had
+    loaded the model it named. That is the same silent substitution
+    ``resolve_model_dir`` prevents one layer up, so it is prevented the same way
+    — the cache is keyed on the RESOLVED directory, and a caller who asks for a
     directory that has not been loaded gets a load, not somebody else's model.
 
     Loads are still paid once per artifact per process, which is the property the

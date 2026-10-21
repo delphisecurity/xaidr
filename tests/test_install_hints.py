@@ -15,15 +15,14 @@ refused to work. It has two ways to be wrong and only one of them is obvious:
 person who wrote it had the dependency installed already. The three framework
 integrations quote — `pip install 'xaidr[crewai]'`, `'xaidr[langchain]'`,
 `'xaidr[haystack]'` — and nothing else in the package does. The policy hint is
-the one 1.17.0 fixes; the remaining TEN occurrences are recorded as a strict
+quoted and pinned here; the remaining TEN occurrences are recorded as a strict
 xfail at the bottom of this file rather than left to be found again.
 
-TEN, NOT NINE. This file said nine for three releases because it scanned a
-hand-typed list of six files rather than the package. `xaidr/types.py:117` was
-not on the list and so was not counted. The list is gone — `_emitting_files()`
+TEN, NOT NINE. A hand-typed list of six files undercounts, because
+`xaidr/types.py:117` is not on it. So there is no list — `_emitting_files()`
 walks `xaidr/` — and `test_the_hint_scan_reaches_every_file_in_the_package`
 cross-checks that walk against an independent `grep`, so the scope of this file
-can no longer be a thing someone remembered to update.
+is not a thing someone has to remember to update.
 """
 from __future__ import annotations
 
@@ -46,8 +45,8 @@ _HINT = re.compile(r"""pip install\s+(['"]?)xaidr\[([a-z,]+)\]\1""")
 def _parsed_extras():
     """Extras via a real TOML parser, or (None, None) when none is importable.
 
-    `tomllib` is stdlib only from 3.11 and pyproject.toml claims 3.10, which is
-    what broke both py3.10 jobs in 1.17.0.
+    `tomllib` is stdlib only from 3.11 and pyproject.toml claims 3.10, so an
+    unconditional `import tomllib` breaks both py3.10 jobs.
 
     `tomli` covers 3.10 in practice, and for a reason worth writing down: pytest
     itself declares `tomli>=1; python_version<"3.11"`, so any environment that
@@ -330,15 +329,15 @@ def test_every_emitted_hint_names_a_declared_extra():
     "([nano]), sensor.py x2 ([nano], [http]), types.py x1 ([nano]). Three of "
     "those are raised at the operator (reporters.py:388/447, nano.py:701/741); "
     "the rest are prose that teaches the broken form. Every named extra is "
-    "real; each is printed in a shape zsh refuses. Out of scope for 1.17.0, "
-    "which changed one line as asked; recorded so it is not rediscovered from "
+    "real; each is printed in a shape zsh refuses. Out of scope for the "
+    "one-line policy-hint fix; recorded so it is not rediscovered from "
     "scratch. strict=True, so this flips to a hard failure the moment they are "
     "fixed and the marker is then deleted.\n"
     "\n"
-    "THE COUNT WAS NINE UNTIL THE SCAN WAS ENUMERATED. It said nine because "
-    "the list above it named six files and this line bolted on a seventh; "
-    "`xaidr/types.py:117` was in none of them. The number was a property of "
-    "the list, not of the package — which is the reason the list is gone."
+    "THE COUNT IS TEN BECAUSE THE SCAN IS ENUMERATED. A hand-typed list of six "
+    "files plus one more counts nine, because `xaidr/types.py:117` is in none "
+    "of them. A count from a list is a property of the list, not of the "
+    "package — which is the reason there is no list."
 ))
 def test_todo_every_emitted_hint_survives_the_shell():
     unquoted = []

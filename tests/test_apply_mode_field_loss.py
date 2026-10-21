@@ -1,25 +1,19 @@
-"""FIXED: monitor-mode downgrade used to drop three ScanResult fields.
+"""A monitor-mode downgrade keeps every ScanResult field except ``action``.
 
-``_apply_mode`` reconstructs the ScanResult when it softens a halting verdict,
-and it used to pass five of the dataclass's eight fields. ``input_status``,
-``nano_score`` and ``nano_raw`` were silently dropped, so in MONITOR mode — the
-default — a blocked verdict carrying nano readings or a not-scannable marker
-returned them as ``None``.
+``_apply_mode`` reconstructs the ScanResult when it softens a halting verdict.
+``input_status``, ``nano_score`` and ``nano_raw`` must survive that, so in
+MONITOR mode — the default — a blocked verdict carrying nano readings or a
+not-scannable marker returns them intact rather than as ``None``.
 
-WHY IT MATTERED. ``nano_score`` is how an operator tells a rules verdict from an
+WHY IT MATTERS. ``nano_score`` is how an operator tells a rules verdict from an
 ML-assisted one, and ``input_status`` is how a caller's own bug stays visible
-(see ``_emit_not_scannable``: fail open but RECORD). Both survived in block mode
-and vanished in monitor mode, which is exactly backwards — monitor is the mode
-you run while you are still measuring.
+(see ``_emit_not_scannable``: fail open but RECORD). Keeping them in block mode
+and losing them in monitor mode would be exactly backwards — monitor is the
+mode you run while you are still measuring.
 
-FOUND while building S1/S5/S6 and unrelated to them, so it is a separate commit
-rather than folded in: the seams PR's headline claim is "no behaviour change
-with no extension registered", and an observable change to what monitor mode
-returns does not belong under that sentence.
-
-THE FIX is ``dataclasses.replace`` instead of naming five of eight fields. That
-is the durable form: constructing by field list re-breaks silently every time a
-field is added to ScanResult, and this call site had already drifted twice.
+THE MECHANISM is ``dataclasses.replace`` rather than naming fields one by one.
+That is the durable form: constructing by field list re-breaks silently every
+time a field is added to ScanResult.
 """
 
 from xaidr import Sensor
@@ -44,11 +38,11 @@ def test_monitor_downgrade_preserves_nano_and_input_status():
 
 
 def test_block_mode_keeps_the_fields_which_is_what_made_it_a_bug():
-    """The discriminating half: the same verdict in block mode always kept them.
+    """The discriminating half: the same verdict in block mode keeps them.
 
-    This is what showed the loss was an artefact of the DOWNGRADE path rather
-    than a field the sensor never populates, and it is why the fix belongs in
-    ``_apply_mode`` and nowhere else.
+    This shows that any loss would be an artefact of the DOWNGRADE path rather
+    than a field the sensor never populates, which is why the guarantee lives
+    in ``_apply_mode`` and nowhere else.
     """
     s = Sensor(agent_id="field-loss-block", enforcement_mode="block")
     before = ScanResult(
@@ -65,11 +59,11 @@ def test_block_mode_keeps_the_fields_which_is_what_made_it_a_bug():
 def test_every_scanresult_field_survives_a_downgrade():
     """The regression guard that does not rot.
 
-    The two tests above name the three fields that were actually lost. This one
-    asserts the general property — a downgrade changes ``action`` and NOTHING
-    else — so a field added to ScanResult tomorrow is covered without anyone
-    remembering to come back here. That is the failure mode the original bug
-    had: a call site that construct-by-field-list silently excluded.
+    The two tests above name three fields explicitly. This one asserts the
+    general property — a downgrade changes ``action`` and NOTHING else — so a
+    field added to ScanResult tomorrow is covered without anyone remembering to
+    come back here. That is the failure mode a construct-by-field-list call
+    site has: whatever it does not name, it silently excludes.
     """
     import dataclasses
 

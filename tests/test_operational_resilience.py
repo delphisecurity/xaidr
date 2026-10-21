@@ -253,11 +253,11 @@ def test_corrupt_rule_asset_tests_never_write_inside_the_package():
     assert not strays, f"temp artifacts left inside xaidr/rules: {strays}"
 
 # ── the fail-open LOG is held to the same content rule as the telemetry ──────
-# Telemetry was always hash-only, but the WARN log interpolated the exception's
+# Telemetry is hash-only, and the WARN log names the exception TYPE, never its
 # MESSAGE. Exception messages are routinely built by interpolating the value
-# that caused the fault, so a scanner fault on a prompt containing a key could
-# put that key into a log line that ships to the host's pipeline. The message
-# body is no longer logged.
+# that caused the fault, so logging the message would let a scanner fault on a
+# prompt containing a key put that key into a log line that ships to the host's
+# pipeline.
 
 _SECRET_SHAPED = "sk-proj-AbCdEf0123456789AbCdEf0123456789"
 

@@ -1,38 +1,37 @@
 """Async tool seams: real awaited tools, and the structural guard for the rest.
 
-WHAT SHIPPED. `protect_tools()` wrapped `.func` and nothing else. A real
-`langchain_core` async tool has `func=None` and `coroutine=<async fn>`, so:
+THE DEFECT CLASS. A `protect_tools()` that wraps `.func` and nothing else
+misses async tools. A real `langchain_core` async tool has `func=None` and
+`coroutine=<async fn>`, so:
 
-  * testing the VALUE of `.func` rather than its PRESENCE sent the tool past the
-    LangChain branch into the CrewAI one (its `_run` is callable, being
-    `StructuredTool._run`), where its SYNC `_run` was shadowed;
-  * every async call went `ainvoke` -> `arun` -> `_arun` -> `self.coroutine` and
-    touched neither.
+  * testing the VALUE of `.func` rather than its PRESENCE sends the tool past
+    the LangChain branch into the CrewAI one (its `_run` is callable, being
+    `StructuredTool._run`), where only its SYNC `_run` is shadowed;
+  * every async call goes `ainvoke` -> `arun` -> `_arun` -> `self.coroutine` and
+    touches neither.
 
-Measured on langchain_core 1.6.2: a blocked credential read executed once on the
-async path and zero times on the sync path, same tool, same argument. It was
-never covered -- `protect_tools` was written with a sync-only `def wrapper` in
-448a66f and neither `coroutine` nor `iscoroutinefunction` had ever appeared in
-sensor.py.
+With langchain_core 1.6.2, the observable symptom of such a wrapper would be a
+blocked credential read executing once on the async path and zero times on the
+sync path, same tool, same argument. A sync-only `def wrapper` cannot cover it.
 
-The same question asked of every other shape found three more:
+The same question asked of every other shape covers three more:
 
-  * a plain `async def` callable WAS scanned, but the sync wrapper returned the
-    refusal `str` where the caller awaited, so a correctly-blocked call raised
-    `ValueError: a coroutine was expected` in the host. Right verdict, wrong
-    type, exactly like the LangGraph ToolMessage bug of 1.9.0;
+  * a plain `async def` callable must be scanned AND get back an awaitable: a
+    sync wrapper that returns the refusal `str` where the caller awaits makes a
+    correctly-blocked call raise `ValueError: a coroutine was expected` in the
+    host. Right verdict, wrong type, the same shape as a LangGraph ToolMessage
+    returned as the wrong type;
   * a CrewAI `BaseTool` implementing `_arun`, and any class-seam object with an
-    `_arun`, had only `_run` wrapped;
-  * `autogen.ConversableAgent.a_execute_function` was declared unpatchable. It
-    is an ordinary async method on the same class taking the same `func_call`,
-    and it is now patched.
+    `_arun`, needs `_arun` wrapped as well as `_run`;
+  * `autogen.ConversableAgent.a_execute_function` is an ordinary async method on
+    the same class taking the same `func_call`, so it is patched rather than
+    declared unpatchable.
 
-WHY THESE TESTS USE REAL FRAMEWORKS AND NOT FAKES. The async tests that existed
-used hand-written stand-ins, and a fake shares whatever assumption its author
-had. That is precisely how the CrewAI dead seam passed 107 tests: the fake's
-`BaseTool.run` WAS the implementation, and the real framework's was not. A fake
-async tool written by whoever wrote the sync wrapper would have had `func` set,
-and would have passed.
+WHY THESE TESTS USE REAL FRAMEWORKS AND NOT FAKES. A hand-written stand-in
+shares whatever assumption its author had. A CrewAI fake whose `BaseTool.run`
+is the implementation (the real framework's is not) passes a whole suite
+against a dead seam, and a fake async tool written by whoever wrote the sync
+wrapper would have `func` set, and would pass.
 
 Each suite SKIPS when its framework is absent.
 """
@@ -108,7 +107,7 @@ def _protect(**kw):
 
 @requires_lc
 def test_a_real_async_langchain_tool_is_scanned(sensor):
-    """HARD GATE. The auditor's finding, on the real framework."""
+    """HARD GATE. An async tool is scanned, on the real framework."""
     from langchain_core.tools import tool
 
     executed = []
@@ -127,7 +126,7 @@ def test_a_real_async_langchain_tool_is_scanned(sensor):
 
 @requires_lc
 def test_the_async_and_sync_halves_agree(sensor):
-    """Same tool, same argument, both paths. The bug was that they disagreed."""
+    """Same tool, same argument, both paths. They must agree."""
     from langchain_core.tools import tool
 
     executed = []
@@ -213,9 +212,9 @@ def test_protect_tools_is_idempotent_on_the_async_half(sensor):
 def test_a_plain_async_callable_returns_an_awaitable_refusal(sensor):
     """Right verdict, right TYPE.
 
-    Before the fix the scan ran and blocked correctly, then returned a `str`
-    where the caller awaited: `ValueError: a coroutine was expected`. A refusal
-    that crashes the host is not enforcement.
+    A sync wrapper scans and blocks correctly, then returns a `str` where the
+    caller awaits: `ValueError: a coroutine was expected`. A refusal that
+    crashes the host is not enforcement.
     """
     executed = []
 
@@ -347,7 +346,7 @@ def test_protect_scans_the_async_llama_index_seam():
 
 @requires_ag_legacy
 def test_protect_scans_the_async_autogen_legacy_seam():
-    """`a_execute_function` was declared unpatchable and is now patched."""
+    """`a_execute_function` is patched, not declared unpatchable."""
     from autogen import ConversableAgent
 
     executed = []
@@ -447,7 +446,7 @@ def _resolve_class(module_name: str, dotted: str):
 
 
 def test_every_sync_seam_has_its_async_counterpart_patched_or_declared():
-    """HARD GATE. The rule that would have caught this before an auditor did.
+    """HARD GATE. The structural rule that catches an uncovered async seam.
 
     For each class-method seam we patch, resolve the class from the INSTALLED
     framework and look for a coroutine sibling under the usual naming
@@ -490,12 +489,12 @@ def test_every_sync_seam_has_its_async_counterpart_patched_or_declared():
                 )
 
     if not checked:
-        # NOTHING TO CHECK IS NOT A FAILURE, and asserting it was one shipped a
-        # red `base` and `full` job in 1.11.0. Resolving an async sibling needs
-        # the framework's classes importable, and NO CI job installs one: `base`
-        # is `pip install .` plus pytest, `full` is `.[http,trace,dev]`. So this
-        # assertion could never hold in either, and the guard failed everywhere
-        # it was supposed to be quiet.
+        # NOTHING TO CHECK IS NOT A FAILURE, and asserting it was one would turn
+        # the `base` and `full` jobs red. Resolving an async sibling needs the
+        # framework's classes importable, and NO CI job installs one: `base` is
+        # `pip install .` plus pytest, `full` is `.[http,trace,dev]`. So such an
+        # assertion could never hold in either, and the guard would fail
+        # everywhere it is supposed to be quiet.
         #
         # Skipping here does NOT drop the non-vacuity requirement. It moves it,
         # deliberately, to two places that can actually hold it -- see
@@ -527,12 +526,11 @@ def test_the_guard_harness_is_not_blind():
     installs a framework, so a framework-gated check skips in 100% of CI runs
     and protects nothing in the configuration this guard actually breaks in.
 
-    And the framework is not how this guard died in practice. It went blind once
-    already, during the change that introduced it: the CrewAI async-kickoff fix
-    was first written as a `for` loop over target names, `_patched_targets()`
-    reads targets out of the SOURCE by AST and cannot see a loop variable, so
-    the guard reported a gap that had just been closed. Nothing about a
-    framework was involved. That failure mode is a property of the harness's
+    And a missing framework is not the only way this guard goes blind.
+    `_patched_targets()` reads targets out of the SOURCE by AST and cannot see
+    a loop variable, so a patcher written as a `for` loop over target names
+    makes the guard report a gap that is in fact closed. Nothing about a
+    framework is involved. That failure mode is a property of the harness's
     INPUTS, it is config-independent, and it is checkable with nothing
     installed:
 
@@ -552,8 +550,8 @@ def test_the_guard_harness_is_not_blind():
         f"structural guard is checking nothing"
     )
     # A target supplied through a variable is invisible to the AST, which is
-    # exactly how this guard went blind before. Every one must be a literal
-    # dotted path.
+    # exactly how this guard goes blind. Every one must be a literal dotted
+    # path.
     malformed = [t for t in targets if "." not in t or t != t.strip()]
     assert not malformed, f"patch targets that are not dotted paths: {malformed}"
 
@@ -583,7 +581,7 @@ def test_the_guard_is_not_vacuous_when_a_framework_is_present():
     """TRUE non-vacuity: with a framework installed the guard really resolved
     something.
 
-    This is the check the main guard used to make inline. It belongs here rather
+    This check is deliberately not inline in the main guard. It belongs here rather
     than there because "a framework is installed" is a precondition for the
     check, not a property of the code under test -- expressing it as a skipif
     lets the configuration that cannot satisfy it say so, instead of failing.
@@ -617,8 +615,8 @@ def test_the_structural_guard_can_fail():
     """Non-vacuity. If the guard cannot fail it is decoration.
 
     Re-runs the same rule with the async autogen seam removed from the patched
-    set, which is exactly the state this branch found, and asserts it is
-    reported.
+    set, which is exactly the state the guard exists to report, and asserts it
+    is reported.
     """
     if not HAVE_AG_LEGACY:
         pytest.skip("needs pyautogen 0.2 to resolve the class")
@@ -636,8 +634,8 @@ def test_the_structural_guard_can_fail():
     declared = {d for d in _declared_unpatchable()
                 if d.endswith("a_execute_function")}
     assert not declared, (
-        "a_execute_function is declared unpatchable again; it is patchable and "
-        "this branch patched it"
+        "a_execute_function is declared unpatchable; it is patchable and "
+        "frameworks.py patches it"
     )
 
 

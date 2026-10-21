@@ -69,20 +69,18 @@ else) does. LangGraph's own graph boundary, the OpenAI Agents SDK's per-instance
 patchable call site — each is reported as `found_unpatchable` with the reason and
 the manual alternative (`sensor.protect_tools(...)`).
 
-**LangGraph was assumed covered; here is what is measured.** `create_agent` had
-been proven and a hand-written `StateGraph` had not, so both halves of the claim
-are now pinned in `tests/test_real_frameworks.py::TestRealLangGraph` against
-langgraph 1.2.11 / langchain-core 1.6.1.
+**LangGraph: what is measured.** Both `create_agent` and a hand-written
+`StateGraph` are pinned in `tests/test_real_frameworks.py::TestRealLangGraph`
+against langgraph 1.2.11 / langchain-core 1.6.1.
 
 * **Tool calls are covered, and the refusal is readable.** A destructive call
   under `protect(enforcement_mode="block")` executes **zero** times and comes
   back as a `[BLOCKED]` `ToolMessage` with `status="error"`, on `invoke` and
-  `ainvoke` alike. It did not always: `BaseTool.run` returned the refusal as a
-  *string*, which is what `tool.run(args)` callers are promised but not what a
-  `ToolNode` is — ToolNode raises `TypeError: Tool <name> returned unexpected
-  type: <class 'str'>` and its default `handle_tool_errors` re-raises, so a
-  correctly-blocked call took the whole graph down. The seam now returns the
-  type each caller was promised, keyed on `tool_call_id` exactly as langchain's
+  `ainvoke` alike. The type matters: a refusal returned as a *string* is what
+  `tool.run(args)` callers are promised but not what a `ToolNode` is — ToolNode
+  raises `TypeError: Tool <name> returned unexpected type: <class 'str'>` and
+  its default `handle_tool_errors` re-raises, so a correctly-blocked call would
+  take the whole graph down. The seam returns the type each caller was promised, keyed on `tool_call_id` exactly as langchain's
   own `_format_output` is.
 * **Graph input and output are not covered.** There is no library-owned call
   site between the graph and your node functions, so an injected prompt reaches
@@ -129,19 +127,24 @@ scans either. Tool *results* are outside every wiring; only tool *arguments* are
 scanned. Pinned in `tests/test_real_frameworks.py::TestRealDeepAgents`, import
 order included (in child processes, since it is a process-global fact).
 
-**CrewAI is a hook, and the coverage claim is narrower than it was.** Through
-1.6.1 this table said `crewai` → `tools.BaseTool.run` → "tool", and the manifest
-said "every CrewAI tool invocation is `scan_tool_call`'d before it executes".
-**That claim was false and the published 1.6.1 wheel still carries it.**
+**CrewAI is a hook, not a `BaseTool.run` patch.** **Correction:** an earlier
+version of this table listed `crewai` → `tools.BaseTool.run` → "tool", and the
+manifest stated that every CrewAI tool invocation is `scan_tool_call`'d before it
+executes. That statement is withdrawn and superseded by this section. An install
+whose `protect()` manifest still lists `tools.BaseTool.run` for CrewAI carries
+the withdrawn claim; the current boundary is the `before_tool_call` hook
+described below. Patching `tools.BaseTool.run` does not reach an agent's tool
+call:
 `BaseTool.to_structured_tool()` binds `CrewStructuredTool(func=self._run)`, so an
 agent's tool call runs `invoke()` → `func` → `_run` and never touches
-`BaseTool.run`. Measured against crewai 1.15.17: the patch fired on **0 of 3**
-agent-driven paths (`Crew.kickoff`, `Crew.kickoff_async`, `Agent.kickoff`) while
-a destructive command executed, and the manifest reported the boundary covered
-throughout. It shipped because every `protect()` test ran against a hand-written
-fake whose `BaseTool.run` *was* the implementation — a CrewAI that never existed.
+`BaseTool.run`. Measured against crewai 1.15.17, a `BaseTool.run` patch fires on
+**0 of 3** agent-driven paths (`Crew.kickoff`, `Crew.kickoff_async`,
+`Agent.kickoff`) while a destructive command executes, and a manifest built on
+that patch would report the boundary covered throughout. A hand-written fake
+whose `BaseTool.run` *is* the implementation — a CrewAI that does not exist —
+cannot show this; only the real library can.
 
-What replaces it is CrewAI's own `before_tool_call` registry, which fires on all
+The boundary is CrewAI's own `before_tool_call` registry, which fires on all
 three of those paths and has a documented block contract. What that does **not**
 cover, said plainly rather than left to be discovered:
 
@@ -161,13 +164,12 @@ cover, said plainly rather than left to be discovered:
   other boundary here. Catch it at your `kickoff()` call site if that is not
   what you want.
 
-Both facts are now pinned by `tests/test_real_frameworks.py`, which imports the
+Both facts are pinned by `tests/test_real_frameworks.py`, which imports the
 real framework and skips when it is absent.
 
-**One remaining gap, found by asking the same question of every other seam.** The
-CrewAI bug turned on "is this method on the path the framework itself takes",
-not "does this method exist", so each remaining fake was re-checked against the
-real library at a named version:
+**One remaining gap, found by asking the same question of every other seam:**
+"is this method on the path the framework itself takes", not "does this method
+exist". Each seam is checked against the real library at a named version:
 
 | Framework | What is uninstrumented | Mechanism |
 |---|---|---|
@@ -175,24 +177,23 @@ real library at a named version:
 
 Wrap the underlying functions with `sensor.protect_tools([...])` for that one.
 
-**`autogen` (0.2) async tool calls used to be listed here and are now covered.**
-The entry described the mechanism correctly — the async reply path is
+**`autogen` (0.2) async tool calls are covered.** The async reply path is
 `a_generate_tool_calls_reply` → `_a_execute_tool_call` → **`a_execute_function`**,
-a separate method that never goes through the patched `execute_function` — and
-then drew the wrong conclusion, filing a patchable method as unpatchable.
+a separate method that never goes through the patched `execute_function`.
 `a_execute_function(self, func_call)` is an ordinary async method on the same
 class, taking the same `func_call` dict and returning the same
-`(is_exec_success, response_dict)` tuple, and it is now patched with the same
-factory and the same refusal shape. Measured against `pyautogen==0.2.35`: a
-blocked credential read executed once before, zero times after. A documented gap
-is still a gap, and documenting it is not the same as being unable to close it.
+`(is_exec_success, response_dict)` tuple, so it is patched with the same factory
+and the same refusal shape. Measured against `pyautogen==0.2.35`: a blocked
+credential read executes once with only the sync method patched, and zero times
+with both. A documented gap is still a gap, and documenting it is not the same
+as being unable to close it.
 
 **Tool RESULTS are scanned at the `langchain-core` and `mcp` seams, and not at
 the others.** A tool that fetches a poisoned document, reads a poisoned row or
-calls a poisoned MCP server is the inbound half of the tool boundary, and until
-1.20.0 the `BaseTool.run`/`.arun` seam had no `after` position at all — it scanned
-arguments and handed the return value to the model unread. It now scans the
-result as `direction="tool_result"`, on both the sync and async halves, and
+calls a poisoned MCP server is the inbound half of the tool boundary. A
+`BaseTool.run`/`.arun` seam with no `after` position scans arguments and hands
+the return value to the model unread; this one scans the result as
+`direction="tool_result"`, on both the sync and async halves, and
 refuses it in the same type the caller was promised. What is *not* covered, said
 here rather than left to be discovered:
 
@@ -221,7 +222,7 @@ is a `ToolNode` or a `create_agent` tool loop and a string is not a legal return
 there. Direct `tool.run(args)` callers still get the string, and no other
 framework's seam is affected. **If you match on the refusal, match on
 `str(result)`, not on `isinstance(result, str)`** — see the LangGraph section
-above for why this changed in 1.9.0. Transport and entrypoint boundaries raise
+above for why. Transport and entrypoint boundaries raise
 `DelphiBlockedError` instead — there is no in-band way for an HTTP send to say
 "refused".
 

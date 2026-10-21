@@ -1,30 +1,30 @@
 """The sdist must carry the pools and the scripts that regenerate the figures.
 
-U-1 requires every published figure to have a regenerator. Until 1.18.0 the
-sdist's include list was
+The release rule is that every published figure has a regenerator. An
+sdist whose include list is
 
     include = ["xaidr", "README.md", "pyproject.toml"]
 
-so it carried no pool, no script and no test. Every regenerator could therefore
-run from a git clone and from nowhere else, which is the opposite of what
-"verified from the built artifact" claims.
+carries no pool, no script and no test. Every regenerator could then run from a
+git clone and from nowhere else, which is the opposite of what "verified from
+the built artifact" claims.
 
-THE PART THAT MAKES THIS A TEST AND NOT A CHANGELOG ENTRY. The old list did not
-merely omit the pools — it produced a listing that looked like it had them.
+THE PART THAT MAKES THIS A TEST AND NOT A CHANGELOG ENTRY. Such a list does not
+merely omit the pools — it produces a listing that looks like it has them.
 Hatchling's include patterns are gitignore-style, so a bare `README.md` with no
-slash matches AT ANY DEPTH, and the built sdist listed
+slash matches AT ANY DEPTH, and the built sdist lists
 
-    xaidr-1.18.0/asi_battery/README.md
-    xaidr-1.18.0/benign_a2a/README.md
-    xaidr-1.18.0/benign_longform/README.md
-    xaidr-1.18.0/benign_toolcalls/README.md
-    xaidr-1.18.0/heldout/README.md
+    xaidr-<version>/asi_battery/README.md
+    xaidr-<version>/benign_a2a/README.md
+    xaidr-<version>/benign_longform/README.md
+    xaidr-<version>/benign_toolcalls/README.md
+    xaidr-<version>/heldout/README.md
 
-Five pool directories, every one of them empty of data. That listing is what the
-1.16.0 body read to conclude the pools were present "measured from the built
-files". The check did not fail. It passed on evidence that meant nothing, which
-is the failure mode this file is shaped against: both halves below refuse to be
-satisfied by a directory name.
+Five pool directories, every one of them empty of data. A reader of that listing
+would conclude the pools were present "measured from the built files". A check
+on directory names passes on evidence that means nothing, which is the failure
+mode this file is shaped against: both halves below refuse to be satisfied by a
+directory name.
 
 TWO CHECKS, DELIBERATELY DIFFERENT IN KIND:
 
@@ -41,7 +41,7 @@ substitutes for the other: an anchored pattern list can still name the wrong
 directories, and a passing build here says nothing about a list someone rewrites
 tomorrow in the shape that caused this.
 
-AND THE OTHER DIRECTION, AFTER 1.20.0. asi_battery/, heldout/ and
+AND THE OTHER DIRECTION. asi_battery/, heldout/ and
 docs/releasing.md are maintainer material and are excluded from the sdist (the
 reasoning is in pyproject.toml). The same two kinds of check pin that: one reads
 the `exclude` list and always runs, one reads the tarball. An upload cannot be
@@ -125,8 +125,8 @@ def test_every_sdist_include_pattern_is_anchored():
 
     `README.md` is not a request for the README. It is a request for every file
     named README.md anywhere in the tree, and that is how five empty pool
-    directories ended up in a listing that was then read as proof the pools
-    shipped. `/README.md` is the request that was meant.
+    directories end up in a listing that reads as proof the pools shipped.
+    `/README.md` is the request that is meant.
     """
     patterns = _sdist_patterns()
     assert patterns, "the sdist target declares no include list at all"
@@ -222,7 +222,7 @@ def test_the_built_sdist_carries_every_committed_pool_and_regenerator(tmp_path):
     with tarfile.open(path) as tf:
         members = tf.getnames()
 
-    # Strip the `xaidr-1.18.0/` prefix every sdist member carries.
+    # Strip the `xaidr-<version>/` prefix every sdist member carries.
     roots = {m.split("/", 1)[0] for m in members if "/" in m}
     assert len(roots) == 1, f"sdist has more than one root directory: {roots}"
     root = roots.pop()
@@ -268,6 +268,29 @@ def test_the_built_sdist_leaves_out_the_maintainer_material(tmp_path):
         "\n  " + "\n  ".join(leaked[:20]) + "\n"
         "An upload to PyPI cannot be amended. pyproject.toml excludes these "
         "paths and records why; the exclusion did not hold.")
+
+
+def test_the_built_sdist_ships_python_only_under_its_named_roots(tmp_path):
+    """Every .py in the sdist lives under a directory this file names.
+
+    The Python roots of the sdist are the package, the regenerators and the
+    suite (`_MUST_SHIP_DIRS`). A module anywhere else is code no test collects
+    and no regenerator is, which ships to PyPI unowned.
+    """
+    path = _build_sdist(tmp_path)
+    with tarfile.open(path) as tf:
+        members = tf.getnames()
+    inside = [m.split("/", 1)[1] for m in members if "/" in m]
+    assert any(m.endswith(".py") for m in inside), (
+        f"{os.path.basename(path)} carries no .py file at all")
+    loose = sorted(m for m in inside if m.endswith(".py")
+                   and m.split("/", 1)[0] not in _MUST_SHIP_DIRS)
+    assert not loose, (
+        f"Python files outside {_MUST_SHIP_DIRS} reached the built sdist "
+        f"({os.path.basename(path)}):\n  " + "\n  ".join(loose) + "\n"
+        "No test or regenerator owns these, and an upload to PyPI cannot be "
+        "amended. Move the file under one of those roots, or drop it from the "
+        "sdist `include` list in pyproject.toml.")
 
 
 def test_the_wheel_does_not_grow_the_pools(tmp_path):

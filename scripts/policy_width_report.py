@@ -12,17 +12,14 @@ WHY THIS EXISTS. README.md publishes this:
     | impact_tier: [critical,high]| 253 of 277    | 4 of 38               |
     | impact_class: all ten       | 265 of 277    | 5 of 38               |
 
-Eight figures. Until this script, **not one of them had a regenerator.** They
-entered the tree in `ab09cb3` ("docs: correct every published corpus figure and
-add the policy ceiling"), a commit that touched four markdown files and no code,
-no test and no fixture. Its body says "Measured", and that word was the entire
-provenance. `scripts/corpus_report.py` — credited in the same commit for the
-other figures — contains the string "policy" zero times. U-1 forbids exactly
-this: a figure that reads as rigour and cannot be recomputed.
+Eight figures, and this script is their only regenerator.
+`scripts/corpus_report.py` produces the other corpus figures and contains the
+string "policy" zero times. The release rule (no published figure without a
+regenerator) forbids exactly what a table without this script would be: a
+figure that reads as rigour and cannot be recomputed.
 
-The denominator then drifted from 281 to 277 in a later edit with nothing
-re-deriving the DevOps column, so the two halves of each row have not been
-measured in the same run since the row was written.
+Both halves of every row are measured in the same run, so the attack
+denominator and the DevOps column cannot drift apart when the corpus changes.
 
 WHAT "GATED" MEANS, precisely, because the README's phrase is "the action does
 not execute": `scan_tool_call(...).action` is `blocked` OR `approval_required`.

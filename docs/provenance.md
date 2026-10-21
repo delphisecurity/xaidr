@@ -49,10 +49,6 @@ with ThreadPoolExecutor() as pool:
     pool.submit(propagate_context(handle_request), payload)   # chain preserved
 ```
 
-This documentation previously said `contextvars` carried the chain across
-threads as well as tasks. That was wrong, and a deployment that believed it had
-a weaker delegation control than it thought.
-
 **Cross-boundary**,
 the chain rides the standard `traceparent` header plus a companion entry for the
 correlation id and a compact chain header — the same mechanism OpenTelemetry

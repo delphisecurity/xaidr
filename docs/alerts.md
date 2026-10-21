@@ -25,11 +25,11 @@ borrowing a neighbouring one. It appears in `.category` on the returned
 `gen_ai.security.detection.category` in the `openA2A` schema. A rule that
 enumerates categories explicitly will not match it until you add it.
 
-**A third thing, and it will change your event volume:** tool calls now emit
+**A third thing, and it will change your event volume:** tool calls emit
 `jailbreak`, `system_prompt_leak`, `encoding_evasion`, `dos_attempt` and
-`forged_trust` with `direction="tool_call"`. Those five families were dropped
-from the tool path in earlier versions and are now reported at **flag** level —
-so the same traffic produces more `flagged` events than before, and none of them
+`forged_trust` with `direction="tool_call"`, reported at **flag** level. A
+deployment upgrading from a release that did not report those five families on
+the tool path sees more `flagged` events for the same traffic, and none of them
 are new blocks. Dashboards that chart flagged-event counts over time will show a
 step. The reasoning for flag rather than block, and the `category:` policy rule
 that escalates a family to a block in your deployment, are under

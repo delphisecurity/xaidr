@@ -1,11 +1,11 @@
 """Guards for the email-ReDoS hardening family.
 
-Three related fixes, each pinned here:
+Three related properties, each pinned here:
   (A) LLM06_email / OUT_pii_email bounded to RFC 5321 caps
-      ({1,64}@{1,255}.{2,24}), and the stray `|` removed from the TLD class —
+      ({1,64}@{1,255}.{2,24}), with no `|` in the TLD class —
       linear matching, no literal-pipe "TLDs".
-  (B) DLP_email_bulk linearized: a bounded single-email findall plus a count
-      threshold (>= 3), instead of the catastrophic repeated group
+  (B) DLP_email_bulk is linear: a bounded single-email findall plus a count
+      threshold (>= 3), rather than a catastrophic repeated group such as
       `(?:…+@…+){3,}`.
   (C) The L1_MAX_SCAN_CHARS input cap, applied BEFORE normalization, and the
       RFC-reserved documentation-domain exclusion (example.com/.test/.invalid
@@ -16,9 +16,8 @@ WHY THERE IS NOT A SINGLE WALL-CLOCK ASSERTION IN THIS FILE
 A `time.perf_counter() < 1.0` guard is a test of the machine, not of the code.
 It passes on a fast laptop with a quadratic pattern and fails on a loaded CI box
 with a linear one, and the flake it produces is indistinguishable from a real
-regression — which is exactly the failure class removed from this suite in
-`test: assert the normalizer bound structurally, not on a clock` (0f4682c) and
-from the paid tree alongside it.
+regression — the failure class this suite asserts structurally instead (see the
+normalizer bound, likewise asserted structurally rather than on a clock).
 
 So each oracle below asserts the bound the CODE enforces:
 
@@ -32,8 +31,8 @@ So each oracle below asserts the bound the CODE enforces:
   * The bulk threshold is `min_count`, asserted on the boundary (2 vs 3) rather
     than on how long findall took.
 
-The paid tree's counterpart file (tests/test_email_redos_hardening.py) uses
-generous wall-clock ceilings for the first two. That is the one thing not ported.
+A counterpart file in another implementation may use generous wall-clock
+ceilings for the first two; this file deliberately does not.
 """
 from __future__ import annotations
 
@@ -121,8 +120,8 @@ def test_the_email_patterns_carry_no_unbounded_quantifier(rule_id):
 
 @pytest.mark.parametrize("rule_id", EMAIL_RULES)
 def test_the_email_patterns_repeat_no_group(rule_id):
-    """The specific pre-fix shape was `(?:…+@…+){3,}` — a repeated group whose
-    body could match the same text many ways. No group in these patterns is
+    """The catastrophic shape is `(?:…+@…+){3,}` — a repeated group whose
+    body can match the same text many ways. No group in these patterns is
     quantified at all."""
     body = _strip_classes(_rule(rule_id)["pattern"].pattern)
     found = _REPEATED_GROUP.findall(body)
@@ -142,7 +141,7 @@ def test_the_email_patterns_carry_the_rfc_5321_caps(rule_id):
 
 @pytest.mark.parametrize("rule_id", EMAIL_RULES)
 def test_the_tld_class_holds_no_literal_pipe(rule_id):
-    """The old class `[A-Z|a-z]` treated `|` as a TLD character. Asserted on the
+    """A class written `[A-Z|a-z]` treats `|` as a TLD character. Asserted on the
     pattern as well as behaviourally below, because the behavioural test alone
     would pass if the class were widened some other way."""
     tld = re.search(r"\\\.\[([^\]]*)\]\{2,24\}", _rule(rule_id)["pattern"].pattern)
@@ -151,7 +150,7 @@ def test_the_tld_class_holds_no_literal_pipe(rule_id):
 
 
 def test_the_stray_pipe_no_longer_matches():
-    """The behavioural half of the same fact: `foo@bar.c|m` used to match."""
+    """The behavioural half of the same fact: `foo@bar.c|m` does not match."""
     assert not _email_rule_fired("reach foo@bar.c|m today")
     assert not _email_rule_fired("reach foo@bar.c|m today", output=True)
 
@@ -162,7 +161,7 @@ def test_the_bulk_rule_is_a_count_threshold():
     """The linearization is visible in the rule's SHAPE: one bounded
     single-email pattern plus `min_count`, which scan_dlp applies with findall.
     A repeated-group pattern would need no min_count — its presence is the
-    structural evidence the fix is in place."""
+    structural evidence of the linear form."""
     bulk = _bulk()
     assert bulk.get("min_count") == 3, bulk.get("min_count")
     body = _strip_classes(bulk["pattern"].pattern)
@@ -186,8 +185,9 @@ def test_the_bulk_threshold_holds_at_its_boundary():
 
 def test_the_pathological_input_completes_and_finds_nothing():
     """Availability, without a clock: the pathological input has no `@`, so a
-    linear pattern returns no match. Pre-fix this did not return in reasonable
-    time at all — if catastrophic backtracking came back, this test would hang
+    linear pattern returns no match. A backtracking pattern would not return in
+    reasonable time at all — if catastrophic backtracking were introduced, this
+    test would hang
     rather than fail, and the suite timeout is the honest reporter of that.
     A wall-clock ceiling here would only add a machine-speed flake on top."""
     assert _rule("LLM06_email")["pattern"].search(PATHOLOGICAL) is None

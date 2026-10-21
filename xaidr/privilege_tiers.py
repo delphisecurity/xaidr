@@ -72,7 +72,7 @@ def validate_tier(value: Any) -> int:
     lowest privilege).
 
     Anything else that is not an int in 1..4 raises ``ValueError``, following the
-    ADV-2 precedent set by ``enforcement_mode``: a security control configured
+    loud-validation rule set by ``enforcement_mode``: a security control configured
     with a value it does not understand must fail at construction, in the
     deployer's face, rather than silently pick a default and enforce something
     other than what was written. ``bool`` is rejected explicitly — it is an

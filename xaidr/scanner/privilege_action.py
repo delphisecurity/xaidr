@@ -65,9 +65,9 @@ relation between two keys and the scope of that relation IS the control:
 Both directions are the fail-closed one. Widening an enabling fact costs a false
 positive; widening a SUPPRESSING fact costs the detection outright, and it hands
 the caller a switch they can flip from any nesting depth — `{"role": "admin",
-"metadata": {"type": "grant"}}` was silent because `type` is a filter key
-somewhere in the tree. 1.14.1 made three predicates relational and applied the
-sibling requirement to two of them; this is the third.
+"metadata": {"type": "grant"}}` would be silent because `type` is a filter key
+somewhere in the tree. Three predicates are relational and all three apply the
+sibling requirement; this is one of them.
 
 WHAT THIS DELIBERATELY DOES NOT CATCH. Crypto-mining as a workload
 (``schedule_job(image="xmrig/...")``) is a privilege/resource abuse, but the only
@@ -160,8 +160,9 @@ _ADMIN = re.compile(r"\b(org-?admin|super-?user|superuser|root|administrator|adm
 # escalation under a ROLE or PERMISSION slot, where it is MongoDB's built-in
 # `root` role and not a node. And it stays one in a scope LIST: a position slot
 # holds exactly ONE position, so `scopes: "read-only,root"` is not a caller
-# saying where in a tree it is working, it is a token being widened — which is
-# the F4b shape (`tests/test_sep10_high_findings.py`) and it must keep firing.
+# saying where in a tree it is working, it is a token being widened. A
+# read-only word in a scope list excuses only its own entry, never an admin
+# entry beside it, so that call must keep firing.
 # Hence the `len(scopes) == 1` requirement: the carve-out reaches `scope: "root"`
 # alone and nothing else.
 _ROOT_TOKEN = re.compile(r"^root$", re.I)
@@ -496,8 +497,8 @@ def scan_privileged_action(tool_name: str, arguments) -> list:
 
     # 4. ESCALATION TO ADMIN/ROOT IN A ROLE OR SCOPE, read one RECORD at a time.
     #
-    # THE RULE THIS PREDICATE NOW FOLLOWS, and the one the cross-product fix in
-    # 1.14.1 reached for two of its three predicates: a fact that turns
+    # THE RULE THIS PREDICATE FOLLOWS, the same one the other two relational
+    # predicates follow: a fact that turns
     # detection ON may be read anywhere in the call, because missing it is the
     # fail-open direction. A fact that turns detection OFF must be a SIBLING of
     # the thing it excuses, because a suppressor read from the flattened tree is

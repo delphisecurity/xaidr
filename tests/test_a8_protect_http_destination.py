@@ -1,4 +1,4 @@
-"""A-8: protect_http must enforce on DESTINATION (blocked-URL list + local
+"""protect_http must enforce on DESTINATION (blocked-URL list + local
 deny-destination policy) for EVERY method incl. GET/DELETE, additive to the
 existing POST/PUT/PATCH body scan (which must keep working).
 
@@ -176,10 +176,11 @@ def test_explicit_destination_block_enforced_in_monitor_mode():
 
 
 # ── the destination-block message must not carry the request URL ────────────
-# The audit record on this path has always been host-only, and says so: a query
-# string routinely carries a token or an API key. The console line beside it was
-# broader than the record, printing the full URL. Same class as the fail-open
-# log leak fixed on the scan path, in a surface that fix did not touch.
+# The audit record on this path is host-only, and says so: a query string
+# routinely carries a token or an API key. The console line beside it must be
+# no broader than the record, so it never prints the full URL either. Same
+# class as the fail-open log line on the scan path, in a separate surface that
+# needs its own pin.
 
 _URL_SECRET = "SECRET123"
 _SECRET_URL = f"http://evil.com/steal?token={_URL_SECRET}&user=alice"

@@ -1,17 +1,17 @@
-"""The delegation-rate trigger, and the class of bug it shipped as.
+"""The delegation-rate trigger, and the class of bug it guards against.
 
-WHAT SHIPPED. ``xaidr 1.10.0`` and earlier carried ``Sensor._breaker_delegation_tick``
--- a complete method, with a docstring arguing why only OUTBOUND delegations
-count -- which called ``self._breaker.record_delegation()``. ``_CircuitRuntime``
-implemented ``record_violation`` and ``record_tool_call`` and nothing else. So
-every outbound ``scan_a2a`` with a breaker configured raised AttributeError, the
-sensor's fail-open ``except`` caught it, a WARNING was logged, and the count was
-dropped. Measured on the published wheel: 50 delegations against
-``rate_threshold=5`` left the circuit ``closed``.
+THE DEFECT CLASS. ``Sensor._breaker_delegation_tick`` -- a complete method, with
+a docstring arguing why only OUTBOUND delegations count -- calls
+``self._breaker.record_delegation()``. A ``_CircuitRuntime`` that implements
+only ``record_violation`` and ``record_tool_call`` makes every outbound
+``scan_a2a`` with a breaker configured raise AttributeError; the sensor's
+fail-open ``except`` catches it, a WARNING is logged, and the count is dropped.
+In that shape, 50 delegations against ``rate_threshold=5`` leave the circuit
+``closed``.
 
 The half that makes it a trap rather than a missing feature is that everything
-LOOKED fine. ``circuit_state`` answered ``"closed"``, which is what a healthy
-breaker answers. The only signal was a log line per call, which at fifty
+LOOKS fine. ``circuit_state`` answers ``"closed"``, which is what a healthy
+breaker answers. The only signal is a log line per call, which at fifty
 identical lines reads as noise.
 
 So this file pins three separate things, and the second is the one that matters
@@ -91,8 +91,8 @@ def _breaker_attrs_used_in_sensor() -> set[str]:
     """Every attribute sensor.py reads off ``self._breaker``, by AST.
 
     Source analysis and not ``dir()``: the point is to catch a call on a path
-    no test exercises, which is exactly how the delegation counter shipped
-    broken. A behavioural test cannot see an unexercised line; the parser can.
+    no test exercises, which is exactly how a call with no implementation goes
+    unnoticed. A behavioural test cannot see an unexercised line; the parser can.
     """
     with open(SENSOR_SRC, encoding="utf-8") as fh:
         tree = ast.parse(fh.read(), SENSOR_SRC)
@@ -115,9 +115,9 @@ def _breaker_attrs_used_in_sensor() -> set[str]:
 def test_every_breaker_attribute_the_sensor_uses_actually_exists():
     """HARD GATE. The bug's whole class, not just its one instance.
 
-    ``record_delegation`` shipped as a call with no implementation. This asserts
-    that no such call exists anywhere in sensor.py, including on paths no test
-    covers.
+    A call such as ``record_delegation`` with no implementation behind it is the
+    defect. This asserts that no such call exists anywhere in sensor.py,
+    including on paths no test covers.
     """
     used = _breaker_attrs_used_in_sensor()
     assert used, "parsed no self._breaker attribute uses; the AST walk is broken"
@@ -125,7 +125,7 @@ def test_every_breaker_attribute_the_sensor_uses_actually_exists():
     assert not missing, (
         f"sensor.py calls {missing} on the breaker runtime, which does not "
         f"implement them. Each is caught by a fail-open `except` and silently "
-        f"counts nothing -- the exact shape of the 1.10.0 delegation bug. "
+        f"counts nothing -- the exact shape of the delegation-counter bug. "
         f"Attributes used: {sorted(used)}"
     )
 
@@ -133,8 +133,8 @@ def test_every_breaker_attribute_the_sensor_uses_actually_exists():
 def test_the_guard_would_have_caught_the_shipped_bug():
     """Non-vacuity. If the guard cannot fail, it is decoration.
 
-    Re-runs the same check against the 1.10.0 runtime shape (the two record_*
-    methods it actually had) and asserts it flags record_delegation.
+    Re-runs the same check against the defective runtime shape (only the two
+    record_* methods below) and asserts it flags record_delegation.
     """
     used = _breaker_attrs_used_in_sensor()
     assert "record_delegation" in used, (
@@ -153,7 +153,7 @@ def test_the_guard_would_have_caught_the_shipped_bug():
     )
     assert missing == ["record_delegation"], (
         f"expected the guard to flag exactly record_delegation against the "
-        f"1.10.0 shape, got {missing}"
+        f"defective runtime shape, got {missing}"
     )
 
 
@@ -186,7 +186,7 @@ def test_every_trigger_is_named_in_the_enabled_property():
 
 
 def test_a_real_fanout_through_scan_a2a_trips_the_circuit():
-    """HARD GATE. The scenario measured as broken on the published wheel."""
+    """HARD GATE. The fan-out scenario the defective runtime fails."""
     s = sensor(CircuitBreaker(delegation_rate_threshold=5, cooldown_sec=None))
     assert s.circuit_state == "closed"
     for i in range(4):
@@ -195,14 +195,14 @@ def test_a_real_fanout_through_scan_a2a_trips_the_circuit():
     s.scan_a2a(A2A, destination="peer-4")
     assert s.circuit_state == "open", (
         "5 outbound delegations against delegation_rate_threshold=5 did not "
-        "open the circuit -- this is the 1.10.0 bug"
+        "open the circuit -- this is the delegation-counter bug"
     )
     # ...and the open circuit halts subsequent work, benign or not.
     assert s.scan("what is the weather").action == "blocked"
 
 
 def test_the_control_measurement_from_the_bug_report():
-    """50 delegations against a threshold of 5. Measured closed on 1.10.0."""
+    """50 delegations against a threshold of 5. The defective shape stays closed."""
     s = sensor(CircuitBreaker(delegation_rate_threshold=5, cooldown_sec=None))
     for i in range(50):
         s.scan_a2a(A2A, destination=f"peer-{i}")
@@ -210,7 +210,7 @@ def test_the_control_measurement_from_the_bug_report():
 
 
 def test_no_warning_is_logged_on_the_delegation_path(caplog):
-    """The bug's only symptom was a log line per call. There must be none now."""
+    """The bug's only symptom is a log line per call. There must be none."""
     s = sensor(CircuitBreaker(delegation_rate_threshold=100))
     with caplog.at_level(logging.WARNING):
         for i in range(10):
@@ -219,7 +219,7 @@ def test_no_warning_is_logged_on_the_delegation_path(caplog):
     assert not breaker_lines, breaker_lines
 
 
-# ── the separation the audit argued for, and (b) requires ────────────────
+# ── the separation (b) requires ──────────────────────────────────────────
 
 
 def test_tool_calls_do_not_feed_the_delegation_counter():

@@ -1,31 +1,31 @@
 """Author the conformance inputs from the corpus LABELS — run once, output committed.
 
-    python tests/value_origin_conformance/convert.py --sentinel ~/delphi-sentinel \
+    python tests/value_origin_conformance/convert.py --sentinel <corpus-repo-checkout> \
         [--rev origin/main] [--adopt]
 
-Reads, from delphi-sentinel at ``--rev`` (git objects, never the working tree):
+Reads, from the upstream corpus repository at ``--rev`` (git objects, never the working tree):
 ``bench/action-path-corpus/corpus.jsonl``, ``classes.py`` (for DESIGNATIONS) and
 ``reference_ledger.py`` (the oracle). Writes, beside this file:
 
-    flows.jsonl      one flow script per corpus case (§5.1)
+    flows.jsonl      one flow script per corpus case
     expected.jsonl   the expected outcome of every corpus case under configs A,
                      B and C, and of every supplementary case (config "S")
     oracle.jsonl     the ORACLE's wire for every case, configs A and B,
                      unsabotaged and under each of its five sabotages
-    SOURCE.json      the sentinel commit and the sha256 of every input read
+    SOURCE.json      the upstream corpus commit and the sha256 of every input read
 
-WHY THE EXPECTED FILE IS WRITTEN HERE AND NOT BY THE CORE (§5.2). It is written
+WHY THE EXPECTED FILE IS WRITTEN HERE AND NOT BY THE CORE. It is written
 from the corpus labels by the mapping table below, so it cannot be a recording of
 what the code happened to do. This module does NOT import ``xaidr``. Where the
 mapping and the core disagree, the presumption is that the core is wrong, and
-changing an expected row must name the rule that justifies it (and obliges paid
-to bump EVALUATOR_GENERATION on re-vendor — P4).
+changing an expected row must name the rule that justifies it (and obliges any
+package that vendors the core to bump EVALUATOR_GENERATION on re-vendor).
 
 WHY THE ORACLE RUNS OVER THERE. ``reference_ledger.py`` says "Nothing may import
 this outside bench/action-path-corpus". It is run as a subprocess whose working
 directory is an extract of that directory; its answers are committed to
 oracle.jsonl, and test_probes.py compares the REAL core to them. Oracle-versus-
-core disagreement is a red (§5.4, ruling 2026-09-24).
+core disagreement is a red.
 
 A CHANGED CORPUS IS A VISIBLE RE-AUTHORING. The converter refuses a corpus whose
 sha256 differs from SOURCE.json unless ``--adopt`` is passed, and the diff of
@@ -46,7 +46,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CORPUS_DIR = "bench/action-path-corpus"
 
-# ── §5.2, the mapping table: destination_origin -> config-A wire ─────────────
+# ── the mapping table: destination_origin -> config-A wire ──────────────────
 A_WIRE = {
     "tool_result": "trusted_source",
     "principal_span": "principal",
@@ -75,7 +75,7 @@ VERDICT = {                       # §1.4 verdict_of, transcribed (not imported)
 ORIGIN_OF_WIRE = {"principal": "principal", "trusted_source": "trusted_source",
                   "untrusted_source": "untrusted_source", "unresolved": "unresolved"}
 
-# §5.1 config A designations, as data. Asserted equal to classes.DESIGNATIONS.
+# Config A designations, as data. Asserted equal to classes.DESIGNATIONS.
 CONFIG_A = [
     {"tool": "directory_lookup", "match": "exact", "source_arg": "directory",
      "pattern": "corporate_directory", "key_args": ["query"]},
@@ -122,7 +122,7 @@ def _label_destination(case) -> str:
 
 def _names_registrable(case) -> bool:
     """subdomain_path_drift: does a PRINCIPAL span name the destination's
-    registrable domain as a bare host? (§5.2's 20 exceptions)"""
+    registrable domain as a bare host? (20 exceptions in the corpus)"""
     reg = _label_destination(case).split(":", 1)[1]
     pat = r"(?<![\w.@/\-])" + re.escape(reg) + r"(?![\w@\-])"
     return any(s["writer"] == "principal" and re.search(pat, s["text"])
@@ -131,7 +131,7 @@ def _names_registrable(case) -> bool:
 
 def _writes_national_phone(case) -> bool:
     """format_variance: the destination is E.164 but the request wrote no '+'
-    (§5.2's 23 exceptions)."""
+    (23 exceptions in the corpus)."""
     return case["destination_value"].startswith("+") and "+" not in case["request_text"]
 
 
@@ -146,7 +146,7 @@ def expected_for(case, config):
         wire, derived_principal = "principal", True
     origin = ORIGIN_OF_WIRE[wire]
     if config == "B":
-        # §5.2 as amended (ruling 2026-09-24, C-3a): no span is declared, so
+        # As amended (docs/value-origin-rulings.md): no span is declared, so
         # every principal-derived destination and every designated-read
         # authorization reports principal_undeclared_span.
         if derived_principal and wire in ("principal", "untrusted_source") \
@@ -238,7 +238,7 @@ def main(argv=None) -> int:
             desig = ast.literal_eval(node.value)
     got = [dict(d, key_args=list(d["key_args"])) for d in desig]
     if got != CONFIG_A:
-        raise SystemExit(f"classes.DESIGNATIONS differs from §5.1 config A:\n{got}")
+        raise SystemExit(f"classes.DESIGNATIONS differs from config A:\n{got}")
 
     cases = [json.loads(line) for line in files["corpus.jsonl"].decode().splitlines()]
     flows = [build_flow(c) for c in cases]
@@ -260,7 +260,7 @@ def main(argv=None) -> int:
                               "origin": origin}],
             })
     if counts != {"national": 23, "drift": 20}:
-        raise SystemExit(f"§5.2 enumerates 23 national-phone and 20 drift "
+        raise SystemExit(f"the specification enumerates 23 national-phone and 20 drift "
                          f"exceptions; the label rules found {counts}")
 
     for line in (HERE / "supplementary.jsonl").read_text(encoding="utf-8").splitlines():
@@ -290,7 +290,7 @@ def main(argv=None) -> int:
     dump("expected.jsonl", expected)
     dump("oracle.jsonl", oracle)
     src.write_text(json.dumps({
-        "repo": "github.com/delphisecurity/delphi-sentinel",
+        "repo": "Delphi internal reference implementation",
         "commit": commit,
         "inputs": {n: {"path": f"{CORPUS_DIR}/{n}", "sha256": s} for n, s in shas.items()},
         "cases": len(cases),

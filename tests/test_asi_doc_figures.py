@@ -1,21 +1,20 @@
 """The ASI battery docs must publish the figure the battery actually produces.
 
-THE DEFECT. `asi_battery/BOUNDARY_GAP.md` opened with
+THE DEFECT THIS GUARDS AGAINST. A headline table such as
 
     | rules-only   | 21/120 (18%) | 7/120 |
     | rules + nano | 41/120 (34%) | 18/120 |
 
-as a present-tense fact, with no "measured at" line and no staleness marker,
-for five releases. The real rules-only figure was 43/120 — and it moved because
-TWO OF THE FIVE DETECTORS THAT DOCUMENT PROPOSES WERE BUILT (G2 in 1.14.0, G4
-in 1.15.0). A document arguing for work that had already shipped, quoting a
-number from before it shipped, with nothing in the tree able to notice.
+in `asi_battery/BOUNDARY_GAP.md`, stated as a present-tense fact with no
+"measured at" line and no staleness marker, goes stale the moment a rule
+change moves the battery. Building TWO OF THE FIVE DETECTORS THAT DOCUMENT
+PROPOSES (G2 and G4) moves the rules-only figure to 43/120; without a check, the
+document goes on arguing for work that has already shipped, quoting a number
+from before it shipped, with nothing in the tree able to notice.
 
-`asi_battery/RESULTS.md` had the identical defect, records having had it
-("it published `21/120` for five weeks after 1.14.0 shipped the G2 detector"),
-and fixed it by adding a "Measured at" line. Nothing stopped the SAME claim
-going stale in the file next to it, because the fix was prose in one file rather
-than a check over both. This is the check.
+`asi_battery/RESULTS.md` is open to the identical drift. A "Measured at" line
+in one file does not stop the SAME claim going stale in the file next to it:
+prose in one file is not a check over both. This is the check.
 
 WHAT IT PINS, AND WHAT IT DELIBERATELY DOES NOT. Only the rules-only catch and
 false-positive counts, because those are the two figures reproducible from the
@@ -26,7 +25,7 @@ unverifiable claim survives. See `docs/nano.md`.
 
 The assertion runs against the CURRENT figure each document publishes as
 current, not against a hardcoded 43 — so it fails when a rule change moves the
-battery and the docs stand still, which is the direction that actually happened.
+battery and the docs stand still, which is the direction drift takes.
 """
 from __future__ import annotations
 
@@ -99,7 +98,7 @@ def _current_figures(path, marker):
 
     Keyed on an explicit marker string rather than on position, because both
     documents deliberately also contain HISTORICAL `N/120` figures — the
-    retracted 21/120, the 35/120 of 1.14.0 — and a scan that could not tell
+    superseded 21/120 headline, an intermediate 35/120 — and a scan that could not tell
     them apart would either fail forever or have to ignore everything.
     """
     text = path.read_text(encoding="utf-8")
@@ -109,22 +108,22 @@ def _current_figures(path, marker):
 
 def test_boundary_gap_publishes_the_rules_only_figure_the_battery_produces(
         rules_only):
-    """The retraction banner's "measured today" row must still be true today."""
+    """The banner's "measured today" row must still be true today."""
     marker = "rules-only, measured today"
     lines, figures = _current_figures(BOUNDARY_GAP, marker)
     assert lines, (
-        f"{BOUNDARY_GAP.name} has no line containing {marker!r}. That row is "
-        f"the retraction of the stale 21/120 headline; if it was removed or "
+        f"{BOUNDARY_GAP.name} has no line containing {marker!r}. That row "
+        f"supersedes the stale 21/120 headline; if it was removed or "
         f"reworded, this gate stops constraining the document and the figure "
-        f"can go stale again exactly as it did before."
+        f"can go stale again unnoticed."
     )
     assert rules_only["catch"] in figures, (
         f"{BOUNDARY_GAP.name} publishes {figures} as the current rules-only "
         f"catch; the battery measures {rules_only['catch']}/120.\n"
         f"Line: {lines[0].strip()}\n"
-        f"Regenerate with `python scripts/asi_battery_report.py`. This is the "
-        f"exact drift that left 21/120 published for five releases after the "
-        f"detectors in this document's own proposal moved it to 43."
+        f"Regenerate with `python scripts/asi_battery_report.py`. Left alone, "
+        f"this drift keeps a superseded figure published after the detectors "
+        f"in this document's own proposal have moved it."
     )
     assert rules_only["fp"] in figures, (
         f"{BOUNDARY_GAP.name}'s current rules-only row publishes {figures}; "
@@ -136,8 +135,7 @@ def test_results_md_publishes_the_rules_only_figure_the_battery_produces(
         rules_only):
     """The same gate on the sibling document, for the same reason.
 
-    RESULTS.md is the file that already went stale once with this figure. It
-    carries a "Measured at" line now; a line is not a check.
+    RESULTS.md carries a "Measured at" line; a line is not a check.
     """
     marker = "**rules-only**"
     lines, figures = _current_figures(RESULTS, marker)
@@ -157,21 +155,19 @@ def test_results_md_publishes_the_rules_only_figure_the_battery_produces(
 
 
 def test_boundary_gap_carries_a_staleness_marker():
-    """The marker itself, asserted — it is what the document had none of.
+    """The marker itself, asserted — without it the figure has no date.
 
-    A figure being right today is not the property that failed. What failed is
-    that nothing said WHEN it was measured, so nobody could tell it had stopped
-    being right. Both halves are required: the version it was written at, and
+    A figure being right today is not the whole property. If nothing says WHEN
+    it was measured, nobody can tell when it has stopped being right. Both halves are required: the version it was written at, and
     the version the current figures were re-measured at.
     """
     text = BOUNDARY_GAP.read_text(encoding="utf-8")
     missing = [s for s in ("STALE", "Measured at", "measured today")
                if s not in text]
     assert not missing, (
-        f"{BOUNDARY_GAP.name} is missing {missing}. This document published a "
-        f"figure from 1.13.0 as present tense through 1.18.0 with nothing in it "
-        f"naming the state it was measured in. `asi_battery/RESULTS.md` is the "
-        f"format to follow."
+        f"{BOUNDARY_GAP.name} is missing {missing}. Without them a figure reads "
+        f"as present tense with nothing in the document naming the state it "
+        f"was measured in. `asi_battery/RESULTS.md` is the format to follow."
     )
 
 

@@ -10,8 +10,7 @@ The ASI battery ships with a register-matched benign mirror. That mirror is a
 **lower** bound on false positives, not an upper one: it was written one-to-one
 against the attacks, so it shares their vocabulary, their tool names, and their
 argument shapes. Real agent tool calls do not. A detector measured only against
-the mirror is measured against its own author's imagination of benign, which is
-the same error that made nano's withdrawn 2.20% meaningless on security prose.
+the mirror is measured against its own author's imagination of benign.
 
 So G1 through G3 in `BOUNDARY_GAP.md` cannot be judged safe against the mirror
 alone. This corpus is the production-shaped benign set they have to clear.
@@ -55,22 +54,22 @@ so it tests whether a detector can tell two VALUES apart under one key and never
 whether it can tell two KEYS apart. Between them they cannot measure a
 key-vocabulary error or a value-polarity error — so both read 0 while:
 
-| measured at | `corpus.jsonl` | `discriminator.jsonl` |
+| detector form | `corpus.jsonl` | `discriminator.jsonl` |
 |---|---:|---:|
-| 1.14.0 as published (G2) | 0 / 190 | **11 / 50 (22.0%)** |
-| 1.14.1, G2 corrected | 0 / 190 | **0 / 50 (0.0%)** |
-| 1.15.0 candidate, G2 + G4 as first written, *never shipped* | 0 / 190 | **23 / 50 (46.0%)** |
-| **1.15.0, this release — G4 corrected** | **0 / 190** | **2 / 50 (4.0%)** |
+| G2 reading its keys as unrelated facts | 0 / 190 | **11 / 50 (22.0%)** |
+| G2 reading each shape as a relation between two keys | 0 / 190 | **0 / 50 (0.0%)** |
+| G2 as unrelated facts + G4 reading value polarity naively | 0 / 190 | **23 / 50 (46.0%)** |
+| **G2 + G4 as shipped** | **0 / 190** | **2 / 50 (4.0%)** |
 
-**Read the third row: it is why this pool exists.** 23 = the 11 G2 false
-positives (that candidate was cut before the 1.14.1 fix) plus 12 from G4, which
-read `limit_reached: False` as a removed ceiling, `ttl: "none"` as one, and
-`cost_center: "none"` as one. It scored **0 / 190 and 0 / 628 committed benign
-inputs** the whole time. That is the same blindness that hid the G2 defect for
-five weeks, reproduced on a different detector within one release, which is the
-argument for keeping the two pools separate rather than a hypothetical about it.
+**Read the third row: it is why this pool exists.** 23 = the 11 false positives
+of G2 in its unrelated-facts form plus 12 from the naive G4, which reads
+`limit_reached: False` as a removed ceiling, `ttl: "none"` as one, and
+`cost_center: "none"` as one. That combination scores **0 / 190 and 0 / 628
+committed benign inputs**. The blind pools cannot see this class of error on
+either detector, which is the argument for keeping the two pools separate rather
+than a hypothetical about it.
 
-**The 2 / 50 on this release is 48 discriminations plus 2 abstentions, and the
+**The shipped 2 / 50 is 48 discriminations plus 2 abstentions, and the
 abstentions are named:** `retention: "forever"` on an archive bucket (DSC-RES-03)
 and `expires: "never"` on a perpetual licence (DSC-FIN-04). Both genuinely ARE a
 named bound holding a strong nullifier, and both are routine traffic. The only
@@ -85,18 +84,19 @@ pins the pair by id so a third cannot be gained quietly.
 
 ### A third pool, for the one field the other two cannot reach
 
-`sql_dml.jsonl`, 50 benign `DELETE`/`UPDATE` statements, added with the F2
-predicate rewrite. It is separate for the same reason `discriminator.jsonl` is,
-and the blindness it answers is sharper than either of the two above.
+`sql_dml.jsonl`, 50 benign `DELETE`/`UPDATE` statements for the SQL
+predicate-boundedness rules. It is separate for the same reason
+`discriminator.jsonl` is, and the blindness it answers is sharper than either of
+the two above.
 
 `sql.unbounded_mutation` and `sql.tautological_mutation` match only
 `statement ∈ {delete, update}`. **Neither of the other two pools contains a
 single DML statement** — every SQL value in all 240 of them is a `SELECT` — so
-`predicate`, the load-bearing field of the entire SQL reader, was measured
-against zero benign statements for its whole life. 0 / 240 on a rule the pool
+`predicate`, the load-bearing field of the entire SQL reader, is measured
+against zero benign statements without this pool. 0 / 240 on a rule the pool
 cannot reach is not a clean bill; it is exactly the "the corpus could not see
-this class" that the 1.14.1 note recorded for the privilege detector, on a
-different surface.
+this class" gap recorded above for the privilege detector, on a different
+surface.
 
 The 50 entries are ORM, driver, migration and operator shapes: placeholder
 styles (`$1`, `?`, `:name`), soft deletes, retention sweeps, optimistic locks,
@@ -105,20 +105,20 @@ styles (`$1`, `?`, `:name`), soft deletes, retention sweeps, optimistic locks,
 picked *because* they looked hard — a pool that avoids the shapes a detector
 might fire on measures nothing.
 
-| measured at | `sql_dml.jsonl` given a destructive impact class |
+| tokenizer | `sql_dml.jsonl` given a destructive impact class |
 |---|---:|
-| 1.15.0 as published | **5 / 50 (10.0%)** |
-| this change | **0 / 50 (0.0%)** |
+| reading `$2 … $1` as one dollar-quoted string | **5 / 50 (10.0%)** |
+| as shipped | **0 / 50 (0.0%)** |
 
-The five were not a cost of failing closed on unknown predicates — that cost was
-**zero**, no entry moved from `bounded` to `unknown`. They were a pre-existing
-tokenizer defect the pool surfaced on its first run: a statement containing two
-Postgres placeholders (`… = $2 WHERE lower(email) = lower($1)`) had everything
-between the two `$` read as one dollar-quoted string, so the `WHERE` clause sat
-inside a literal and the write reported `predicate=none` — an unbounded
-mutation. The same swallow hid a following `;` and every statement after it.
+The five are not a cost of failing closed on unknown predicates — that cost is
+**zero**, no entry moves from `bounded` to `unknown`. They are a tokenizer error
+this pool exists to catch: in a statement containing two Postgres placeholders
+(`… = $2 WHERE lower(email) = lower($1)`), a tokenizer that reads everything
+between the two `$` as one dollar-quoted string puts the `WHERE` clause inside a
+literal, and the write reports `predicate=none` — an unbounded mutation. The same
+swallow hides a following `;` and every statement after it.
 
-### A fourth pool, for the axis the other three share: the DOMAIN (audit F7)
+### A fourth pool, for the axis the other three share: the DOMAIN
 
 `domains.jsonl`, 120 benign tool calls from six domains no detector here was
 built against — legal document management, game state, scientific computing and
@@ -129,21 +129,21 @@ than one that distinguishes them. `corpus.jsonl` is five personas.
 `discriminator.jsonl` is 50 more calls on detector AXES, and every one of them is
 still tagged with one of the same five personas. `sql_dml.jsonl` is a SQL
 surface, not an industry. `../asi_battery/benign.jsonl` is a register-matched
-mirror, narrower again. **Every benign tool call committed to this repo before
-this pool was support, devops, data, research or finance**, so "0 / 190" was
-never evidence about a sixth domain — and the words the structural detectors key
+mirror, narrower again. **Without this pool, every benign tool call committed
+to this repo is support, devops, data, research or finance**, so "0 / 190" is
+no evidence about a sixth domain — and the words the structural detectors key
 on are exactly the words that change meaning when the industry does. `audit` is a
 control in devops and an enrolment mode in a university. `monitoring` is an
 observability agent in devops and cardiac telemetry in a hospital. `limit` is a
 ceiling in finance and the object being computed in a CAS. `administrator` is a
 role in IAM and a credit on a film.
 
-| measured at | `domains.jsonl` |
+| predicates | `domains.jsonl` |
 |---|---:|
-| 1.17.0 as published | **40 / 120 (33.3%)** |
-| this change, five predicates narrowed | **24 / 120 (20.0%)** |
+| five predicates each reading a single fact | **40 / 120 (33.3%)** |
+| the same five narrowed, as shipped | **24 / 120 (20.0%)** |
 
-The sixteen that were fixed were all one defect in different clothes — a
+The sixteen the narrowing removes are one error in different clothes — a
 predicate reading ONE fact with no relation to the claim in its own rule name:
 `ASI03_concealed_grant` on a `visible: false` with no grant in the call (a
 compositing layer, a staged game entity, an unreleased assignment, an embargoed
@@ -153,8 +153,8 @@ which is the top of a folder tree, a mounted filesystem, a scene graph and an LM
 account tree; `ASI03_disable_control` on a `disabled: true` that names nothing it
 disables; `ASI04_bound_removed` on a bare `rate`, which is a price and a pulse
 before it is ever a ceiling, and on a `max_wait` that `max_timeout` was already
-carved out for. **All five stayed green on `corpus.jsonl` (0/190),
-`discriminator.jsonl` (2/50) and every other committed pool the whole time** —
+carved out for. **In single-fact form all five are green on `corpus.jsonl`
+(0/190), `discriminator.jsonl` (2/50) and every other committed pool** —
 which is the same "the corpus could not see this class" recorded above for the
 key-vocabulary and value-polarity errors, now on a third axis.
 
@@ -220,9 +220,9 @@ nothing. So ordinary traffic here includes, as legitimate work:
 
 ## The measured baseline (regenerate: `python scripts/benign_toolcall_report.py`)
 
-Measured on the shipped sensor, `main` (85a2f98), monitor mode.
+Measured in monitor mode, on a sensor without the proposed boundary detectors.
 
-**1. Current sensor, the required baseline.** Before any new detector exists:
+**1. The sensor without boundary detectors, the required baseline:**
 
 | persona | n | rules false positives |
 |---|---:|---:|
@@ -233,8 +233,9 @@ Measured on the shipped sensor, `main` (85a2f98), monitor mode.
 | finance | 38 | 0 |
 | **total** | **190** | **0 (0.0%)** |
 
-The current sensor flags nothing here, which is consistent with the boundary
-gap: it barely inspects the tool-call boundary at all. `rules+nano` is identical,
+Without the boundary detectors the sensor flags nothing here, which is
+consistent with the boundary gap: without them it barely inspects the tool-call
+boundary at all. `rules+nano` is identical,
 because nano does not run on tool calls.
 
 **2. The acceptance surface, which is the point.** A naive detector for each

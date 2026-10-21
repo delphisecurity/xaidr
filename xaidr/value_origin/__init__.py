@@ -1,12 +1,12 @@
 """xaidr.value_origin — where a tool call's destination came from.
 
-The core of docs/value-origin-architecture.md (delphi-sentinel), built ONCE here
-and vendored byte-identically by paid at a pinned commit. Pure: no seams, no
+The value-origin core, built ONCE here and vendored byte-identically by its
+consumers at a pinned commit. Pure: no seams, no
 I/O, no network, no dependency outside the standard library and this package
 (tests/value_origin_conformance/test_self_contained.py enforces that).
 
-``__all__`` IS the interface (§1). Paid imports nothing else; changing it is a
-breaking change to paid and is called out as one in the PR that makes it.
+``__all__`` IS the interface. Consumers import nothing else; changing it is a
+breaking change and is called out as one in the PR that makes it.
 Deliberately absent: any accessor that returns ledger contents, any way to write
 an origin directly, any function that takes a correlation id — each is a
 laundering or disclosure primitive.
@@ -54,16 +54,16 @@ from ._types import (
 )
 
 __all__ = [
-    # §1.1 enums
+    # enums
     "Origin", "WIRE_STRENGTH", "ORIGIN_STRENGTH", "Verdict", "WireValue", "RowState",
     "Writer", "Mode", "MatchKind", "RecordOutcome", "UnresolvedReason",
-    # §1.2 value types
+    # value types
     "Span", "Authority", "SourceDesignation", "Finding", "DestinationFinding",
     "CallVerdict",
-    # §1.3 constants
+    # constants
     "LEDGER_MAX_ENTRIES", "MAX_ARG_LEAVES", "MAX_ARG_DEPTH", "MAX_LEAF_CHARS",
     "MAX_KEY_TOKENS", "PSL_SNAPSHOT_DATE",
-    # §1.4 functions
+    # functions
     "validate_designations", "validate_mode", "bind_ledger", "bind_fresh_ledger",
     "unbind_ledger", "ledger_bound", "record_principal_input", "record_tool_result",
     "evaluate_call", "should_block", "authority_of", "extract_destinations",

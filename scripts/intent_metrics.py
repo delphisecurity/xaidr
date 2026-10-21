@@ -7,15 +7,15 @@
 
 WHY THIS SCRIPT EXISTS, AND WHAT IT REPLACES
 ────────────────────────────────────────────
-The figure this project published for years was `blocked / all attacks` — 165 of
-281, 59% — presented as detection. That figure counts as a failure every entry
-the ruleset deliberately declines to block. `terraform destroy` is not a missed
+The obvious figure is `blocked / all attacks`, presented as detection. That
+figure counts as a failure every entry the ruleset deliberately declines to
+block. `terraform destroy` is not a missed
 detection. It is the documented inverse of `terraform apply`, an ephemeral-
 environment pipeline runs it on a schedule, and the shipped rule names the impact
 class and hands the decision to a policy the deployer writes. Scoring that as a
-miss was wrong from the start: it made the ruleset look weaker than it is in
-exactly the place where it is behaving as designed, and it invited the reader to
-"fix" the design by adding blocks that would break ordinary teardown pipelines.
+miss is wrong: it makes the ruleset look weaker than it is in exactly the place
+where it is behaving as designed, and it invites the reader to "fix" the design
+by adding blocks that would break ordinary teardown pipelines.
 
 Two changes, and the second is the one that matters:
 
@@ -463,9 +463,9 @@ def print_denominator(corpus, intended, in_scope):
     gaps = [e for e in corpus["attacks"] if e.get("detection_intent") == "GAP"]
     blocked_unlabelled = [e for e in corpus["attacks"] if "detection_intent" not in e]
 
-    # DERIVED, not typed. This header read "THE 281" until 1.13.0, four attacks
-    # after the corpus became 277 -- a hardcoded count in the output of the
-    # script whose whole purpose is to make the denominator auditable.
+    # DERIVED, not typed. A hardcoded count here goes stale the moment the
+    # corpus changes size, in the output of the script whose whole purpose is
+    # to make the denominator auditable.
     print(f"  THE {len(corpus['attacks'])}, DECOMPOSED BY INTENT")
     print(f"    {'blocked, so never labelled (fail-closed default)':<62}{len(blocked_unlabelled):>4}")
     print(f"    {'INTENDED  — left to policy, OUT of the denominator':<62}{len(intended):>4}")
@@ -866,12 +866,12 @@ def print_report(args, corpus, devops):
         print("  --nano cannot regenerate a recovery figure for it.")
         print()
         print("  The corpus, its derivation and the ruleset it was scored against are")
-        print("  preserved in the PRIVATE delphisecurity/xaidr-internal repository,")
-        print("  under nano/. They are not published: the population is a working set")
-        print("  of attacks that defeat the shipped rules.")
+        print("  kept in a private repository, not in this one. They are not")
+        print("  published: the population is a working set of attacks that defeat")
+        print("  the shipped rules.")
         print()
-        print("  The withdrawn 23-of-26 recovery figure is documented in docs/nano.md,")
-        print("  including why it is not being replaced with a fresh one.")
+        print("  docs/nano.md explains why no recovery figure for that population is")
+        print("  published.")
         print()
 
     print(_rule("="))

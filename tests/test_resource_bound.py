@@ -33,8 +33,8 @@ def scan(tool, args):
     """The structural scanner, imported at CALL time on purpose.
 
     A module-level import makes this file uncollectable against a tree that does
-    not have the detector — and that tree is exactly the pre-fix state these
-    tests have to be shown RED against. ``ModuleNotFoundError`` during collection
+    not have the detector — and a failing-first run has to show these tests RED
+    against exactly such a tree. ``ModuleNotFoundError`` during collection
     is not a failure message; "EXH-A02 not caught" is. So the absent detector
     degrades to "finds nothing", every catch assertion fails with the case it
     missed, and the benign assertions pass vacuously, which is what
@@ -248,9 +248,8 @@ def test_aspectual_continuation_is_not_a_non_termination_claim():
 # that blindness is the whole reason "0 / 190" is worth quoting. It is also
 # exactly why it CANNOT see this class: it holds 656 leaf key/value pairs, twelve
 # booleans and no integer zeros, so a detector can read `limit_reached: False` as
-# a removed ceiling and still score a clean 0/190. G2 shipped in 1.14.0 flagging
-# 11 of these 50 with 0/190 green over it; G4 as first written flagged 12 of 50
-# with 0/190 and 0/628 green over it. Same blindness, same green suite, twice.
+# a removed ceiling and still score a clean 0/190. A detector can flag a dozen
+# of these 50 with 0/190 and 0/628 green over it: the blind pools cannot tell.
 #
 # The two ALLOWED entries are a residual, not an exemption. `retention: "forever"`
 # on an archive bucket and `expires: "never"` on a perpetual licence are real

@@ -1,14 +1,13 @@
 """SQL carried in a tool argument: classification, the block/classify split, and
 the false positives the split exists to avoid.
 
-THE GAP THIS CLOSES. An independent reviewer published
-``scan_tool_call("run_sql", {"query": "DROP TABLE users"})`` returning
-allowed / 0.00. That was accurate. Destructive classification read shell
-structure only, so it recognised ``psql -c "DROP TABLE users"`` (a binary with a
-recognisable argument) and was blind to ``DROP TABLE users`` (no binary at all).
-The argument KEY was never the gate and neither was the tool name: before this
-change ``run_command(command="DROP TABLE users")`` was equally invisible. What
-was missing was a reader for SQL, not a wider key list.
+WHY SQL IS READ AS SQL. ``scan_tool_call("run_sql", {"query": "DROP TABLE users"})``
+carries no shell binary. A destructive classifier that read shell structure only
+would recognise ``psql -c "DROP TABLE users"`` (a binary with a recognisable
+argument) and see nothing in ``DROP TABLE users`` (no binary at all). The
+argument KEY is not the gate and neither is the tool name:
+``run_command(command="DROP TABLE users")`` must classify the same way. What
+this takes is a reader for SQL, not a wider key list.
 
 THE SPLIT UNDER TEST, and it is the whole design:
 
@@ -71,12 +70,12 @@ def _quiet(fn, *a, **k):
         return fn(*a, **k)
 
 
-# ══ (a) THE REVIEWER'S REPRODUCER ════════════════════════════════════════════
+# ══ (a) A BARE DDL STATEMENT ═════════════════════════════════════════════════
 
 def test_the_published_reproducer_is_no_longer_invisible():
-    """The exact call from the report. It does not block, and that is the
-    designed answer, but it must no longer be UNCLASSIFIED: a policy has to be
-    able to reach it."""
+    """A bare DDL statement in a SQL tool. It does not block, and that is the
+    designed answer, but it must be CLASSIFIED: a policy has to be able to
+    reach it."""
     s = _sensor("block")
     r = _quiet(s.scan_tool_call, "run_sql", {"query": "DROP TABLE users"})
     assert classify("run_sql", {"query": "DROP TABLE users"}) == (
@@ -357,12 +356,12 @@ def test_a_pathological_value_stays_inside_the_budget():
 def test_a_semicolon_heavy_blob_does_not_explode():
     """Bounded work, AND the bound is reported.
 
-    The count assertion moved from `<= 32` to `<= 32 + the markers` when the caps
-    were made fail-closed. Parsed STATEMENTS are still capped at 32 -- that is
-    what keeps the work bounded -- but parse_sql now appends an `unparsed` shape
-    naming each bound that fired, because a short list was indistinguishable from
-    a short input and that was a measured bypass. Asserting the parsed statements
-    separately from the markers keeps both properties pinned.
+    The count assertion is `<= 32 + the markers`, because the caps fail closed.
+    Parsed STATEMENTS are capped at 32 -- that is what keeps the work bounded --
+    and parse_sql appends an `unparsed` shape naming each bound that fired,
+    because without it a short list would be indistinguishable from a short
+    input, and padding could hide a statement past the cap. Asserting the parsed
+    statements separately from the markers keeps both properties pinned.
     """
     from xaidr.scanner.sql_parse import UNPARSED_STATEMENT
 

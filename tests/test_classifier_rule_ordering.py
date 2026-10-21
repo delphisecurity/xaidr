@@ -7,16 +7,16 @@ decide whether a segment blocks at all. A `detect` added to a rule that a
 broader rule already shadows is dead code, and a coverage gate measured against
 it measures nothing.
 
-The escalate family documented this discipline and followed it (`escalate.
-setuid_bit` ahead of the general `escalate.privileged_wrapper`). The exec family
-was ordered the other way round, so three rules were unreachable for exactly the
-commands that motivated them:
+The escalate family follows this discipline (`escalate.setuid_bit` ahead of
+the general `escalate.privileged_wrapper`), and so must the exec family: ordered
+the other way round, three rules would be unreachable for exactly the commands
+that motivate them:
 
-    perl -e 'system("id")'          interpreter_payload shadowed code_in_args
-    socat exec:'bash -li' …         tool_exec_flag      shadowed remote_shell
-    exec /bin/bash                  bare_shell          shadowed wrapper_exec
+    perl -e 'system("id")'          interpreter_payload would shadow code_in_args
+    socat exec:'bash -li' …         tool_exec_flag      would shadow remote_shell
+    exec /bin/bash                  bare_shell          would shadow wrapper_exec
 
-These tests pin the fix so a future insertion cannot silently re-shadow. They
+These tests pin the order so a future insertion cannot silently shadow. They
 assert on the RULESET's order and on the winner for a witness command, not on
 scores — reordering classify-only rules must never move a score, and
 tests/test_shell_classes_stage3.py already holds that line.

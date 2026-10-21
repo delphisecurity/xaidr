@@ -1,28 +1,24 @@
-"""URL carried in a tool argument: the metadata-endpoint bypass, and the
-block/classify split the address measurement forces.
+"""URL carried in a tool argument: every spelling of the metadata endpoint, and
+the block/classify split the address measurement forces.
 
-THE BUG THIS CLOSES. ``SHELL_cloud_metadata_credentials`` was the only URL rule
-in the product, and it reached tool arguments by accident. Its alternation
+WHY A STRING RULE IS NOT ENOUGH. A shell rule whose alternation
 
     \\b(?:curl|wget|fetch|http|httpie|nc|ncat|python\\d?|node|ruby|perl)\\b …
 
-was written to name the HTTPie binary ``http``. What satisfied it in
-``http_get(url="http://169.254.169.254/…")`` was the literal SCHEME — ``http``
-followed by ``:``, and ``:`` is a word boundary. The accident was one character
-wide, because ``https`` has no word boundary after ``http``:
+names the HTTPie binary ``http`` reaches a tool argument only by accident. What
+would satisfy it in ``http_get(url="http://169.254.169.254/…")`` is the literal
+SCHEME — ``http`` followed by ``:``, and ``:`` is a word boundary. The accident
+is one character wide, because ``https`` has no word boundary after ``http``:
+the ``http://`` form matches and the ``https://`` form does not. Across fifteen
+spellings of that ONE address, such a rule misses nine: https, gopher, file,
+no-scheme, hex, decimal, octal, and the IPv6 unique-local form.
 
-    http://169.254.169.254/latest/meta-data/     blocked 0.90
-    https://169.254.169.254/latest/meta-data/    allowed 0.00
-
-Measured across fifteen spellings of that ONE address, nine were allowed: https,
-gopher, file, no-scheme, hex, decimal, octal, and the IPv6 unique-local form.
-
-WHY THIS IS NOT A REPAIRED REGEX. Adding ``https`` to the alternation would have
-kept the design that produced the bug — a list of spellings, where every form
-nobody wrote down is a bypass. ``0xA9FEA9FE``, ``2852039166``,
-``0251.0376.0251.0376`` and ``[::ffff:169.254.169.254]`` are all the same
-destination, and a string list can only ever know the one someone typed. The rule
-is now about the ADDRESS RANGE, decided by ``urlsplit`` + ``ipaddress``.
+WHY NOT A LONGER REGEX. Adding ``https`` to the alternation would keep the
+design that is the problem — a list of spellings, where every form nobody wrote
+down is a bypass. ``0xA9FEA9FE``, ``2852039166``, ``0251.0376.0251.0376`` and
+``[::ffff:169.254.169.254]`` are all the same destination, and a string list can
+only ever know the one someone typed. The rule is about the ADDRESS RANGE,
+decided by ``urlsplit`` + ``ipaddress``.
 
 THE SPLIT UNDER TEST, and it is the whole design:
 
@@ -76,10 +72,10 @@ def _scan(sensor, tool, args):
         return sensor.scan_tool_call(tool, args)
 
 
-# ── the bypass: every spelling of one address ────────────────────────────────
-# THE central table. Each of these is the SAME destination; nine of the fifteen
-# were allowed before this change, and the two that were not blocked by design —
-# they were blocked because the string `http:` happened to satisfy a binary-name
+# ── every spelling of one address ────────────────────────────────────────────
+# THE central table. Each of these is the SAME destination and gets the same
+# verdict. A spelling list would miss nine of the fifteen, and would catch some
+# of the rest only because the string `http:` happens to satisfy a binary-name
 # alternation.
 
 METADATA_FORMS = [
@@ -110,7 +106,7 @@ def test_every_metadata_form_blocks(sensor, name, url):
 
 
 def test_the_scheme_is_not_what_decides(sensor):
-    """The exact one-character bypass, pinned. http and https are the same fact."""
+    """The one-character scheme difference, pinned. http and https are the same fact."""
     http = _scan(sensor, "http_get", {"url": "http://169.254.169.254/latest/meta-data/"})
     https = _scan(sensor, "http_get", {"url": "https://169.254.169.254/latest/meta-data/"})
     assert http.action == https.action == "blocked"

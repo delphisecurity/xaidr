@@ -1,4 +1,4 @@
-"""F6 — A2A structural enforcement must reach messages nested in task containers.
+"""A2A structural enforcement must reach messages nested in task containers.
 
 THE DEFECT. ``A2AStructuralValidator`` read only the top-level message
 (``params.message``, a bare Message, or a ``result`` that IS a Message). A2A also

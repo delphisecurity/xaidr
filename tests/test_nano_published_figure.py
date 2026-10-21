@@ -1,12 +1,12 @@
 """Pin the nano model's DECISIONS around the operating point, not its containment.
 
 WHY THIS FILE EXISTS. ``test_nano_containment.py`` runs against the real artifact
-and passes 43/43 while the published false-positive figure is wrong by a factor
+and can pass 43/43 while a published false-positive figure is wrong by a factor
 of two, because it asserts what nano CANNOT do (never block, never exceed the
-flag band) and never asserts what it DOES. That is how a runtime change moved the
-rate from 35/2000 to 67/2000 with a green suite the whole way.
+flag band) and never asserts what it DOES. A runtime change can move the rate
+from 35/2000 to 67/2000 with a green suite the whole way.
 
-The smallest thing that would have caught it is here: a fixed set of prompts that
+The smallest thing that catches it is here: a fixed set of prompts that
 STRADDLE the operating point, each asserting which side it lands on. Straddling is
 the whole design. A prompt at 9e-08 and a prompt at 7e-11 are both far below
 ``NANO_T_OP`` and both stay below it across every runtime measured — pinning those
@@ -30,8 +30,8 @@ because that is the thing that moves them. Measured over these 20 prompts:
 Three prompts change side across that range, so all three runtimes are calibrated
 here and all three pass. A runtime with NO calibration — 1.25, 1.30, anything
 unmeasured — is a FAILURE and not a skip, because silently passing on an
-unmeasured runtime is the exact behaviour that let 1.85% ship against the wrong
-one.
+unmeasured runtime is exactly how a published rate ends up measured against the
+wrong one.
 
 PROVEN NON-VACUOUS, not assumed. Running on onnxruntime 1.26.0 with the 1.29
 calibration forced:

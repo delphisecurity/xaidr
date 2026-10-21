@@ -1,11 +1,11 @@
-"""A-9 (widened json.loads catches) + A-5 (received-A2A direction) guards.
+"""Widened json.loads catches and received-A2A direction guards.
 
-A-9: looks_like_a2a and the A2A field extractor must not propagate a json.loads
+looks_like_a2a and the A2A field extractor must not propagate a json.loads
 fault (e.g. RecursionError on a runtime whose json raises at depth) — the
 "never raises" guarantee must not depend on the runtime. BaseException must
 still propagate (not over-widened).
 
-A-5: a RECEIVED A2A message maps to interaction.direction "inbound"; a SENT one
+A RECEIVED A2A message maps to interaction.direction "inbound"; a SENT one
 to "outbound".
 """
 import json
@@ -23,7 +23,7 @@ A2A_ENVELOPE = (
 )
 
 
-# ── A-9 ──────────────────────────────────────────────────────────────────────
+# ── A2A json.loads handling ──────────────────────────────────────────────────
 
 def test_looks_like_a2a_survives_json_recursionerror(monkeypatch):
     monkeypatch.setattr(json, "loads",
@@ -54,7 +54,7 @@ def test_normal_a2a_still_detected():
     assert is_a2a and isinstance(parsed, dict)
 
 
-# ── A-5 ──────────────────────────────────────────────────────────────────────
+# ── received-A2A direction ───────────────────────────────────────────────────
 
 def test_received_a2a_maps_to_inbound():
     out = to_openA2A({"direction": "a2a_inbound", "action": "allowed", "score": 0.0})

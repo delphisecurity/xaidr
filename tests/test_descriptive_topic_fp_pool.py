@@ -23,9 +23,8 @@ a candidate that only moves the in-sample number has reproduced the defect.
 
 The engineering detail behind all of this — which signals interact, in what
 order, and what each rejected candidate actually did — is deliberately not in
-this file, and not anywhere in this repository. It is in the private
-`delphisecurity/xaidr-internal` repository under `detection/`. If you are about
-to change this area, read it there first.
+this file, and not anywhere in this repository. It is kept privately by the
+maintainers; if you are about to change this area, ask for it first.
 
 THIS FILE ASSERTS ONLY WHAT SHOULD BE TRUE:
   * every entry really is at risk, or is recorded as not-at-risk with its reason

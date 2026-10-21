@@ -7,8 +7,8 @@ that cost could not be measured at all.
 
 ## Why this corpus
 
-The A2A structural validator used to read only the top-level message. Reaching
-nested messages means walking attacker-controlled structure and scanning
+A structural validator that reads only the top-level message is the cheap
+design. Reaching nested messages means walking attacker-controlled structure and scanning
 strictly more values, which is strictly more chances to misfire. The obvious
 move is to measure the delta on the committed benign pools.
 
@@ -24,8 +24,9 @@ A2AStructuralValidator.validate calls : 0
 
 The 42 items those pools send through `scan_a2a` are **plain text**. The body
 never parses to a dict, so the structural layer never runs. A false-positive
-delta of zero across every committed pool — which is what this change measures,
-all 1139 `corpus_diff` rows byte-identical — says nothing about this code,
+delta of zero across every committed pool — which is what walking nested
+containers measures there, all 1139 `corpus_diff` rows byte-identical — says
+nothing about this code,
 because none of those rows reach it.
 
 That is the blind-population problem: a gate that passes on a population the
@@ -107,8 +108,9 @@ BENIGN NESTED A2A GATE: PASS   gate: structural FP must be 0, got 0
 ```
 
 **274 nodes walked, 99 of them Messages and Artifacts.** That number is the
-point: the pre-change validator reached 60 of them (one top-level object per
-body). The gate is measured on the population the change actually altered.
+point: a top-level-only validator reaches 60 of them (one top-level object per
+body). The gate is measured on the population that nested walking actually
+reaches.
 
 `tests/test_f6_a2a_nested_containers.py` asserts both halves — that every entry
 is clean, and that the corpus still reaches at least 90 message/artifact nodes.

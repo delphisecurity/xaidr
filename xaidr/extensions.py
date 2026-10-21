@@ -1,9 +1,9 @@
-"""SensorExtension — the one seam an enterprise package plugs into.
+"""SensorExtension — the one seam an extension package plugs into.
 
-WHY ONE OBJECT AND NOT FIFTEEN CALLABLES. Paid behaviour that open lacks has to
+WHY ONE OBJECT AND NOT FIFTEEN CALLABLES. Behaviour an extension adds has to
 attach somewhere. Fifteen separate ``on_x=`` constructor kwargs would be fifteen
-independently-validated, independently-documented surfaces, and the ADV-2
-failure class says what happens to a security control handed something it does
+independently-validated, independently-documented surfaces, and the
+loud-validation rule says what happens to a security control handed something it does
 not understand: it is ignored, quietly, and the deployment believes it is
 protected. So there is one object, it is validated by ``isinstance`` at
 construction, and a bad one raises.
@@ -43,12 +43,12 @@ THE FOUR RULES THIS MODULE ENCODES:
 WHAT THE VIEWS DO NOT CARRY. Nothing here hands an extension the raw prompt
 beyond what the hook already receives as the scan input (``ScanRequest.text``,
 which the scan already has). Destinations are host-only; tool arguments and
-response bodies are hashed. The enterprise reporter's ``capture_content``
-default-``False`` is enterprise config, not an open seam.
+response bodies are hashed. Whether an extension's own reporter captures
+content is that extension's configuration, not a seam here.
 
 Only S1 (attach), S5 (gate chain) and S6 (verdict transform) are wired today.
 The remaining hooks are declared here rather than added one per PR so the public
-contract stops moving: an enterprise package written against this class does not
+contract stops moving: an extension package written against this class does not
 have to re-subclass every time another seam lands.
 """
 
@@ -128,9 +128,9 @@ class ResponseView:
 class DestinationView:
     """An egress destination, for S10/S12. HOST ONLY — never the URL or query.
 
-    The host-only ``dest_id`` is the same value the open sensor emits. The three
-    enterprise ``print`` statements that leaked full URLs do not come across;
-    this is deliberately the only destination shape a seam can see.
+    The host-only ``dest_id`` is the same value the sensor emits. This is
+    deliberately the only destination shape a seam can see: no full URL, no
+    path, no query.
     """
 
     host: Optional[str] = None
@@ -169,7 +169,7 @@ class SensorExtension:
 
         A fault here RAISES out of the constructor. An extension that cannot
         attach has not degraded, it has failed to install, and a deployment that
-        believes it installed an enterprise control it did not have is the
+        believes it installed a control it did not have is the
         failure this whole module exists to prevent.
 
         The sensor also logs the failure at ERROR on the way out, so a host that
@@ -197,8 +197,8 @@ class SensorExtension:
     def transform_verdict(self, req: "ScanRequest", result: Any) -> Any:
         """Last look at the verdict, AFTER telemetry and the breaker have seen it.
 
-        This is the seam for a fleet-driven mode (the Brain says this deployment
-        is ``watch``). It may only move a verdict TOWARD ``allowed``: returning
+        This is the seam for a fleet-driven mode (a remote control plane says
+        this deployment is ``watch``). It may only move a verdict TOWARD ``allowed``: returning
         something stricter than it received raises, because a strengthening
         transform would bypass the breaker and the telemetry record of the true
         verdict. Strengthening is what ``gate`` is for.

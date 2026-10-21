@@ -9,13 +9,14 @@ WHY THIS EXISTS. The ASI03 row of README.md's OWASP table publishes:
     it fires on **14 of the battery's 48 tool-call steps** (30 whole
     `tool_call` cases plus the 18 tool-call steps inside `sequence` cases)
 
-Three figures — 14, 48, and the 30 + 18 that make up the 48 — and until this
-script none of them had a regenerator. `scripts/asi_battery_report.py` measures
+Three figures — 14, 48, and the 30 + 18 that make up the 48 — and this script
+is their only regenerator. `scripts/asi_battery_report.py` measures
 whole CASES at their own boundary and stops a sequence at its first detection,
 so it cannot produce this ratio even in principle: a sequence caught at step 1
 never has its later tool-call steps scanned, and a tool-call step that fires
-inside a case some other rule already caught is invisible to it. The number was
-therefore not recomputable from anything in the tree, which is what U-1 forbids.
+inside a case some other rule already caught is invisible to it. Without this
+script the number would not be recomputable from anything in the tree, which is
+what the release rule forbids: no published figure without a regenerator.
 
 It is also the LAST figure in that row without one. The same sentence's "0 of
 190" and "0 of 50" come from `benign_toolcall_report.py`, the "24 of 120" from
@@ -34,11 +35,11 @@ keep that readable: the detector is not aimed at the other 34 and does not fire
 on them. A denominator that quietly became "the ones we expected to fire" would
 turn a 14/48 reach claim into a 14/14 tautology.
 
-UNAFFECTED BY THE F9 RELABELLING, and this script is how that is checkable
-rather than assertable. F9 moved 28 cases between categories without editing any
-`tool` or `args`, so a whole-battery step count over all categories cannot move.
-The per-category breakdown below shows the labels; the total does not depend on
-them.
+UNAFFECTED BY THE OWASP RELABELLING, and this script is how that is checkable
+rather than assertable. The relabelling moved 28 cases between categories
+without editing any `tool` or `args`, so a whole-battery step count over all
+categories cannot move. The per-category breakdown below shows the labels; the
+total does not depend on them.
 
 Standard library + `xaidr`. No sensor is built, no policy is bound, no network.
 """

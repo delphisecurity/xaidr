@@ -299,8 +299,13 @@ def reconstruct(text: str) -> str:
     text, which is why ``rm -rf /`` blocks and ``r''m -r''f /`` scores nothing.
     Feeding this reconstruction through the same rules closes that gap without
     writing a single new obfuscation pattern: the tokenizer does the work, so
-    ``$IFS``-splitting, empty-string splicing and mixed quoting all collapse to
-    the same canonical form.
+    empty-string splicing and mixed quoting all collapse to the same canonical
+    form.
+
+    It does not expand the shell: ``shlex`` removes quotes, it does not
+    word-split ``$IFS``, resolve a variable, or run a substitution. Those
+    expansion-time rewrites belong to ``scanner.canonicalize``;
+    ``test_canonicalize`` pins the split.
 
     Two properties matter, both about NOT inventing an attack:
 

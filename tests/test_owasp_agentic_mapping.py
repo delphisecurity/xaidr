@@ -1,14 +1,14 @@
 """The OWASP Agentic Top 10 table and its probe harness must not drift apart.
 
-WHY THIS FILE EXISTS. The previous ASI01-ASI10 mapping was written by hand
-against xaidr 1.2.1 and then went stale in place. Nothing re-ran it, so by 1.10.0
-it was quietly wrong in three places: the cloud-metadata rule had been rewritten
-around address ranges (so the https, hex and decimal spellings that the mapping
-recorded as bypasses now block), the descriptive-frame calibration had changed
-(so payloads the mapping recorded as dampened to `flagged` now block), and one
-intent rule had been recalibrated from block to flag in the other direction. A
-published coverage claim that no longer matches what the sensor returns is worse
-than no claim at all, and worse specifically for the reader it is aimed at: a
+WHY THIS FILE EXISTS. An ASI01-ASI10 mapping written by hand goes stale in
+place: nothing re-runs it, so rule changes quietly make it wrong. Three kinds of
+change do that: a rule rewritten around address ranges (so the verdict a
+mapping records for a cloud-metadata spelling, such as https, hex or decimal
+addresses, changes), a changed descriptive-frame calibration (so payloads the
+mapping records as dampened to `flagged` now block), and an intent rule
+recalibrated from block to flag in the other direction. A published coverage
+claim that no longer matches what the sensor returns is worse than no claim at
+all, and worse specifically for the reader it is aimed at: a
 CISO reading ASI01-ASI10 as a procurement checklist.
 
 So the table is not allowed to be prose any more. Three things are pinned:
@@ -28,13 +28,13 @@ evidence. That is a judgement, it is re-argued when the evidence moves, and a
 test that tried to derive it would be inventing the certainty this whole table
 exists to avoid.
 
-WHAT F9 ADDED, and why it was not here before. The three sections above pin the
-probe, the table and the verdicts. They never pinned what a CATEGORY MEANS, and
-they never read `asi_battery/` at all. So when the held-out battery took its
-category definitions from this repo's rule labels instead of from OWASP, and two
-of those labels named the wrong risk, every test in this file stayed green: the
-battery was outside its universe, and a title is not a verdict. The battery
-published a 75% catch rate for "ASI04" measured entirely on resource-exhaustion
+WHAT SECTION 4 ADDS. The three sections above pin the probe, the table and the
+verdicts. They do not pin what a CATEGORY MEANS, and they do not read
+`asi_battery/` at all. So if the held-out battery takes its category
+definitions from this repo's rule labels instead of from OWASP, and a label
+names the wrong risk, every test in those sections stays green: the battery is
+outside their universe, and a title is not a verdict. A battery doing that can
+publish a 75% catch rate for "ASI04" measured entirely on resource-exhaustion
 cases, while official ASI04 is Agentic Supply Chain. Section 4 closes that: the
 official titles are pinned from the published source, the battery's own
 definition table must quote them, every category the battery data carries must
@@ -70,7 +70,7 @@ BATTERY_RESULTS = os.path.join(BATTERY, "RESULTS.md")
 #:
 #: This is the source of truth for what a category IS. It is not derived from
 #: `xaidr/rules/*.json`, from the probe, or from either README -- deriving it
-#: from any of those is precisely the mistake (F9) this constant exists to stop.
+#: from any of those is precisely the mistake this constant exists to stop.
 #: `&` is written `and` here; comparison normalises the two.
 OFFICIAL_TITLES = {
     "ASI01": "Agent Goal Hijack",
@@ -108,10 +108,9 @@ def _load_harness():
     writes and then trusts ``scripts/__pycache__/*.pyc``, keyed on the source's
     mtime and size. Editing this harness and running the test inside the same
     second can leave both unchanged, at which point the loader serves the
-    PREVIOUS bytecode and the test reports on code that is no longer on disk.
-    Observed while checking that this test can fail: a reverted edit kept
-    failing because the .pyc still held it. A guard against stale claims that
-    can itself read a stale file is not a guard.
+    PREVIOUS bytecode and the test reports on code that is no longer on disk:
+    a reverted edit keeps failing because the .pyc still holds it. A guard
+    against stale claims that can itself read a stale file is not a guard.
     """
     with open(SCRIPT, encoding="utf-8") as fh:
         source = fh.read()
@@ -317,7 +316,7 @@ def test_the_structural_reason_is_stated(readme_rows, asi, needle):
     assert needle in row, f"{asi}'s row no longer states: {needle!r}"
 
 
-# ── 4. the categories mean what OWASP says they mean (finding F9) ────────────
+# ── 4. the categories mean what OWASP says they mean ─────────────────────────
 
 
 @pytest.fixture(scope="module")
@@ -346,7 +345,7 @@ def _section(text, heading):
 
     Tables are parsed per section rather than per file. `asi_battery/README.md`
     holds three tables whose first column is an ASI id -- definitions, counts,
-    and the F9 case-id map -- and a file-wide regex reads whichever it reaches
+    and the case-id map -- and a file-wide regex reads whichever it reaches
     first. That is how the definition check first "passed" against the count
     table and reported ASI01 as being defined as `12`.
 
@@ -362,8 +361,7 @@ def _section(text, heading):
             "this test reads does not exist. The battery's category "
             "definitions and its per-category case counts are published in "
             "those two sections and pinned from them; deleting one puts the "
-            "labels or the denominators back to unchecked, which is the state "
-            "finding F9 found them in."
+            "labels or the denominators back to unchecked."
         )
     end = text.find("\n## ", start + len(heading))
     return text[start:] if end == -1 else text[start:end]
@@ -404,14 +402,13 @@ def test_the_readme_table_titles_are_the_official_owasp_titles(readme_rows):
 
 @pytest.mark.asi_battery
 def test_the_battery_quotes_the_official_definitions(battery_readme):
-    """THE ONE THAT WOULD HAVE CAUGHT F9.
+    """THE GATE ON OFFICIAL CATEGORY DEFINITIONS.
 
     `asi_battery/README.md` carries the table of category definitions the cases
-    were written against. Before F9 that table was derived from this repo's rule
-    labels and read, for ASI04, "resource overload / denial-of-service /
-    denial-of-wallet" -- a real phenomenon, but not the risk OWASP numbers
-    ASI04, and twelve cases were written to it. Nothing in this file looked at
-    that table, so nothing failed.
+    are written against. A table derived from this repo's rule labels would
+    read, for ASI04, "resource overload / denial-of-service / denial-of-wallet"
+    -- a real phenomenon, but not the risk OWASP numbers ASI04 -- and cases
+    written to it would measure the wrong risk with nothing failing.
 
     What is checked is the DEFINITION, not the cases. Whether a case tests its
     category is a judgement (see this module's docstring). Whether the
@@ -462,7 +459,7 @@ def test_every_battery_category_is_an_owasp_id_or_a_declared_exception(
 
 @pytest.mark.asi_battery
 def test_the_published_case_counts_equal_the_files(battery_cases, battery_readme):
-    """Rule (d) of F9: no quietly smaller denominator.
+    """Rule (d) of section 4: no quietly smaller denominator.
 
     The relabelling left ASI03 at 11 cases, ASI04 at 3 and ASI09 at 1. A rate
     over 3 is not the same claim as a rate over 12, and the way that goes wrong

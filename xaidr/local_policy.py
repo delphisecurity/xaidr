@@ -20,6 +20,9 @@ Composition (policy-as-overlay, STRICTER WINS):
 
 Fail-safe: a malformed policy file logs a warning and falls through to
 detection-only. A policy error never crashes the agent and never blocks-all.
+A malformed policy passed to ``set_policy()`` is refused and the policy already
+in force keeps enforcing (keep-last-good, see ``adopt_policy``). A policy file
+with a duplicate YAML key is refused rather than keeping the last value.
 
 Policy YAML format (mirrors the engine's action_policy structure)::
 
@@ -59,7 +62,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from .authz.policy import (
     AuthzDecision,
@@ -84,6 +87,36 @@ _SEVERITY = {
     "block": 3,
     "blocked": 3,
 }
+
+
+def _unique_key_loader(yaml):
+    """A SafeLoader that refuses a mapping with two equal keys.
+
+    Every key written in the file is then the one the policy is built from.
+    Keys introduced by a YAML merge (`<<: *anchor`) are not counted, since
+    overriding a merged key is what a merge is for.
+    """
+    class _UniqueKeySafeLoader(yaml.SafeLoader):
+        def construct_mapping(self, node, deep=False):
+            seen = set()
+            for key_node, _ in getattr(node, "value", ()):
+                if key_node.tag == "tag:yaml.org,2002:merge":
+                    continue
+                key = self.construct_object(key_node, deep=deep)
+                try:
+                    duplicate = key in seen
+                except TypeError:
+                    continue  # unhashable; the base constructor reports it
+                if duplicate:
+                    raise yaml.constructor.ConstructorError(
+                        "while constructing a mapping", node.start_mark,
+                        f"found duplicate key {key!r}; each key may appear "
+                        "once per mapping", key_node.start_mark,
+                    )
+                seen.add(key)
+            return super().construct_mapping(node, deep=deep)
+
+    return _UniqueKeySafeLoader
 
 
 def load_policy(
@@ -115,7 +148,7 @@ def load_policy(
 
     try:
         with open(path, "r", encoding="utf-8") as fh:
-            raw = yaml.safe_load(fh)
+            raw = yaml.load(fh, Loader=_unique_key_loader(yaml))  # noqa: S506 - SafeLoader subclass
     except FileNotFoundError:
         logger.warning("[xaidr] policy file not found: %s (detection-only)", path)
         return None
@@ -142,15 +175,48 @@ def set_policy_dict(
 ) -> Optional[dict]:
     """Parse a policy supplied programmatically as a dict. Fail-safe (None on bad).
 
-    Takes `extra_conditions` for the same reason `load_policy` does: this backs
-    the public `Sensor.set_policy()`, so a policy set at RUNTIME must accept the
-    same extension-supplied condition names a policy FILE would. The seam design
-    named only `load_policy`; the grep found this one too.
+    Takes `extra_conditions` for the same reason `load_policy` does: a policy
+    set at RUNTIME must accept the same extension-supplied condition names a
+    policy FILE would. `Sensor.set_policy()` goes through `adopt_policy`, which
+    forwards them the same way; this function has no caller in the sensor.
     """
     policy = parse_action_policy(raw, extra_conditions=extra_conditions)
     if policy is None:
-        logger.warning("[xaidr] set_policy: malformed policy ignored (detection-only)")
+        logger.warning("[xaidr] set_policy: malformed policy refused")
     return policy
+
+
+def adopt_policy(
+    raw: Any,
+    *,
+    in_force: Callable[[], Optional[dict]],
+    extra_conditions: Optional[Mapping[str, Any]] = None,
+) -> Optional[dict]:
+    """Parse `raw` and return the policy to install, or None to install nothing.
+
+    KEEP-LAST-GOOD. The candidate is parsed in full before anything changes.
+    An accepted candidate is installed by the caller with a single assignment,
+    which is the atomic swap. A refused one returns None and the caller writes
+    nothing, so whatever is in force when the refusal lands, including a
+    policy set or cleared by another thread during the parse, stays in force.
+    ``in_force`` is read only to report what stayed in force.
+    """
+    parsed = parse_action_policy(raw, extra_conditions=extra_conditions)
+    if parsed is not None:
+        return parsed
+    current = in_force()
+    if current is not None:
+        logger.error(
+            "[xaidr] set_policy: policy REFUSED; the previous policy remains in "
+            "force (%d rules). The error above names the field.",
+            len(current.get("rules", [])),
+        )
+    else:
+        logger.error(
+            "[xaidr] set_policy: policy REFUSED; no policy was in force, so the "
+            "sensor stays detection-only. The error above names the field.",
+        )
+    return None
 
 
 def evaluate_policy(

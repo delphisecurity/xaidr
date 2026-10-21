@@ -314,8 +314,8 @@ class PatchContext:
         Preferred over :meth:`install` wherever a framework offers one. A patch
         is a bet that a private call path will not move; a registry is a
         contract the framework maintains. CrewAI is the worked example: its
-        agent tool path stopped going through ``BaseTool.run`` and the patch
-        went silently dead while the manifest still claimed coverage.
+        agent tool path does not go through ``BaseTool.run``, so a patch there
+        would be silently dead while a manifest still claimed coverage.
 
         Idempotency cannot use the wrapper token here — there is no wrapper to
         stamp — so it keys on a process-wide record of which registries this

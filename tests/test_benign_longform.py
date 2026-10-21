@@ -102,8 +102,7 @@ def test_manifest_pins_the_generated_corpus(corpus):
     """A generated corpus nobody pins is a corpus that drifts under the README.
 
     The text is not committed (24 items, 10 100 008 characters, 10.5 MB of
-    JSONL against a 4.4 MB tracked tree — measured 2026-09-20; this said "25 MB
-    against an 8 MB repo" and both figures were wrong, see
+    JSONL against a 4.4 MB tracked tree — measured 2026-09-20, see
     `benign_longform/README.md`), so this hash check is the only thing standing
     between an edited word list and a set of published numbers that describe
     inputs which no longer exist.
@@ -236,11 +235,11 @@ def test_a_fully_read_long_document_is_NOT_refused(measured):
 def test_a_truncated_document_IS_refused(measured):
     """The other direction: an unread tail must not pass under `bounds`.
 
-    THE FLOOR HERE IS 2, AND IT USED TO BE 5. That is not a weakened gate, it is
-    the first honest count. The 5 was measured when the wall clock decided which
-    items were truncated, which on the author's machine truncated everything
-    from 150 KB up; with the clocks pinned, truncation starts at the window
-    coverage limit (~796 KB) and only the 900 KB items reach it. Of those, the
+    THE FLOOR HERE IS 2, and that is the honest count, not a weakened gate. A
+    count taken while the wall clock decides which items are truncated measures
+    the machine (a slow one truncates everything from 150 KB up); with the
+    clocks pinned, truncation starts at the window coverage limit (~796 KB) and
+    only the 900 KB items reach it. Of those, the
     ones that are also clean at the default posture are the two shapes that do
     not trip a content rule on realistic long text — see finding 2 in the
     corpus README. `test_oversized_and_tail_unread_are_different_signals` pins

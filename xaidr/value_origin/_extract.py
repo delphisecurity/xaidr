@@ -1,10 +1,10 @@
-"""The argument walk (C-8, V-11), result normalisation (V-15) and key tokens (C-3, V-8).
+"""The argument walk, result normalisation and key tokens.
 
 VALUE-BASED, NOT KEY-BASED. The argument key is ignored when deciding what is a
 destination, per ``url_parse``: "a key allowlist here would be a gate the
 attacker chooses the combination to".
 
-THE WALK, exactly (V-11). Depth-first in insertion order; a dict's KEYS are
+THE WALK, exactly. Depth-first in insertion order; a dict's KEYS are
 walked as leaves before its values; list elements in index order. Only ``str``
 counts as a leaf, including empty and whitespace-only strings; other scalars are
 ignored and not counted. The arguments mapping is the container at depth 1, so
@@ -257,13 +257,13 @@ def budgeted_atoms(strings, budget: AtomBudget):
 
 def extract_destinations(arguments: Mapping[str, object] | None
                          ) -> tuple[tuple[Finding, ...], bool]:
-    """The value-based argument walk (§6 C-8). Returns (findings, truncated).
+    """The value-based argument walk. Returns (findings, truncated).
 
     A leaf yields a finding iff its WHOLE value is one destination or a
     comma/semicolon list of mailboxes. A destination-shaped value that does not
-    parse yields ``Finding(destination=None, reason=PARSE_FAILURE)`` (V-4,
-    ruling 3.2), followed by one finding per mailbox-list part that did parse
-    (R1, 2026-10-03), so an untrusted part decides the wire; a walk that hits a
+    parse yields ``Finding(destination=None, reason=PARSE_FAILURE)`` (ruling
+    3.2), followed by one finding per mailbox-list part that did parse, so an
+    untrusted part decides the wire; a walk that hits a
     bound yields exactly one
     ``Finding(destination=None, reason=WALK_BOUND)``. Never raises: an internal
     fault is one PARSE_FAILURE finding, because an unparseable call is not a
@@ -320,7 +320,7 @@ _IO_BACKED_MODULES = frozenset({"httpx", "requests", "urllib3", "aiohttp"})
 
 
 def _normalise_result_node(node: Any) -> Any:
-    """V-15: str → leaf; Mapping/Sequence → walk; an object with a str
+    """str → leaf; Mapping/Sequence → walk; an object with a str
     ``.content`` → that content; ``model_dump()`` → its dict; a dataclass
     instance → ``asdict``; anything else → no leaves. May run host code, so it
     is only ever called OUTSIDE the ledger lock."""
@@ -343,7 +343,7 @@ def _normalise_result_node(node: Any) -> Any:
 
 def result_leaves(result: Any) -> List[str]:
     """The string leaves of a raw tool result, each capped at 65,536 chars,
-    walked with the C-8 leaf and depth bounds. Raises only on a host fault
+    walked with the argument walk's leaf and depth bounds. Raises only on a host fault
     (e.g. a ``model_dump`` that raises); the caller reports FAULT."""
     return result_leaves_bounded(result)[0]
 
@@ -376,9 +376,9 @@ def argument_value(arguments: Mapping[str, object] | None, name: str):
     return True, arguments[name]
 
 
-# ── key tokens (C-3, V-8) ────────────────────────────────────────────────────
+# ── key tokens ───────────────────────────────────────────────────────────────
 # A trailing full stop is not part of a token.
-# Exactly C-3's pattern. Unambiguous (every repetition opens with "."), so linear.
+# The specified token pattern, exactly. Unambiguous (every repetition opens with "."), so linear.
 _TOKEN_RE = re.compile(r"[\w@+-]+(?:\.[\w@+-]+)*")
 
 
@@ -388,7 +388,7 @@ def tokens(text: str) -> List[str]:
 
 def span_ngrams(text: str) -> Iterator[str]:
     """Every contiguous 1..MAX_KEY_TOKENS token n-gram of ONE span, joined by a
-    single space. A span boundary is a token boundary (V-8e): the caller calls
+    single space. A span boundary is a token boundary: the caller calls
     this per span."""
     toks = tokens(text)
     for i in range(len(toks)):
@@ -399,7 +399,7 @@ def span_ngrams(text: str) -> Iterator[str]:
 
 
 def key_ngram(value: Any):
-    """V-8 (a)-(d): the normalised n-gram a key value must equal, or None when
+    """The normalised n-gram a key value must equal, or None when
     the key can never be authorized by a principal n-gram."""
     if isinstance(value, bool):
         return None

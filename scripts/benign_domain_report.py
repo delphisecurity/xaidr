@@ -3,15 +3,17 @@
 
     python scripts/benign_domain_report.py
 
-WHY THIS EXISTS (audit finding F7). The privilege-action and removed-bound
-detectors were tuned against five agent personas — support, devops, data,
-research, finance — and every committed benign tool-call pool contains only
-those five. `benign_toolcalls/corpus.jsonl` is 190 calls across the five;
-`discriminator.jsonl` is 50 more, on detector AXES but still inside the five;
-`asi_battery/benign.jsonl` is a register-matched mirror of the attacks, which is
-narrower again. So "0 / 190" answered a question nobody had asked outside
-devops: it measured whether the detectors separate two VALUES under one key, and
-never whether the KEY means the same thing in another industry.
+Reports how structural tool-argument detectors score benign off-persona calls.
+
+The privilege-action and removed-bound detectors were tuned against five agent
+personas — support, devops, data, research, finance — and every committed
+benign tool-call pool contains only those five. `benign_toolcalls/corpus.jsonl`
+is 190 calls across the five; `discriminator.jsonl` is 50 more, on detector
+AXES but still inside the five; `asi_battery/benign.jsonl` is a register-matched
+mirror of the attacks, which is narrower again. So "0 / 190" answered a question
+nobody had asked outside devops: it measured whether the detectors separate two
+VALUES under one key, and never whether the KEY means the same thing in another
+industry.
 
 `benign_toolcalls/domains.jsonl` is 120 production-shaped benign calls from six
 domains none of the detectors ever saw: legal document management, game state,
@@ -41,8 +43,8 @@ from collections import defaultdict
 
 # ── which xaidr answered? ────────────────────────────────────────────────────
 # This script publishes the per-domain table quoted in README.md and
-# docs/privilege-tiers.md, so it is a U-1 regenerator and owes the same answer
-# as its ten siblings: `bind` puts the repo root on sys.path (the default, and
+# docs/privilege-tiers.md, so it is a published figure's regenerator and owes
+# the same answer as its ten siblings: `bind` puts the repo root on sys.path (the default, and
 # what every committed figure here was measured against), prints the resolved
 # path and version FIRST, and under XAIDR_FROM_INSTALL=1 leaves sys.path alone
 # and refuses a source tree. See scripts/_provenance.py.
@@ -104,8 +106,8 @@ DOMAIN_RESIDUAL = {
     "EDU-19": ("word-is-the-work", "'monitoring' is a remote webcam proctor, off in person"),
 }
 
-#: The mechanisms F7 fixed, each with the ids it silenced. Reported so the run
-#: shows what the narrowing bought, not only what is left.
+#: The narrowed mechanisms, each with the ids its narrowing silences. Reported so
+#: the run shows what the narrowing bought, not only what is left.
 FIXED = [
     ("concealment with no grant in the call (privilege_action predicate 5)",
      ["GAM-08", "MED-01", "HLT-15", "EDU-03"]),
@@ -161,7 +163,7 @@ def main():
     per, fps = _domain_table(s, pool)
 
     print(_rule("="))
-    print("BENIGN TOOL CALLS FROM OUTSIDE THE FIVE TUNED PERSONAS  (audit F7)")
+    print("BENIGN TOOL CALLS FROM OUTSIDE THE FIVE TUNED PERSONAS")
     print(_rule("="))
     print(f"pool     : {len(pool)} tool calls, {len(DOMAINS)} domains "
           f"(benign_toolcalls/domains.jsonl)")
@@ -211,7 +213,7 @@ def main():
         print()
 
     print(_rule("="))
-    print("2. WHAT THE F7 NARROWINGS SILENCED")
+    print("2. WHAT THE DOMAIN NARROWINGS SILENCED")
     print(_rule("="))
     for name, ids in FIXED:
         still = [i for i in ids
@@ -231,7 +233,7 @@ def main():
         ("benign_toolcalls/corpus.jsonl", "benign_toolcalls/corpus (5 personas)", "0"),
         ("benign_toolcalls/discriminator.jsonl", "benign_toolcalls/discriminator", "2"),
         ("benign_toolcalls/sql_dml.jsonl", "benign_toolcalls/sql_dml", "0"),
-        ("benign_toolcalls/domains.jsonl", "benign_toolcalls/domains (F7, new)",
+        ("benign_toolcalls/domains.jsonl", "benign_toolcalls/domains (6 domains)",
          str(len(DOMAIN_RESIDUAL))),
     ):
         p = _jsonl(path)

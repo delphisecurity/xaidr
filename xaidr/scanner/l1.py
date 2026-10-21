@@ -31,7 +31,7 @@ _DETECTORS = {
 # tool-argument threats BY CATEGORY, so a rule whose `category` is misspelled
 # ("jailbrake", "sytem_prompt_leak") loads cleanly, fires on the content path,
 # and is then SILENTLY DISCARDED on the tool path — a rule half-disabled by a
-# typo, exactly the failure class the ADV-2 policy-key validator exists to stop.
+# typo, exactly the failure class the policy-key validator exists to stop.
 # So an unrecognized category is rejected LOUDLY at load, not defaulted quietly.
 #
 # Deliberately an EXPLICIT allowlist, not `{r["category"] for r in rules}`: a set
@@ -84,6 +84,12 @@ _KNOWN_L1_CATEGORIES = frozenset({
     # flood rules and already a recognised FLAG-tier tool-argument category, so
     # it needs no entry of its own.
     "privileged_action",
+    # scanner.canonicalize emits this on the tool path for a shell construct it
+    # could not resolve statically (an env/unknown variable in the verb or
+    # target slot, an in-line IFS reassignment with no destructive command).
+    # FLAG-tier (see sensor._TOOL_ARG_FLAG_CATEGORIES); the destructive
+    # substitution case blocks under code_execution, not this.
+    "shell_unresolved",
 })
 
 
@@ -103,7 +109,7 @@ class UnknownRuleCategory(ValueError):
     a bad category is invisible at runtime: the rule still fires on the content
     path but is dropped by the tool-path category filter, so the operator sees a
     working rule that is in fact disarmed on one surface. Fail loudly at ship
-    time (CI imports the package) instead. Mirrors the ADV-2 precedent for
+    time (CI imports the package) instead. Mirrors the loud-validation rule for
     unknown policy keys (authz/policy.py) and unknown enforcement modes (sensor).
     """
 
@@ -126,8 +132,8 @@ L1_MAX_SCAN_CHARS = 100_000
 _L1_SCAN_BUDGET_SEC = 0.5
 
 # Per-rule wall-clock above which ONE pattern is treated as having behaved
-# pathologically on this input. Calibrated from the audit, not guessed: with every
-# pattern now linear, the slowest single rule on a full-size 100k adversarial
+# pathologically on this input. Calibrated by measurement, not guessed: with every
+# pattern linear, the slowest single rule on a full-size 100k adversarial
 # input measures 376ms, so 1.0s leaves ~2.7x headroom for a loaded machine. The
 # margin is wide on purpose: it costs nothing in detection and removes any
 # chance of firing on honest work.
@@ -135,12 +141,12 @@ _L1_RULE_SLOW_SEC = 1.0
 
 # WHAT HAPPENS WHEN A BOUND IS BLOWN — AND WHY NEITHER IS A TIMEOUT.
 #
-# Both used to be a bare `print`: rules were skipped, nothing was recorded, and
-# the scan returned whatever the rules before the slow one had found. That is a
-# DETECTION-LOSS path an attacker controls, and this scanner also fails OPEN on an
-# unexpected exception (sensor._emit_scan_error returns `allowed` with
-# SCAN_FAILED_OPEN), so "make the scanner slow" and "make the scanner throw" would
-# both reduce a verdict. Neither may stay silent.
+# A bare `print` would skip rules, record nothing, and return whatever the rules
+# before the slow one had found. That is a DETECTION-LOSS path an attacker
+# controls, and this scanner also fails OPEN on an unexpected exception
+# (sensor._emit_scan_error returns `allowed` with SCAN_FAILED_OPEN), so "make the
+# scanner slow" and "make the scanner throw" would both reduce a verdict. Neither
+# may stay silent.
 #
 # They are DIFFERENT FAILURES and get different verdicts, which is the whole of
 # the calibration:
@@ -149,19 +155,18 @@ _L1_RULE_SLOW_SEC = 1.0
 #   pattern audited linear, no honest rule can do this at any input size; it means
 #   a pattern has re-entered super-linear behaviour on attacker-chosen structure.
 #   BLOCK BAND. This is what makes slowness unusable as a bypass: an input crafted
-#   to make the scanner grind now blocks BECAUSE it made the scanner grind, so the
+#   to make the scanner grind blocks BECAUSE it made the scanner grind, so the
 #   attacker's lever raises the verdict instead of lowering it.
 #
 #   SCAN BUDGET — the rule LOOP ran long without any single rule misbehaving.
-#   After the audit this means one thing only: the input is very large and 160
+#   With every pattern linear this means one thing only: the input is very large and 160
 #   linear rules over it add up. That is ordinary work on a big document, not an
 #   attack, and this engine has a standing decision that large input is SURFACED
 #   and never hard-blocked (LLM01_oversized_input, and
-#   test_truncation_bypass.test_benign_large_input_flagged_not_blocked, which is
-#   what caught an earlier version of this change blocking a 150k benign
-#   document). FLAG BAND — visible, attributable, and not a new false positive.
-#   The detection loss it admits is the pre-existing, deliberate windowing
-#   trade-off; what is new is that it is now reported instead of printed.
+#   test_truncation_bypass.test_benign_large_input_flagged_not_blocked, which
+#   pins that a 150k benign document is not blocked). FLAG BAND — visible,
+#   attributable, and not a false positive. The detection loss it admits is the
+#   deliberate windowing trade-off, and it is reported, never merely printed.
 SCAN_DEGRADED_CATEGORY = "dos_attempt"
 
 PATHOLOGICAL_PATTERN_RULE = "LLM04_pathological_pattern"
@@ -170,11 +175,11 @@ PATHOLOGICAL_PATTERN_SCORE = 0.65
 SCAN_DEGRADED_RULE = "LLM04_scan_budget_exceeded"
 SCAN_DEGRADED_SCORE = 0.25
 
-# --- Over-length windowing (truncation-bypass fix) ---------------------------
-# Truncating to the first L1_MAX_SCAN_CHARS silently dropped everything past the
-# cap — an attacker padded >100k of benign filler to push a payload past it and
-# the whole engine never saw the payload (a clean total bypass). Instead of
-# dropping the tail we scan the FULL input in successive OVERLAPPING windows, but
+# --- Over-length windowing (no truncation bypass) ----------------------------
+# Truncating to the first L1_MAX_SCAN_CHARS would silently drop everything past
+# the cap — an attacker could pad >100k of benign filler to push a payload past
+# it, and the whole engine would never see the payload. Instead of dropping the
+# tail we scan the FULL input in successive OVERLAPPING windows, but
 # under a HARD TOTAL wall-clock budget so a megabyte-class input cannot impose
 # unbounded latency (the very DoS the cap existed to prevent).
 #
@@ -202,7 +207,7 @@ OVERSIZED_INPUT_RULE = "LLM01_oversized_input"
 OVERSIZED_INPUT_CATEGORY = "oversized_input"
 
 # THE INPUT WAS LONG vs THERE IS TEXT HERE WE NEVER READ. Two different facts,
-# and until this rule existed only the first had a name.
+# and each has its own rule name.
 #
 # OVERSIZED_INPUT_RULE fires on `len(prompt) > L1_MAX_SCAN_CHARS` and nothing
 # else, so it is on EVERY input past the cap — including the overwhelming
@@ -210,7 +215,7 @@ OVERSIZED_INPUT_CATEGORY = "oversized_input"
 # contract is two windows out of an eight-window budget: fully read, and still
 # carrying the same rule as a 4 MB payload whose tail the budget never reached.
 #
-# That made the over-length path impossible to fail closed on. Measured against
+# So OVERSIZED_INPUT_RULE cannot be a fail-closed signal. Measured against
 # `benign_longform/` (see the corpus README), refusing on OVERSIZED_INPUT_RULE
 # blocks 100% of realistic long benign input — a pasted policy document, a
 # kubectl dump, a JVM thread dump, a support transcript — because the rule is a
@@ -244,7 +249,7 @@ def iter_scan_windows(
 
     WHY ``end_offset`` IS YIELDED RATHER THAN RECOMPUTED BY THE CALLER. Whether
     the scan REACHED THE END is a different fact from whether the input was
-    LONG, and conflating them is what made ``LLM01_oversized_input`` unusable as
+    LONG, and conflating them is what makes ``LLM01_oversized_input`` unusable as
     a fail-closed signal: it fires on ``len(prompt) > L1_MAX_SCAN_CHARS`` alone,
     so a 150 000-character document that these windows covered completely
     carries the identical rule to a 4 MB one whose tail was never read. A
@@ -299,7 +304,7 @@ def _load_and_compile(filename: str) -> list:
         # A corrupt/unreadable rule asset must NOT make `import xaidr` crash the
         # host — degrade to an empty ruleset (same posture as a missing file).
         #
-        # The degradation is now RECORDED as well as printed. A print to stdout
+        # The degradation is RECORDED as well as printed. A print to stdout
         # is not a signal: nothing reads it, no host pipeline captures it as an
         # error, and the sensor goes on answering with a ruleset it does not
         # have. `Sensor.degradations` reads the registry, and `fail_closed=
@@ -320,7 +325,7 @@ def _load_and_compile(filename: str) -> list:
         # caught by it: a misspelled category is an authoring bug in a vendored
         # rule that must fail the build, not a corrupt-asset condition to degrade
         # around. A did-you-mean names the offending rule and category, matching
-        # the ADV-2 unknown-key message shape in authz/policy.py.
+        # the unknown-key message shape in authz/policy.py.
         category = r.get("category")
         if category not in _KNOWN_L1_CATEGORIES:
             near = difflib.get_close_matches(
@@ -401,11 +406,11 @@ def _detectors_first(rules: list) -> list:
 
     The rule loop abandons remaining rules when it blows its budget, and on a
     huge input that is exactly the family you least want to skip: the detectors
-    ARE the flood rules, and a flood is what exhausts a budget. Measured on 100k
-    of "curl " repeated — a repetition flood — the expensive destination rules ran
-    first, the budget went, and the LLM04 family (positions 42-89 in file order)
-    never ran: the input came back flagged/0.25 on the degradation signal alone
-    instead of blocked on the repetition it plainly was.
+    ARE the flood rules, and a flood is what exhausts a budget. On 100k of
+    "curl " repeated — a repetition flood — file order would run the expensive
+    destination rules first, spend the budget, and never reach the LLM04 family
+    (positions 42-89 in file order): the input would come back flagged on the
+    degradation signal alone instead of blocked on the repetition it plainly is.
 
     Detectors are the cheapest rules in the set and their cost is bounded by
     input length alone, so running them first costs the common path nothing and

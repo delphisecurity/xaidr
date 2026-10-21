@@ -6,9 +6,8 @@ WHY THIS READS THE API AND NOT THE TREE.
 Every other guard in this repository proves the tree is self-consistent. This
 one cannot, because the thing it is checking does not live in the tree: a
 release object is server-side state, and the failure it exists to catch --
-fifteen tags and zero releases, which is the state this repo was in on
-2026-09-09 -- is invisible to `git tag`, to pytest, and to every CI job that
-only ever looks at a checkout. So BOTH sides of the comparison are fetched from
+tags pushed with no release published for them -- is invisible to `git tag`,
+to pytest, and to every CI job that only ever looks at a checkout. So BOTH sides of the comparison are fetched from
 GitHub:
 
     tags     GET /repos/{repo}/tags

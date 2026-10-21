@@ -17,7 +17,7 @@ What this pins:
 2. NON-VACUITY — the rule is doing the work, not the detector. A category rule
    that names a DIFFERENT family leaves the call flagged, so a passing test
    cannot be explained by the sensor having blocked anyway;
-3. the ADV-2 unknown-key rejection covers the new field (`categorie` → policy
+3. the unknown-key rejection covers the new field (`categorie` → policy
    REJECTED with a did-you-mean), inherited rather than re-implemented;
 4. the field is INERT where no detection exists, matching `mcp_server`'s
    contract — a benign call has category=None and matches nothing.
@@ -158,7 +158,7 @@ def test_pii_stays_filtered_and_therefore_unreachable_by_category():
     assert r.category is None
 
 
-# ── 3. ADV-2 unknown-key rejection is INHERITED, not re-implemented ───────────
+# ── 3. unknown-key rejection is INHERITED, not re-implemented ─────────────────
 
 @pytest.mark.parametrize("bad_key", ["categorie", "categories", "catgeory"])
 def test_misspelled_category_key_rejects_the_policy(bad_key, caplog):

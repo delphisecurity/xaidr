@@ -106,11 +106,12 @@ def test_structural_validator_unit():
 
 
 # ── id-field CONTENT validation (ASI07) ──────────────────────────────────────
-# An A2A id is provenance-checked (A2AIdTracker) but its STRING CONTENT was never
-# validated. A traversal/injection payload smuggled into messageId/taskId/contextId
-# slipped through (id fields are filtered out of the content scan as routing noise).
-# The validator now fires on traversal/injection SHAPES only — never on prose and
-# never on a legitimate namespaced single slash.
+# An A2A id is provenance-checked (A2AIdTracker), and its STRING CONTENT is
+# validated separately: id fields are filtered out of the content scan as
+# routing noise, so without this check a traversal/injection payload smuggled
+# into messageId/taskId/contextId would reach no detector. The validator fires
+# on traversal/injection SHAPES only — never on prose and never on a legitimate
+# namespaced single slash.
 
 # (label, message-field kwargs) — each must produce an id_field_* structural signal.
 _ID_CONTENT_CATCH = [

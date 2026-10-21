@@ -1,23 +1,24 @@
-"""F8 (Sept 9 audit): a scanned prompt must not reach the logs via an
-extension's own exception.
+"""A scanned prompt must not reach the logs via an extension's own
+exception.
 
-REPRODUCED ON 1.16.0 before any of this was written. A `SensorExtension` whose
-`gate()` raised with the scan text in the message put that text on the sensor's
-own ERROR line, verbatim and in full:
+THE SHAPE THIS PREVENTS. Unredacted, a `SensorExtension` whose `gate()` raises
+with the scan text in the message would put that text on the sensor's own
+ERROR line, verbatim and in full:
 
     xaidr: extension 'acme-quarantine' raised in gate() (ValueError: quarantine
     lookup failed for input 'please summarise this internal memo:
     PRIVATE_PROMPT_CANARY do not disclose'). THIS CONTROL IS INERT until ...
 
-Four hooks reached that one sink and every one of them leaked: `gate`,
-`transform_verdict`, `subject_trust`, `blocked_urls`. `escalation.run_escalators`
-had the identical shape in its own file.
+Four hooks reach that one sink: `gate`, `transform_verdict`, `subject_trust`,
+`blocked_urls`. `escalation.run_escalators` has the identical shape in its own
+file.
 
 THE EXTENSION IS ENTITLED TO THE PROMPT. That is what `ScanRequest.text` is for.
-The sensor's LOG is not, and `_extension_failed` shipped without the treatment
-`_emit_scan_error` had had all along on the scan path four screens away.
+The sensor's LOG is not, so `_extension_failed` gets the same treatment
+`_emit_scan_error` gives the scan path four screens away.
 
-WHY `safe_exc` IS NOT THE FIX, and why this file asserts that directly below.
+WHY `safe_exc` IS NOT THE REDACTION USED HERE, and why this file asserts that
+directly below.
 `safe_exc` redacts URLs out of a message it otherwise keeps — right for a
 reporter that failed against a destination, where the destination has a grammar
 and is the diagnostic. An extension's exception text is arbitrary caller prose
@@ -28,7 +29,7 @@ that the tool the other paths use passes this canary through untouched.
 The COUNT is the assertion, as in `test_audit_f8_reporter_redaction.py`: every
 test asserts ZERO occurrences across logging, stdout and stderr — and, in the
 same breath, that the line is still USABLE (names the extension, the hook and
-the exception type). A sink made safe by going silent is not a fix.
+the exception type). A sink made safe by going silent is not acceptable.
 """
 
 from __future__ import annotations
@@ -61,8 +62,8 @@ class _Capture:
 
     The handler is attached to the ``xaidr`` PARENT logger, so a sink added in
     any submodule is captured without this file having to know its name — which
-    is the whole point of a regression test for "one path was added without the
-    treatment the others had".
+    is the whole point of a guard against "one path added without the treatment
+    the others have".
     """
 
     def __enter__(self):
@@ -122,10 +123,10 @@ def test_safe_exc_would_NOT_have_fixed_this():
     """THE DISCRIMINATING CASE for (b).
 
     `safe_exc` is what every reporter path uses and it is the obvious thing to
-    reach for here. It does not work: the reporter leak was a URL, which has a
-    grammar `redact_url` can take apart. This leak is a prompt. `safe_exc`
-    passes it through in full, and a fix built on it would have been green,
-    plausible, and still leaking.
+    reach for here. It does not work: on the reporter path the sensitive value
+    is a URL, which has a grammar `redact_url` can take apart. Here it is a
+    prompt. `safe_exc` passes it through in full, so a redaction built on it
+    would be green, plausible, and still leaking.
     """
     out = safe_exc(ValueError(f"gate failed on {PROMPT!r}"))
     assert CANARY in out, (
@@ -171,7 +172,7 @@ def test_exc_origin_is_bounded():
         assert len(exc_origin(exc)) <= 120
 
 
-# ── the three hooks named in the finding ─────────────────────────────────────
+# ── the hooks that are handed the scan text ──────────────────────────────────
 
 class _GateBoom(SensorExtension):
     """A real quarantine gate: it looks at the scan text, and the lookup it
@@ -222,7 +223,7 @@ def test_verdict_transform_exception_does_not_put_the_prompt_in_the_log():
 def test_on_attach_exception_does_not_put_the_payload_in_the_log():
     """`on_attach` still RAISES — that contract is not being changed here.
 
-    What changed is that the sensor now says something on the way out, under
+    What this pins is that the sensor also says something on the way out, under
     the same content rule as the other hooks, so a host that catches the
     constructor exception and falls back to an unprotected path still leaves a
     record. The exception itself carries the message to the CALLER, who owns the
@@ -241,7 +242,7 @@ def test_on_attach_exception_does_not_put_the_payload_in_the_log():
     )
 
 
-# ── the neighbours the audit asked for ───────────────────────────────────────
+# ── the neighbouring hooks with the same shape ───────────────────────────────
 
 class _TrustBoom(SensorExtension):
     name = "acme-trust"
@@ -341,7 +342,7 @@ def test_s2_condition_evaluator_exception_does_not_put_request_text_in_the_log()
     cap.assert_still_useful("region_is", "RuntimeError")
 
 
-# ── the sinks the audit cleared, pinned so they stay cleared ─────────────────
+# ── the sinks that cannot see content, pinned so they keep their message ─────
 
 def test_escalator_health_keeps_its_message_because_it_cannot_see_content():
     """The other half of the (b) decision, pinned.
