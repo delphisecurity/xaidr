@@ -732,7 +732,10 @@ def _patch_openai_agents(ctx: PatchContext) -> None:
             scan_text_boundary(ctx.sensor, getattr(result, "final_output", None), "output")
             return result
 
-        return make_wrapper(orig, before=before, after=after)
+        # Each run is one request (ruling 4): the value-origin ledger its input
+        # binds ends with the run, so a later run on the same thread or worker
+        # never reads this run's principal authority.
+        return _vo_seams.request_scoped_run(make_wrapper(orig, before=before, after=after))
 
     ctx.try_install(
         "agents", "Runner.run", "input+output", factory,
@@ -788,7 +791,8 @@ def _patch_crewai(ctx: PatchContext) -> None:
                 scan_text_boundary(ctx.sensor, text, "input")
             return None
 
-        return make_wrapper(orig, before=before)
+        # Each kickoff is one request (ruling 4), as Runner.run is above.
+        return _vo_seams.request_scoped_run(make_wrapper(orig, before=before))
 
     # ── TOOL boundary — crewai.hooks, the framework's own registry ───────
     # ctx.module() first so a build without the hook API is reported as

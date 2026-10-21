@@ -868,6 +868,10 @@ class DelphiSensor:
         self._vo_record_fault_logged = False     # M6: input recording fault, logged once
         self._vo_result_fault_logged = False     # M7: result recording fault, logged once
         self._vo_lock = threading.Lock()
+        if self._value_origin is not _vo.Mode.OFF:
+            # Ruling 4: each ThreadPoolExecutor work item is one request, so a pool
+            # thread never hands one job's ledger, and its authority, to the next.
+            _vo_seams.install_executor_requests()
         if self._value_origin is _vo.Mode.ENFORCE:
             # ONE warning, and only for ENFORCE. Two facts an operator must not
             # learn from an incident (the owner's Q6 principle: a configuration
@@ -2026,6 +2030,10 @@ class DelphiSensor:
                     logger.warning("xaidr: Sensor(agent_id=%r): scan(spans=...) is honoured only "
                                    "for direction='input'; ignored for %r. Logged once.",
                                    self.agent_id, direction)
+                return
+            if _vo_seams.NESTED_RUN.get():
+                # A run hooked inside another hooked run: its input is the outer
+                # run's model text, scanned above and never principal input.
                 return
             text = _coerce_scannable(prompt)
             spans = list(spans) if spans is not None else None

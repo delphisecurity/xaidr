@@ -394,6 +394,8 @@ class _ScopeEntry:
     owner: Any
     fresh: bool             # True: this scope started the flow and restores `saved` on exit
     saved: tuple | None     # (chain, correlation id, tiers, inbound mark, ledger) at entry
+    request: Any = None     # a fresh scope's value-origin request (ruling 4)
+    alive: list = dataclasses.field(default_factory=lambda: [True])   # [False] once it ends
 
 
 _SCOPES: contextvars.ContextVar[tuple] = contextvars.ContextVar("xaidr_flow_scopes", default=())
@@ -429,10 +431,14 @@ def _put_back(saved: tuple) -> None:
 
 def _close_scopes(entries) -> None:
     """Mark these entries' scopes as closed by something else, so their own exits,
-    whenever they come, are silent and change nothing."""
+    whenever they come, are silent and change nothing. Their requests end now,
+    innermost first, so the ledgers bound in them close with them."""
     with _scope_lock:
         for e in entries:
             e.owner._closed_elsewhere += 1
+            e.alive[0] = False
+    for e in reversed(tuple(entries)):
+        _vo_ledger.request_exit(e.request)
 
 
 def _held_by_generator() -> bool:
@@ -510,7 +516,10 @@ class _FlowScope(contextlib.ContextDecorator):
         _check_not_held_by_generator()
         stack = ()
         try:
-            stack = _SCOPES.get()
+            # An entry whose scope has ended is not a request to join: it reaches
+            # this context only through a copy made while it was open (a worker
+            # task created inside it), and its request is over.
+            stack = tuple(e for e in _SCOPES.get() if e.alive[0])
             if stack:                                  # an open scope here: join it
                 _SCOPES.set(stack + (_ScopeEntry(self, False, None),))
                 return current_correlation_id()
@@ -518,7 +527,9 @@ class _FlowScope(contextlib.ContextDecorator):
         except Exception:
             self._open_inert(stack, "could not read the current flow to save it")
             return current_correlation_id()
+        request = None
         try:
+            request = _vo_ledger.request_enter()       # ruling 4: the flow is one request
             corr = begin_flow(principal=self._principal,
                               correlation_id=self._correlation_id)
             # begin_flow keeps going if the fresh ledger did not bind. A scope must
@@ -532,9 +543,10 @@ class _FlowScope(contextlib.ContextDecorator):
                 _chain_ctx.set(saved[0])
                 _tiers_ctx.set(saved[2])
                 _inbound_ctx.set(saved[3])
-            _SCOPES.set(stack + (_ScopeEntry(self, True, saved),))
+            _SCOPES.set(stack + (_ScopeEntry(self, True, saved, request),))
             return corr
         except Exception:
+            _vo_ledger.request_exit(request)
             try:
                 _put_back(saved)
             except Exception:
@@ -542,6 +554,7 @@ class _FlowScope(contextlib.ContextDecorator):
             self._open_inert(stack, "opening the scope faulted")
             return current_correlation_id()
         except BaseException:
+            _vo_ledger.request_exit(request)
             try:
                 _put_back(saved)
             except Exception:
@@ -572,6 +585,8 @@ class _FlowScope(contextlib.ContextDecorator):
             entry, inside = stack[i], stack[i + 1:]
             _close_scopes(inside)                      # opened inside this one: they end with it
             _SCOPES.set(stack[:i])
+            entry.alive[0] = False
+            _vo_ledger.request_exit(entry.request)     # its ledgers close with it
             if entry.fresh:
                 try:
                     _put_back(entry.saved)
@@ -629,6 +644,64 @@ def flow(*, principal: str | None = None,
     part of the flow; use ``origin_scope()`` for that.
     """
     return _FlowScope(principal, correlation_id)
+
+
+_REQUEST_SCOPES: contextvars.ContextVar[tuple] = contextvars.ContextVar(
+    "xaidr_request_scopes", default=())
+
+
+class _RequestScope:
+    """``xaidr.request_scope()``'s context manager. See :func:`request_scope`."""
+
+    def __enter__(self) -> None:
+        try:
+            rec = _vo_ledger.request_enter()
+            _REQUEST_SCOPES.set(_REQUEST_SCOPES.get() + ((self, rec),))
+        except Exception:
+            _scope_fault("request_scope(): opening it faulted; the body runs in the "
+                         "request it was entered in")
+        return None
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        try:
+            stack = _REQUEST_SCOPES.get()
+            i = next((k for k in range(len(stack) - 1, -1, -1) if stack[k][0] is self), None)
+            if i is not None:
+                _REQUEST_SCOPES.set(stack[:i])
+                for _, rec in reversed(stack[i:]):     # and every one opened inside it
+                    _vo_ledger.request_exit(rec)
+        except Exception:
+            _scope_fault("request_scope(): its exit faulted")
+        return False                                   # the body's exception propagates
+
+    async def __aenter__(self) -> None:
+        return self.__enter__()
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        return self.__exit__(exc_type, exc, tb)
+
+
+def request_scope() -> _RequestScope:
+    """One request, for a server that never begins a flow::
+
+        with xaidr.request_scope():
+            handle(request)
+
+    Value origin's ledgers bound inside the block (by an input scan, a
+    ``begin_flow()``, an ``extract_context()``) end when it exits, on return or
+    raise: a closed ledger reads as not bound everywhere, including in work
+    started inside the block that outlives it, so no later request reads this
+    request's principal authority. Opened inside a live request, or inside a
+    flow the host began, it joins that and changes nothing. It never touches the
+    provenance chain, tiers or the inbound mark.
+
+    Each ``ThreadPoolExecutor`` work item, each CrewAI kickoff, each Agents SDK
+    ``Runner.run`` and each fresh :func:`flow` is already a request; this is for
+    the requests the sensor cannot see begin, such as a server loop that handles
+    one request after another on one thread. ``with`` and ``async with`` both
+    work; use it inside an ``async def`` handler's body.
+    """
+    return _RequestScope()
 
 
 def build_provenance(

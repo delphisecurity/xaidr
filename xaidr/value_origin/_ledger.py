@@ -19,9 +19,23 @@ BINDING (ruling 3.1). A ledger is EXPLICIT or IMPLICIT (an internal attribute):
                                raise), so a scope ends its ledger and hands back the one
                                bound before it (owner, D1, 2026-10-08)
 
+THE REQUEST (ruling 4, 2026-10-21). A ledger belongs to the request it was bound
+in, and ends with it. ``request_enter()`` opens a request record in this context
+and hides any ledger no live request owns; every ledger bound while the record is
+live is registered with it; ``request_exit()`` CLOSES each of them and puts back
+what was there before. A closed ledger reads as not bound everywhere, including
+in a context copied from the request (a worker task, an executor job), so no
+later request reads its authority. A request opened inside a live one, or inside
+a host's own flow, joins it and changes nothing. The record holds no tier state:
+the provenance chain, tiers and inbound mark are untouched.
+
+    sensor's executor seam     each ThreadPoolExecutor work item is a request
+    framework entry hooks      each CrewAI kickoff and Agents SDK run is a request
+    xaidr.request_scope()      the host marks one request
+    xaidr.flow()               a fresh scope is a request too
+
 An implicit ledger lives for one request. Replacing it at the next input scan
-keeps authority per request: a thread-reusing server that never begins a flow must not carry
-user A's principal authority into user B's request.
+keeps authority per request too.
 
 WHAT IS STORED. ``HMAC-SHA256(k, authority.key())`` and the same for
 principal n-grams, ``k`` 32 random bytes drawn once per process. Nothing here can
@@ -113,7 +127,7 @@ def _digest_ngram(g: str) -> bytes:
 class _Ledger:
     __slots__ = ("lock", "pid", "explicit", "entries", "ngrams", "saturated", "sat_logged",
                  "input_truncated", "result_truncated", "result_unread", "atoms_incomplete",
-                 "dests_dropped")
+                 "dests_dropped", "closed")
 
     def __init__(self, *, explicit: bool) -> None:
         self.lock = _new_lock()
@@ -128,6 +142,7 @@ class _Ledger:
         self.atoms_incomplete = False    # an atom pass hit its WORK budget (2026-10-06)
         self.dests_dropped = False       # a DESTINATION write was dropped: blocks (owner, 2026-10-06)
         self.sat_logged = False
+        self.closed = False              # its request ended: read as not bound, everywhere
 
     def __repr__(self) -> str:                  # discloses nothing
         return (f"<value-origin ledger {'explicit' if self.explicit else 'implicit'} "
@@ -139,9 +154,78 @@ _LEDGER: ContextVar[Optional[_Ledger]] = ContextVar("xaidr_value_origin_ledger",
 
 def _current() -> Optional[_Ledger]:
     lg = _LEDGER.get()
-    if lg is None or lg.pid != os.getpid():     # another pid's ledger is not bound
+    if lg is None or lg.closed or lg.pid != os.getpid():   # ended, or another pid's
         return None
     return lg
+
+
+# ── the request (ruling 4) ───────────────────────────────────────────────────
+class _Request:
+    __slots__ = ("live", "ledgers", "saved_ledger", "saved_request")
+
+    def __init__(self, saved_ledger, saved_request) -> None:
+        self.live = True
+        self.ledgers: List[_Ledger] = []
+        self.saved_ledger = saved_ledger
+        self.saved_request = saved_request
+
+
+_REQUEST: ContextVar[Optional[_Request]] = ContextVar("xaidr_value_origin_request", default=None)
+
+
+def _bound(lg: _Ledger) -> _Ledger:
+    """Bind ``lg`` and register it with this context's live request, if any."""
+    _LEDGER.set(lg)
+    rec = _REQUEST.get()
+    if rec is not None and rec.live:
+        rec.ledgers.append(lg)
+    return lg
+
+
+def request_enter() -> Optional[_Request]:
+    """Open a request in this context. Returns its record, or None when it JOINS:
+    inside a live request, or inside a host's own flow (a live explicit ledger no
+    request owns). Otherwise any ledger bound here belongs to no live request in
+    this context, so it is hidden for the request's duration. Never raises."""
+    try:
+        rec = _REQUEST.get()
+        if rec is not None and rec.live:
+            return None
+        lg = _LEDGER.get()
+        if lg is not None and lg.explicit and not lg.closed and lg.pid == os.getpid():
+            return None
+        new = _Request(lg, rec)
+        _REQUEST.set(new)
+        _LEDGER.set(None)
+        return new
+    except Exception:
+        _log.exception("value origin: opening a request faulted")
+        return None
+
+
+def request_exit(rec: Optional[_Request]) -> None:
+    """End ``rec``: close every ledger bound in it and, in the context it was
+    opened in, put back what was there before. Never raises."""
+    if rec is None:
+        return
+    try:
+        # A request opened inside this one and still open ends with it: no record
+        # of this request can outlive it into the next one in this context.
+        inner, chain = _REQUEST.get(), []
+        while inner is not None and inner is not rec and len(chain) < 1024:
+            chain.append(inner)
+            inner = inner.saved_request
+        found = inner is rec
+        for r in (chain if found else []) + [rec]:
+            r.live = False
+            for lg in r.ledgers:
+                lg.closed = True
+            r.ledgers = []
+        if found:
+            _LEDGER.set(rec.saved_ledger)
+            _REQUEST.set(rec.saved_request)
+    except Exception:
+        _log.exception("value origin: ending a request faulted")
 
 
 # ── binding (ruling 3.1) ─────────────────────────────────────────────────────
@@ -149,7 +233,7 @@ def bind_ledger() -> None:
     """Bind a new empty EXPLICIT ledger iff none is bound. Never rebinds."""
     try:
         if _current() is None:
-            _LEDGER.set(_Ledger(explicit=True))
+            _bound(_Ledger(explicit=True))
     except Exception:
         _log.exception("value origin: bind_ledger faulted")
 
@@ -159,7 +243,7 @@ def bind_fresh_ledger() -> None:
     callers: ``begin_flow()`` and ``extract_context()`` — an inbound flow must
     not inherit the caller-process's ledger."""
     try:
-        _LEDGER.set(_Ledger(explicit=True))
+        _bound(_Ledger(explicit=True))
     except Exception:
         _log.exception("value origin: bind_fresh_ledger faulted")
 
@@ -195,9 +279,7 @@ def _bind_for_input() -> _Ledger:
     lg = _current()
     if lg is not None and lg.explicit:
         return lg
-    lg = _Ledger(explicit=False)
-    _LEDGER.set(lg)
-    return lg
+    return _bound(_Ledger(explicit=False))
 
 
 # ── the write rule ───────────────────────────────────────────────────────────
