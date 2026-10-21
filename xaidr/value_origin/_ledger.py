@@ -162,10 +162,14 @@ def _current() -> Optional[_Ledger]:
 
 # ── the request (ruling 4) ───────────────────────────────────────────────────
 class _Request:
-    __slots__ = ("live", "ledgers", "saved_ledger", "saved_request", "accumulate")
+    __slots__ = ("live", "ledgers", "saved_ledger", "saved_request", "accumulate", "declared")
 
-    def __init__(self, saved_ledger, saved_request, accumulate=False) -> None:
+    def __init__(self, saved_ledger, saved_request, accumulate=False, declared=False) -> None:
         self.live = True
+        # True for a request the host or a framework names (request_scope(), a
+        # hooked run, flow()); False for an executor job, a boundary the sensor
+        # infers. A declared request opened inside an inferred one is its own.
+        self.declared = declared
         # True for a request the host or a framework declares (request_scope(), a
         # hooked run): every input in it keeps authorizing in it. An executor job
         # may be a loop serving many users, so there a new input still ends the
@@ -189,17 +193,20 @@ def _bound(lg: _Ledger) -> _Ledger:
     return lg
 
 
-def request_enter(*, accumulate: bool = False) -> Optional[_Request]:
-    """Open a request in this context. Returns its record, or None when it JOINS a
-    live request. Otherwise any ledger bound here belongs to no live request in
-    this context (a flow left open, a pool initializer's begin_flow()), so it is
+def request_enter(*, accumulate: bool = False, declared: bool = False,
+                  new: bool = False) -> Optional[_Request]:
+    """Open a request in this context. Returns its record, or None when it JOINS
+    the live request here: an inferred request (an executor job) joins any; a
+    declared one joins only a declared one; ``new`` (request_scope()) joins
+    none. Otherwise the ledger bound here is not this request's (a flow left
+    open, a pool initializer's begin_flow(), the enclosing job's), so it is
     hidden for the request's duration. Never raises."""
     try:
         rec = _REQUEST.get()
-        if rec is not None and rec.live:
+        if rec is not None and rec.live and not new and (rec.declared or not declared):
             return None
         lg = _LEDGER.get()
-        new = _Request(lg, rec, accumulate)
+        new = _Request(lg, rec, accumulate, declared)
         _REQUEST.set(new)
         _LEDGER.set(None)
         return new

@@ -92,31 +92,39 @@ def test_a_request_that_raises_ends_its_ledger_and_propagates():
     assert _fresh(serve) == "no_flow"
 
 
-def test_a_nested_request_joins_and_its_ledgers_end_with_the_outer_one():
+def test_each_request_scope_is_a_new_request_even_inside_another():
+    """request_scope() marks a new request wherever it opens: the enclosing
+    request's ledger is hidden inside it, its own closes at its exit, and the
+    enclosing one is back after it."""
     s = _sensor()
 
     def serve():
         with xaidr.request_scope():
+            s.scan(f"Email {ALICE} the report.", direction="input")
             with xaidr.request_scope():
-                s.scan(f"Email {ALICE} the quarterly report.", direction="input")
-            after_inner = _wire(s)                    # same request: still authorized
-        return after_inner, _wire(s)
-    after_inner, after_outer = _fresh(serve)
-    assert after_inner in AUTHORITY, f"an inner scope ended its outer request: {after_inner!r}"
+                inner = _wire(s)
+            after_inner = _wire(s)
+        return inner, after_inner, _wire(s)
+    inner, after_inner, after_outer = _fresh(serve)
+    assert inner == "no_flow", f"a new request read the enclosing one's authority: {inner!r}"
+    assert after_inner in AUTHORITY, f"the enclosing request lost its ledger: {after_inner!r}"
     assert after_outer == "no_flow", after_outer
 
 
-def test_a_request_inside_a_scoped_flow_joins_it_and_hides_an_unscoped_one():
-    """xaidr.flow() is a request, so a request inside it joins it. A begin_flow()
-    with no request around it belongs to no request: hidden inside one, and back
-    after it."""
-    s = _sensor()
+def test_a_hooked_run_inside_a_scoped_flow_joins_it_and_a_request_scope_does_not(hooked):
+    """A hooked run inside xaidr.flow() is part of that request; a request_scope()
+    is a new request; a begin_flow() with no request around it is hidden inside
+    a request and back after it."""
+    agents, _, s = hooked
+    agents.Runner.handler = staticmethod(lambda agent, inp: _wire(s))
 
     def scoped():
         with xaidr.flow(principal="alice"):
             s.scan(f"Email {ALICE} the quarterly report.", direction="input")
+            run = agents.Runner.run_sync(agents.Agent(), None).final_output
             with xaidr.request_scope():
-                return _wire(s)
+                new = _wire(s)
+            return run, new
 
     def unscoped():
         pc.begin_flow(principal="alice")
@@ -127,7 +135,8 @@ def test_a_request_inside_a_scoped_flow_joins_it_and_hides_an_unscoped_one():
             return inside, _wire(s)
         finally:
             pc.clear_flow()
-    assert _fresh(scoped) in AUTHORITY
+    run, new = _fresh(scoped)
+    assert run in AUTHORITY and new not in AUTHORITY, (run, new)
     inside, after = _fresh(unscoped)
     assert inside not in AUTHORITY and after in AUTHORITY, (inside, after)
 
@@ -407,3 +416,97 @@ def test_one_executor_job_serving_several_users_ends_each_users_authority():
     with ThreadPoolExecutor(1) as pool:
         a, b = pool.submit(consumer_loop).result()
     assert a in AUTHORITY and b not in AUTHORITY, (a, b)
+
+
+# ── after the second concurrency review (2026-10-21) ─────────────────────────
+def test_a_request_scope_left_open_is_not_joined_by_the_next_one():
+    s = _sensor()
+    keep = []
+
+    def serve():
+        def body():
+            with xaidr.request_scope():
+                s.scan(f"Email {ALICE} the report.", direction="input")
+                yield b"chunk"
+        g = body()
+        next(g)
+        keep.append(g)                                  # suspended, never closed
+        with xaidr.request_scope():
+            s.scan("Summarise my notes.", direction="input")
+            return _wire(s)
+    assert _fresh(serve) not in AUTHORITY
+
+
+def test_requests_inside_one_executor_job_each_end_at_their_own_exit(hooked):
+    agents, _, s = hooked
+    agents.Runner.handler = staticmethod(lambda agent, inp: _wire(s))
+
+    def serve_loop():
+        out = []
+        for user_in in (f"Email {ALICE} the report.", None):
+            with xaidr.request_scope():
+                if user_in:
+                    s.scan(user_in, direction="input")
+                out.append(_wire(s))
+        out.append(agents.Runner.run_sync(agents.Agent(), f"Email {ALICE} the report.").final_output)
+        out.append(agents.Runner.run_sync(agents.Agent(), None).final_output)
+        return out
+    with ThreadPoolExecutor(1) as pool:
+        a1, b1, a2, b2 = pool.submit(serve_loop).result()
+    assert a1 in AUTHORITY and a2 in AUTHORITY, (a1, a2)
+    assert b1 not in AUTHORITY and b2 not in AUTHORITY, (
+        f"inside one job a later request read {b1!r}/{b2!r}: the earlier one did not end")
+
+
+def test_every_input_of_a_declared_request_authorizes_inside_an_executor_job(hooked):
+    _, crewai, s = hooked
+
+    def job():
+        with xaidr.request_scope():
+            s.scan(f"Email {ALICE} the report.", direction="input")
+            s.scan("Also copy the team.", direction="input")
+            scoped = _wire(s)
+        kicked = crewai.Crew(runner=lambda inputs: _wire(s)).kickoff(
+            inputs={"ask": f"Email {ALICE} the report.", "topic": "Q3 numbers"})
+        return scoped, kicked
+    with ThreadPoolExecutor(1) as pool:
+        scoped, kicked = pool.submit(job).result()
+    assert scoped in AUTHORITY and kicked in AUTHORITY, (scoped, kicked)
+
+
+def test_a_shared_request_scope_exited_elsewhere_never_ends_another_threads_request():
+    import threading
+    s = _sensor()
+    rs = xaidr.request_scope()
+    got = {}
+    a_open, b_open, a_closed = threading.Event(), threading.Event(), threading.Event()
+
+    def body_a():
+        with rs:
+            s.scan(f"Email {ALICE} the report.", direction="input")
+            yield
+
+    def user_a():
+        g = body_a()
+        next(g)
+        got["g"] = g
+        a_open.set()
+        a_closed.wait(5)
+
+    def user_b():
+        a_open.wait(5)
+        with rs:
+            s.scan("Email bob@corp.example the minutes.", direction="input")
+            b_open.set()
+            a_closed.wait(5)
+            got["b"] = _wire(s, to="bob@corp.example")
+
+    ta = threading.Thread(target=user_a)
+    tb = threading.Thread(target=user_b)
+    ta.start(); tb.start()
+    b_open.wait(5)
+    tc = threading.Thread(target=lambda: got["g"].close())
+    tc.start(); tc.join()
+    a_closed.set()
+    ta.join(); tb.join()
+    assert got["b"] in AUTHORITY, f"user B's own request lost its authority: {got['b']!r}"

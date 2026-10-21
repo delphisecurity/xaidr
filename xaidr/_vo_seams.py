@@ -61,7 +61,7 @@ _RUN_DEPTH: contextvars.ContextVar[int] = contextvars.ContextVar(
 def _enter_run():
     from .value_origin import _ledger
     depth = _RUN_DEPTH.get()
-    return (_ledger.request_enter(accumulate=True), _RUN_DEPTH.set(depth + 1),
+    return (_ledger.request_enter(accumulate=True, declared=True), _RUN_DEPTH.set(depth + 1),
             NESTED_RUN.set(depth > 0))
 
 

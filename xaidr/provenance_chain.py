@@ -532,7 +532,7 @@ class _FlowScope(contextlib.ContextDecorator):
             return current_correlation_id()
         request = None
         try:
-            request = _vo_ledger.request_enter()       # ruling 4: the flow is one request
+            request = _vo_ledger.request_enter(declared=True)   # ruling 4: the flow is one request
             if saved[0] is not None or saved[1] is not None:
                 # A flow is already active (Q-G (b), 2026-10-21): its chain, tiers,
                 # correlation id and inbound mark stay exactly as they are, on entry
@@ -680,7 +680,7 @@ class _RequestScope:
 
     def __enter__(self) -> None:
         try:
-            rec = _vo_ledger.request_enter(accumulate=True)
+            rec = _vo_ledger.request_enter(accumulate=True, declared=True, new=True)
             self._opened.append(rec)
             _REQUEST_SCOPES.set(_REQUEST_SCOPES.get() + ((self, rec),))
         except Exception:
@@ -698,9 +698,11 @@ class _RequestScope:
                     _vo_ledger.request_exit(rec)
                 if stack[i][1] in self._opened:
                     self._opened.remove(stack[i][1])
-            elif self._opened:
+            elif len(self._opened) == 1:
                 # Exited in another context (a generator closed on another thread):
-                # the request still ends, and its ledgers close.
+                # the request still ends, and its ledgers close. With more than one
+                # open (one instance shared across threads), which one this exit
+                # belongs to cannot be told, so none is ended here.
                 _vo_ledger.request_exit(self._opened.pop())
         except Exception:
             _scope_fault("request_scope(): its exit faulted")
@@ -723,9 +725,10 @@ def request_scope() -> _RequestScope:
     ``begin_flow()``, an ``extract_context()``) end when it exits, on return or
     raise: a closed ledger reads as not bound everywhere, including in work
     started inside the block that outlives it, so no later request reads this
-    request's principal authority. Opened inside a live request, it joins that
-    and changes nothing; a ledger bound outside any request (a ``begin_flow()``
-    with no request around it) is hidden inside the block and back after it.
+    request's principal authority. It always starts a new request: a ledger
+    bound outside it (a ``begin_flow()`` with no request around it, an enclosing
+    request's) is hidden inside the block and back after it. A hooked framework
+    run inside the block joins it.
     Every input inside the block keeps authorizing for the rest of the block. An
     exit in another context (a generator closed on another thread) still ends
     the request. It never touches the provenance chain, tiers or the inbound

@@ -45,12 +45,16 @@ reads its authority. The requests are:
   Agents SDK run (`Runner.run`, `run_sync`) hooked by `protect()`;
 - each fresh `xaidr.flow()` scope.
 
-A request opened inside a live request joins it and changes nothing. A ledger
-bound outside any request (a `begin_flow()` with no request around it, a pool
-initializer's) belongs to no request: inside a request it is hidden, and it is
-back when the request ends. An exit ends every request opened inside it, and a
+`request_scope()` always starts a new request. A hooked run or a fresh `flow()`
+opened inside a live `request_scope()`, hooked run or `flow()` joins it and
+changes nothing; opened inside an executor job, it is its own request, so one job
+serving several users keeps each run and each `request_scope()` to itself. A
+ledger bound outside the request being opened (a `begin_flow()` with no request
+around it, a pool initializer's, an enclosing request's) is hidden inside it,
+and back when it ends. An exit ends every request opened inside it, and a
 `request_scope()` exited in another context (a generator closed on another
-thread) still ends its request. In a request the host or a framework declares
+thread) still ends its request, unless that one instance has several requests
+open at once (shared across threads), when the exit cannot tell which is its own. In a request the host or a framework declares
 (`request_scope()`, a hooked run) every input keeps authorizing for the rest of
 it; in an executor job, which may be a loop serving one user after another, a new
 input still ends the previous implicit ledger (S-2). A run hooked inside another
