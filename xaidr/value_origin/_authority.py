@@ -531,7 +531,6 @@ def _implied_ip_authority(value: str, *, arg_mode: bool):
 # ── mailboxes (rulings 3.2 / 3.6) ───────────────────────────────────────────
 _LOCAL_RE = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~\-]{1,64}")
 _ASCII_DOMAIN_RE = re.compile(r"[A-Za-z0-9\-]{1,63}(?:\.[A-Za-z0-9\-]{1,63}){1,126}")
-_ADDR_END = frozenset(" \t\r\n<>,;:\"()[]")    # where email.utils ends an address
 _DISPLAY_RE = re.compile(r"^(?P<display>[^<>]{0,256})<(?P<addr>[^<>]{1,320})>$")
 
 
@@ -588,6 +587,29 @@ def _mailbox_part(part: str) -> Optional[Authority]:
     return mailbox_authority(p)
 
 
+_DISPLAY_OPEN_RE = re.compile(r'^\s*(?:"[^"]{0,256}"|[^<>"@,;]{0,256}?)\s*<\s*$')
+
+
+def _mailbox_in_junk(part: str) -> Optional[Authority]:
+    """The one mailbox in a part that does not parse, when everything around it
+    is junk (no letter or digit) or a display name opening ``<``; else None."""
+    found = None
+    for m in _P_EMAIL_RE.finditer(part):
+        if found is not None:
+            return None                        # two addresses: not one mailbox in junk
+        found = m
+    if found is None:
+        return None
+    before, after = part[:found.start()], part[found.end():]
+    if before and before[-1].isalnum():
+        return None                            # starts mid-word: `jürgen@` is not `rgen@`
+    if any(c.isalnum() for c in after):
+        return None                            # `user@evil.test/x`, or prose after it
+    if any(c.isalnum() for c in before) and not _DISPLAY_OPEN_RE.match(before):
+        return None                            # prose before it
+    return mailbox_authority(found.group(0).rstrip(".-"))
+
+
 def mailbox_list(value: str):
     """Ruling 3.2: a value with '@' that is not a URL is a mailbox list. Every
     part must parse, or the WHOLE value is a ParseFailure. Empty parts (a
@@ -609,19 +631,14 @@ def mailbox_list(value: str):
         a = _mailbox_part(part)
         if a is None:
             failed = True
-            # Junk inside the part does not hide a mailbox in it: a real client
-            # reads `evil@x.example` out of `evil@x.example <`
-            # (email.utils.getaddresses), so every address in the part that
-            # parses is a finding (ruling 2).
-            for m in _P_EMAIL_RE.finditer(part):
-                if m.start() and part[m.start() - 1].isalnum():
-                    continue                   # starts mid-word: `jürgen@` is not `rgen@`
-                end = m.end() + (part[m.end():m.end() + 1] == ".")   # a root or full stop
-                if end < len(part) and part[end] not in _ADDR_END:
-                    continue                   # `user@evil.test/x` is no mailbox at evil.test
-                b = mailbox_authority(m.group(0).rstrip(".-"))
-                if b is not None and b not in out:
-                    out.append(b)
+            # Junk in the part does not hide the mailbox it surrounds: a real
+            # client reads `evil@x.example` out of `evil@x.example <` and
+            # `Bob <evil@x.example` (email.utils.getaddresses), so that address is
+            # a finding (ruling 2). Only junk or a display name may surround it:
+            # prose that mentions an address is not a recipient list.
+            b = _mailbox_in_junk(part)
+            if b is not None and b not in out:
+                out.append(b)
         else:
             out.append(a)
     if failed or not out:
