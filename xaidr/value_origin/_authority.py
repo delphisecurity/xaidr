@@ -227,6 +227,7 @@ _IMPLIED_IP_RE = re.compile(r"^(\[[0-9A-Fa-f:.]{2,45}\]|[0-9]{1,3}(?:\.[0-9]{1,3
                             r"(?::[0-9]{1,5}(?![^/?#])|(?=[/?#]))")
 _NON_DESTINATION_SCHEMES = frozenset({"file", "data"})
 _TAB_NEWLINE = str.maketrans("", "", "\t\n\r")
+_C0_OR_SPACE = "".join(map(chr, range(0x21)))
 # Q1: where an RFC 3986 authority ends (urlsplit's netloc delimiters).
 _AUTHORITY_END_RE = re.compile(r"[/?#]")
 # urlsplit's IPvFuture literal (`_check_bracketed_host`).
@@ -480,7 +481,9 @@ def url_authority(value: str, *, arg_mode: bool, written: Optional[str] = None):
         primary = NOT_A_DESTINATION              # hostless (C-6)
     else:
         primary = _host_authority(host, arg_fallback=arg_mode) or PARSE_FAILURE
-    others = [_authority_host(value if written is None else written, whatwg=False)]  # RFC 3986
+    as_written = value if written is None else written
+    others = [_authority_host(as_written, whatwg=False),   # RFC 3986, as urlsplit 3.12.2 reads it
+              _authority_host(as_written, whatwg=True)]    # httpx: brackets checked in the HOST only
     if not ok:
         others.insert(0, _authority_host(whatwg, whatwg=True))          # what urlsplit refused
     extra = []
@@ -676,7 +679,8 @@ def classify_value(value: str, *, arg_mode: bool):
     otherwise a value with '@' is a mailbox list; then a phone; then a bare
     strict IP. Bare hostnames are never destinations here.
     """
-    v = value.strip()
+    c0 = value.strip(_C0_OR_SPACE)        # what WHATWG and urlsplit strip from a URL
+    v = c0.strip()
     if not v or len(v) > MAX_LEAF_CHARS:
         return NOT_A_DESTINATION
     if v[:7].lower() == "mailto:":
@@ -684,8 +688,8 @@ def classify_value(value: str, *, arg_mode: bool):
         if not addr:
             return NOT_A_DESTINATION           # mailto: with no address
         return mailbox_list(addr) if arg_mode else _single(mailbox_list(addr))
-    written = v
-    url = v.translate(_TAB_NEWLINE)
+    written = c0
+    url = c0.translate(_TAB_NEWLINE)
     m = _SPECIAL_RE.match(url)
     if m:
         url = m.group(1) + "://" + url[m.end():]
