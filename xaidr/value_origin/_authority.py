@@ -166,6 +166,8 @@ def _host_authority(raw_host: str, *, arg_fallback: bool) -> Optional[Authority]
     never ``no_destination``; a prose candidate is dropped.
     """
     host = raw_host.strip()
+    if any(c.isspace() for c in host):
+        return None                            # no resolver reads a name with a space
     if host.startswith("[") and host.endswith("]"):
         ip = _strict_ip(host)
         return Authority(scheme="ip", value=ip_key(ip)) if ip is not None else None
@@ -185,7 +187,7 @@ def _host_authority(raw_host: str, *, arg_fallback: bool) -> Optional[Authority]
             return (Authority(scheme="dns", value=raw_host.lower().rstrip("."))
                     if arg_fallback else None)
         host = host.rstrip(".")
-        if not host:
+        if not host or any(c.isspace() for c in host):
             return None
     ascii_host = to_ascii(host)
     if ascii_host is None or not ascii_host:
@@ -206,9 +208,17 @@ _SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]{0,31})://")
 # rewritten to `scheme://` and parsed as one. A non-special scheme with no `//`
 # has no host (`gopher:evil.test`), as WHATWG and urllib.parse agree.
 _SPECIAL_RE = re.compile(r"^(https?|wss?|ftp):[/\\]*(?=[^\s/\\])", re.IGNORECASE)
-# `host/path` with no scheme — ≥2 labels, alphabetic final label, and a
-# path. Labels are \w so a Unicode host is accepted here too (ruling 3.6).
-_IMPLIED_RE = re.compile(r"^((?:[\w\-]{1,63}\.){1,126}[^\W\d_]{1,63})/")
+# `host/path` with no scheme — ≥2 labels, alphabetic final label, an optional
+# port, and a path. Labels are \w so a Unicode host is accepted here too (ruling
+# 3.6). A client that guesses `http://` (curl) sends `evil.test:8080/x` to
+# evil.test (ruling 2).
+_IMPLIED_RE = re.compile(r"^((?:[\w\-]{1,63}\.){1,126}[^\W\d_]{1,63})(?::[0-9]{1,5})?/")
+# No scheme, a host in any inet_aton spelling (hex, octal, decimal, short dotted),
+# then a port, path, query or fragment: `0xA9FEA9FE/latest`. A client that
+# guesses `http://` sends it to the address that host denotes (ruling 2). Read for
+# ARGUMENTS only: recorded from a result it would make `2024/report` in a file
+# listing an address that a later call to that path matches.
+_IMPLIED_INT_RE = re.compile(r"^([0-9][0-9A-Za-z.]{0,63})(?::[0-9]{1,5}(?![^/?#])|(?=[/?#]))")
 # No scheme, a STRICT address literal (a dotted quad, or IPv6 in
 # brackets), then a port, path, query or fragment — `169.254.169.254/latest`.
 # Strict because the integer spellings (hex, decimal, octal, short dotted)
@@ -216,6 +226,7 @@ _IMPLIED_RE = re.compile(r"^((?:[\w\-]{1,63}\.){1,126}[^\W\d_]{1,63})/")
 _IMPLIED_IP_RE = re.compile(r"^(\[[0-9A-Fa-f:.]{2,45}\]|[0-9]{1,3}(?:\.[0-9]{1,3}){3})"
                             r"(?::[0-9]{1,5}(?![^/?#])|(?=[/?#]))")
 _NON_DESTINATION_SCHEMES = frozenset({"file", "data"})
+_TAB_NEWLINE = str.maketrans("", "", "\t\n\r")
 # Q1: where an RFC 3986 authority ends (urlsplit's netloc delimiters).
 _AUTHORITY_END_RE = re.compile(r"[/?#]")
 # urlsplit's IPvFuture literal (`_check_bracketed_host`).
@@ -494,19 +505,33 @@ def url_authority(value: str, *, arg_mode: bool, written: Optional[str] = None):
 
 
 def implied_url_authority(value: str, *, arg_mode: bool):
-    """The one scheme-less exception: ``host/path`` counts as a URL with an implied scheme."""
+    """A scheme-less ``host[:port]/path`` read as a URL with an implied ``http://``,
+    every reading of its authority included (Q1, ruling 2)."""
     m = _IMPLIED_RE.match(value)
     if not m:
         return NOT_A_DESTINATION
-    a = _host_authority(m.group(1), arg_fallback=arg_mode)
-    if a is None:
-        return PARSE_FAILURE if arg_mode else NOT_A_DESTINATION
-    return a
+    res = url_authority("http://" + value, arg_mode=arg_mode)
+    if res is NOT_A_DESTINATION and arg_mode:
+        return PARSE_FAILURE
+    return res
+
+
+def _implied_ip_authority(value: str, *, arg_mode: bool):
+    """A scheme-less integer-spelled address with a locator, read as ``http://value``.
+    Kept only when some reading is an address: a host no resolver reads as a
+    number is a bare name, and a bare name is never a destination."""
+    res = url_authority("http://" + value, arg_mode=arg_mode)
+    found = (res.parsed if isinstance(res, ParseFailure)
+             else res if isinstance(res, list) else [res] if isinstance(res, Authority) else [])
+    if not any(a.scheme == "ip" for a in found):
+        return NOT_A_DESTINATION
+    return res
 
 
 # ── mailboxes (rulings 3.2 / 3.6) ───────────────────────────────────────────
 _LOCAL_RE = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~\-]{1,64}")
 _ASCII_DOMAIN_RE = re.compile(r"[A-Za-z0-9\-]{1,63}(?:\.[A-Za-z0-9\-]{1,63}){1,126}")
+_ADDR_END = frozenset(" \t\r\n<>,;:\"()[]")    # where email.utils ends an address
 _DISPLAY_RE = re.compile(r"^(?P<display>[^<>]{0,256})<(?P<addr>[^<>]{1,320})>$")
 
 
@@ -584,6 +609,19 @@ def mailbox_list(value: str):
         a = _mailbox_part(part)
         if a is None:
             failed = True
+            # Junk inside the part does not hide a mailbox in it: a real client
+            # reads `evil@x.example` out of `evil@x.example <`
+            # (email.utils.getaddresses), so every address in the part that
+            # parses is a finding (ruling 2).
+            for m in _P_EMAIL_RE.finditer(part):
+                if m.start() and part[m.start() - 1].isalnum():
+                    continue                   # starts mid-word: `jürgen@` is not `rgen@`
+                end = m.end() + (part[m.end():m.end() + 1] == ".")   # a root or full stop
+                if end < len(part) and part[end] not in _ADDR_END:
+                    continue                   # `user@evil.test/x` is no mailbox at evil.test
+                b = mailbox_authority(m.group(0).rstrip(".-"))
+                if b is not None and b not in out:
+                    out.append(b)
         else:
             out.append(a)
     if failed or not out:
@@ -628,13 +666,16 @@ def classify_value(value: str, *, arg_mode: bool):
             return NOT_A_DESTINATION           # mailto: with no address
         return mailbox_list(addr) if arg_mode else _single(mailbox_list(addr))
     written = v
-    m = _SPECIAL_RE.match(v)
+    url = v.translate(_TAB_NEWLINE)
+    m = _SPECIAL_RE.match(url)
     if m:
-        v = m.group(1) + "://" + v[m.end():]
-    if _SCHEME_RE.match(v):
-        if any(c.isspace() for c in v):
-            return PARSE_FAILURE if arg_mode else NOT_A_DESTINATION
-        return url_authority(v, arg_mode=arg_mode, written=written)
+        url = m.group(1) + "://" + url[m.end():]
+    if _SCHEME_RE.match(url):
+        # WHATWG and urlsplit both remove every tab and newline from a URL; other
+        # whitespace counts only where it lands. In a host it is no host (that
+        # reading fails); in a path, query or fragment WHATWG percent-encodes it
+        # and the host is unaffected (ruling 3).
+        return url_authority(url, arg_mode=arg_mode, written=written.translate(_TAB_NEWLINE))
     if not any(c.isspace() for c in v):
         if _IMPLIED_RE.match(v):
             return implied_url_authority(v, arg_mode=arg_mode)
@@ -643,6 +684,10 @@ def classify_value(value: str, *, arg_mode: bool):
             ip = _strict_ip(m.group(1))
             if ip is not None:
                 return Authority(scheme="ip", value=ip_key(ip))
+        if arg_mode and _IMPLIED_INT_RE.match(v):
+            res = _implied_ip_authority(v, arg_mode=arg_mode)
+            if res is not NOT_A_DESTINATION:
+                return res
     if "@" in v:
         res = mailbox_list(v)
         return res if arg_mode else _single(res)

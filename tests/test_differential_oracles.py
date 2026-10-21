@@ -175,6 +175,35 @@ _OVER_READ_CLASSES = {
 }
 
 
+#: Not a URL reading at all: a value with an ``@`` that a URL consumer finds no
+#: host in is also a mailbox list, and email.utils.getaddresses reads the mailbox
+#: out of it (ruling 2). None of the URL oracles performs that reading, so each such
+#: finding is checked against email.utils itself, not absorbed on trust.
+def _email_utils_reads(url, key):
+    """The mailbox is written in the value verbatim (junk around it does not hide
+    it), or email.utils reads a mailbox at the same DOMAIN (the destination of a
+    mailbox; junk in a local part does not move it)."""
+    from email.utils import getaddresses
+    box = key[len("mailto:"):]
+    local, _, dom = box.rpartition("@")
+    try:
+        ulabel = dom.encode("ascii").decode("idna")
+    except UnicodeError:
+        ulabel = dom
+    if box in url.lower() or f"{local}@{ulabel}" in url.lower():
+        return True
+    domain = key[len("mailto:"):].rpartition("@")[2]
+    for _, addr in getaddresses([url]):
+        d = addr.rpartition("@")[2].rstrip(".").lower()
+        try:
+            d = d.encode("idna").decode("ascii") if not d.isascii() else d
+        except UnicodeError:
+            continue
+        if "@" in addr and d == domain:
+            return True
+    return False
+
+
 def _urlsplit_reads_like_3_12_2():
     """True on an interpreter whose urlsplit predates the bracketed-host
     backport (CPython 3.12.2 behaves this way; 3.10.21 and 3.12.14 do not)."""
@@ -207,6 +236,9 @@ def comparison(oracles):
             if k not in core:
                 under.append((url, name, k, sorted(core)))
         for k in sorted(core - read):
+            if k.startswith("mailto:") and _email_utils_reads(url, k):
+                over["mailbox-reading"].append((url, k))
+                continue
             cls = next((c for c, (pred, _) in _OVER_READ_CLASSES.items() if pred(url)), None)
             over[cls].append((url, k))
     return {"n": n, "under": under, "over": over, "per_oracle": per_oracle, "keys": keys}
