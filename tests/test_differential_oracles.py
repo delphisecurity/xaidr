@@ -909,3 +909,29 @@ def test_r4_a_metadata_hostname_without_slashes_reaches_the_hostname_rules(oracl
     shape = parse_url(url)
     assert shape is not None and shape.host == "metadata.google.internal", (
         f"WHATWG reaches metadata.google.internal for {url!r}; url_parse gives {shape}")
+
+
+def test_a_url_prefix_designation_never_trusts_a_value_with_several_readings():
+    """Ruling 2, the trust direction: a URL_PREFIX designation raises a read to a
+    trusted source, so it must match only a value every consumer reads the same
+    way. Over every spelling here, a value the designation for its own split host
+    matches is one the core reads as exactly one authority."""
+    from urllib.parse import urlsplit
+    from xaidr.value_origin._authority import Authority, classify_value
+    from xaidr.value_origin._designations import _url_prefix_match
+    matched, bad = 0, []
+    for url in _spellings():
+        try:
+            host = urlsplit(url).hostname
+        except ValueError:
+            continue
+        if not host:
+            continue
+        for scheme in ("http", "https"):
+            if _url_prefix_match(url.strip(), f"{scheme}://{host}/"):
+                matched += 1
+                if not isinstance(classify_value(url, arg_mode=True), Authority):
+                    bad.append(url)
+    assert matched >= 500, matched              # not vacuous (837 on this corpus)
+    assert not bad, (f"{len(bad)} values with more than one reading match a trusted "
+                     f"designation for one of them: {bad[:5]}")

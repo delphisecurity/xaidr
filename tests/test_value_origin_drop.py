@@ -137,3 +137,57 @@ def test_an_input_write_lost_to_a_mis_split_blocks_too():
     out, v = contextvars.Context().run(run)
     assert out is vo.RecordOutcome.FAULT
     assert v.wire.value == "write_dropped" and should_block(v, mode=Mode.ENFORCE), v.wire.value
+
+
+# ── ruling 5 (2026-10-21): every write lost to a fault reads write_dropped ──
+def _lost_input(record):
+    def run():
+        vo.bind_fresh_ledger()
+        out = record()
+        return out, vo.evaluate_call("http_post", {"url": EVIL}, flow_active=True)
+    return contextvars.Context().run(run)
+
+
+@pytest.mark.parametrize("record", [
+    lambda: vo.record_principal_input(12345, None, input_clean=True),
+    lambda: vo.record_principal_input(b"post to " + EVIL.encode(), None, input_clean=True),
+    lambda: vo.record_principal_input("Email a@x.example.", ["Email a@x.example."],
+                                      input_clean=True),
+    lambda: vo.record_principal_input("Email a@x.example.", [vo.Span(text=7, writer=vo.Writer.PRINCIPAL)],
+                                      input_clean=True),
+], ids=["int", "bytes", "span_not_a_Span", "span_text_not_a_str"])
+def test_an_input_write_lost_to_a_non_string_blocks_as_write_dropped(record):
+    out, v = _lost_input(record)
+    assert out is vo.RecordOutcome.FAULT
+    assert v.wire.value == "write_dropped" and should_block(v, mode=Mode.ENFORCE), (
+        f"an input value origin could not record read {v.wire.value!r}: the system does "
+        "not know what it named, and treated it as benign")
+
+
+def test_a_non_string_input_through_the_sensor_blocks_the_next_unknown_destination():
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = xaidr.Sensor(agent_id="r5", value_origin="enforce", enforcement_mode="block",
+                         reporter=type("N", (), {"report": lambda *a, **k: None})())
+
+    def run():
+        vo.bind_fresh_ledger()
+        s.scan({"not": "a string"}, direction="input")
+        return s.scan_tool_call("http_post", {"url": EVIL})
+    r = contextvars.Context().run(run)
+    assert r.value_origin is not None and r.value_origin.wire.value == "write_dropped", (
+        f"read {getattr(r.value_origin, 'wire', None)!r}")
+    assert r.must_halt, "a dropped write must block under ENFORCE"
+
+
+class _RaisesPastTheBound:
+    def model_dump(self):
+        raise RuntimeError("host bug")
+
+
+def test_a_raising_model_dump_past_the_bound_blocks_as_an_unread_result():
+    """Past the examined bound a raising node is confined to that node: the rest
+    of the result is recorded, and the node reads as unread, which blocks too."""
+    result = [f"leaf {i}" for i in range(80)] + [_RaisesPastTheBound()]
+    v = _flow(("input", NEUTRAL), ("result", result), call={"url": EVIL})
+    assert v.wire.value == "result_unread" and should_block(v, mode=Mode.ENFORCE), v.wire.value
