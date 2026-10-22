@@ -1,0 +1,6 @@
+== venv-pins310
+27 passed, 4 xfailed in 4.62s
+== venv-pins
+29 passed, 1 skipped, 1 xfailed in 8.05s
+== venv-latest
+29 passed, 1 skipped, 1 xfailed in 8.11s

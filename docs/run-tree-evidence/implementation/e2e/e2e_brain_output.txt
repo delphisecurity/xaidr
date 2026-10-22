@@ -1,0 +1,17 @@
+events in 14 | ai_guard_logs rows 14 | runRootRejected 0 | traceParentRejected 0
+input |  | stamped | c0da44fcded6 | ["inbound"] | 1 |  | 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01 | wire
+input |  | stamped | c0da44fcded6 | ["support_agent","DelphiMiddleware.before_model"] | 2 |  | NULL | -
+input |  | stamped | faca49df2be4 | ["inbound"] | 1 |  | 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01 | wire
+input |  | stamped | faca49df2be4 | ["support_agent","DelphiMiddleware.before_model"] | 2 |  | NULL | -
+tool_call | record_note | stamped | c0da44fcded6 | ["support_agent","tools"] | 3 | call_1 | NULL | -
+tool_call | lookup_customer | stamped | faca49df2be4 | ["support_agent","tools"] | 3 | call_1 | NULL | -
+tool_result |  | stamped | faca49df2be4 | ["support_agent","tools"] | 4 | call_1 | NULL | -
+tool_result |  | stamped | c0da44fcded6 | ["support_agent","tools"] | 4 | call_1 | NULL | -
+input |  | stamped | faca49df2be4 | ["support_agent","DelphiMiddleware.before_model"] | 5 |  | NULL | -
+output |  | stamped | faca49df2be4 | ["support_agent","DelphiMiddleware.after_model"] | 6 |  | NULL | -
+input |  | stamped | c0da44fcded6 | ["support_agent","DelphiMiddleware.before_model"] | 5 |  | NULL | -
+output |  | stamped | c0da44fcded6 | ["support_agent","DelphiMiddleware.after_model"] | 6 |  | NULL | -
+tool_call | lookup_customer | no_run | NULL | null |  |  | NULL | -
+tool_result |  | no_run | NULL | null |  |  | NULL | -
+distinct run_root_id: 2 | rows with trace_id: 2 | no_run rows with a root: 0
+E2E BRAIN INGEST: OK

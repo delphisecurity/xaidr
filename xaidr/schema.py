@@ -256,6 +256,7 @@ def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
     # Trace correlation applies to every event type, so it is resolved before
     # the branch.
     _passthrough_trace(data, out)
+    _passthrough_run_tree(data, out)
 
     if event_type == EVENT_TYPE_CIRCUIT_BREAKER:
         _map_circuit_breaker(data, out)
@@ -531,6 +532,39 @@ def _passthrough_trace(data: dict[str, Any], out: dict[str, Any]) -> None:
         out["trace_flags"] = trace["traceFlags"]
     if trace.get("source"):
         out["gen_ai.security.trace.source"] = trace["source"]
+
+
+#: Internal run-tree key -> mapped attribute. Additive, all optional.
+_RUN_TREE_ATTRS = (
+    ("runTree", "gen_ai.security.run.status"),
+    ("runRootId", "gen_ai.security.run.root_id"),
+    ("runTaskId", "gen_ai.security.run.task_id"),
+    ("runParentId", "gen_ai.security.run.parent_id"),
+    ("runNode", "gen_ai.security.run.node"),
+    ("runNodePath", "gen_ai.security.run.node_path"),
+    ("runStep", "gen_ai.security.run.step"),
+    ("runSeq", "gen_ai.security.run.seq"),
+    ("runSource", "gen_ai.security.run.source"),
+)
+
+
+def _passthrough_run_tree(data: dict[str, Any], out: dict[str, Any]) -> None:
+    """Carry the run-tree keys (``xaidr.run_tree``), when the sensor stamped them.
+
+    ``gen_ai.security.run.root_id`` is the flow key: every event of one
+    LangChain invocation carries the same value. A run id that named more than
+    one run is never handed out as a key; those events carry ``collision``. ``status`` says why the ids are absent when they are (``no_run``,
+    ``unknown_run``, ``collision``, ``fault``), so absence is never ambiguous.
+    The tool-call id reuses the OTel attribute ``gen_ai.tool.call.id`` rather
+    than minting one.
+    """
+    for key, attr in _RUN_TREE_ATTRS:
+        value = data.get(key)
+        if value is not None:
+            out[attr] = value
+    call_id = data.get("toolCallId")
+    if call_id:
+        out["gen_ai.tool.call.id"] = call_id
 
 
 def _passthrough_provenance(data: dict[str, Any], out: dict[str, Any]) -> None:

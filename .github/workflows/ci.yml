@@ -157,8 +157,8 @@ jobs:
             "langgraph==1.2.12" "langgraph-prebuilt==1.1.0"
           pip list 2>/dev/null | grep -iE '^(langchain|langgraph)'
 
-      - name: Run tests/test_real_frameworks.py
-        run: python -m pytest tests/test_real_frameworks.py -q -rs --junitxml=real-frameworks.xml
+      - name: Run tests/test_real_frameworks.py and tests/test_run_tree.py
+        run: python -m pytest tests/test_real_frameworks.py tests/test_run_tree.py -q -rs --junitxml=real-frameworks.xml
 
       # THE GUARD. A real-framework test that skips when its library is absent
       # passes vacuously: pytest exits 0 and the job goes green having run
@@ -198,6 +198,43 @@ jobs:
               sys.exit("GUARD RED: " + "; ".join(problems))
           print("GUARD GREEN")
           PY
+
+      # Run-tree capture (tests/test_run_tree.py) is only real against real
+      # LangChain, so the same vacuity applies: every case must run except the
+      # ones named here, each for a stated reason. Anything else skipped,
+      # xfailed or broken is a red.
+      - name: Guard — TestRealRunTree ran, only the named cases did not
+        run: python .github/run_tree_guard.py real-frameworks.xml py312
+
+  # ── Run-tree capture on Python 3.10 ────────────────────────────────────────
+  # Before 3.11, asyncio.create_task takes no context, so LangChain cannot carry
+  # the run config into an async node. The run tree must then report
+  # unknown_run (never no_run, never a root) — a different expected outcome
+  # from py3.12, so it is asserted on the interpreter where it happens.
+  run-tree-py310:
+    name: run tree (py3.10, langchain-core 1.6.1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install (package + pinned LangChain stack)
+        run: |
+          python -m pip install --upgrade pip
+          pip install . pytest \
+            "langchain-core==1.6.1" "langchain==1.4.1" \
+            "langgraph==1.2.12" "langgraph-prebuilt==1.1.0"
+
+      - name: Run tests/test_run_tree.py
+        run: python -m pytest tests/test_run_tree.py -q -rsx --junitxml=run-tree.xml
+
+      - name: Guard — TestRealRunTree ran, only the named cases did not
+        run: python .github/run_tree_guard.py run-tree.xml py310
 
   # ── The corpus report, printed into the log ────────────────────────────────
   # A reviewer reading a rule PR should see what the rule did to the corpus

@@ -1,0 +1,11 @@
+== slow-reporter probe (report sleeps 0.3 s), BEFORE the flush fix — the race made deterministic
+E       AssertionError: a real BaseTool.arun return never reached the after position — every tool result on the async path goes to the model unscanned (directions scanned: [])
+E       AssertionError: blocked, but not on the result path: ran=['readme.md'] directions=[]
+E       AssertionError: blocked, but not on the result path: ran=['readme.md'] directions=[]
+3 failed, 76 deselected in 0.48s
+== same probe, AFTER the flush fix
+3 passed, 76 deselected in 1.35s
+== probe removed; CI pins (langchain-core 1.6.1, py3.12)
+after fix: 0 of 25 runs of TestRealToolResultSeam (CI pins, py3.12) had a failure; per-run: 25 6 passed
+after fix: 0 of 5 combined affected runs failed a TestRealToolResultSeam case
+(for comparison, before the fix: 5/25 and 2/25 alone at 0502c99 — flake_compare.txt)

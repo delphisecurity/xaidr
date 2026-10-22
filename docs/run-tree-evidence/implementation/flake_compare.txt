@@ -1,0 +1,6 @@
+head-wt: 5 of 25 runs of TestRealToolResultSeam had a failure
+run-tree: 1 of 25 runs of TestRealToolResultSeam had a failure
+head-wt (0502c99, rerun after the index rewrite): 2 of 25 runs of TestRealToolResultSeam alone had a failure
+run-tree (final branch code): 0 of 25 runs of TestRealToolResultSeam alone had a failure
+head-wt: 1 of 5 combined runs failed that test
+run-tree: 2 of 5 combined runs failed that test

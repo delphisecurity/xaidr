@@ -1,0 +1,7 @@
+import langchain_core.tools                {'langchain_core.tracers.context': False, 'langchain_core.runnables.config': False, 'langchain_core.callbacks.manager': False}
+from langchain.agents import create_agent  {'langchain_core.tracers.context': False, 'langchain_core.runnables.config': True, 'langchain_core.callbacks.manager': True}
+import langgraph.graph                     {'langchain_core.tracers.context': False, 'langchain_core.runnables.config': True, 'langchain_core.callbacks.manager': True}
+import langchain_core                      {'langchain_core.tracers.context': False, 'langchain_core.runnables.config': False, 'langchain_core.callbacks.manager': False}
+new modules on importing langchain_core.tracers.context after create_agent: 2
+non-langchain_core: []
+after first Runnable.invoke: tracers.context loaded = True

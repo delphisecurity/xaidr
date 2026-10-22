@@ -1,0 +1,156 @@
+=== S1 stamp call removed from the enqueue funnel
+  test: test_t1_every_event_in_one_graph_run_carries_one_root
+  RED   (rc=1): 1 failed in 0.48s
+    E       AssertionError: events emitted INSIDE a LangGraph run carry no flow key, so the Brain cannot tell which flow they belong to: [{'direction': 'input', 'toolName': None, 'runTree': None, 'runRootId': None, 'runNode': None, 'toolCallId': None}, {'direction': 'tool_call', 'toolName': 'lookup_customer', 'runTree': None, 'runRootId': None, 'runNode': None, 'toolCallId': None}, {'direction': 'tool_result', 'toolName'
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.38s
+=== S2 concurrent roots merged onto the oldest live root
+  test: test_t2_two_concurrent_flows_never_share_a_root
+  RED   (rc=1): 1 failed in 0.43s
+    E       AssertionError: SECURITY: two concurrent flows were stamped with ONE root, so one flow's input could vouch for the other's tool call: {'01a15295-f497-7843-a887-060c864279b6': {'lookup_customer', 'record_note'}}
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.40s
+=== S3 collision detection removed (a reused id is silently ignored)
+  test: test_t2_a_reused_run_id_is_a_collision_never_a_merged_root
+  RED   (rc=1): 1 failed in 0.41s
+    E       AssertionError: SECURITY: two live flows that reused one run_id were both stamped with it, a merged root: [{'direction': 'input', 'toolName': None, 'runTree': 'stamped', 'runRootId': 'd7e47d6b-8353-4a61-832c-3e9612f94c72', 'runNode': 'DelphiMiddleware.before_model', 'toolCallId': None}, {'direction': 'input', 'toolName': None, 'runTree': 'stamped', 'runRootId': 'd7e47d6b-8353-4a61-832c-3e9612f94c72', 'runNode
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.38s
+=== S4 current_root synthesizes a key outside any run
+  test: test_current_root_is_the_flow_key_in_process
+  RED   (rc=1): 1 failed in 0.40s
+    E       AssertionError: current_root() outside any run is 'fbbed778-ee9c-4dbd-afaf-1362846932b4', not None
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.37s
+=== S5 handler try/except removed
+  test: test_t3_a_faulting_handler_never_reaches_the_host_or_the_log
+  RED   (rc=1): 1 failed in 0.41s
+    E       AssertionError: a handler fault must surface as runTree='fault', not vanish: [{'direction': 'input', 'toolName': None, 'runTree': 'unknown_run', 'runRootId': None, 'runNode': None, 'toolCallId': None}, {'direction': 'tool_call', 'toolName': 'lookup_customer', 'runTree': 'unknown_run', 'runRootId': None, 'runNode': None, 'toolCallId': 'call_1'}, {'direction': 'tool_result', 'toolName': None, 'runTree': 'unknow
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.38s
+=== S6 stamp except clause removed (re-raises)
+  test: test_t3_a_faulting_stamp_never_costs_the_event_or_the_verdict
+  RED   (rc=1): 1 failed in 0.40s
+    E       AssertionError: a stamp fault cost events: []
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.39s
+=== S7 eviction removed
+  test: test_t4_abandoned_roots_are_evicted_under_the_cap
+  RED   (rc=1): 1 failed in 0.11s
+    E       AssertionError: 30000 live entries after 10k abandoned roots: an end that never fires leaks without bound
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.12s
+=== S7b eviction removed (memory budget)
+  test: test_d4_budget_index_stays_under_2mb_with_many_flows
+  RED   (rc=1): 1 failed in 4.87s
+    E       AssertionError: 83335 live entries: abandoned roots are not being evicted, so the index grows without bound
+  restored (sha256 identical)
+  GREEN (rc=0): 3 passed in 6.93s
+=== S8 a root synthesized for a no-run event
+  test: test_t5_a_direct_tool_run_is_no_run_and_never_a_synthesized_root
+  RED   (rc=1): 1 failed in 0.47s
+    E       AssertionError: SECURITY: a root was synthesized for an event that has no framework run; a guessed root is how two flows come to share one: [{'direction': 'tool_call', 'toolName': 'lookup_customer', 'runTree': 'no_run', 'runRootId': 'a4ca6165-5099-48cb-9ac7-eccda9195985', 'runNode': None, 'toolCallId': None}, {'direction': 'tool_result', 'toolName': None, 'runTree': 'no_run', 'runRootId': 'ca6802b1-c16b-4609-
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.38s
+=== S9 unprotect no longer stops stamping
+  test: test_t5_protect_twice_is_idempotent_and_unprotect_detaches
+  RED   (rc=1): 1 failed in 0.40s
+    E       AssertionError: unprotect() left run-tree stamping active: events would keep carrying run keys from an index no handler feeds any more
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.37s
+=== S10 configure wrapper attaches nothing (LangChain routing around configure)
+  test: test_t6_canary_sync_langchain_still_routes_through_configure
+  RED   (rc=1): 1 failed in 0.40s
+    E       AssertionError: CANARY (invoke): LangChain delivered 15 run(s) the run-tree handler never saw. LangChain is configuring callbacks without going through CallbackManager.configure / AsyncCallbackManager.configure; run-tree capture is DEAD on this version, not degraded.
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.38s
+=== S11 tool_call_id not bound around the tool-result scan
+  test: test_t7_a_tool_result_joins_its_tool_call_by_tool_call_id
+  RED   (rc=1): 1 failed in 0.41s
+    E       AssertionError: a tool_result cannot be joined to the tool_call that produced it; with parallel tool calls adjacency cannot recover it: [{'direction': 'tool_result', 'toolName': None, 'runTree': 'stamped', 'runRootId': '01a15296-72bb-7b71-a183-c7af39e5673c', 'runNode': 'tools', 'toolCallId': None}, {'direction': 'tool_result', 'toolName': None, 'runTree': 'stamped', 'runRootId': '01a15296-72bb-7b71-a183-c7af3
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.38s
+=== S12 AsyncCallbackManager.configure not wrapped
+  test: test_async_toolnode_graph_is_stamped_on_one_root
+  RED   (rc=1): 1 failed in 0.40s
+    E       AssertionError: events from an ainvoke'd graph lost their flow key: [{'direction': 'tool_call', 'toolName': 'lookup_customer', 'runTree': 'unknown_run', 'runRootId': None, 'runNode': None, 'toolCallId': 'call_1'}, {'direction': 'tool_result', 'toolName': None, 'runTree': 'unknown_run', 'runRootId': None, 'runNode': None, 'toolCallId': 'call_1'}, {'direction': 'tool_call', 'toolName': 'record_note', 'runTree':
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.37s
+=== S12b AsyncCallbackManager.configure not wrapped (canary)
+  test: test_t6_canary_async_langchain_still_routes_through_configure
+  RED   (rc=1): 1 failed in 0.41s
+    E       AssertionError: CANARY (ainvoke): LangChain delivered 5 run(s) the run-tree handler never saw. LangChain is configuring callbacks without going through CallbackManager.configure / AsyncCallbackManager.configure; run-tree capture is DEAD on this version, not degraded.
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.38s
+=== S13 schema run-tree passthrough removed
+  test: test_schema_maps_the_run_keys_and_omits_them_when_absent
+  RED   (rc=1): 1 failed in 0.06s
+    E       AssertionError: the OpenA2A form drops run keys a SIEM would join on: {'gen_ai.security.run.status': 'stamped', 'gen_ai.security.run.root_id': '51727443-dde4-41d6-9783-d9fcfe07bae9', 'gen_ai.security.run.task_id': '7d9c40a5-bcdb-4a13-aec6-58783b43ac3e', 'gen_ai.security.run.parent_id': 'bad1f0b3-a90c-485c-bca5-94b0db553759', 'gen_ai.security.run.node': 'tools', 'gen_ai.security.run.node_path': ['agent', 'tool
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.04s
+=== S14 stamp made slow
+  test: test_d4_budget_stamp_p99_at_most_10us
+  RED   (rc=1): 1 failed in 0.48s
+    E       AssertionError: stamp p99 17.58 us exceeds the 10 us per-event budget
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.15s
+=== S15 callback made slow
+  test: test_d4_budget_callback_p99_at_most_10us
+  RED   (rc=1): 1 failed in 0.43s
+    E       AssertionError: handler callback p99 17.21 us exceeds the 10 us budget
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.11s
+=== S16 run-tree target removed from TARGETS
+  test: test_t5_without_langchain_no_run_keys_and_the_manifest_says_so
+  RED   (rc=1): 1 failed in 0.16s
+    E       AssertionError: the manifest does not name run-tree capture at all in a process without LangChain, so its absence is silent: not_present=['httpx', 'requests', 'langchain_core', 'langchain', 'langgraph', 'deepagents', 'openai-agents', 'crewai', 'autogen-core', 'autogen-legacy', 'llama-index', 'mcp', 'haystack']
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.14s
+=== S17 the Python < 3.11 unplaceable label removed
+  test: test_py310_async_events_are_unplaceable_never_rooted
+  RED   (rc=1): 1 failed in 0.44s
+    E       AssertionError: on Python < 3.11 an async node's events cannot be placed in their run; they must say unknown_run, not no_run (which claims they ran outside any run): [{'direction': 'tool_call', 'toolName': 'lookup_customer', 'runTree': 'no_run', 'runRootId': None, 'runNode': None, 'toolCallId': 'call_1'}, {'direction': 'tool_result', 'toolName': None, 'runTree': 'no_run', 'runRootId': None, 'runNode': None, '
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.34s
+=== S18 a reused id marks only the newcomer's root collided
+  test: test_t2_index_a_reused_child_id_collides_both_flows
+  RED   (rc=1): 1 failed in 0.06s
+    E           AssertionError: SECURITY: run 831d86d6-d295-4199-8b55-b77274c89884 resolves to a stamped root after a run-id reuse, so two flows can share one key: status=stamped
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.04s
+=== S18b same, a root id equal to a live child
+  test: test_t2_index_a_root_id_equal_to_a_live_child_collides
+  RED   (rc=1): 1 failed in 0.06s
+    E           AssertionError: SECURITY: run eaf323c5-a60e-4029-952e-65a579a60533 resolves to a stamped root after a run-id reuse, so two flows can share one key: status=stamped
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.04s
+=== S19 ended ids forgotten (no memo of ended runs)
+  test: test_t2_index_a_root_id_reused_after_its_flow_ended_is_a_collision
+  RED   (rc=1): 1 failed in 0.06s
+    E           AssertionError: SECURITY: run 2deaa2bd-bf2b-40a5-8f10-133b0bf11592 resolves to a stamped root after a run-id reuse, so two flows can share one key: status=stamped
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.04s
+=== S20 resolve ignores tainted ids (a reused id reads unknown_run, not collision)
+  test: test_t2_index_a_collided_root_id_stays_collided_after_the_first_flow_ends
+  RED   (rc=1): 1 failed in 0.06s
+    E       AssertionError: {UUID('ae147a16-0ebf-404d-bc8d-b85cc8c2908a'): 'unknown_run', UUID('eae301f8-45aa-4e6f-96e5-1c280e772b05'): 'unknown_run'}
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.04s
+=== S21 in-flight handler indexes after unprotect
+  test: test_t5_unprotect_stops_indexing_runs_already_in_flight
+  RED   (rc=1): 1 failed in 0.40s
+    E       AssertionError: after unprotect() the in-flight handler indexed 100 runs
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.37s
+=== S22 every run carries an eager member set
+  test: test_d4_budget_index_stays_under_2mb_with_many_flows
+  RED   (rc=1): 1 failed in 5.23s
+    E       AssertionError: the run index retains 2.39 MB under _mixed; the budget is 2 MB
+  restored (sha256 identical)
+  GREEN (rc=0): 3 passed in 6.94s
+=== S23 handler made a no-op (benchmark vacuity guard)
+  test: test_d4_budget_callback_p99_at_most_10us
+  RED   (rc=1): 1 failed in 0.10s
+    E       AssertionError: the benchmark timed callbacks that indexed nothing: the last root's end found no entry to remove
+  restored (sha256 identical)
+  GREEN (rc=0): 1 passed in 0.11s

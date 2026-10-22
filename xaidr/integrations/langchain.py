@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from .. import run_tree
 from ..sensor import DelphiSensor
 from ..trace_context import resolve_parent
 from ._a2a_detect import looks_like_a2a
@@ -233,7 +234,11 @@ def delphi_middleware(
                 # scan_tool_call is fail-open internally (an internal fault
                 # returns a safe allow, never raises), so a scan error lets the
                 # tool proceed.
-                result = sensor.scan_tool_call(tool_name, arguments or {})
+                token = run_tree.bind_tool_call_id(call_id)
+                try:
+                    result = sensor.scan_tool_call(tool_name, arguments or {})
+                finally:
+                    run_tree.reset_tool_call_id(token)
                 print(
                     f"[xaidr] tool_call action={result.action} "
                     f"score={result.score:.2f} category={result.category} "

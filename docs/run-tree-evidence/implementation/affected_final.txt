@@ -1,0 +1,4 @@
+venv-base | affected (+real frameworks): 732 passed, 83 skipped, 5 xfailed in 17.95s  | test_b9 alone: 1 skipped in 0.01s
+venv-pins | affected (+real frameworks): FAILED tests/test_real_frameworks.py::TestRealToolResultSeam::test_a_real_ToolNode_accepts_the_result_path_refusal[invoke] 1 failed, 883 passed, 60 skipped, 6 xfailed in 19.66s  | test_b9 alone: 6 passed in 0.40s
+venv-latest | affected (+real frameworks): FAILED tests/test_real_frameworks.py::TestRealToolResultSeam::test_a_real_ToolNode_accepts_the_result_path_refusal[invoke] 1 failed, 883 passed, 60 skipped, 6 xfailed in 19.89s  | test_b9 alone: 6 passed in 0.40s
+venv-pins310 | affected (+real frameworks): FAILED tests/test_real_frameworks.py::TestRealToolResultSeam::test_a_real_ToolNode_accepts_the_result_path_refusal[invoke] 1 failed, 881 passed, 59 skipped, 9 xfailed in 17.04s  | test_b9 alone: 6 passed in 0.35s

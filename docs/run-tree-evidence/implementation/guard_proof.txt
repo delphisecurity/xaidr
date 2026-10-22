@@ -1,0 +1,4 @@
+== guard venv-pins/py312: GUARD GREEN
+== guard venv-pins310/py310: GUARD GREEN
+== guard venv-latest/py312: GUARD GREEN
+== guard venv-base (all skipped)/py312: GUARD RED: not run without a named reason (LangChain missing?): ['test_async_create_agent_without_middleware_is_stamped', 'test_async_toolnode_graph_is_stamped_

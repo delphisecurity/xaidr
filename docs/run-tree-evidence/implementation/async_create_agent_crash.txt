@@ -1,0 +1,6 @@
+== venv-pins
+async create_agent CRASH: NotImplementedError Asynchronous implementation of awrap_tool_call is not available. You are likely encountering this error because you defined only the sync version (wrap_tool_call) and invoked your agent in an asynchro
+== venv-latest
+async create_agent CRASH: NotImplementedError Asynchronous implementation of awrap_tool_call is not available. You are likely encountering this error because you defined only the sync version (wrap_tool_call) and invoked your agent in an asynchro
+== venv-pins at 0502c99 (no run-tree code)
+async create_agent CRASH: NotImplementedError Asynchronous implementation of awrap_tool_call is not available. You are likely encountering this error because you defined only the sync version (wrap_tool_call) and invoked your agent in an asynchro

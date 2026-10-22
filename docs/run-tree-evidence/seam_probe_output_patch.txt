@@ -1,0 +1,28 @@
+xaidr from: /Users/anirudhkotaru/worktrees/xaidr/run-tree/xaidr/__init__.py
+MODE: patch
+=== V1/V2 sync invoke on fresh thread, no config callbacks: 8 sensor events, handler saw 21 callbacks, 21 runs, distinct roots on events: ['0d025ddd0b73']
+   {"dir": "input", "tool": null, "enclosing": "349c9fc40638", "enclosing_known_to_handler": true, "enclosing_name": "DelphiMiddleware.before_model", "root_name": "LangGraph", "node": "DelphiMiddleware.before_model", "step": 1, "root": "0d025ddd0b73", "hops": 3, "thread": "fresh-thread"}
+   {"dir": "tool_call", "tool": "lookup_customer", "enclosing": "033f892c0201", "enclosing_known_to_handler": true, "enclosing_name": "tools", "root_name": "LangGraph", "node": "tools", "step": 4, "root": "0d025ddd0b73", "hops": 3, "thread": "ThreadPoolExecutor-3_0"}
+   {"dir": "tool_result", "tool": null, "enclosing": "033f892c0201", "enclosing_known_to_handler": true, "enclosing_name": "tools", "root_name": "LangGraph", "node": "tools", "step": 4, "root": "0d025ddd0b73", "hops": 3, "thread": "ThreadPoolExecutor-3_0"}
+   {"dir": "input", "tool": null, "enclosing": "73b0af34e5fc", "enclosing_known_to_handler": true, "enclosing_name": "DelphiMiddleware.before_model", "root_name": "LangGraph", "node": "DelphiMiddleware.before_model", "step": 5, "root": "0d025ddd0b73", "hops": 3, "thread": "fresh-thread"}
+   {"dir": "tool_call", "tool": "record_note", "enclosing": "1b75c4c25d99", "enclosing_known_to_handler": true, "enclosing_name": "tools", "root_name": "LangGraph", "node": "tools", "step": 8, "root": "0d025ddd0b73", "hops": 3, "thread": "ThreadPoolExecutor-4_0"}
+   {"dir": "tool_result", "tool": null, "enclosing": "1b75c4c25d99", "enclosing_known_to_handler": true, "enclosing_name": "tools", "root_name": "LangGraph", "node": "tools", "step": 8, "root": "0d025ddd0b73", "hops": 3, "thread": "ThreadPoolExecutor-4_0"}
+   {"dir": "input", "tool": null, "enclosing": "610bfbd8cd09", "enclosing_known_to_handler": true, "enclosing_name": "DelphiMiddleware.before_model", "root_name": "LangGraph", "node": "DelphiMiddleware.before_model", "step": 9, "root": "0d025ddd0b73", "hops": 3, "thread": "fresh-thread"}
+   {"dir": "output", "tool": null, "enclosing": "6134e2aa3729", "enclosing_known_to_handler": true, "enclosing_name": "DelphiMiddleware.after_model", "root_name": "LangGraph", "node": "DelphiMiddleware.after_model", "step": 11, "root": "0d025ddd0b73", "hops": 3, "thread": "fresh-thread"}
+tool run -> tool_call_id (V5): {'795735efa1cf': 'call_1', '1b81bce95a73': 'call_2'}
+nodes seen by handler: ['DelphiMiddleware.after_model', 'DelphiMiddleware.before_model', 'model', 'retrieve_context', 'support_agent', 'tools']
+=== V3 direct tool.run(): 2 sensor events, handler saw 22 callbacks, 22 runs, distinct roots on events: ['None']
+   {"dir": "tool_call", "tool": "lookup_customer", "enclosing": null, "enclosing_known_to_handler": null, "enclosing_name": null, "root_name": null, "node": null, "step": null, "root": null, "hops": 0, "thread": "MainThread"}
+   {"dir": "tool_result", "tool": null, "enclosing": null, "enclosing_known_to_handler": null, "enclosing_name": null, "root_name": null, "node": null, "step": null, "root": null, "hops": 0, "thread": "MainThread"}
+=== V4 ainvoke: 8 sensor events, handler saw 21 callbacks, 21 runs, distinct roots on events: ['358244a79eff']
+   {"dir": "input", "tool": null, "enclosing": "5c6975110617", "enclosing_known_to_handler": true, "enclosing_name": "DelphiMiddleware.before_model", "root_name": "LangGraph", "node": "DelphiMiddleware.before_model", "step": 1, "root": "358244a79eff", "hops": 3, "thread": "asyncio_0"}
+   {"dir": "tool_call", "tool": "lookup_customer", "enclosing": "2c6624e5ebda", "enclosing_known_to_handler": true, "enclosing_name": "tools", "root_name": "LangGraph", "node": "tools", "step": 4, "root": "358244a79eff", "hops": 3, "thread": "ThreadPoolExecutor-6_0"}
+   {"dir": "tool_result", "tool": null, "enclosing": "2c6624e5ebda", "enclosing_known_to_handler": true, "enclosing_name": "tools", "root_name": "LangGraph", "node": "tools", "step": 4, "root": "358244a79eff", "hops": 3, "thread": "ThreadPoolExecutor-6_0"}
+   {"dir": "input", "tool": null, "enclosing": "df5eed06f1a2", "enclosing_known_to_handler": true, "enclosing_name": "DelphiMiddleware.before_model", "root_name": "LangGraph", "node": "DelphiMiddleware.before_model", "step": 5, "root": "358244a79eff", "hops": 3, "thread": "asyncio_0"}
+   {"dir": "tool_call", "tool": "record_note", "enclosing": "4cfc8fac51a1", "enclosing_known_to_handler": true, "enclosing_name": "tools", "root_name": "LangGraph", "node": "tools", "step": 8, "root": "358244a79eff", "hops": 3, "thread": "ThreadPoolExecutor-7_0"}
+   {"dir": "tool_result", "tool": null, "enclosing": "4cfc8fac51a1", "enclosing_known_to_handler": true, "enclosing_name": "tools", "root_name": "LangGraph", "node": "tools", "step": 8, "root": "358244a79eff", "hops": 3, "thread": "ThreadPoolExecutor-7_0"}
+   {"dir": "input", "tool": null, "enclosing": "4d19597e6abb", "enclosing_known_to_handler": true, "enclosing_name": "DelphiMiddleware.before_model", "root_name": "LangGraph", "node": "DelphiMiddleware.before_model", "step": 9, "root": "358244a79eff", "hops": 3, "thread": "asyncio_0"}
+   {"dir": "output", "tool": null, "enclosing": "db6f8df01b95", "enclosing_known_to_handler": true, "enclosing_name": "DelphiMiddleware.after_model", "root_name": "LangGraph", "node": "DelphiMiddleware.after_model", "step": 11, "root": "358244a79eff", "hops": 3, "thread": "asyncio_0"}
+V7 concurrent: 10 roots carrying tool_call events (10 invokes), roots mixing both flows' tools: 0, tool_call events with no root: 0
+V6 stamp cost over 68 events: median 1.4us  max 5.5us
+configure hooks registered: 1

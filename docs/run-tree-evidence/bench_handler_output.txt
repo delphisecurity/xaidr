@@ -1,0 +1,10 @@
+# 7 runs of bench_handler.py, 2026-10-18, Apple M5 Max, load average ~7.8 (other sessions running).
+# runs 1-2 were earlier invocations, runs 3-7 the loop below. Callbacks/invoke: 11.
+median invoke ms over 4 interleaved rounds x 40: no handler 1.551 | with handler 1.557 | delta +0.006 ms (+0.4%)
+median invoke ms over 4 interleaved rounds x 40: no handler 1.440 | with handler 1.582 | delta +0.142 ms (+9.9%)
+median invoke ms over 4 interleaved rounds x 40: no handler 1.349 | with handler 1.364 | delta +0.015 ms (+1.1%)
+median invoke ms over 4 interleaved rounds x 40: no handler 1.446 | with handler 1.470 | delta +0.025 ms (+1.7%)
+median invoke ms over 4 interleaved rounds x 40: no handler 1.516 | with handler 1.408 | delta -0.108 ms (-7.1%)
+median invoke ms over 4 interleaved rounds x 40: no handler 1.391 | with handler 1.421 | delta +0.030 ms (+2.2%)
+median invoke ms over 4 interleaved rounds x 40: no handler 1.453 | with handler 1.487 | delta +0.034 ms (+2.3%)
+no-eviction parent map after 100 invokes: 1100 entries, ~84008 bytes attributed to the handler's own lines (unbounded growth without root-end eviction)
