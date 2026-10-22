@@ -894,9 +894,12 @@ def _stable_p99_us(prepare, timed, *, rounds=7, per_round=5_000, warmup=2_000):
     then ``rounds`` independent rounds of ``per_round`` events, and the MEDIAN of
     the rounds' p99. ``prepare()`` builds each event's argument untimed; only
     ``timed(arg)`` is inside the clock, so the timed region is the call under
-    budget and nothing else. A stall on a shared runner inflates one round; real
-    per-event cost inflates every round. Returns (p99 us, median us, every
-    round's p99)."""
+    budget and nothing else. The clock is this thread's CPU time, not wall time:
+    on a shared runner wall time also counts the time the thread was not
+    running (other threads holding the GIL, preemption), which is no part of the
+    call's own cost. Real per-event work costs CPU time and inflates every
+    round. Returns (p99 us, median us, every round's p99)."""
+    clock = time.thread_time_ns
     for _ in range(warmup):
         timed(prepare())
     p99s, everything = [], []
@@ -904,9 +907,9 @@ def _stable_p99_us(prepare, timed, *, rounds=7, per_round=5_000, warmup=2_000):
         samples = []
         for _ in range(per_round):
             arg = prepare()
-            t0 = time.perf_counter_ns()
+            t0 = clock()
             timed(arg)
-            samples.append(time.perf_counter_ns() - t0)
+            samples.append(clock() - t0)
         p99s.append(_p99_us(samples))
         everything.extend(samples)
     rounds_p99 = sorted(p99s)
