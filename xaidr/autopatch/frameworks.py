@@ -489,6 +489,16 @@ def _build_middleware(ctx: PatchContext) -> Any:
                 _MW_TOOL_SCANNED.reset(token)
 
         cls.wrap_tool_call = guarded
+        ainner = getattr(cls, "awrap_tool_call", None)
+        if ainner is not None:
+            async def aguarded(self, request, handler):
+                token = _MW_TOOL_SCANNED.set(True)
+                try:
+                    return await ainner(self, request, handler)
+                finally:
+                    _MW_TOOL_SCANNED.reset(token)
+
+            cls.awrap_tool_call = aguarded
     except Exception:
         ctx.note(
             "langchain: could not install the middleware/BaseTool re-entrancy "

@@ -439,6 +439,18 @@ class TestRealLangChain:
         tool_messages = [m for m in out["messages"] if isinstance(m, ToolMessage)]
         assert tool_messages and "[BLOCKED]" in tool_messages[-1].content
 
+    def test_a_destructive_tool_call_is_refused_when_the_agent_runs_async(self, agent_bits):
+        """ainvoke runs the middleware's async tool hook (issue #38)."""
+        import asyncio
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        build, _, executed = agent_bits
+        agent = build([self._destructive_call(), AIMessage(content="stopped")])
+        out = asyncio.run(agent.ainvoke({"messages": [HumanMessage(content="clean the disk")]}))
+        assert executed == [], f"the destructive tool EXECUTED: {executed}"
+        tool_messages = [m for m in out["messages"] if isinstance(m, ToolMessage)]
+        assert tool_messages and "[BLOCKED]" in tool_messages[-1].content
+
     def test_a_secret_is_caught_on_output(self, agent_bits):
         from langchain_core.messages import AIMessage, HumanMessage
 

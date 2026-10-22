@@ -223,8 +223,9 @@ def delphi_middleware(
             return None
 
         # ── TOOL-CALL boundary ───────────────────────────────────────────
-        def wrap_tool_call(self, request: Any, handler: Any) -> Any:
-            """Scan a tool call before execution; block → tool NOT invoked."""
+        def _tool_refusal(self, request: Any) -> Any:
+            """The refusal ToolMessage for a call that must not run, else None.
+            One decision for the sync and async hooks, so they cannot drift."""
             tool_call = getattr(request, "tool_call", None) or {}
             tool_name = tool_call.get("name") if isinstance(tool_call, dict) else None
             arguments = tool_call.get("args") if isinstance(tool_call, dict) else None
@@ -267,8 +268,18 @@ def delphi_middleware(
                         name=tool_name,
                         status="error",
                     )
+            return None
 
-            return handler(request)
+        def wrap_tool_call(self, request: Any, handler: Any) -> Any:
+            """Scan a tool call before execution; block → tool NOT invoked."""
+            refusal = self._tool_refusal(request)
+            return refusal if refusal is not None else handler(request)
+
+        async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
+            """The same, for an agent run with ``ainvoke``: the decision is the
+            sync hook's, and the tool runs only when it allows."""
+            refusal = self._tool_refusal(request)
+            return refusal if refusal is not None else await handler(request)
 
         # ── OUTPUT boundary ──────────────────────────────────────────────
         @hook_config(can_jump_to=["end"])

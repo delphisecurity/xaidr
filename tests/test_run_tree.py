@@ -758,14 +758,10 @@ class TestRealRunTree:
             f"any run): {_brief(events)}")
         assert not [e for e in events if "runRootId" in e], _brief(events)
 
-    @pytest.mark.xfail(
-        strict=True, raises=NotImplementedError,
-        reason="PRE-EXISTING, not run-tree: DelphiMiddleware defines wrap_tool_call "
-               "and no awrap_tool_call, so every async create_agent under protect() "
-               "raises at its first tool call (recorded in d38486a). When "
-               "awrap_tool_call lands this XPASSes and strict=True turns it red, so "
-               "the marker cannot outlive the defect.")
+    @async_needs_context
     def test_async_create_agent_with_injected_middleware_is_stamped(self, stack):
+        """An async create_agent under protect() runs its tool calls through the
+        middleware's async tool hook, and every event is stamped (issue #38)."""
         cap = _Capture()
         m = _protect(cap)
         try:
