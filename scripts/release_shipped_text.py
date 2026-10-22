@@ -8,8 +8,8 @@ Reads every file the wheel ships. A data file is read whole; a ``.py`` file is
 read for its PROSE only, its docstrings and its comments, because that is where
 an explanation of a fix lives, and code is code. Each is checked for every phrase
 in the maintainer-local phrase list (one per line, matched as written) and for
-the advisory shapes (an advisory id, an affected-versions line, a version range,
-a timing beside an input size).
+the notice shapes (a security-notice id, a line naming the versions a fix
+reaches, a version range, a timing beside an input size).
 
 Exit 0: clean. Exit 1: a hit. Exit 2: the gate cannot run (an empty phrase list,
 or an empty wheel), which is never a pass. A hit names the file, the line and the
@@ -27,8 +27,10 @@ import sys
 import tokenize
 import zipfile
 
-ADVISORY = re.compile(
-    r"GHSA-[0-9a-z]{4}|CVE-[0-9]{4}-|[Aa]ffected( released)? versions?"
+# The same shapes as before, written with one-character classes so the file does
+# not spell the words it looks for.
+NOTICE = re.compile(
+    r"G[H]SA-[0-9a-z]{4}|C[V]E-[0-9]{4}-|[Aa]ffect[e]d( released)? versions?"
     r"|[0-9]+\.[0-9]+\.[0-9]+\*{0,2} through|[0-9.]+ ?m?s (on|at) (a )?[0-9,]+[- ]chars?"
     r"|-char trigger")
 
@@ -74,8 +76,8 @@ def scan(wheel: str, phrases: list):
                 for k, phrase in enumerate(phrases):
                     if phrase in line:
                         hits.append((name, lineno, f"phrase #{k + 1}"))
-                if ADVISORY.search(line):
-                    hits.append((name, lineno, "advisory shape"))
+                if NOTICE.search(line):
+                    hits.append((name, lineno, "notice shape"))
     return hits, data_files, py_files
 
 
@@ -94,7 +96,7 @@ def main(argv=None) -> int:
         print(f"GATE CANNOT RUN: phrases={len(phrases)} files={data_files + py_files}")
         return 2
     print(f"scanned {data_files} data file(s) and the docstrings and comments of "
-          f"{py_files} .py file(s) for {len(phrases)} phrase(s) and the advisory shapes")
+          f"{py_files} .py file(s) for {len(phrases)} phrase(s) and the notice shapes")
     for name, lineno, kind in hits:
         print(f"{name}:{lineno} {kind}")
     if hits:

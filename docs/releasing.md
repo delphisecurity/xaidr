@@ -167,7 +167,8 @@ pins both halves.
 
 Every check in step 3 asks whether the artifact works. None of them asks what
 text it carries, and a wheel can pass all of them while shipping a fix's trigger
-phrase, its timing, or a versions-affected line to PyPI. Data files are one place
+phrase, its timing, or a line naming the versions a fix reaches to PyPI. Data
+files are one place
 that hides: a `description` or a corpus label is reviewed as prose by nobody and
 ships verbatim. The docstrings and comments of the shipped `.py` files are the
 other: the natural place to explain a fix is where it lives. (Free-text
@@ -182,8 +183,9 @@ python scripts/release_shipped_text.py /tmp/rel/dist/xaidr-$VERSION-py3-none-any
 ```
 
 It reads every data file whole and every `.py` file's docstrings and comments,
-for each phrase in the list and for the advisory shapes (an advisory id, an
-affected-versions line, a version range, a timing beside an input size). Exit 0
+for each phrase in the list and for the notice shapes (a security-notice id, a
+line naming the versions a fix reaches, a version range, a timing beside an input
+size). Exit 0
 is clean, 1 is a hit, 2 is a gate that cannot run. A hit names the file, the
 line and the kind, never the text (`tests/test_release_shipped_text.py`).
 

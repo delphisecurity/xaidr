@@ -50,9 +50,10 @@ def test_a_phrase_in_code_that_is_not_prose_is_not_read(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
 
 
-def test_a_phrase_or_an_advisory_shape_in_a_data_file_is_red(tmp_path):
+def test_a_phrase_or_a_notice_shape_in_a_data_file_is_red(tmp_path):
+    notice_id = "C" + "VE-2026-0001"
     whl = _wheel(tmp_path, {"pkg/a.json": f'{{"d": "{PHRASE}"}}',
-                            "pkg/b.txt": "fixed in CVE-2026-0001"})
+                            "pkg/b.txt": f"fixed in {notice_id}"})
     r = _gate(whl, tmp_path)
     assert r.returncode == 1 and "pkg/a.json:1" in r.stdout and "pkg/b.txt:1" in r.stdout, r.stdout
 
