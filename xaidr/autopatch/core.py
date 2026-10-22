@@ -532,3 +532,31 @@ def strings_in(value: Any, limit: int = 64) -> list[str]:
 
     walk(value)
     return out
+
+
+def _tool_result_text(result: Any) -> Optional[str]:
+    """The scannable text a tool RETURN value carries, or None.
+
+    Three shapes, because tool seams have (at least) three return contracts:
+
+    * a plain ``str`` — the direct-caller contract;
+    * an object with a string ``.content`` — ``langchain_core``'s
+      ``ToolMessage``, ``llama_index``'s ``ToolOutput``;
+    * anything else the tool happened to return. A tool returning rows, a
+      dict or a dataclass is the ORDINARY case, not the exotic one, so these
+      are walked with ``strings_in`` — the same bounded string-leaf collector
+      the entrypoint seams already use for untyped framework payloads.
+
+    Deliberately NOT ``str(result)``. Stringifying an arbitrary object scans
+    its ``repr``, which is neither the content the model will read nor
+    bounded, and on an ORM row or a response object it can drag private
+    attributes into a content hash. A shape with no strings in it yields None
+    and is passed through untouched.
+    """
+    if isinstance(result, str):
+        return result or None
+    content = getattr(result, "content", None)
+    if isinstance(content, str):
+        return content or None
+    parts = strings_in(content if content is not None else result, limit=64)
+    return "\n".join(parts) if parts else None

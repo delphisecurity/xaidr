@@ -33,6 +33,7 @@ from .core import (
     Halt,
     PatchContext,
     PatchUnavailable,
+    _tool_result_text,
     is_exempt,
     is_xaidr_wrapper,
     make_wrapper,
@@ -294,29 +295,29 @@ def _langchain_refusal(text: str, name: str, kwargs: dict) -> Any:
 def _langchain_result_text(result: Any) -> Optional[str]:
     """The scannable text a ``BaseTool.run`` return value carries, or None.
 
-    Three shapes, because ``run`` has three return contracts:
-
-    * a plain ``str`` — the direct-caller contract;
-    * a ``ToolMessage`` — the ToolCall-driven contract (``.content``, which is
-      itself either a ``str`` or a list of content blocks);
-    * anything else the tool happened to return. A tool returning rows, a dict
-      or a dataclass is the ORDINARY case, not the exotic one, so these are
-      walked with ``strings_in`` — the same bounded string-leaf collector the
-      entrypoint seams already use for untyped framework payloads.
-
-    Deliberately NOT ``str(result)``. Stringifying an arbitrary object scans its
-    ``repr``, which is neither the content the model will read nor bounded, and
-    on an ORM row or a response object it can drag private attributes into a
-    content hash. A shape with no strings in it yields None and is passed
-    through untouched.
+    The three return contracts (a plain ``str``; a ``ToolMessage`` whose
+    ``.content`` is a ``str`` or a list of content blocks; anything else the
+    tool happened to return) are exactly what :func:`_tool_result_text`
+    extracts, so this is that shared extractor under the seam's own name.
     """
-    if isinstance(result, str):
-        return result or None
-    content = getattr(result, "content", None)
-    if isinstance(content, str):
-        return content or None
-    parts = strings_in(content if content is not None else result, limit=64)
-    return "\n".join(parts) if parts else None
+    return _tool_result_text(result)
+
+
+def _tool_result_refusal(name: str, verdict: Any) -> str:
+    """The in-band refusal a tool-result scan returns.
+
+    One vocabulary for every result seam: a denial is ``[BLOCKED]`` and a
+    pending approval is ``[APPROVAL REQUIRED]`` — the two must never collapse
+    into one message, the same rule ``refusal_text`` states for the
+    argument path. ``langchain_core`` builds this same text inline and then
+    re-types it per caller; the seams below return it as-is because their
+    callers were promised exactly this shape.
+    """
+    return (
+        f"[{'APPROVAL REQUIRED' if verdict.requires_approval else 'BLOCKED'}] "
+        f"The result returned by tool '{name}' was blocked by security "
+        f"policy ({verdict.category or 'policy'})."
+    )
 
 
 def _patch_langchain_core(ctx: PatchContext) -> None:
@@ -784,7 +785,10 @@ def _patch_crewai(ctx: PatchContext) -> None:
             lambda: install_tool_hooks(ctx.sensor),
             "AGENT-DRIVEN tool calls are scan_tool_call'd before they execute "
             "(Crew.kickoff, Crew.kickoff_async and Agent.kickoff all dispatch "
-            "this hook). Does NOT cover a direct tool.run() from your own code "
+            "this hook), and the tool's RESULT is scanned on the way back "
+            "(direction=tool_result) by the after_tool_call hook — a halting "
+            "verdict returns the refusal string instead of the tool's output. "
+            "Does NOT cover a direct tool.run() from your own code "
             "with no agent — wrap those with sensor.protect_tools(...).",
         )
 
@@ -814,7 +818,11 @@ def _patch_crewai(ctx: PatchContext) -> None:
     ctx.note(
         "crewai: the tool boundary is a registered before_tool_call HOOK, not a "
         "patch. It covers agent-driven calls only; a direct tool.run() in your "
-        "own code is not an agent boundary and is covered by protect_tools()."
+        "own code is not an agent boundary and is covered by protect_tools(). "
+        "The after_tool_call hook scans each tool's RESULT "
+        '(direction="tool_result") and restates our refusal in our vocabulary; '
+        "a build without the after-registry keeps the argument enforcement "
+        "but leaves results unscanned."
     )
     ctx.note(
         "crewai: agent OUTPUT is not scanned by protect() — CrewAI's output "
@@ -844,11 +852,38 @@ def _patch_autogen_core(ctx: PatchContext) -> None:
                 arguments = args[1]
             return scan_tool_boundary(ctx.sensor, name, dict(arguments or {}))
 
-        return make_wrapper(orig, before=before)
+        def after(result: Any, args: tuple, kwargs: dict) -> Any:
+            # WHAT THE TOOL HANDED BACK. Until this hook existed this seam
+            # scanned a tool's ARGUMENTS and nothing else, so a tool that
+            # fetched a poisoned document, read a poisoned row or called a
+            # poisoned remote handed that content to the model verbatim.
+            # `run_json` returns the tool's raw return value, so the refusal
+            # is the same plain string the before path returns — there is no
+            # envelope to preserve.
+            text = _tool_result_text(result)
+            if not text or not text.strip():
+                return result
+            tool = args[0] if args else None
+            name = getattr(tool, "name", None) or "unknown_tool"
+            verdict = ctx.sensor.scan(text, direction="tool_result")
+            if not verdict.must_halt:
+                return result
+            return _tool_result_refusal(name, verdict)
+
+        return make_wrapper(orig, before=before, after=after)
 
     ctx.install(
         "autogen_core.tools", "BaseTool.run_json", "tool", factory,
-        "every AgentChat 0.4+ tool dispatch is scanned before it executes",
+        "every AgentChat 0.4+ tool dispatch is scanned before it executes, "
+        "and the tool's RESULT is scanned on the way back "
+        "(direction=tool_result); a halting verdict returns the refusal "
+        "instead of the tool's output",
+    )
+    ctx.note(
+        "autogen-core: run_json returns the tool's raw return, so the result "
+        "refusal is the same plain string the argument refusal already is. A "
+        "result with no strings in it is passed through unscanned rather "
+        "than stringified."
     )
 
 
@@ -856,13 +891,21 @@ def _patch_autogen_legacy(ctx: PatchContext) -> None:
     ctx.module("autogen")
 
     def factory(orig: Callable) -> Callable:
+        def _name_of(args: tuple, kwargs: dict) -> str:
+            call = kwargs.get("func_call")
+            if call is None and len(args) > 1:
+                call = args[1]
+            if isinstance(call, dict):
+                return call.get("name") or "unknown_tool"
+            return "unknown_tool"
+
         def before(args: tuple, kwargs: dict) -> Optional[Halt]:
             call = kwargs.get("func_call")
             if call is None and len(args) > 1:
                 call = args[1]
             if not isinstance(call, dict):
                 return None
-            name = call.get("name") or "unknown_tool"
+            name = _name_of(args, kwargs)
             raw = call.get("arguments")
             arguments: Any = raw
             if isinstance(raw, str):
@@ -876,11 +919,42 @@ def _patch_autogen_legacy(ctx: PatchContext) -> None:
             # execute_function returns (is_exec_success, response_dict).
             return Halt((False, {"name": name, "role": "function", "content": halt.value}))
 
-        return make_wrapper(orig, before=before)
+        def after(result: Any, args: tuple, kwargs: dict) -> Any:
+            # WHAT THE TOOL HANDED BACK. Same gap as the other three seams:
+            # the result is the `content` of the returned (is_exec_success,
+            # response_dict) tuple, and it reached the model unscanned. The
+            # refusal is that same tuple shape the before path already
+            # builds — and because the async half shares this factory, both
+            # halves refuse identically.
+            content: Any = None
+            if isinstance(result, (tuple, list)) and len(result) == 2:
+                response = result[1]
+                if isinstance(response, dict):
+                    content = response.get("content")
+            text = _tool_result_text(content)
+            if not text or not text.strip():
+                return result
+            name = _name_of(args, kwargs)
+            verdict = ctx.sensor.scan(text, direction="tool_result")
+            if not verdict.must_halt:
+                return result
+            return (
+                False,
+                {
+                    "name": name,
+                    "role": "function",
+                    "content": _tool_result_refusal(name, verdict),
+                },
+            )
+
+        return make_wrapper(orig, before=before, after=after)
 
     ctx.install(
         "autogen", "ConversableAgent.execute_function", "tool", factory,
-        "SYNC function dispatch is scanned before it executes",
+        "SYNC function dispatch is scanned before it executes, and the "
+        "function's RESULT (the response dict's content) is scanned on the "
+        "way back (direction=tool_result); a halting verdict returns the "
+        "refusal tuple instead of the tool's output",
     )
     # THE ASYNC HALF. The async reply path is a_generate_tool_calls_reply ->
     # _a_execute_tool_call -> a_execute_function, a SEPARATE method that never
@@ -897,13 +971,16 @@ def _patch_autogen_legacy(ctx: PatchContext) -> None:
     ctx.try_install(
         "autogen", "ConversableAgent.a_execute_function", "tool", factory,
         "ASYNC function dispatch is scanned before it executes, with the same "
-        "refusal tuple the sync path returns",
+        "refusal tuple the sync path returns — and the result is scanned on "
+        "the way back, same as the sync half",
     )
     ctx.note(
         "autogen (0.2): this is the legacy pyautogen line. Its function-call "
         "shape has changed across 0.2.x minor releases; if the manifest stops "
         "listing either target after an upgrade, that boundary is "
-        "uninstrumented."
+        "uninstrumented. Result refusals keep the (is_exec_success, "
+        "response_dict) tuple shape the before path already builds, because "
+        "that is what the reply loop was promised."
     )
 
 
@@ -912,28 +989,93 @@ def _patch_autogen_legacy(ctx: PatchContext) -> None:
 # ─────────────────────────────────────────────────────────────────────────
 
 
+def _llama_index_refusal(result: Any, message: str, name: str,
+                       arguments: Any) -> Any:
+    """The refusal as the ``ToolOutput`` the caller was promised.
+
+    Built with the same keyword shape ``FunctionTool.call`` itself uses on
+    its callback-override path (``content=``, ``tool_name=``,
+    ``raw_input=``, ``raw_output=``), on the result's own class so a
+    subclassed ``ToolOutput`` keeps its type. ``raw_output`` carries the
+    refusal, not the poison: the raw value is reachable programmatically
+    past the model-facing content, and leaving the attack in it would keep
+    the bypass one attribute access away.
+    """
+    try:
+        return type(result)(
+            content=message,
+            tool_name=name,
+            raw_input=dict(arguments or {}),
+            raw_output=message,
+        )
+    except Exception:
+        # An exotic ToolOutput whose constructor moved: rewrite the returned
+        # object in place rather than answer with a bare string. A correct
+        # verdict in the wrong return type is the 1.9.0 LangGraph crash
+        # class, and it is reachable from a new return path exactly as it
+        # was from the old one.
+        try:
+            result.content = message
+            result.raw_output = message
+        except Exception:
+            pass
+        return result
+
+
 def _patch_llama_index(ctx: PatchContext) -> None:
     ctx.module("llama_index.core.tools")
 
     def factory(orig: Callable) -> Callable:
-        def before(args: tuple, kwargs: dict) -> Optional[Halt]:
+        def _name_and_args(args: tuple, kwargs: dict) -> tuple[str, dict]:
             tool = args[0] if args else None
             meta = getattr(tool, "metadata", None)
             name = getattr(meta, "name", None) or getattr(tool, "name", None) or "unknown_tool"
             arguments = dict(kwargs)
             for i, v in enumerate(args[1:]):
                 arguments[f"arg{i}"] = v
+            return name, arguments
+
+        def before(args: tuple, kwargs: dict) -> Optional[Halt]:
+            name, arguments = _name_and_args(args, kwargs)
             return scan_tool_boundary(ctx.sensor, name, arguments)
 
-        return make_wrapper(orig, before=before)
+        def after(result: Any, args: tuple, kwargs: dict) -> Any:
+            # WHAT THE TOOL HANDED BACK. Until this hook existed this seam
+            # scanned a tool's ARGUMENTS and nothing else, so a tool that
+            # fetched a poisoned document or read a poisoned row handed that
+            # content to the model verbatim. The refusal is a ToolOutput, not
+            # a bare string: that is the type `call`/`acall` promised, and a
+            # string here would be the 1.9.0 crash class (right verdict,
+            # wrong return type) on a new path.
+            text = _tool_result_text(result)
+            if not text or not text.strip():
+                return result
+            name, arguments = _name_and_args(args, kwargs)
+            verdict = ctx.sensor.scan(text, direction="tool_result")
+            if not verdict.must_halt:
+                return result
+            return _llama_index_refusal(
+                result, _tool_result_refusal(name, verdict), name, arguments
+            )
+
+        return make_wrapper(orig, before=before, after=after)
 
     ctx.try_install(
         "llama_index.core.tools", "FunctionTool.call", "tool", factory,
-        "every sync FunctionTool invocation is scanned before it executes",
+        "every sync FunctionTool invocation is scanned before it executes, "
+        "and the tool's RESULT is scanned on the way back "
+        "(direction=tool_result); a halting verdict returns a ToolOutput "
+        "refusal instead of the tool's output",
     )
     ctx.try_install(
         "llama_index.core.tools", "FunctionTool.acall", "tool", factory,
-        "same coverage on the async path",
+        "same coverage, arguments and result, on the async path",
+    )
+    ctx.note(
+        "llama-index: a tool RESULT is refused as a ToolOutput carrying the "
+        "refusal in both content and raw_output — a bare string is not a "
+        "legal return from call()/acall. A result with no strings in it is "
+        "passed through unscanned rather than stringified."
     )
     ctx.unpatchable(
         "llama_index.core.tools.QueryEngineTool", "tool",

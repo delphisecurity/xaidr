@@ -18,6 +18,9 @@ adds one. Run them by installing the framework you want covered::
     pip install 'xaidr[haystack]'  && pytest tests/test_real_frameworks.py
     pip install langgraph          && pytest tests/test_real_frameworks.py
     pip install deepagents         && pytest tests/test_real_frameworks.py
+    pip install autogen-core       && pytest tests/test_real_frameworks.py
+    pip install 'pyautogen<0.3'    && pytest tests/test_real_frameworks.py
+    pip install llama-index-core   && pytest tests/test_real_frameworks.py
 
 Every suite uses a SCRIPTED model rather than a live LLM: no API key, no network,
 deterministic. That is not a weaker test than a real model — it is a stronger
@@ -69,6 +72,11 @@ HAVE_DEEPAGENTS = HAVE_LANGGRAPH and _installed("deepagents")
 # than the package is what makes the skip mean "cannot run these", not
 # "something called haystack is importable".
 HAVE_HAYSTACK = _installed("haystack") and _installed("haystack.hooks")
+# The four #30 seams. `autogen` is the legacy pyautogen 0.2 line, distinct
+# from `autogen_core` (AgentChat 0.4+).
+HAVE_AUTOGEN_CORE = _installed("autogen_core")
+HAVE_AUTOGEN_LEGACY = _installed("autogen")
+HAVE_LLAMA_INDEX = _installed("llama_index.core")
 
 requires_crewai = pytest.mark.skipif(
     not HAVE_CREWAI,
@@ -89,6 +97,18 @@ requires_deepagents = pytest.mark.skipif(
 requires_haystack = pytest.mark.skipif(
     not HAVE_HAYSTACK,
     reason="real haystack-ai>=3 not installed — pip install 'xaidr[haystack]' to run",
+)
+requires_autogen_core = pytest.mark.skipif(
+    not HAVE_AUTOGEN_CORE,
+    reason="real autogen-core not installed — pip install autogen-core to run",
+)
+requires_autogen_legacy = pytest.mark.skipif(
+    not HAVE_AUTOGEN_LEGACY,
+    reason="real pyautogen 0.2 not installed — pip install 'pyautogen<0.3' to run",
+)
+requires_llama_index = pytest.mark.skipif(
+    not HAVE_LLAMA_INDEX,
+    reason="real llama-index not installed — pip install llama-index-core to run",
 )
 
 DESTRUCTIVE = "rm -rf / --no-preserve-root"
@@ -2323,3 +2343,475 @@ emit(missing=[n for n in needed if n not in sys.modules],
         assert isinstance(restored["before_tool"][0], _DelphiHook)
         assert restored["before_tool"][0].point == "before_tool"
         assert restored["before_tool"][0].sensor.enforcement_mode == "block"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Issue #30 — the AFTER position on the four remaining tool seams, on the
+# real libraries. Each class proves the two claims that matter:
+#
+# 1. a real tool return reaches the after position, and a poisoned one is
+#    refused rather than handed to the caller verbatim;
+# 2. the refusal arrives in the TYPE the caller was promised — the raw
+#    return for autogen-core's run_json, the (is_exec_success,
+#    response_dict) tuple for autogen 0.2, a ToolOutput for llama-index,
+#    the hook's return string for CrewAI.
+#
+# The tool's arguments are innocent and its result is the attack, so a pass
+# cannot be coming from the arguments scan. A control proves the attack
+# reaches the caller with protect() off.
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@requires_autogen_core
+class TestRealAutogenCoreResultSeam:
+    """``BaseTool.run_json`` returns the tool's raw return — the after
+    position scans it, and the refusal is the same plain string the
+    before path returns. Measured against autogen-core 0.7.5."""
+
+    ARGS = {"path": "readme.md"}
+    BENIGN = "The Q3 report was filed on the 14th by the Lisbon office."
+
+    class _Cap:
+        def __init__(self):
+            self.events: list = []
+
+        def report(self, batch):
+            self.events.extend(batch)
+
+        def close(self, *a, **k):
+            pass
+
+        def directions(self):
+            return [e["data"].get("direction") for e in self.events
+                    if isinstance(e.get("data"), dict)]
+
+    @pytest.fixture
+    def bits(self):
+        from autogen_core.tools import FunctionTool
+
+        result = {"text": INJECTION}
+
+        async def read_doc(path: str) -> str:
+            """Read a document from the knowledge base."""
+            return result["text"]
+
+        tool = FunctionTool(read_doc, name="read_doc",
+                            description="Read a document from the knowledge base.")
+        return tool, result
+
+    def _protect(self, cap):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", XaidrProtectionWarning)
+            return xaidr.protect(targets=["autogen-core"], agent_id="real-ac-result",
+                                 enforcement_mode="block", quiet=True, reporter=cap)
+
+    @staticmethod
+    async def _run(tool, args):
+        from autogen_core import CancellationToken
+
+        return await tool.run_json(args, CancellationToken())
+
+    def test_control_the_poisoned_result_reaches_the_caller_unprotected(self, bits):
+        import asyncio
+
+        tool, _ = bits
+        out = asyncio.run(self._run(tool, dict(self.ARGS)))
+        assert out == INJECTION, (
+            "the poisoned result did not reach the caller unprotected — the "
+            "attack itself is broken, so a refusal below would mean nothing"
+        )
+
+    def test_a_poisoned_run_json_result_is_refused(self, bits):
+        import asyncio
+
+        tool, _ = bits
+        manifest = self._protect(self._Cap())
+        try:
+            out = asyncio.run(self._run(tool, dict(self.ARGS)))
+        finally:
+            manifest.unprotect()
+        assert isinstance(out, str) and out.startswith("[BLOCKED]"), (
+            "a real tool returned an injection through run_json and the seam "
+            f"handed it to the caller verbatim: {out!r}"
+        )
+        assert INJECTION not in out
+
+    def test_a_benign_run_json_result_is_scanned_and_returned_unchanged(self, bits):
+        import asyncio
+
+        tool, result = bits
+        result["text"] = self.BENIGN
+        cap = self._Cap()
+        manifest = self._protect(cap)
+        try:
+            out = asyncio.run(self._run(tool, dict(self.ARGS)))
+        finally:
+            manifest.sensor.close_sync()
+            manifest.unprotect()
+        assert out == self.BENIGN, f"the after position altered a clean tool result: {out!r}"
+        assert "tool_result" in cap.directions(), (
+            "a real run_json return never reached the after position "
+            f"(directions scanned: {cap.directions()})"
+        )
+
+
+@requires_autogen_legacy
+class TestRealAutogenLegacyResultSeam:
+    """``ConversableAgent.execute_function`` / ``a_execute_function`` return
+    ``(is_exec_success, response_dict)`` — the after position scans the
+    response dict's content, and the refusal keeps that tuple shape, which
+    the before-path Halt already builds. Measured against pyautogen 0.2.35."""
+
+    ARGS = {"path": "readme.md"}
+    BENIGN = "The Q3 report was filed on the 14th by the Lisbon office."
+
+    class _Cap:
+        def __init__(self):
+            self.events: list = []
+
+        def report(self, batch):
+            self.events.extend(batch)
+
+        def close(self, *a, **k):
+            pass
+
+        def directions(self):
+            return [e["data"].get("direction") for e in self.events
+                    if isinstance(e.get("data"), dict)]
+
+    @pytest.fixture
+    def bits(self):
+        from autogen import ConversableAgent
+
+        result = {"text": INJECTION}
+
+        def read_doc(path: str) -> str:
+            return result["text"]
+
+        agent = ConversableAgent(name="a", llm_config=False)
+        agent.register_function({"read_doc": read_doc})
+        return agent, result
+
+    def _call(self):
+        return {"name": "read_doc", "arguments": json.dumps(self.ARGS)}
+
+    def _protect(self, cap):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", XaidrProtectionWarning)
+            return xaidr.protect(targets=["autogen-legacy"], agent_id="real-ag-result",
+                                 enforcement_mode="block", quiet=True, reporter=cap)
+
+    @staticmethod
+    def _assert_refusal(ok, resp):
+        assert ok is False, "a poisoned tool result reported success"
+        assert resp["name"] == "read_doc" and resp["role"] == "function"
+        content = resp["content"]
+        assert isinstance(content, str) and content.startswith("[BLOCKED]"), (
+            f"the refusal is not the promised tuple shape: {resp!r}"
+        )
+        assert INJECTION not in content
+
+    def test_control_the_poisoned_result_reaches_the_caller_unprotected(self, bits):
+        agent, _ = bits
+        ok, resp = agent.execute_function(self._call())
+        assert ok is True and resp["content"] == INJECTION, (
+            "the poisoned result did not reach the caller unprotected — the "
+            "attack itself is broken, so a refusal below would mean nothing"
+        )
+
+    def test_a_poisoned_execute_function_result_is_refused_as_the_promised_tuple(self, bits):
+        agent, _ = bits
+        manifest = self._protect(self._Cap())
+        try:
+            ok, resp = agent.execute_function(self._call())
+        finally:
+            manifest.unprotect()
+        self._assert_refusal(ok, resp)
+
+    def test_a_poisoned_a_execute_function_result_is_refused_as_the_promised_tuple(self, bits):
+        import asyncio
+
+        agent, _ = bits
+        manifest = self._protect(self._Cap())
+        try:
+            ok, resp = asyncio.run(agent.a_execute_function(self._call()))
+        finally:
+            manifest.unprotect()
+        self._assert_refusal(ok, resp)
+
+    def test_a_benign_result_is_scanned_and_returned_unchanged(self, bits):
+        agent, result = bits
+        result["text"] = self.BENIGN
+        cap = self._Cap()
+        manifest = self._protect(cap)
+        try:
+            ok, resp = agent.execute_function(self._call())
+        finally:
+            manifest.sensor.close_sync()
+            manifest.unprotect()
+        assert ok is True and resp["content"] == self.BENIGN, (
+            f"the after position altered a clean tool result: {resp!r}"
+        )
+        assert "tool_result" in cap.directions(), (
+            "a real execute_function return never reached the after position "
+            f"(directions scanned: {cap.directions()})"
+        )
+
+
+@requires_llama_index
+class TestRealLlamaIndexResultSeam:
+    """``FunctionTool.call`` / ``acall`` promise a ``ToolOutput`` — the after
+    position scans its content, and the refusal is a ``ToolOutput``, not a
+    bare string. Measured against llama-index-core 0.14.25."""
+
+    ARGS = {"path": "readme.md"}
+    BENIGN = "The Q3 report was filed on the 14th by the Lisbon office."
+
+    class _Cap:
+        def __init__(self):
+            self.events: list = []
+
+        def report(self, batch):
+            self.events.extend(batch)
+
+        def close(self, *a, **k):
+            pass
+
+        def directions(self):
+            return [e["data"].get("direction") for e in self.events
+                    if isinstance(e.get("data"), dict)]
+
+    @pytest.fixture
+    def bits(self):
+        from llama_index.core.tools import FunctionTool
+
+        result = {"text": INJECTION}
+
+        def read_doc(path: str) -> str:
+            return result["text"]
+
+        tool = FunctionTool.from_defaults(
+            fn=read_doc, name="read_doc", description="Read a document.")
+        return tool, result
+
+    def _protect(self, cap):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", XaidrProtectionWarning)
+            return xaidr.protect(targets=["llama-index"], agent_id="real-li-result",
+                                 enforcement_mode="block", quiet=True, reporter=cap)
+
+    @staticmethod
+    def _assert_refusal(out):
+        from llama_index.core.tools import ToolOutput
+
+        assert isinstance(out, ToolOutput), (
+            f"a caller promised a ToolOutput got {type(out).__name__} from "
+            "the result path — the 1.9.0 crash class on a new seam"
+        )
+        assert out.content.startswith("[BLOCKED]"), (
+            f"the tool result was not refused: {out.content!r}"
+        )
+        assert INJECTION not in out.content, (
+            "the poisoned result survived in the refusal content"
+        )
+        assert INJECTION not in str(out.raw_output), (
+            "the poisoned result survived in raw_output, one attribute "
+            "access away from the model"
+        )
+
+    def test_control_the_poisoned_result_reaches_the_caller_unprotected(self, bits):
+        from llama_index.core.tools import ToolOutput
+
+        tool, _ = bits
+        out = tool.call(**self.ARGS)
+        assert isinstance(out, ToolOutput) and out.content == INJECTION, (
+            "the poisoned result did not reach the caller unprotected — the "
+            "attack itself is broken, so a refusal below would mean nothing"
+        )
+
+    def test_a_poisoned_call_result_is_refused_as_a_ToolOutput(self, bits):
+        tool, _ = bits
+        manifest = self._protect(self._Cap())
+        try:
+            out = tool.call(**self.ARGS)
+        finally:
+            manifest.unprotect()
+        self._assert_refusal(out)
+
+    def test_a_poisoned_acall_result_is_refused_as_a_ToolOutput(self, bits):
+        import asyncio
+
+        tool, _ = bits
+        manifest = self._protect(self._Cap())
+        try:
+            out = asyncio.run(tool.acall(**self.ARGS))
+        finally:
+            manifest.unprotect()
+        self._assert_refusal(out)
+
+    def test_a_benign_result_is_scanned_and_returned_unchanged(self, bits):
+        tool, result = bits
+        result["text"] = self.BENIGN
+        cap = self._Cap()
+        manifest = self._protect(cap)
+        try:
+            out = tool.call(**self.ARGS)
+        finally:
+            manifest.sensor.close_sync()
+            manifest.unprotect()
+        assert out.content == self.BENIGN, (
+            f"the after position altered a clean tool result: {out.content!r}"
+        )
+        assert "tool_result" in cap.directions(), (
+            "a real FunctionTool.call return never reached the after position "
+            f"(directions scanned: {cap.directions()})"
+        )
+
+
+@requires_crewai
+class TestRealCrewAIResultSeam:
+    """The ``after_tool_call`` hook already ran after every tool — it read
+    ``context.tool_result`` only to restate our refusal in our vocabulary.
+    It now scans the result as ``direction="tool_result"``, and the
+    refusal is the string the hook returns, which CrewAI's reducer makes
+    the result the agent reads. Measured against crewai 1.15.27, with the
+    scripted-LLM harness from ``TestRealCrewAI`` (no API key, no network).
+
+    The tool result is observed through a capturing after-hook registered
+    AFTER protect(), so it runs after ours and sees exactly what the agent
+    would read.
+    """
+
+    ARGS = {"path": "readme.md"}
+    BENIGN = "The Q3 report was filed on the 14th by the Lisbon office."
+
+    class _Cap:
+        def __init__(self):
+            self.events: list = []
+
+        def report(self, batch):
+            self.events.extend(batch)
+
+        def close(self, *a, **k):
+            pass
+
+        def directions(self):
+            return [e["data"].get("direction") for e in self.events
+                    if isinstance(e.get("data"), dict)]
+
+    @pytest.fixture
+    def crew_bits(self):
+        """Real Crew/Agent/Task/BaseTool with a scripted BaseLLM. No API key."""
+        from crewai import Agent, Crew, Task
+        from crewai.hooks import clear_all_hooks
+        from crewai.llms.base_llm import BaseLLM
+        from crewai.tools import BaseTool
+
+        result = {"text": INJECTION}
+        seen: list = []
+
+        class ReadDocTool(BaseTool):
+            name: str = "read_doc"
+            description: str = "Read a document. Argument: path (string)."
+
+            def _run(self, path: str) -> str:
+                return result["text"]
+
+        class ScriptedLLM(BaseLLM):
+            script: list = []
+            calls: int = 0
+
+            def call(self, messages, tools=None, callbacks=None,
+                     available_functions=None, from_task=None, from_agent=None,
+                     response_model=None):
+                index = min(self.calls, len(self.script) - 1)
+                self.calls += 1
+                return self.script[index]
+
+            def supports_function_calling(self) -> bool:
+                return False
+
+            def supports_stop_words(self) -> bool:
+                return True
+
+            def get_context_window_size(self) -> int:
+                return 8192
+
+        def build(script, **task_kwargs):
+            llm = ScriptedLLM(model="scripted", script=script)
+            agent = Agent(role="ops", goal="maintain the host",
+                          backstory="an ops agent", llm=llm, tools=[ReadDocTool()],
+                          verbose=False, max_iter=3)
+            task = Task(description="read the readme",
+                        expected_output="a status line", agent=agent,
+                        **task_kwargs)
+            return Crew(agents=[agent], tasks=[task], verbose=False)
+
+        clear_all_hooks()
+        try:
+            yield build, seen, result
+        finally:
+            clear_all_hooks()
+
+    ACT = ('Thought: I will read the document.\n'
+           'Action: read_doc\n'
+           'Action Input: {"path": "readme.md"}')
+    FINISH = "Thought: I am finished.\nFinal Answer: all done"
+
+    def _protect(self, cap):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", XaidrProtectionWarning)
+            return xaidr.protect(targets=["crewai"], agent_id="real-crew-result",
+                                 enforcement_mode="block", quiet=True, reporter=cap)
+
+    @staticmethod
+    def _capture(seen):
+        from crewai.hooks import register_after_tool_call_hook
+
+        def capture(context):
+            seen.append(context.tool_result)
+            return None
+
+        register_after_tool_call_hook(capture)
+
+    def test_control_the_poisoned_result_reaches_the_agent_unprotected(self, crew_bits):
+        build, seen, _ = crew_bits
+        self._capture(seen)
+        build([self.ACT, self.FINISH]).kickoff()
+        assert seen == [INJECTION], (
+            "the poisoned result did not reach the agent unprotected — the "
+            "attack itself is broken, so a refusal below would mean nothing"
+        )
+
+    def test_a_poisoned_tool_result_is_replaced_with_the_refusal(self, crew_bits):
+        build, seen, _ = crew_bits
+        manifest = self._protect(self._Cap())
+        try:
+            self._capture(seen)
+            build([self.ACT, self.FINISH]).kickoff()
+        finally:
+            manifest.unprotect()
+        assert len(seen) == 1 and isinstance(seen[0], str) and seen[0].startswith("[BLOCKED]"), (
+            "a real tool returned an injection and the after-hook handed it "
+            f"to the agent verbatim: {seen!r}"
+        )
+        assert INJECTION not in seen[0]
+
+    def test_a_benign_tool_result_is_scanned_and_passes_through(self, crew_bits):
+        build, seen, result = crew_bits
+        result["text"] = self.BENIGN
+        cap = self._Cap()
+        manifest = self._protect(cap)
+        try:
+            self._capture(seen)
+            build([self.ACT, self.FINISH]).kickoff()
+        finally:
+            manifest.sensor.close_sync()
+            manifest.unprotect()
+        assert seen == [self.BENIGN], (
+            f"the after-hook altered a clean tool result: {seen!r}"
+        )
+        assert "tool_result" in cap.directions(), (
+            "a real tool result never reached the after position "
+            f"(directions scanned: {cap.directions()})"
+        )

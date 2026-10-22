@@ -8,7 +8,9 @@ CrewAI has no middleware concept, so this is not a mirror of
   ``tool_input: dict``, which is exactly ``scan_tool_call``'s signature with no
   loss. Returning ``False`` blocks execution; CrewAI's dispatcher maps that to
   ``HookAborted`` and the executor returns a blocked message WITHOUT invoking
-  the tool.
+  the tool. ``register_after_tool_call_hook`` scans what the tool handed back
+  (``context.tool_result``) as ``direction="tool_result"``; returning the
+  refusal string replaces the result the agent reads.
 * **OUTPUT boundary** — ``Task(guardrail=...)``. Per-task, not global; see
   :func:`delphi_guardrail` for what that costs you.
 
@@ -104,34 +106,59 @@ def delphi_tool_hook(sensor: Any) -> Callable[[Any], Optional[bool]]:
     return before_tool_call
 
 
-def delphi_after_tool_hook() -> Callable[[Any], Optional[str]]:
-    """An ``after_tool_call`` hook that restates OUR block in OUR vocabulary.
+def delphi_after_tool_hook(sensor: Any) -> Callable[[Any], Optional[str]]:
+    """An ``after_tool_call`` hook that scans the tool RESULT, and restates OUR block in OUR vocabulary.
 
-    CrewAI writes ``"Tool execution blocked by hook. Tool: <name>"`` for any
-    blocking hook, its own text and identical whoever blocked. Every other tool
-    boundary in this package returns ``[BLOCKED]`` / ``[APPROVAL REQUIRED]``,
-    and an operator reading a transcript must not have to learn two
-    vocabularies for the same verdict. CrewAI runs the after-hooks even on a
-    blocked call (verified in all four executor paths), so the rewrite lands
-    everywhere the block does.
+    Two jobs, in order:
 
-    Only rewrites a refusal THIS sensor produced, and only for the tool it
-    produced it for. Somebody else's block keeps somebody else's words.
+    1. **Restate our refusal.** CrewAI writes ``"Tool execution blocked by
+       hook. Tool: <name>"`` for any blocking hook, its own text and identical
+       whoever blocked. Every other tool boundary in this package returns
+       ``[BLOCKED]`` / ``[APPROVAL REQUIRED]``, and an operator reading a
+       transcript must not have to learn two vocabularies for the same
+       verdict. CrewAI runs the after-hooks even on a blocked call (verified
+       in all four executor paths), so the rewrite lands everywhere the block
+       does. Only rewrites a refusal THIS sensor produced, and only for the
+       tool it produced it for. Somebody else's block keeps somebody else's
+       words.
+    2. **Scan what the tool handed back.** When the before-hook allowed the
+       call, the tool RAN, and its result is untrusted inbound content — a
+       tool that fetched a poisoned document hands it to the model here. The
+       position existed and the value was in hand, but until this hook
+       scanned it the result went to the model unread. Scanned as
+       ``direction="tool_result"``, not ``"input"``: a tool's return value is
+       not principal input. A halting verdict returns the refusal string,
+       which is what CrewAI's reducer turns into the result the agent reads.
+
+    Fails OPEN on an internal fault: returns ``None``, so a bug here can
+    never stop an agent from working or corrupt its results.
     """
+    from ..autopatch.core import _tool_result_text
 
     def after_tool_call(context: Any) -> Optional[str]:
         try:
             pending = _PENDING_REFUSAL.get()
-            if pending is None:
+            if pending is not None:
+                _PENDING_REFUSAL.set(None)
+                tool_name, refusal = pending
+                if getattr(context, "tool_name", None) != tool_name:
+                    return None
+                current = getattr(context, "tool_result", None)
+                if isinstance(current, str) and current.startswith(_CREWAI_BLOCKED_PREFIX):
+                    return refusal
                 return None
-            _PENDING_REFUSAL.set(None)
-            tool_name, refusal = pending
-            if getattr(context, "tool_name", None) != tool_name:
+            tool_name = getattr(context, "tool_name", None) or "unknown_tool"
+            text = _tool_result_text(getattr(context, "tool_result", None))
+            if not text or not text.strip():
                 return None
-            current = getattr(context, "tool_result", None)
-            if isinstance(current, str) and current.startswith(_CREWAI_BLOCKED_PREFIX):
-                return refusal
-            return None
+            verdict = sensor.scan(text, direction="tool_result")
+            if not verdict.must_halt:
+                return None
+            return (
+                f"[{'APPROVAL REQUIRED' if verdict.requires_approval else 'BLOCKED'}] "
+                f"The result returned by tool '{tool_name}' was blocked by "
+                f"security policy ({verdict.category or 'policy'})."
+            )
         except Exception:
             return None
 
@@ -165,13 +192,14 @@ def install_tool_hooks(sensor: Any) -> Callable[[], None]:
         hooks.register_before_tool_call_hook(before)
         registered.append((hooks.unregister_before_tool_call_hook, before))
 
-        # The after-hook is presentation only — it restates OUR refusal in this
-        # package's vocabulary. A build without the after-registry still gets
-        # full enforcement, just in CrewAI's own words, so this stays optional.
+        # The after-hook scans the tool RESULT (direction="tool_result") as
+        # well as restating our refusal in our own vocabulary. A build
+        # without the after-registry still gets the before-hook's argument
+        # enforcement; its tool results go to the model unscanned.
         register_after = getattr(hooks, "register_after_tool_call_hook", None)
         unregister_after = getattr(hooks, "unregister_after_tool_call_hook", None)
         if callable(register_after) and callable(unregister_after):
-            after = delphi_after_tool_hook()
+            after = delphi_after_tool_hook(sensor)
             register_after(after)
             registered.append((unregister_after, after))
     except Exception:
