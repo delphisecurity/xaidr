@@ -414,7 +414,7 @@ _VO_INPUT_CAP = 65_536   # the core's key n-gram window (MAX_INPUT_NGRAM_CHARS);
 # V-31 as ruled by the owner (2026-10-04): a value-origin block's category and rule.
 _VO_BLOCK_CATEGORY = "untrusted_destination"
 _VO_BLOCK_RULE = "ORIGIN_UNTRUSTED_DESTINATION"
-# The spec's V-31 audit key (delphi-sentinel docs/value-origin-architecture.md
+# The spec's V-31 audit key (the value-origin architecture specification,
 # V-31/C-19): the waterfall renders the intent stage `decided` iff findings carry
 # it. Carried beside the owner's rule so the cross-repo contract is not broken
 # while the two namings are reconciled (M8 report).
@@ -501,8 +501,8 @@ def _coerce_scannable(value) -> Optional[str]:
 
 
 # ── M9: the valueOrigin wire field, and its consumer gate (owner, 2026-10-06) ──
-# "Do not emit a value no consumer accepts." The Brain on delphi-sentinel
-# origin/main (01450c7, src/value-origin.ts VALUE_ORIGINS) accepts exactly the
+# "Do not emit a value no consumer accepts." The consumer (the Brain's
+# VALUE_ORIGINS) accepts exactly the
 # nine below and stores anything else as NULL while counting it rejected (the
 # Brain DEPLOYED on 2026-10-06, 8c01911 per /health, predates that code and
 # ignores the field: milestone review). Withholding applies to EVERY reporter. The
@@ -2524,10 +2524,9 @@ class DelphiSensor:
                     logger.warning(
                         "xaidr: Sensor(agent_id=%r): value-origin wire value %r withheld from "
                         "telemetry (every reporter): value_origin_wire=%r, the vocabulary the "
-                        "consumer accepts, does not include it. The Brain's code on "
-                        "delphi-sentinel origin/main accepts nine values and stores any other "
-                        "as NULL; the Brain deployed on 2026-10-06 (8c01911) does not read the "
-                        "field at all. It is still on ScanResult.value_origin. Set "
+                        "consumer accepts, does not include it. The v1 consumer accepts "
+                        "nine values and stores any other as NULL. It is still on "
+                        "ScanResult.value_origin. Set "
                         "value_origin_wire='v2' once the consumer accepts all fifteen.",
                         self.agent_id, wire, self._vo_wire_name)
         except Exception:
