@@ -299,8 +299,8 @@ def reconstruct(text: str) -> str:
     text, which is why ``rm -rf /`` blocks and ``r''m -r''f /`` scores nothing.
     Feeding this reconstruction through the same rules closes that gap without
     writing a single new obfuscation pattern: the tokenizer does the work, so
-    empty-string splicing and mixed quoting all collapse to the same canonical
-    form.
+    empty-string splicing, ANSI-C quoting (``$'\x72\x6d'``) and mixed quoting
+    all collapse to the same canonical form.
 
     It does not expand the shell: ``shlex`` removes quotes, it does not
     word-split ``$IFS``, resolve a variable, or run a substitution. Those
@@ -652,6 +652,10 @@ def _split_segments(text: str) -> List[tuple]:
     buf: List[str] = []
     pending_sep = ""
     quote: Optional[str] = None
+    # True while inside a $'...' span: unlike a plain single-quoted string, a
+    # backslash there escapes the next character, so an escaped quote must not
+    # close the span (and a separator after it must not split).
+    ansi_c = False
     # Heredocs whose HEADER has been seen on the current line but whose BODY
     # starts after the next newline. Collected here so the body is consumed as a
     # unit at that newline, BEFORE the newline can act as a segment separator —
@@ -667,17 +671,20 @@ def _split_segments(text: str) -> List[tuple]:
         ch = text[i]
         if quote:
             buf.append(ch)
-            # A backslash escape inside double quotes consumes the next char.
-            if ch == "\\" and quote == '"' and i + 1 < n:
+            # A backslash escape inside double quotes consumes the next char,
+            # and the same holds inside an ANSI-C span.
+            if ch == "\\" and (quote == '"' or ansi_c) and i + 1 < n:
                 buf.append(text[i + 1])
                 i += 2
                 continue
             if ch == quote:
                 quote = None
+                ansi_c = False
             i += 1
             continue
         if ch in ("'", '"'):
             quote = ch
+            ansi_c = ch == "'" and _is_ansi_c_open(text, i)
             buf.append(ch)
             i += 1
             continue
@@ -803,6 +810,23 @@ def _consume_heredoc_body(text: str, start: int, delim: str, strip_tabs: bool):
     return "\n".join(lines), i, False
 
 
+def _is_ansi_c_open(text: str, i: int) -> bool:
+    """True when the quote at ``text[i]`` opens a bash ANSI-C string.
+
+    That is the case when it is immediately preceded by a ``$`` that is not
+    itself backslash-escaped (an odd run of backslashes before the ``$``
+    escapes it; an even run leaves it live).
+    """
+    if i == 0 or text[i - 1] != "$":
+        return False
+    backslashes = 0
+    j = i - 2
+    while j >= 0 and text[j] == "\\":
+        backslashes += 1
+        j -= 1
+    return backslashes % 2 == 0
+
+
 def _match_separator(text: str, i: int) -> str:
     for sep in _SEPARATORS:
         if text.startswith(sep, i):
@@ -810,6 +834,178 @@ def _match_separator(text: str, i: int) -> str:
             # handled as a droppable token later.
             return sep
     return ""
+
+
+_ANSI_C_SIMPLE = {
+    "a": "\a",
+    "b": "\b",
+    "e": "\x1b",
+    "E": "\x1b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+    "\\": "\\",
+    "'": "'",
+    '"': '"',
+    "?": "?",
+}
+
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+_OCT_DIGITS = frozenset("01234567")
+
+
+def _decode_ansi_c(body: str) -> str:
+    """Decode the body of a bash ANSI-C quoted string (``$'...'``).
+
+    Mirrors the bash manual's escape table: the simple escapes above, ``\\xHH``
+    (1-2 hex digits), ``\\uHHHH`` / ``\\UHHHHHHHH``, ``\\nnn`` octal (up to 3
+    digits), and ``\\cX`` control characters. A backslash before anything else
+    is not an escape at all: bash keeps both characters as written. Bash words
+    are C strings, so decoding stops at the first NUL, exactly as the shell
+    truncates the word there.
+    """
+    out: List[str] = []
+    i = 0
+    n = len(body)
+    while i < n:
+        ch = body[i]
+        if ch != "\\" or i + 1 >= n:
+            out.append(ch)
+            i += 1
+            continue
+        nxt = body[i + 1]
+        if nxt in _ANSI_C_SIMPLE:
+            out.append(_ANSI_C_SIMPLE[nxt])
+            i += 2
+        elif nxt == "x":
+            j = i + 2
+            while j < n and j < i + 4 and body[j] in _HEX_DIGITS:
+                j += 1
+            if j == i + 2:
+                # No hex digits: bash keeps the sequence as written.
+                out.append("\\x")
+                i += 2
+            else:
+                out.append(chr(int(body[i + 2 : j], 16) & 0xFF))
+                i = j
+        elif nxt in ("u", "U"):
+            width = 4 if nxt == "u" else 8
+            j = i + 2
+            while j < n and j < i + 2 + width and body[j] in _HEX_DIGITS:
+                j += 1
+            if j == i + 2:
+                out.append("\\" + nxt)
+                i += 2
+            else:
+                value = int(body[i + 2 : j], 16)
+                if value <= 0x10FFFF and not 0xD800 <= value <= 0xDFFF:
+                    out.append(chr(value))
+                else:
+                    out.append("\ufffd")
+                i = j
+        elif nxt == "c" and i + 2 < n:
+            ctrl = body[i + 2]
+            out.append("\x7f" if ctrl == "?" else chr(ord(ctrl) & 0x1F))
+            i += 3
+        elif nxt in _OCT_DIGITS:
+            j = i + 1
+            while j < n and j < i + 4 and body[j] in _OCT_DIGITS:
+                j += 1
+            out.append(chr(int(body[i + 1 : j], 8) & 0xFF))
+            i = j
+        else:
+            # Not a recognised escape: bash keeps backslash and character
+            # exactly as written (\d stays \d, \8 stays \8).
+            out.append("\\")
+            out.append(nxt)
+            i += 2
+        if out and out[-1] == "\x00":
+            # Bash truncates the word at a NUL; everything after it in this
+            # span never reaches the executed command line.
+            out.pop()
+            break
+    return "".join(out)
+
+
+def _expand_ansi_c(text: str) -> str:
+    """Expand bash ANSI-C quoting (``$'...'``) in a command line.
+
+    ``shlex`` has no notion of ``$'...'``: it keeps ``$'\\x72\\x6d'`` as the
+    literal token ``$\\x72\\x6d``, so every rule downstream scans the dressed
+    text while bash executes ``rm``. That made ANSI-C quoting a complete
+    bypass: any blocked command could be spelled with escapes and score 0.0.
+
+    The expansion is done here, before tokenizing, the same way bash does it:
+    a ``$'`` span is recognised only OUTSIDE other quoting (inside single or
+    double quotes the characters are literal), its escapes are decoded, and
+    the decoded text is re-emitted as an ordinary single-quoted string so the
+    tokenizer folds it into the surrounding word. Decoded characters never
+    re-enter tokenization as syntax: ``$'a;b'`` stays one word with a ``;`` in
+    it, exactly as bash runs it, so the expansion cannot invent a command
+    boundary the shell would not create. Unterminated spans and everything
+    else pass through untouched; the caller degrades as before.
+    """
+    if "$'" not in text:
+        return text
+    out: List[str] = []
+    i = 0
+    n = len(text)
+    quote: Optional[str] = None
+    while i < n:
+        ch = text[i]
+        if quote:
+            out.append(ch)
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            out.append(ch)
+            out.append(text[i + 1])
+            i += 2
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "$" and i + 1 < n and text[i + 1] == "'":
+            # Find the closing quote, honouring backslash escapes: an escaped
+            # quote is content, not the end of the span.
+            j = i + 2
+            body: List[str] = []
+            closed = False
+            while j < n:
+                cj = text[j]
+                if cj == "\\" and j + 1 < n:
+                    body.append(cj)
+                    body.append(text[j + 1])
+                    j += 2
+                    continue
+                if cj == "'":
+                    closed = True
+                    break
+                body.append(cj)
+                j += 1
+            if not closed:
+                out.append(ch)
+                i += 1
+                continue
+            decoded = _decode_ansi_c("".join(body))
+            out.append("'")
+            out.append(decoded.replace("'", "'\\''"))
+            out.append("'")
+            i = j + 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def _tokenize(segment: str) -> tuple[List[str], bool]:
@@ -820,6 +1016,13 @@ def _tokenize(segment: str) -> tuple[List[str], bool]:
     than propagated. The fallback is a plain whitespace split, which keeps the
     command inspectable at reduced fidelity.
     """
+    try:
+        segment = _expand_ansi_c(segment)
+    except Exception:
+        # The expansion is a pure function of the segment text; if it ever
+        # failed, tokenizing the unexpanded text is strictly better than
+        # losing the segment.
+        pass
     try:
         return shlex.split(segment, comments=False, posix=True), False
     except ValueError:
