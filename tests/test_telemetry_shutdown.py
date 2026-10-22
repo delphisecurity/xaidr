@@ -129,3 +129,48 @@ def test_join_is_bounded():
     )
     src_start = inspect.getsource(telemetry.SyncTelemetryQueue.start)
     assert "daemon=True" in src_start
+
+
+def test_the_finalizer_survives_running_at_the_recursion_limit():
+    """A queue freed by the garbage collector is shut down, however deep the
+    stack the collector happens to run on: collection itself runs no Python
+    frame, and the shutdown runs on a fresh stack. Forced here: an unreachable
+    queue, collected from the deepest frame a recursion reaches."""
+    import gc
+    import sys
+    import threading
+    from xaidr.telemetry import SyncTelemetryQueue
+
+    closed = threading.Event()
+
+    class _Reporter:
+        def report(self, batch):
+            pass
+
+        def close(self):
+            closed.set()
+
+    gc.collect()                     # nothing else pending: only this queue is collected below
+    q = SyncTelemetryQueue(reporter=_Reporter())
+    q.start()
+    q.cycle = q                      # unreachable but cyclic: only the collector frees it
+    del q
+    unraisable = []
+    old_hook = sys.unraisablehook
+    sys.unraisablehook = unraisable.append
+
+    def dive():
+        try:
+            dive()
+        except RecursionError:
+            gc.collect()             # at the limit, as an allocation-triggered collection is
+    gc.disable()
+    try:
+        dive()
+    finally:
+        gc.enable()
+        sys.unraisablehook = old_hook
+    assert not unraisable, (
+        f"{len(unraisable)} unraisable exception(s) from the telemetry finalizer at the "
+        f"recursion limit: {[type(u.exc_value).__name__ for u in unraisable][:3]}")
+    assert closed.wait(5), "the collected queue was never shut down"
