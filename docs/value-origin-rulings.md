@@ -189,8 +189,14 @@ it:
   IPv4-mapped IPv6), mapped addresses unwrapped before rendering
   (`coerce_ip`, `ip_key`).
 - **An empty hex part is 0**: `https://0x.0x.0/` is `ip:0.0.0.0`, as WHATWG's IPv4
-  number parser reads it everywhere and the macOS resolver reads it.
-  `M3-empty-hex-part`; `test_an_empty_hex_part_is_the_zero_address`.
+  number parser reads it on every platform. The macOS resolver (`inet_aton` and
+  `getaddrinfo` with `AI_NUMERICHOST`, measured on macOS 26.6) reads an empty hex
+  part only where a later part follows it: it reads `0x.0x.0`, `0x.1.1.1` and
+  `0x.0`, and refuses `0x`, `0x.0x`, `127.0x`, `127.1.0x` and `0x.0x.0x.0x`. What it
+  refuses, Python's clients send as a DNS name, so for those shapes the `ip:` key
+  is WHATWG's reading alone. `M3-empty-hex-part`;
+  `test_an_empty_hex_part_is_the_zero_address`;
+  `test_the_empty_hex_ruling_states_what_the_macos_resolver_reads`.
 - **Integer parts are digit-checked**, not left to `int()`, which takes `_`
   separators no resolver reads (`0x_1.1.1.1` is a name).
 - **The macOS resolver's readings are read on every platform** (Q22, re-ruled):

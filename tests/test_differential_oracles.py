@@ -896,6 +896,55 @@ def test_q22_bsd_libc_decimal_leading_zero_class_is_present_on_darwin_and_empty_
                             f"{sys.platform}, where it must be empty: {exempt[:8]}")
 
 
+_EMPTY_HEX_PROBES = frozenset(
+    {"0x.0x.0", "0x.1.1.1", "0x.0", "0x", "0x.0x", "127.0x", "127.1.0x", "0x.0x.0x.0x"})
+
+
+def _numeric_host(h):
+    """What the platform resolver reads ``h`` as without a lookup, or None."""
+    try:
+        return socket.getaddrinfo(h, None, socket.AF_INET, 0, 0,
+                                  socket.AI_NUMERICHOST)[0][4][0]
+    except socket.gaierror:
+        return None
+
+
+def _empty_hex_bullet():
+    import pathlib
+    text = (pathlib.Path(__file__).resolve().parents[1]
+            / "docs" / "value-origin-rulings.md").read_text(encoding="utf-8")
+    start = text.index("- **An empty hex part is 0**")
+    end = text.index("\n- ", start + 1)
+    return " ".join(text[start:end].split())
+
+
+def test_the_empty_hex_ruling_states_what_the_macos_resolver_reads():
+    """The rulings name which empty-hex shapes the macOS resolver reads and which
+    it refuses, and on darwin each is measured against the resolver itself. What
+    it refuses, Python's clients send as a DNS name, so for those shapes the
+    `ip:` key is WHATWG's reading alone."""
+    bullet = _empty_hex_bullet()
+    _, mac, rest = bullet.partition("macOS resolver")
+    reads_part, refuses_word, refuses_part = rest.partition("refuses")
+    refused_here = sorted(h for h in _EMPTY_HEX_PROBES if _numeric_host(h) is None)
+    assert mac and refuses_word, (
+        "the empty-hex ruling says the macOS resolver reads an empty hex part, without "
+        f"naming the shapes it refuses (this {sys.platform} resolver refuses "
+        f"{refused_here}): {bullet!r}")
+    refuses_part = refuses_part.split(". ")[0]
+    reads = set(re.findall(r"`([0-9a-fx.]+)`", reads_part))
+    refuses = set(re.findall(r"`([0-9a-fx.]+)`", refuses_part))
+    assert reads | refuses == _EMPTY_HEX_PROBES and not reads & refuses, (
+        f"the ruling names reads {sorted(reads)} and refuses {sorted(refuses)}; "
+        f"the measured probes are {sorted(_EMPTY_HEX_PROBES)}")
+    if sys.platform == "darwin":
+        wrong = sorted((h, _numeric_host(h)) for h in _EMPTY_HEX_PROBES
+                       if (h in reads) != (_numeric_host(h) is not None))
+        assert not wrong, (
+            f"the ruling's macOS statement differs from this resolver: {wrong} "
+            "(host, what getaddrinfo(AI_NUMERICHOST) reads; None is refused)")
+
+
 # Strict xfail at M3; it contradicted W1's R4 and is fixed (rulings doc, 2026-10-04).
 def test_r4_a_metadata_hostname_without_slashes_reaches_the_hostname_rules(oracles):
     """WHATWG (Node fetch, undici MCP servers) sends `http:metadata.google.internal/…`

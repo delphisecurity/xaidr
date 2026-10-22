@@ -307,9 +307,10 @@ def test_a_name_with_a_port_and_a_path_and_no_scheme_reads_as_that_host():
 def test_an_empty_hex_part_is_the_zero_address():
     """An EMPTY hex part
     is 0, as WHATWG's IPv4 number parser reads it. ada reads https://0x.0x.0/ as
-    0.0.0.0, and so does the macOS libc resolver httpx and urllib3 hand the name
-    to; glibc does not, which makes this a superset reading on Linux, not an
-    over-read (WHATWG reaches it everywhere). coerce_ip raised on int('0x', 16)
+    0.0.0.0. The macOS libc resolver httpx and urllib3 hand the name to reads an
+    empty hex part only before a later part (0x.0x.0 yes; 0x and 127.0x no), and
+    glibc not at all, so where a resolver refuses it this is WHATWG's reading
+    alone, a superset reading and not an over-read (WHATWG reaches it everywhere). coerce_ip raised on int('0x', 16)
     and read dns:0x.0."""
     assert authority_of("https://0x.0x.0/") == A("ip:0.0.0.0")
     assert authority_of("http://0x.1.1.1/") == A("ip:0.1.1.1")

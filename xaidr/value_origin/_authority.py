@@ -100,9 +100,10 @@ def coerce_ip(host: str):
         for p in parts:
             lp = p.lower()
             if lp.startswith("0x"):
-                # An empty hex part is 0, as WHATWG's IPv4 number parser and the
-                # macOS resolver read it. Digits are checked, not left to int(),
-                # which also takes `_` separators no resolver reads.
+                # An empty hex part is 0, as WHATWG's IPv4 number parser reads it
+                # (the macOS resolver only before a later part). Digits are
+                # checked, not left to int(), which also takes `_` separators no
+                # resolver reads.
                 digits = lp[2:]
                 if not set(digits) <= _HEX_DIGITS:
                     return None
