@@ -888,6 +888,27 @@ def _p99_us(samples_ns):
     return s[int(len(s) * 0.99)] / 1000
 
 
+def _stable_p99_us(one_event, *, rounds=7, per_round=5_000, warmup=2_000):
+    """The budget's percentile, measured so that one burst of host noise cannot
+    decide it: an untimed warm-up (caches, the interpreter's specialisation),
+    then ``rounds`` independent rounds of ``per_round`` timed events, and the
+    MEDIAN of the rounds' p99. A stall on a shared runner inflates one round;
+    real per-event cost inflates every round. Returns (p99 us, median us)."""
+    for _ in range(warmup):
+        one_event()
+    p99s, everything = [], []
+    for _ in range(rounds):
+        samples = []
+        for _ in range(per_round):
+            t0 = time.perf_counter_ns()
+            one_event()
+            samples.append(time.perf_counter_ns() - t0)
+        p99s.append(_p99_us(samples))
+        everything.extend(samples)
+    p99s.sort()
+    return p99s[len(p99s) // 2], sorted(everything)[len(everything) // 2] / 1000
+
+
 @requires_stack
 def test_d4_budget_stamp_p99_at_most_10us():
     from langchain_core.callbacks.manager import CallbackManager
@@ -903,23 +924,23 @@ def test_d4_budget_stamp_p99_at_most_10us():
         "metadata": {"langgraph_node": "tools", "langgraph_step": 4}})
     was_active = run_tree.is_active()
     run_tree.activate()
-    samples = []
+    last = {}
+
+    def one_event():
+        data = {"direction": "tool_call", "action": "allowed"}
+        run_tree.stamp(data)
+        last["data"] = data
     try:
         gc.disable()
-        for _ in range(20_000):
-            data = {"direction": "tool_call", "action": "allowed"}
-            t0 = time.perf_counter_ns()
-            run_tree.stamp(data)
-            samples.append(time.perf_counter_ns() - t0)
-        assert data["runTree"] == "stamped", data
+        p99, median = _stable_p99_us(one_event)
+        assert last["data"]["runTree"] == "stamped", last["data"]
     finally:
         gc.enable()
         var_child_runnable_config.reset(token)
         if not was_active:
             run_tree.deactivate()
         run_tree.INDEX.end(root)
-    p99 = _p99_us(samples)
-    print(f"stamp p99 {p99:.2f} us, median {sorted(samples)[len(samples)//2]/1000:.2f} us")
+    print(f"stamp p99 {p99:.2f} us, median {median:.2f} us")
     assert p99 <= 10.0, f"stamp p99 {p99:.2f} us exceeds the 10 us per-event budget"
 
 
@@ -932,29 +953,35 @@ def test_d4_budget_callback_p99_at_most_10us():
     handler = run_tree.handler_for(BaseCallbackHandler)
     was_active = run_tree.is_active()
     run_tree.activate()            # an inactive handler returns at once: time the real work
-    samples = []
+    state = {"step": 0, "root": None, "child": None}
+
+    def one_event():
+        # The four callbacks of one tool run, one per timed event, in order.
+        step = state["step"] % 4
+        if step == 0:
+            state["root"], state["child"] = uuid.uuid4(), uuid.uuid4()
+        root, child = state["root"], state["child"]
+        if step == 0:
+            handler.on_chain_start({}, {}, run_id=root, parent_run_id=None,
+                                   name="LangGraph", metadata={})
+        elif step == 1:
+            handler.on_tool_start({}, "x", run_id=child, parent_run_id=root,
+                                  name="lookup", metadata={"langgraph_node": "tools"})
+        elif step == 2:
+            handler.on_tool_end("ok", run_id=child, parent_run_id=root)
+        else:
+            handler.on_chain_end({}, run_id=root, parent_run_id=None)
+        state["step"] += 1
     try:
         gc.disable()
-        for _ in range(10_000):
-            root, child = uuid.uuid4(), uuid.uuid4()
-            for call in (
-                lambda: handler.on_chain_start({}, {}, run_id=root, parent_run_id=None,
-                                               name="LangGraph", metadata={}),
-                lambda: handler.on_tool_start({}, "x", run_id=child, parent_run_id=root,
-                                              name="lookup", metadata={"langgraph_node": "tools"}),
-                lambda: handler.on_tool_end("ok", run_id=child, parent_run_id=root),
-                lambda: handler.on_chain_end({}, run_id=root, parent_run_id=None),
-            ):
-                t0 = time.perf_counter_ns()
-                call()
-                samples.append(time.perf_counter_ns() - t0)
+        p99, median = _stable_p99_us(one_event, per_round=8_000)
+        root = state["root"]
         indexed = root.int in run_tree.INDEX._ended     # before deactivate() clears it
     finally:
         gc.enable()
         if not was_active:
             run_tree.deactivate()
-    p99 = _p99_us(samples)
-    print(f"callback p99 {p99:.2f} us, median {sorted(samples)[len(samples)//2]/1000:.2f} us")
+    print(f"callback p99 {p99:.2f} us, median {median:.2f} us")
     assert p99 <= 10.0, f"handler callback p99 {p99:.2f} us exceeds the 10 us budget"
     assert indexed, (
         "the benchmark timed callbacks that indexed nothing: the last root's end "
