@@ -167,26 +167,25 @@ pins both halves.
 
 Every check in step 3 asks whether the artifact works. None of them asks what
 text it carries, and a wheel can pass all of them while shipping a fix's trigger
-phrase, its timing, or a versions-affected line to PyPI. Data files are where
+phrase, its timing, or a versions-affected line to PyPI. Data files are one place
 that hides: a `description` or a corpus label is reviewed as prose by nobody and
-ships verbatim. (Free-text annotation keys in the rule JSONs were a third place
-until `tests/test_rule_asset_annotations.py` began refusing any `_`-prefixed key
-in them.) Run this against the wheel you just built, before anything is pushed
-or uploaded:
+ships verbatim. The docstrings and comments of the shipped `.py` files are the
+other: the natural place to explain a fix is where it lives. (Free-text
+annotation keys in the rule JSONs were a third place until
+`tests/test_rule_asset_annotations.py` began refusing any `_`-prefixed key in
+them.) Run this against the wheel you just built, before anything is pushed or
+uploaded:
 
 ```
-W=/tmp/rel/dist/xaidr-$VERSION-py3-none-any.whl
-D=$(mktemp -d) && unzip -q "$W" -d "$D"
-n=$(find "$D" -type f ! -name '*.py' | wc -l | tr -d ' ')
-grep -v '^[[:space:]]*$' "$XAIDR_TRIGGERS" > "$D.phrases" 2>/dev/null
-[ "$n" -gt 0 ] && [ -s "$D.phrases" ] || {
-  echo "GATE CANNOT RUN: data files=$n phrases=$(wc -l < "$D.phrases" 2>/dev/null)"; exit 2; }
-ADVISORY='GHSA-[0-9a-z]{4}|CVE-[0-9]{4}-|[Aa]ffected( released)? versions?|[0-9]+\.[0-9]+\.[0-9]+\*{0,2} through|[0-9.]+ ?m?s (on|at) (a )?[0-9,]+[- ]chars?|-char trigger'
-hits=$( { grep -rnoIE "$ADVISORY" --exclude='*.py' "$D"; grep -rnoIF -f "$D.phrases" --exclude='*.py' "$D"; } )
-echo "scanned $n data files for $(wc -l < "$D.phrases" | tr -d ' ') phrase(s) and the advisory shapes"
-[ -z "$hits" ] || { echo "$hits"; echo "SHIPPED TEXT: RED"; exit 1; }
-echo "SHIPPED TEXT: clean"
+python scripts/release_shipped_text.py /tmp/rel/dist/xaidr-$VERSION-py3-none-any.whl \
+    --phrases "$XAIDR_TRIGGERS"
 ```
+
+It reads every data file whole and every `.py` file's docstrings and comments,
+for each phrase in the list and for the advisory shapes (an advisory id, an
+affected-versions line, a version range, a timing beside an input size). Exit 0
+is clean, 1 is a hit, 2 is a gate that cannot run. A hit names the file, the
+line and the kind, never the text (`tests/test_release_shipped_text.py`).
 
 - **`$XAIDR_TRIGGERS` is a maintainer-local file kept outside this repository.**
   It holds one phrase per line: the trigger of every fix in this release's
@@ -194,9 +193,7 @@ echo "SHIPPED TEXT: clean"
   would publish it, which is the exact outcome this step exists to prevent.
 - **A missing or empty list means the gate cannot run (exit 2). It does not
   mean the gate passed.** An empty list matches nothing and would read as
-  clean. Blank lines are stripped first because `grep -F -f` treats an empty
-  pattern as matching every line, and a gate that always refuses gets
-  ignored.
+  clean. Blank lines are ignored, so an empty line never matches every line.
 - **It reads the wheel and not the sdist.** The sdist carries the tests, and
   the attack strings in their fixtures, by design (`asi_battery/` and
   `heldout/` no longer ship in it). The wheel is what `pip install` puts on a
