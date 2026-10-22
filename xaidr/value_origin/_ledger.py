@@ -223,10 +223,30 @@ def request_enter(*, accumulate: bool = False, kind: str = "job") -> Optional[_R
         return None
 
 
-def request_exit(rec: Optional[_Request]) -> None:
+def request_close(rec: Optional[_Request]) -> None:
+    """``rec``'s scope was closed by something else (a ``clear_flow()``): no later
+    request joins it, but a ledger bound before its own exit is still its own."""
+    if rec is not None:
+        rec.kind = "closed"
+
+
+def request_exit(rec: Optional[_Request], *, only: bool = False) -> None:
     """End ``rec``: close every ledger bound in it and, in the context it was
-    opened in, put back what was there before. Never raises."""
+    opened in, put back what was there before. With ``only``, end ``rec`` alone,
+    never a request opened after it. Never raises."""
     if rec is None:
+        return
+    if only:
+        try:
+            rec.live = False
+            for lg in rec.ledgers:
+                lg.closed = True
+            rec.ledgers = []
+            if _REQUEST.get() is rec:
+                _LEDGER.set(rec.saved_ledger)
+                _REQUEST.set(rec.saved_request)
+        except Exception:
+            _log.exception("value origin: ending a request faulted")
         return
     try:
         # A request opened inside this one and still open ends with it: no record

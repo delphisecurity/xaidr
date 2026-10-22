@@ -433,14 +433,16 @@ def _put_back(saved: tuple) -> None:
 
 def _close_scopes(entries) -> None:
     """Mark these entries' scopes as closed by something else, so their own exits,
-    whenever they come, are silent and change nothing. Their requests end now,
-    innermost first, so the ledgers bound in them close with them."""
+    whenever they come, change nothing else. Each one's value-origin request stays
+    open until that exit, so a ledger bound in between (an input after a
+    ``clear_flow()`` inside the scope) is registered with it and closes then."""
     with _scope_lock:
         for e in entries:
             e.owner._closed_elsewhere += 1
             e.alive[0] = False
-    for e in reversed(tuple(entries)):
-        _vo_ledger.request_exit(e.request)
+            if e.request is not None:
+                _vo_ledger.request_close(e.request)
+                e.owner._pending_requests.append(e.request)
 
 
 def _held_by_generator() -> bool:
@@ -492,6 +494,7 @@ class _FlowScope(contextlib.ContextDecorator):
         self._principal = principal
         self._correlation_id = correlation_id
         self._closed_elsewhere = 0
+        self._pending_requests: list = []       # requests of entries closed elsewhere
 
     def __call__(self, func):
         # ContextDecorator wraps the CALL. For these kinds the call only creates a
@@ -593,6 +596,8 @@ class _FlowScope(contextlib.ContextDecorator):
                     closed = self._closed_elsewhere > 0
                     if closed:
                         self._closed_elsewhere -= 1
+                    pending = self._pending_requests.pop() if closed and self._pending_requests else None
+                _vo_ledger.request_exit(pending, only=True)
                 if not closed:
                     _scope_fault("a scope exited in a context it was not entered in, or "
                                  "exited twice; nothing was changed in the context it exited in")

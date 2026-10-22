@@ -549,3 +549,21 @@ def test_a_nested_hooked_run_still_joins_the_outer_run(hooked):
     got = _fresh(lambda: agents.Runner.run_sync(agents.Agent(name="outer"),
                                                 f"Email {ALICE} the report.").final_output)
     assert got in AUTHORITY, got
+
+
+def test_a_ledger_bound_after_clear_flow_inside_a_flow_closes_when_the_flow_exits():
+    from xaidr.value_origin import _ledger
+    s = _sensor()
+
+    def serve():
+        with xaidr.flow(principal="alice"):
+            s.scan(f"Email {ALICE} the report.", direction="input")
+            pc.clear_flow()
+            s.scan(f"Email {ALICE} the report.", direction="input")
+            inside = _wire(s)
+        return inside, _wire(s), _ledger.ledger_bound()
+    inside, after, bound = _fresh(serve)
+    assert inside in AUTHORITY, inside
+    assert after not in AUTHORITY and not bound, (
+        f"after the flow exited the next request read {after!r} (ledger bound: {bound}): "
+        "a ledger bound after clear_flow() outlived the scope")
