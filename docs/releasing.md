@@ -52,6 +52,26 @@ Both live on an unmerged branch and neither is an ancestor of the tag; the
 commits that shipped are `909b8dd` and `c31d10f`. A reader who tries to look
 them up gets nothing.
 
+### 1a. Every commit in the range is signed off
+
+Before tagging, check that every commit in the range carries a DCO
+`Signed-off-by` trailer, the same test the DCO workflow applies to a pull
+request:
+
+```
+unsigned=0
+for sha in $(git rev-list <previous-tag>..HEAD); do
+  git show -s --format=%B "$sha" | grep -qE '^Signed-off-by: .+ <.+@.+>$' \
+    || { echo "NOT SIGNED OFF: $(git show -s --format='%h %s' "$sha")"; unsigned=1; }
+done
+[ "$unsigned" = 0 ] && echo "every commit in the range is signed off"
+```
+
+A commit without one is fixed before the tag exists, while it can still be
+amended or rebased with `--signoff`. Once a tag is published its commits cannot
+change, and the DCO workflow then has to allow each one by SHA, as it does for
+two commits inside v1.21.0.
+
 ### 2. Tag locally. Do not push yet
 
 ```
