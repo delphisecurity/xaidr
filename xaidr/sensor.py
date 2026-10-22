@@ -134,6 +134,17 @@ _ACTION_SEVERITY = {
 }
 
 
+class _HeaderCollisionError(Exception):
+    """An extension's outbound_headers() tried to overwrite an open header.
+
+    Deliberately NOT an _ExtensionContractError: the S12 rule says a collision
+    is reported log-once-then-degrade (the header is dropped, the request goes
+    out without it), never a hard failure. It is constructed at the collision
+    site and handed straight to ``_extension_failed`` — never raised through a
+    hook — so the fail-open machinery never sees it.
+    """
+
+
 class _ExtensionContractError(RuntimeError):
     """An extension violated a seam contract. NEVER failed open.
 
@@ -4219,6 +4230,46 @@ class ProtectedHttpClient:
             # nothing in the sensor's own egress ever called it. This is that
             # wiring, behind the flag.
             out = _chain.inject_context(out)
+        # S12 follow-up (#14) · merge each extension's outbound_headers().
+        # ADD-ONLY: an extension may contribute new headers, never remove or
+        # overwrite one that is already open. A collision is a contract
+        # violation against the S12 rule, and the rule says what happens:
+        # it is reported at call time, ONCE, then the extension's header is
+        # dropped — the log-once-then-degrade discipline from
+        # ``_extension_failed``, not a hard failure, because a collision must
+        # never take down an outbound request. Only the colliding header is
+        # dropped; the extension's other headers still merge.
+        #
+        # Comparison is case-insensitive. HTTP header names are, and a
+        # lowercase `x-delphi-source-agent` overwriting the sensor's
+        # `X-Delphi-Source-Agent` would be the same misattribution through a
+        # smaller door. `seen` covers the sensor's own headers, the caller's,
+        # and headers merged from earlier extensions in this same call.
+        if self._sensor._extensions:
+            host = self._extract_host(dest)
+            view = DestinationView(host=host, dest_id=host)
+            seen = {name.lower() for name in out}
+            for extension in self._sensor._extensions:
+                try:
+                    extra = extension.outbound_headers(view)
+                except Exception as exc:
+                    self._sensor._extension_failed(
+                        extension, "outbound_headers", exc)
+                    continue
+                if not extra:
+                    continue
+                for name, value in extra.items():
+                    if name.lower() in seen:
+                        self._sensor._extension_failed(
+                            extension, "outbound_headers",
+                            _HeaderCollisionError(
+                                f"outbound_headers() tried to overwrite open "
+                                f"header {name!r}; the extension's value was "
+                                f"dropped"),
+                        )
+                        continue
+                    out[name] = value
+                    seen.add(name.lower())
         return out
 
     def post(self, url, *, json=None, content=None, headers=None, **kwargs):

@@ -179,7 +179,7 @@ One `_egress_headers(dest, headers, *, source_agent) -> dict` used by all five v
 
 Within `xaidr/`, this seam is the only caller of `inject_context`; otherwise only the `__init__.py` export, tests and the user-facing docs reference it. With the flag on, the writer is wired; with it off, it is not.
 
-**Still design, NOT built here:** merging `ext.outbound_headers(dest)` from each extension, with the collision rule (extensions may add headers, never remove or overwrite a core one). The helper is the seam that will host it; what is built is the consolidation and the flag only.
+**Built:** merging `ext.outbound_headers(dest)` from each extension, with the collision rule (extensions may add headers, never remove or overwrite a core one; a collision is logged once, then the extension's header is dropped). The merge is case-insensitive on header names.
 
 ### S13 · tools declared — `Sensor.protect_tools` (`sensor.py:1956`)
 
@@ -233,7 +233,7 @@ Contract violations share a base, `_ExtensionContractError`, and every scan entr
 3. **S2** policy conditions through `parse_action_policy`. BUILT.
 4. **S3** escalation chain in `LocalScanner`, flag-band cap, degraded signal, construction-time health. BUILT.
 5. **S9 + S10 + S11** trust, destination policy, blocked-URL provider. BUILT.
-6. **S12** egress header consolidation, with `inject_context` wiring behind a default-off flag. BUILT (extension `outbound_headers` merging still design).
+6. **S12** egress header consolidation, with `inject_context` wiring behind a default-off flag, plus extension `outbound_headers` merging with the add-only collision rule. BUILT.
 7. **S4 + S8 + S13** before_scan, on_response, tools declared.
 
 An extension package pins a released version of this package and builds on these seams: its own reporter, a quarantine gate, a `watch` policy, a `trust_below` condition, a destination policy, a remote escalator, identity/context modules. A parity guard on the extension side checks that the extension's behaviour is a superset of this package's, and stays green by construction.

@@ -195,3 +195,167 @@ def test_no_verb_writes_the_source_agent_header_directly():
             f"{verb} still writes {SOURCE_AGENT} directly instead of going "
             "through the helper"
         )
+
+
+# ── S12 follow-up (#14): extension outbound_headers merging ──────────────────
+#
+# The merge is ADD-ONLY. An extension may contribute new headers; it may never
+# remove or overwrite one that is already open — not the sensor's, not the
+# caller's, not another extension's. A collision is logged once, then the
+# extension's header is dropped; the request always goes out.
+
+from xaidr.extensions import DestinationView, SensorExtension  # noqa: E402
+
+
+class _AddHeaders(SensorExtension):
+    name = "acme-add"
+
+    def __init__(self, headers):
+        self._headers = dict(headers)
+        self.seen_dests = []
+
+    def outbound_headers(self, dest):
+        self.seen_dests.append(dest)
+        return dict(self._headers)
+
+
+class _OverwriteAgent(SensorExtension):
+    """Tries to overwrite X-Delphi-Source-Agent — the misattribution #14 is
+    about."""
+
+    name = "acme-overwrite"
+
+    def outbound_headers(self, dest):
+        return {"X-Delphi-Source-Agent": "mallory"}
+
+
+class _OverwriteAgentLower(SensorExtension):
+    """Same attack through the case-insensitivity door."""
+
+    name = "acme-overwrite-lower"
+
+    def outbound_headers(self, dest):
+        return {"x-delphi-source-agent": "mallory"}
+
+
+class _OverwriteTraceparent(SensorExtension):
+    name = "acme-overwrite-trace"
+
+    def outbound_headers(self, dest):
+        return {"traceparent": "00-deadbeef-deadbeef-00"}
+
+
+class _ThrowingHeaders(SensorExtension):
+    name = "acme-throw"
+
+    def outbound_headers(self, dest):
+        raise RuntimeError("header backend down")
+
+
+def _drive_with(emit, extensions, *, caller_headers=None):
+    sensor = Sensor(agent_id="egress-test", emit_provenance_headers=emit,
+                    extensions=extensions)
+    client = sensor.protect_http(httpx.Client())
+    cap = _Capture()
+    cap.bind(client)
+    clear_flow()
+    begin_flow(principal="alice")
+    extra = {"headers": caller_headers} if caller_headers else {}
+    client.post("https://h.example/x?token=secret", json={}, **extra)
+    client.get("https://h.example/x?token=secret", **extra)
+    clear_flow()
+    return cap.seen
+
+
+def test_extension_added_headers_ride_on_every_verb():
+    ext = _AddHeaders({"X-Acme-Tenant": "t-1"})
+    seen = _drive_with(False, [ext])
+    for verb in ("post", "get"):
+        assert seen[verb]["X-Acme-Tenant"] == "t-1"
+    # The sensor's own headers are untouched by the merge.
+    assert seen["post"][SOURCE_AGENT] == "egress-test"
+
+
+def test_extension_sees_a_host_only_destination_view():
+    ext = _AddHeaders({"X-Acme-Tenant": "t-1"})
+    _drive_with(False, [ext])
+    assert ext.seen_dests, "outbound_headers was never called"
+    for dest in ext.seen_dests:
+        assert isinstance(dest, DestinationView)
+        assert dest.host == "h.example"
+        # HOST ONLY — the query string must not cross the seam.
+        assert "secret" not in repr(dest), (
+            f"destination view leaked the URL/query: {dest!r}")
+
+
+def test_extension_cannot_overwrite_the_source_agent_header():
+    seen = _drive_with(False, [_OverwriteAgent()])
+    assert seen["post"][SOURCE_AGENT] == "egress-test", (
+        "extension overwrote X-Delphi-Source-Agent — the misattribution #14 "
+        "exists to prevent")
+
+
+def test_collision_check_is_case_insensitive():
+    seen = _drive_with(False, [_OverwriteAgentLower()])
+    assert seen["post"][SOURCE_AGENT] == "egress-test"
+    assert "x-delphi-source-agent" not in seen["post"]
+
+
+def test_extension_cannot_overwrite_provenance_headers():
+    seen = _drive_with(True, [_OverwriteTraceparent()])
+    assert seen["post"]["traceparent"].startswith("00-")
+    assert "deadbeef" not in seen["post"]["traceparent"]
+
+
+def test_collision_is_logged_once_then_the_request_goes_out(caplog):
+    import logging
+
+    sensor = Sensor(agent_id="egress-test", extensions=[_OverwriteAgent()])
+    client = sensor.protect_http(httpx.Client())
+    cap = _Capture()
+    cap.bind(client)
+    with caplog.at_level(logging.ERROR, logger="xaidr.sensor"):
+        for _ in range(3):
+            client.post("https://h.example/x", json={})
+    hits = [r for r in caplog.records
+            if "acme-overwrite" in r.getMessage()
+            and "outbound_headers" in r.getMessage()]
+    assert len(hits) == 1, (
+        f"expected exactly one collision log line, got {len(hits)}")
+    # Degrade, not fail: all three requests went out with the sensor's header.
+    assert cap.seen["post"][SOURCE_AGENT] == "egress-test"
+
+
+def test_a_throwing_extension_does_not_break_egress():
+    seen = _drive_with(False, [_ThrowingHeaders(),
+                               _AddHeaders({"X-Acme-Tenant": "t-1"})])
+    assert seen["post"]["X-Acme-Tenant"] == "t-1"
+    assert seen["post"][SOURCE_AGENT] == "egress-test"
+
+
+def test_first_extension_wins_on_extension_vs_extension_collision():
+    seen = _drive_with(False, [_AddHeaders({"X-Acme": "first"}),
+                               _AddHeaders({"X-Acme": "second"})])
+    assert seen["post"]["X-Acme"] == "first"
+
+
+def test_caller_supplied_headers_beat_extensions():
+    seen = _drive_with(False, [_AddHeaders({"X-Caller": "extension"})],
+                       caller_headers={"X-Caller": "mine"})
+    assert seen["post"]["X-Caller"] == "mine"
+
+
+def test_no_extensions_means_no_view_is_built():
+    """The merge path must not cost a parse when there is nothing to merge."""
+    import xaidr.sensor as sensor_mod
+
+    calls = []
+    orig = sensor_mod.ProtectedHttpClient._extract_host
+    sensor_mod.ProtectedHttpClient._extract_host = lambda self, url: (
+        calls.append(url) or orig(self, url))
+    try:
+        _drive(False)  # the no-extension driver from the S12 section
+    finally:
+        sensor_mod.ProtectedHttpClient._extract_host = orig
+    assert calls == [], (
+        f"_egress_headers parsed hosts with no extensions attached: {calls}")
