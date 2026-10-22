@@ -875,33 +875,23 @@ def extract_context(headers: dict[str, str] | None) -> bool:
     so subsequent record_hop()/build_provenance() continue the same chain.
     Returns True if context was found and restored, False otherwise.
 
-    THE RETURN VALUE IS NOT THE SECURITY-RELEVANT PART. Calling this function IS
-    the trusted-ingress signal: the caller is telling us it is processing a
-    request that arrived from somewhere else. So the inbound mark is set FIRST,
-    before any parse can fail, and it stays set whether or not a chain could be
-    restored. `is_delegated()` then reports "delegation with no provenance",
-    which resolves the upstream to tier 4.
-
-    THE MARK PRECEDES BOTH EARLY RETURNS — one for absent headers and one for
-    an absent correlation id. Set after them, it would make removing evidence
-    pay: against a `min_chain_tier_above` policy with a tier-4 sender and a
-    tier-1 receiver, valid headers require approval, while stripping ALL
-    headers, or just the correlation id, would leave nothing marked inbound, so
-    the action would look local and the computed ceiling would fall from 4 to 1.
-    Setting it first keeps the guarantee THREAT_MODEL.md states — "every
-    tampering that REMOVES information tightens the verdict" — so an attacker
-    never has a better move than leaving the headers alone.
+    Calling this function is the trusted-ingress signal: the caller is
+    processing a request that arrived from somewhere else. It binds a fresh
+    value-origin ledger and sets the inbound mark first, before any header is
+    read, and the mark stays set whether or not a chain is restored. With no
+    chain, ``is_delegated()`` reports delegation with no provenance, which
+    resolves the upstream to tier 4. So less header information never yields a
+    looser tier verdict than more, as THREAT_MODEL.md states.
     """
-    # A2 M5, V-7c: an inbound request starts a fresh ledger FIRST, before the
-    # inbound mark and every early return, so a header-stripped request cannot
-    # keep the previous request's recorded sources.
+    # An inbound request starts with a fresh ledger, before the inbound mark and
+    # every early return, whatever its headers carry.
     try:
         _vo.bind_fresh_ledger()
     except Exception:
         # a raising bind must not skip the inbound mark below, the
         # security-critical half of this function (fault-isolation sweep)
         _vo_fault("extract_context")
-    # Set BEFORE any early return. See the docstring: this is the whole fix.
+    # Set before any early return (see the docstring).
     _inbound_ctx.set(True)
     if not headers:
         return False
@@ -933,9 +923,8 @@ def extract_context(headers: dict[str, str] | None) -> bool:
     _chain_ctx.set(chain)
 
     # Privilege tiers from the separate positional header. Every failure mode
-    # resolves DOWNWARD to unknown (-> tier 4 at computation time); nothing here
-    # can ever raise a hop's privilege, which is what makes stripping or
-    # mangling the header a losing move for an attacker rather than a bypass.
+    # resolves downward to unknown (tier 4 at computation time); nothing here
+    # raises a hop's privilege.
     from .privilege_tiers import parse_claimed_tier
 
     raw_tiers = lower.get(_TIERS_HEADER.lower())

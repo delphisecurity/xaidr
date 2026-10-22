@@ -100,10 +100,9 @@ def coerce_ip(host: str):
         for p in parts:
             lp = p.lower()
             if lp.startswith("0x"):
-                # A2 M3: an EMPTY hex part is 0, as WHATWG's IPv4 number parser
-                # reads it (`0x.0x.0` is 0.0.0.0 to ada and to the macOS
-                # resolver); int() raised on it. Digits are checked, not left to
-                # int(), which also takes `_` separators no resolver reads.
+                # An empty hex part is 0, as WHATWG's IPv4 number parser and the
+                # macOS resolver read it. Digits are checked, not left to int(),
+                # which also takes `_` separators no resolver reads.
                 digits = lp[2:]
                 if not set(digits) <= _HEX_DIGITS:
                     return None
@@ -214,14 +213,14 @@ _SPECIAL_RE = re.compile(r"^(https?|wss?|ftp):[/\\]*(?=[^\s/\\])", re.IGNORECASE
 # 3.6). A client that guesses `http://` (curl) sends `evil.test:8080/x` to
 # evil.test (ruling 2).
 _IMPLIED_RE = re.compile(r"^((?:[\w\-]{1,63}\.){1,126}[^\W\d_]{1,63})(?::[0-9]{1,5})?/")
-# No scheme, a host in any inet_aton spelling (hex, octal, decimal, short dotted),
-# then a port, path, query or fragment: `0xA9FEA9FE/latest`. A client that
+# No scheme, a host in any inet_aton spelling (integer, hex, octal, short or
+# mixed dotted forms), then a port, path, query or fragment. A client that
 # guesses `http://` sends it to the address that host denotes (ruling 2). Read for
-# ARGUMENTS only: recorded from a result it would make `2024/report` in a file
+# ARGUMENTS only: recorded from a result it would make a numeric path in a file
 # listing an address that a later call to that path matches.
 _IMPLIED_INT_RE = re.compile(r"^([0-9][0-9A-Za-z.]{0,63})(?::[0-9]{1,5}(?![^/?#])|(?=[/?#]))")
 # No scheme, a STRICT address literal (a dotted quad, or IPv6 in
-# brackets), then a port, path, query or fragment — `169.254.169.254/latest`.
+# brackets), then a port, path, query or fragment.
 # Read in results too; the integer spellings above are read in arguments only.
 _IMPLIED_IP_RE = re.compile(r"^(\[[0-9A-Fa-f:.]{2,45}\]|[0-9]{1,3}(?:\.[0-9]{1,3}){3})"
                             r"(?::[0-9]{1,5}(?![^/?#])|(?=[/?#]))")
@@ -262,9 +261,9 @@ def _split_host(url: str):
 
 
 def _whatwg(value: str) -> str:
-    """``value`` (which starts with ``scheme://``) as WHATWG splits it. V-23:
-    backslashes in the scheme-relative part are slashes, as WHATWG does for
-    special schemes — `https://evil.test\\@corp.example/` is evil.test."""
+    """``value`` (which starts with ``scheme://``) as WHATWG splits it:
+    backslashes in the scheme-relative part are slashes, as WHATWG treats them
+    for special schemes."""
     m = _SCHEME_RE.match(value)
     return value[:m.end()] + value[m.end():].replace("\\", "/")
 
@@ -312,24 +311,22 @@ def _authority_host(url: str, *, whatwg: bool) -> Optional[str]:
         permissive version measured. The host is the part between the first
         ``[`` of the host and the next ``]``, otherwise the part before the
         first ``:``. A netloc 3.12.2 refuses is no host
-        (``_urlsplit_3_12_2_refuses``). Measured: 3.12.2 reads ``il`` from
-        ``http://[::1]\\@ev[il].test`` because it validates only the netloc's
-        FIRST bracket, and 3.12.14 refuses it. urllib.parse is a covered
+        (``_urlsplit_3_12_2_refuses``); 3.12.2 validates only the netloc's
+        first bracketed segment, and later patch releases refuse more.
+        urllib.parse is a covered
         consumer, and xaidr's own ``ProtectedHttpClient._extract_host`` decides
         destination policy with it. ``urllib.request``, by contrast, passes the
         netloc on, percent-decoded and userinfo
         included, and reaches neither host (it DOES reach a percent-encoded host).
       * ``whatwg=True``, used only where ``urlsplit`` refused the WHATWG string:
         WHATWG's host rule. A ``[`` must open the host and enclose an IPv6
-        literal. Any other bracket means no host, as WHATWG refuses
-        ``http:[evil.test]`` and ``http:ev[il].test``.
+        literal. Any other bracket means no host, as WHATWG refuses it.
 
     Written out rather than delegated, because ``urlsplit`` is not the same
     function on every interpreter (V-4) and because what it REFUSES, a transport
-    may still send. Measured 2026-10-03: its bracketed-host validation, a
-    security backport, raises on ``http://[::1]\\@evil.test/`` on CPython
-    3.10.21 / 3.12.14 and returns ``evil.test`` on 3.12.2; and it raises on
-    ``http://&a:foo(b]c@d:2/``, which httpx, urllib3 and WHATWG all send to ``d``.
+    may still send: its bracketed-host validation differs between patch
+    releases, and some netlocs it refuses are ones httpx, urllib3 and WHATWG
+    send to.
     """
     m = _SCHEME_RE.match(url)
     if not m:
@@ -372,12 +369,10 @@ def _leading_zero_decimal(parts: List[str]):
 
 def _macos_resolver_ip(host: str):
     """The address the macOS resolver reads ``host`` as, where it differs from
-    the inet_aton / WHATWG reading the core makes, else None. Measured
-    2026-10-04: a leading-zero dotted quad is DECIMAL (000169.254.000169.254 ->
-    169.254.169.254), so is the IPv4 tail of an IPv6 literal
-    ([::ffff:169.254.0169.254] -> the mapped 169.254.169.254), and one number
-    above 2**32 - 1 wraps modulo 2**32 (4294967296, 0x100000000 -> 0.0.0.0;
-    0x1A9FEA9FE -> 169.254.169.254). glibc and WHATWG refuse all three."""
+    the inet_aton / WHATWG reading the core makes, else None. The resolver reads
+    a leading-zero dotted quad as decimal, the IPv4 tail of an IPv6 literal the
+    same way, and one number above 2**32 - 1 modulo 2**32, in decimal, hex or
+    octal. glibc and WHATWG refuse all three."""
     if ":" in host:
         head, _, tail = host.rpartition(":")
         if head and _DEC_QUAD_RE.fullmatch(tail):
@@ -407,7 +402,7 @@ def _macos_resolver_ip(host: str):
 def _raw_split_host(url: str) -> Optional[str]:
     """The authority's host with NO validation: after the last `@`, inside the
     brackets or before the port. Used only to find macOS readings, which a
-    validating split refuses (`[::ffff:169.254.0169.254]`)."""
+    validating split can refuse."""
     m = _SCHEME_RE.match(url)
     if not m:
         return None
@@ -420,13 +415,9 @@ def _raw_split_host(url: str) -> Optional[str]:
 
 
 def _macos_readings(raw_host: Optional[str]) -> List[Authority]:
-    """Q22 as RE-RULED (twice, 2026-10-04): EVERY macOS-resolver reading is
-    READ, on every platform (a verdict must not depend on where the agent
-    runs), public ones included: a destination named by untrusted content is a
-    finding, and exfiltration goes to public addresses (4311810312 reaches
-    1.1.1.8 on macOS). The first re-ruling read only sensitive space. Developers run macOS: that is where an agent runs
-    before anyone is watching. The old premise, that the decimal reading lands
-    in reserved space, was wrong: it reaches 169.254.169.254."""
+    """Every macOS-resolver reading is read, on every platform (a verdict does
+    not depend on where the agent runs), public addresses included: a
+    destination named by untrusted content is a finding wherever it points."""
     if not raw_host:
         return []
     h = raw_host.strip().rstrip(".")
@@ -460,9 +451,8 @@ def url_authority(value: str, *, arg_mode: bool, written: Optional[str] = None):
         split anyway — a refusal by one parser is not a refusal by the
         transport.
 
-    `https://corp.example\\@evil.test/` is corp.example to WHATWG and evil.test
-    to httpx (which sends there) and urllib.parse; reading only the first made a
-    call httpx sends to an UNTRUSTED evil.test come back AUTHORIZED (finding 1). Distinct
+    A backslash in the userinfo is one host to WHATWG and another to httpx and
+    urllib.parse, so both are destinations. Distinct
     authorities come back as a list, WHATWG first — the mailbox-list shape — and
     readings that normalise to one authority are one answer. A value
     ``urlsplit`` refuses stays PARSE_FAILURE (decision 7), carrying what the

@@ -12,9 +12,9 @@ literal SCHEME — ``http`` followed by ``:``, and ``:`` is a word boundary — 
 accident one character wide: ``https`` has no word boundary after ``http``, so
 the ``https://`` spelling of the same address would not match at all.
 
-A list of spellings is the wrong design for a destination: every form nobody
-thought to write down is a bypass, and the SAME address has many — hex,
-decimal, octal, no scheme, and every non-http scheme. So URLs get their own
+A list of spellings is the wrong design for a destination: the SAME address has
+many forms (integer, hex, octal, mixed, no scheme, every non-http scheme), and a
+list reads only the ones written into it. So URLs get their own
 reader, sitting ALONGSIDE the shell and SQL ones, exactly as ``sql_parse`` does:
 an agent fetches a URL by calling ``http_get(url=…)``, not by running a shell.
 
@@ -127,7 +127,7 @@ def _address_of(authority) -> Optional[str]:
     authority from the value-origin core, else None (a NAME, which no parse
     can classify; see the module note on why that is not resolved here). The
     core's ``ip_key`` has already unwrapped an IPv4-mapped IPv6 address
-    (::ffff:169.254.169.254 IS the address it wraps)."""
+    (an IPv4-mapped IPv6 address IS the address it wraps)."""
     if authority is None or authority.scheme != "ip":
         return None
     ip = ipaddress.ip_address(authority.value)
@@ -145,13 +145,11 @@ def _address_kind(host: str) -> Optional[str]:
 
     The host goes through the value-origin core's WHOLE host pipeline
     (``_host_authority``): percent-decode, then UTS-46, then every inet_aton
-    literal form, then the mapped-v6 unwrap. Not ``coerce_ip`` alone (A2 M3,
-    F3): that drops ``１６９.２５４.１６９.２５４``, which the resolver reaches
-    once Python's IDNA codec has mapped the fullwidth digits, and it never sees
-    ``169．254．169．254`` (httpx) or ``%31%36%39.254.169.254`` (urllib3) as
-    an address at all. The private copy this module used to carry read
-    Arabic-Indic digits and ``1.2.3.256`` (as 1.2.4.0), which no consumer
-    reaches."""
+    literal form, then the mapped-v6 unwrap. Not ``coerce_ip`` alone, because
+    an address can also arrive as Unicode digits or dots that IDNA maps to
+    ASCII, or percent-encoded, and the clients read each of those as the
+    address it spells. Digits are ASCII digits only, and a part over 255 is
+    not an address."""
     if not host:
         return None
     try:
@@ -186,10 +184,8 @@ def _url_address(value: str, split_host: str) -> Optional[str]:
     ``urlsplit`` refuses (httpx, urllib3 and WHATWG still send it), and R4's
     special scheme without ``//``. Plus this interpreter's own ``urlsplit``
     host, which also covers ``file:``, a scheme the core never treats as a
-    destination. The transports disagree with each other (A2 F2), so reading
-    one of them is a bypass of the others: before M3, ``http://169.254.169.254\\x``
-    (WHATWG) and ``http://&a:foo(b]c@169.254.169.254/`` (httpx, urllib3,
-    WHATWG) reached the metadata service with ``address`` None."""
+    destination. The transports disagree with each other, so every one of
+    their readings is read."""
     try:
         res = classify_value(value, arg_mode=True)
     except Exception:
@@ -276,8 +272,8 @@ def parse_url(text: str) -> Optional[UrlShape]:
             except ValueError:
                 # urlsplit REFUSES it (an unbalanced or non-IPv6 bracket, an
                 # NFKC delimiter). That is not "no host": httpx, urllib3 and
-                # WHATWG send `http://&a:foo(b]c@169.254.169.254/` to the
-                # link-local address. The core's readings decide below.
+                # WHATWG can still send such a value. The core's readings decide
+                # below.
                 parts, refused = None, True
             # The trailing root dot is stripped for the same reason the sensor's
             # `_extract_host` strips it: `metadata.google.internal.` is the
