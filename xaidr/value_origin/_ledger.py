@@ -162,14 +162,14 @@ def _current() -> Optional[_Ledger]:
 
 # ── the request (ruling 4) ───────────────────────────────────────────────────
 class _Request:
-    __slots__ = ("live", "ledgers", "saved_ledger", "saved_request", "accumulate", "declared")
+    __slots__ = ("live", "ledgers", "saved_ledger", "saved_request", "accumulate", "kind")
 
-    def __init__(self, saved_ledger, saved_request, accumulate=False, declared=False) -> None:
+    def __init__(self, saved_ledger, saved_request, accumulate=False, kind="job") -> None:
         self.live = True
-        # True for a request the host or a framework names (request_scope(), a
-        # hooked run, flow()); False for an executor job, a boundary the sensor
-        # infers. A declared request opened inside an inferred one is its own.
-        self.declared = declared
+        # "job" (an executor job: a boundary the sensor infers), "scope"
+        # (request_scope()), "run" (a hooked framework run) or "flow" (a fresh
+        # xaidr.flow()). See _JOINS for which kind joins which.
+        self.kind = kind
         # True for a request the host or a framework declares (request_scope(), a
         # hooked run): every input in it keeps authorizing in it. An executor job
         # may be a loop serving many users, so there a new input still ends the
@@ -193,20 +193,28 @@ def _bound(lg: _Ledger) -> _Ledger:
     return lg
 
 
-def request_enter(*, accumulate: bool = False, declared: bool = False,
-                  new: bool = False) -> Optional[_Request]:
-    """Open a request in this context. Returns its record, or None when it JOINS
-    the live request here: an inferred request (an executor job) joins any; a
-    declared one joins only a declared one; ``new`` (request_scope()) joins
-    none. Otherwise the ledger bound here is not this request's (a flow left
-    open, a pool initializer's begin_flow(), the enclosing job's), so it is
-    hidden for the request's duration. Never raises."""
+# Which live request each kind joins. A request_scope() joins none: it marks a
+# new request. A hooked run joins only a run (Agent.as_tool, a crew kicked off from
+# a tool) or a flow(), which hold their own principal state; inside a
+# request_scope() or an executor job it is its own request, so a request left
+# open there never takes the run's input. A flow() binds a fresh ledger of its
+# own, so it may join any request the host or a framework declared.
+_JOINS = {"job": {"job", "scope", "run", "flow"}, "scope": set(),
+          "run": {"run", "flow"}, "flow": {"scope", "run", "flow"}}
+
+
+def request_enter(*, accumulate: bool = False, kind: str = "job") -> Optional[_Request]:
+    """Open a request of ``kind`` in this context. Returns its record, or None
+    when it JOINS the live request here (``_JOINS``). Otherwise the ledger bound
+    here is not this request's (a flow left open, a pool initializer's
+    begin_flow(), an enclosing request's), so it is hidden for the request's
+    duration. Never raises."""
     try:
         rec = _REQUEST.get()
-        if rec is not None and rec.live and not new and (rec.declared or not declared):
+        if rec is not None and rec.live and rec.kind in _JOINS.get(kind, ()):
             return None
         lg = _LEDGER.get()
-        new = _Request(lg, rec, accumulate, declared)
+        new = _Request(lg, rec, accumulate, kind)
         _REQUEST.set(new)
         _LEDGER.set(None)
         return new

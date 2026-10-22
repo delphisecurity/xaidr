@@ -510,3 +510,42 @@ def test_a_shared_request_scope_exited_elsewhere_never_ends_another_threads_requ
     a_closed.set()
     ta.join(); tb.join()
     assert got["b"] in AUTHORITY, f"user B's own request lost its authority: {got['b']!r}"
+
+
+def test_a_hooked_run_after_a_request_scope_left_open_is_its_own_request(hooked):
+    agents, crewai, s = hooked
+    agents.Runner.handler = staticmethod(lambda agent, inp: _wire(s))
+    keep = []
+
+    def left_open():
+        def body():
+            with xaidr.request_scope():
+                s.scan(f"Email {ALICE} the report.", direction="input")
+                yield 1
+        g = body()
+        next(g)
+        keep.append(g)
+
+    def b_run():
+        left_open()
+        return agents.Runner.run_sync(agents.Agent(), "Summarise my notes.").final_output
+
+    def b_kickoff():
+        left_open()
+        return crewai.Crew(runner=lambda i: _wire(s)).kickoff(inputs={"ask": "Summarise my notes."})
+    assert _fresh(b_run) not in AUTHORITY
+    assert _fresh(b_kickoff) not in AUTHORITY
+
+
+def test_a_nested_hooked_run_still_joins_the_outer_run(hooked):
+    """Agent.as_tool: the inner run sees the outer run's ledger, and records no input."""
+    agents, _, s = hooked
+
+    def handler(agent, inp):
+        if agent.name == "outer":
+            return agents.Runner.run_sync(agents.Agent(name="inner"), "model text").final_output
+        return _wire(s)
+    agents.Runner.handler = staticmethod(handler)
+    got = _fresh(lambda: agents.Runner.run_sync(agents.Agent(name="outer"),
+                                                f"Email {ALICE} the report.").final_output)
+    assert got in AUTHORITY, got

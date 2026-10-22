@@ -45,10 +45,13 @@ reads its authority. The requests are:
   Agents SDK run (`Runner.run`, `run_sync`) hooked by `protect()`;
 - each fresh `xaidr.flow()` scope.
 
-`request_scope()` always starts a new request. A hooked run or a fresh `flow()`
-opened inside a live `request_scope()`, hooked run or `flow()` joins it and
-changes nothing; opened inside an executor job, it is its own request, so one job
-serving several users keeps each run and each `request_scope()` to itself. A
+`request_scope()` always starts a new request. A hooked run joins a live hooked
+run (an Agents SDK `Agent.as_tool`, a crew kicked off from a tool) or a live
+`flow()`; inside a `request_scope()` or an executor job it is its own request. A
+fresh `flow()` binds a ledger of its own and joins a live `request_scope()`,
+hooked run or `flow()`; inside an executor job it is its own request. So one job
+serving several users keeps each run and each `request_scope()` to itself, and a
+request left open never takes a later request's input. A
 ledger bound outside the request being opened (a `begin_flow()` with no request
 around it, a pool initializer's, an enclosing request's) is hidden inside it,
 and back when it ends. An exit ends every request opened inside it, and a
