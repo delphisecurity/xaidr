@@ -344,6 +344,15 @@ Each is current behaviour and can still be overruled.
     against `email.utils`.
 12. Integer parts are digit-checked (§2, Addresses).
 13. A name with a port and nothing after it is a bare host, and not a destination.
-14. The first-write lock: the S22 first-write test and the all-or-none
+14. Request kinds (`_JOINS`): `request_scope()` joins no live request, a hooked
+    run joins only a hooked run or a `flow()`, a `flow()` joins any request the
+    host or a framework declared, and an executor job joins any. So a hooked run,
+    or a `request_scope()`, inside a `request_scope()` does not see input the host
+    recorded earlier in the enclosing scope, and a `begin_flow()` with no request
+    around it is not visible inside a hooked run; the run records its own input.
+15. An executor job keeps S-2: a new input ends the previous implicit ledger.
+16. In an Agents SDK run's input list, strings and user, system and developer
+    messages are principal input.
+17. The first-write lock: the S22 first-write test and the all-or-none
     visibility test both stay in the suite; the second is the reliable detector of
     a ledger without its lock.
