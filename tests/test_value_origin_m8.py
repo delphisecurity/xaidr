@@ -238,3 +238,24 @@ def test_tool_identity_on_a_non_result_direction_is_named_not_silently_dropped(c
         s.scan("hello", direction="input", tool="directory_lookup")
     hits = [r.getMessage() for r in caplog.records if "tool=" in r.getMessage()]
     assert len(hits) == 1 and "ignored" in hits[0], hits
+
+
+def test_the_enforce_startup_warning_names_exactly_the_states_that_block(caplog):
+    """The warning is generated from what blocks, so the two cannot differ."""
+    import logging
+    import warnings
+    from xaidr.value_origin import WireValue
+    from xaidr.value_origin._evaluate import _UNEXAMINABLE_WIRES
+    blocking = {WireValue.UNTRUSTED_SOURCE.value} | {w.value for w in _UNEXAMINABLE_WIRES}
+    with caplog.at_level(logging.WARNING, logger="xaidr"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            xaidr.Sensor(agent_id="enforce-warning", value_origin="enforce",
+                         reporter=type("N", (), {"report": lambda *a, **k: None})())
+    text = " ".join(r.getMessage() for r in caplog.records if "ENFORCES" in r.getMessage())
+    assert text, "no ENFORCE startup warning was logged"
+    import re
+    named = {w.value for w in WireValue if re.search(rf"(?<![a-z_]){w.value}(?![a-z_])", text)}
+    assert named == blocking, (
+        f"the ENFORCE warning names {sorted(named)}; the states that block are "
+        f"{sorted(blocking)}")

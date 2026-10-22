@@ -882,14 +882,19 @@ class DelphiSensor:
             #   * C-11: with no designations no read is ever trusted, so every
             #     destination any tool result names is blocked. The owner ruled
             #     ENFORCE off by default until designations exist (V-31).
+            # The blocking states are generated from _UNEXAMINABLE_WIRES, the
+            # set should_block reads, so the warning cannot name a state that
+            # does not block (tests/test_value_origin_m8.py).
+            from .value_origin._evaluate import _UNEXAMINABLE_WIRES
+            unexaminable = ", ".join(sorted(w.value for w in _UNEXAMINABLE_WIRES))
             logger.warning(
                 "xaidr: Sensor(agent_id=%r, value_origin='enforce'): value origin "
-                "ENFORCES: a tool call whose destination traces to an untrusted "
-                "source, or that one of value origin's bounds cut (argument_bound, "
-                "result_truncated, input_truncated, ledger_saturated), gets a block "
-                "verdict (category untrusted_destination): returned as 'blocked' "
-                "under enforcement_mode='block' and as 'flagged' under the default "
-                "'monitor'.%s", self.agent_id,
+                "ENFORCES: a tool call whose wire value is untrusted_source (its "
+                "destination traces to an untrusted source; category "
+                "untrusted_destination) or one of %s (a source value origin could "
+                "not examine; category unexaminable_source) gets a block verdict: "
+                "returned as 'blocked' under enforcement_mode='block' and as "
+                "'flagged' under the default 'monitor'.%s", self.agent_id, unexaminable,
                 "" if self._value_origin_sources else
                 " With NO value_origin_sources designations, no tool result can be "
                 "a trusted source, so EVERY tool call whose destination came from a "
