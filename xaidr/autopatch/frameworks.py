@@ -740,7 +740,14 @@ def _patch_openai_agents(ctx: PatchContext) -> None:
             own = set(strings_in(value if isinstance(value, str) else
                                  [i for i in value or () if _principal_turn(i)]
                                  if isinstance(value, (list, tuple)) else value, limit=64))
-            for text in strings_in(value, limit=8):
+            texts = strings_in(value, limit=8)
+            # The newest user turn is the request this run serves: it is always
+            # scanned, however long the history in front of it.
+            if isinstance(value, (list, tuple)):
+                newest = next((i for i in reversed(value) if _principal_turn(i)
+                               and not isinstance(i, str)), None)
+                texts += [t for t in strings_in(newest, limit=8) if t not in texts]
+            for text in texts:
                 token = _vo_seams.NOT_PRINCIPAL.set(text not in own)
                 try:
                     scan_text_boundary(ctx.sensor, text, "input")
