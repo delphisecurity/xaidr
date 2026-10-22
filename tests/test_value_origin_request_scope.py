@@ -272,6 +272,32 @@ def test_each_crew_kickoff_is_one_request(hooked):
     assert a in AUTHORITY and b == "no_flow", (a, b)
 
 
+def test_a_crews_input_values_are_one_write_of_declared_spans(hooked):
+    """A kickoff's inputs are the template variables the crew's task and agent
+    text is filled from: one input, one write, a declared span per variable, so a
+    destination the principal typed into any of them reads ``principal``."""
+    from xaidr.value_origin import _ledger
+    _, crewai, s = hooked
+    writes = []
+    orig = _ledger.record_input_parts
+
+    def counted(parts, **kw):
+        writes.append(([t for t, _ in parts], kw.get("declared")))
+        return orig(parts, **kw)
+
+    def serve():
+        return crewai.Crew(runner=lambda inputs: (_wire(s), _wire(s, "bob@corp.example"))).kickoff(
+            inputs={"ask": f"Email {ALICE} the quarterly report.", "cc": "bob@corp.example"})
+    _ledger.record_input_parts = counted
+    try:
+        a, b = _fresh(serve)
+    finally:
+        _ledger.record_input_parts = orig
+    assert (a, b) == ("principal", "principal"), (
+        f"the kickoff's template variables read {a!r} and {b!r}, not as declared spans")
+    assert writes == [([f"Email {ALICE} the quarterly report.", "bob@corp.example"], True)], writes
+
+
 def test_a_nested_run_does_not_record_its_input_as_principal(hooked):
     """``Agent.as_tool`` calls Runner.run with the outer model's text as input."""
     agents, _, s = hooked

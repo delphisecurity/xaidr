@@ -6,6 +6,7 @@ model (allow / flag / block). No account, no backend, no network escalation.
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import functools
 import dataclasses
@@ -59,6 +60,8 @@ from .failclosed import (
 from .extensions import DestinationView, ScanRequest, SensorExtension
 from . import value_origin as _vo
 from . import _vo_seams
+from .value_origin import _ledger as _vo_ledger  # noqa: F401  (the input batch, the replay)
+from .value_origin._designations import source_matches as _vo_source_matches
 from .reporters import Reporter, safe_fault
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
 from .scanner.command_parse import reconstruct as _reconstruct_command
@@ -2053,6 +2056,12 @@ class DelphiSensor:
                 # ATOM_WORK_BUDGET. Past 64 KiB a miss reads input_truncated, or
                 # extraction_incomplete when that budget ran out; neither blocks.
                 pass
+            batch = _vo_seams.INPUT_BATCH.get()
+            if batch is not None and spans is None and text is not None:
+                # One input in several strings: the hook records them in one write.
+                batch.append((text, _vo.Writer.PRINCIPAL if clean is True
+                              else _vo.Writer.UNTRUSTED, truncated))
+                return
             out = _vo.record_principal_input(text if text is not None else prompt,
                                              spans, input_clean=clean, truncated=truncated)
             # A FAULT on a scannable input means the record was dropped (a spans
@@ -2071,6 +2080,57 @@ class DelphiSensor:
                 self._vo_record_fault_logged = True
                 logger.exception("xaidr: value origin's input recording faulted; the "
                                  "verdict is unaffected")
+
+    @contextlib.contextmanager
+    def _vo_input_batch(self, *, declared: bool = False):
+        """Scans inside this block that would each record principal input are
+        recorded together, in ONE write, when it ends: an input a framework hands
+        over as several strings (a run's input list, a kickoff's values) is one
+        input, so a later part never replaces an earlier one's record. Each part
+        keeps its own scan's verdict (a part that was not clean is untrusted) and
+        is its own span. ``declared``: the seam knows the span structure (each
+        part is one template variable's value). Recording never raises."""
+        parts: list = []
+        token = _vo_seams.INPUT_BATCH.set(parts)
+        try:
+            yield parts
+        finally:
+            _vo_seams.INPUT_BATCH.reset(token)
+            try:
+                if parts and self._value_origin is not _vo.Mode.OFF:
+                    out = _vo._ledger.record_input_parts(
+                        [(t, w) for t, w, _ in parts], declared=declared,
+                        truncated=any(tr for _, _, tr in parts))
+                    if out is _vo.RecordOutcome.FAULT and not self._vo_record_fault_logged:
+                        self._vo_record_fault_logged = True
+                        logger.warning("xaidr: Sensor(agent_id=%r): value origin did not "
+                                       "record this input. Logged once.", self.agent_id)
+            except Exception:
+                if not self._vo_record_fault_logged:
+                    self._vo_record_fault_logged = True
+                    logger.exception("xaidr: value origin's input recording faulted; the "
+                                     "verdict is unaffected")
+
+    def _vo_replay_result(self, tool, arguments, text, call_id) -> None:
+        """Record a tool output a request replays from history (§1.2): the model
+        reads it again, so a destination it names is untrusted in this request
+        too. Untrusted and nameless, because this request did not scan it; an
+        output from a designated source is not replayed, so it can never pin a
+        read this request makes of that source again at untrusted (the write rule:
+        a read never raises). Never raises."""
+        try:
+            if self._value_origin is _vo.Mode.OFF or not isinstance(text, str) or not text:
+                return
+            args = arguments if isinstance(arguments, Mapping) else {}
+            if isinstance(tool, str) and tool and any(
+                    _vo_source_matches(d, tool, args) for d in self._value_origin_sources):
+                return
+            _vo._ledger.record_replayed_result(text, key=f"{call_id}\x00{text}")
+        except Exception:
+            if not self._vo_result_fault_logged:
+                self._vo_result_fault_logged = True
+                logger.exception("xaidr: value origin's replayed tool-output recording "
+                                 "faulted; the verdict is unaffected")
 
     def _vo_inbound_a2a(self) -> None:
         """Q21 (owner, YES): an inbound A2A message starts a fresh ledger. It ends

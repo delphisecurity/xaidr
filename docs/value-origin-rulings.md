@@ -17,7 +17,7 @@ differ, the ruling wins. Every ruling here is settled; the decisions listed unde
 |---|---|
 | `begin_flow()`, `extract_context()` | a fresh EXPLICIT ledger, unconditionally (`bind_fresh_ledger`) |
 | `xaidr.flow()` | what `begin_flow()` binds; on exit the ledger before the scope is put back |
-| `record_principal_input()` (every input scan) | nothing bound: a fresh IMPLICIT ledger; implicit bound: replaced by a fresh implicit one; explicit bound: kept |
+| `record_principal_input()` (every input scan) | nothing bound: a fresh IMPLICIT ledger; implicit bound: replaced by a fresh implicit one, unless the input's principal text is the last one it recorded; explicit bound: kept |
 | `bind_ledger()` | an explicit ledger iff nothing is bound; never rebinds |
 | `record_hop()` | nothing |
 | `clear_flow()` | unbinds |
@@ -25,6 +25,48 @@ differ, the ruling wins. Every ruling here is settled; the decisions listed unde
 `record_principal_input` binds *before* validating, so a faulting input still
 ends the previous request's implicit authority. No public parameter controls
 binding. *Pinned by:* supplementary `R31-*`, `test_ruling_3_1_changed_*`.
+
+**The same input scanned again is the same request.** A host loop, or a
+middleware such as LangChain's `before_model`, scans the user's message before
+every model call. When an input's principal text is the one the implicit ledger
+last recorded, the ledger is kept, with every tool result recorded in it, so a
+destination a tool result named is untrusted at the next model turn. Another
+input in between ends the request as before; an input with no principal text (an
+inbound A2A message) always starts one. *Pinned by:*
+`tests/test_value_origin_turns.py`.
+
+**One input in several strings is one write.** An Agents SDK run's input list, a
+CrewAI kickoff's input values, and the string variables of a Haystack
+`user_prompt` are recorded together, each string its own span and each keeping its
+own scan's verdict, so a later string never replaces an earlier one's record.
+*Pinned by:* `test_a_multi_string_input_is_one_ledger_write`,
+`test_a_crews_input_values_are_one_write_of_declared_spans`.
+
+**Only text the principal wrote is principal input.** System, developer,
+assistant and tool text, and text a framework renders from a template, never
+authorizes a destination:
+
+- an Agents SDK run's principal input is a plain string or a user message;
+- a CrewAI kickoff's input values and, under `protect()`, a Haystack Agent's
+  string template variables are the template variables the framework exposes:
+  each is a DECLARED principal span, and the template text around them (the
+  author's, and any retrieved document a non-string variable fills in) is scanned
+  and not recorded. `delphi_hooks()` passed to an Agent without `protect()` does
+  not see the run's variables and records the rendered message as before;
+- LangChain's middleware records only the newest human message.
+
+*Pinned by:* `test_system_and_developer_text_is_not_principal_input`,
+`test_rendered_template_text_is_not_principal_and_string_variables_are`.
+
+**History a request replays is recorded as what it is.** A tool output the model
+reads again in a later request (a `ToolMessage` in a LangChain message list, a
+`function_call_output` in an Agents SDK input list) is recorded in that request as
+an untrusted tool output, once per ledger, so the destination a turn-1 tool result
+named is untrusted at turn 2 as well. An output of a designated source is not
+replayed: this request did not scan it, and an untrusted record would pin a read
+the request makes of that source again (a read never raises). *Pinned by:*
+`test_a_tool_results_destination_is_untrusted_at_the_next_user_turn` (LangChain
+and Agents SDK).
 
 **A destination the principal gave keeps authorizing for the rest of that flow,
 never across requests.** Untrusted content never raises it, and nothing lowers it
@@ -68,9 +110,9 @@ it; in an executor job, which may be a loop serving one user after another, a ne
 input still ends the previous implicit ledger (S-2). A run hooked inside another
 hooked run (an Agents SDK `Agent.as_tool`, a crew kicked off from a tool) scans
 its input and does not record it as principal input: that input is the outer
-run's model text. In an Agents SDK run's input list, only a string or a user,
-system or developer message is principal input; a replayed tool output or
-assistant turn is scanned the same way and not recorded as the principal's. A
+run's model text. In an Agents SDK run's input list, only a string or a user
+message is principal input; a replayed tool output is recorded as an untrusted
+tool output, and system, developer and assistant text is scanned and not recorded. A
 `flow()` scope joins only a scope that is still open, inside a request that is
 still live. A `clear_flow()` inside a `flow()` closes the scope, and the scope's
 request stays open, joined by nothing, until the scope's own exit, so a ledger

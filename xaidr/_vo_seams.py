@@ -56,6 +56,11 @@ NOT_PRINCIPAL: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "xaidr_value_origin_not_principal", default=False)
 _RUN_DEPTH: contextvars.ContextVar[int] = contextvars.ContextVar(
     "xaidr_value_origin_run_depth", default=0)
+#: While an entry hook scans one input that arrives as several strings, the
+#: principal parts each scan would record, collected so the hook records them in
+#: ONE write (``DelphiSensor._vo_input_batch``).
+INPUT_BATCH: contextvars.ContextVar = contextvars.ContextVar(
+    "xaidr_value_origin_input_batch", default=None)
 
 
 def _enter_run():

@@ -12,7 +12,8 @@ BINDING (ruling 3.1). A ledger is EXPLICIT or IMPLICIT (an internal attribute):
                                                               binding when ruling 3.1 changed,
                                                               2026-10-04); never rebinds
     record_principal_input()   nothing bound  -> fresh implicit
-                               implicit bound -> REPLACED by a fresh implicit
+                               implicit bound -> REPLACED by a fresh implicit, unless
+                                                 it is the same input again
                                explicit bound -> kept
     unbind_ledger()            clear_flow
     ledger_get()/ledger_set()  xaidr.flow(): saved on enter, put back on exit (return OR
@@ -35,7 +36,11 @@ are put back at its exit (_REQUEST_STATE); entry changes none of them.
     xaidr.flow()               a fresh scope is a request too
 
 An implicit ledger lives for one request. Replacing it at the next input scan
-keeps authority per request too.
+keeps authority per request too. The same input scanned again (a host loop, or a
+middleware, that scans the user's message before every model call) is the same
+request: its principal text matches the last input the ledger recorded, so the
+ledger and every tool result recorded in it are kept. An input with no principal
+text (an inbound A2A message) always starts a request (Q21).
 
 WHAT IS STORED. ``HMAC-SHA256(k, authority.key())`` and the same for
 principal n-grams, ``k`` 32 random bytes drawn once per process. Nothing here can
@@ -127,7 +132,7 @@ def _digest_ngram(g: str) -> bytes:
 class _Ledger:
     __slots__ = ("lock", "pid", "explicit", "entries", "ngrams", "saturated", "sat_logged",
                  "input_truncated", "result_truncated", "result_unread", "atoms_incomplete",
-                 "dests_dropped", "closed", "owner")
+                 "dests_dropped", "closed", "owner", "last_input", "replayed")
 
     def __init__(self, *, explicit: bool) -> None:
         self.lock = _new_lock()
@@ -144,6 +149,8 @@ class _Ledger:
         self.sat_logged = False
         self.closed = False              # its request ended: read as not bound, everywhere
         self.owner = None                # the request it was bound in, if any
+        self.last_input = None           # digest of the last input's principal text
+        self.replayed = set()            # digests of history replayed into it (record_replayed_result)
 
     def __repr__(self) -> str:                  # discloses nothing
         return (f"<value-origin ledger {'explicit' if self.explicit else 'implicit'} "
@@ -334,12 +341,26 @@ def ledger_bound() -> bool:
         return False
 
 
-def _bind_for_input() -> _Ledger:
+def _input_key(texts) -> Optional[bytes]:
+    """The digest an input's principal text is matched by, or None when it has none."""
+    joined = "\x00".join(t for t in texts if isinstance(t, str))
+    if not joined.strip("\x00"):
+        return None
+    return hmac.new(_KEY, b"i\x00" + joined.encode("utf-8", "surrogatepass"),
+                    hashlib.sha256).digest()
+
+
+def _bind_for_input(key: Optional[bytes] = None) -> _Ledger:
     lg = _current()
     if lg is not None and (lg.explicit or (lg.owner is not None and lg.owner.live
                                            and lg.owner.accumulate)):
+        lg.last_input = key
         return lg                  # a flow's ledger, or this live request's: one request, many inputs
-    return _bound(_Ledger(explicit=False))
+    if lg is not None and key is not None and lg.last_input == key:
+        return lg                  # the same input again: the same request
+    lg = _bound(_Ledger(explicit=False))
+    lg.last_input = key
+    return lg
 
 
 # ── the write rule ───────────────────────────────────────────────────────────
@@ -424,7 +445,8 @@ def record_principal_input(text: str, spans: Sequence[Span] | None = None, *,
     """Record every destination candidate in a principal-direction input.
 
     Binds per ruling 3.1 FIRST (a new input is a new request even when its
-    recording then faults). ``spans=None`` means no span structure was declared:
+    recording then faults; the same input again is the same request).
+    ``spans=None`` means no span structure was declared:
     the whole text is one PRINCIPAL span whose entries carry
     ``span_declared=False``. Given spans must concatenate to ``text``
     exactly, else nothing is recorded and FAULT is returned. Unless
@@ -432,7 +454,7 @@ def record_principal_input(text: str, spans: Sequence[Span] | None = None, *,
     recorded (ruling 3.5). Called AFTER the input scan.
     """
     try:
-        lg = _bind_for_input()
+        lg = _bind_for_input(_input_key(_principal_texts(text, spans)))
         if truncated and lg is not None:
             lg.input_truncated = True     # owner, after M6: a miss here is input_truncated
         if not isinstance(text, str):
@@ -450,48 +472,80 @@ def record_principal_input(text: str, spans: Sequence[Span] | None = None, *,
             if "".join(t for t, _ in span_list) != text:
                 return _lost()     # a mis-split is not repaired by guessing
             declared = True
-        clean = _principal_clean(input_clean)
-        dests: List[Tuple[bytes, Entry]] = []
-        grams: List[Tuple[bytes, bool]] = []
-        late: List[Tuple[bytes, Entry]] = []   # atoms past the examined window
-        atom_budget = AtomBudget()             # one call's WORK budget (2026-10-06)
-        budget = MAX_INPUT_NGRAM_CHARS   # key n-grams: the 64 KiB window; atoms past it: the WORK budget
-        if lg is not None and len(text) > MAX_INPUT_NGRAM_CHARS:
-            lg.input_truncated = True     # visible; it no longer blocks
-        for span_text, writer in span_list:            # left to right (V-24)
-            is_principal = writer is Writer.PRINCIPAL and clean
-            origin = Origin.PRINCIPAL if is_principal else Origin.UNTRUSTED_SOURCE
-            window = span_text[:max(budget, 0)]
-            for _, a in prose_candidates(window):      # the examined window: per span
-                dests.append((_digest_authority(a), (origin, declared, None)))
-            if len(span_text) > len(window):
-                # Past the window: the WORK-bounded atom pass (2026-10-06), from the
-                # last whitespace before the cut so a straddling atom is whole; its
-                # atoms go in their OWN write, last (milestone review).
-                cut = span_text.rfind(" ", max(0, len(window) - 2048), len(window))
-                # No whitespace near the cut: overlap 2,048 chars anyway, so an atom
-                # straddling it is still whole (silent-failure review, LOW).
-                tail = span_text[cut + 1 if cut >= 0 else max(0, len(window) - 2048):]
-                for _, a in budgeted_atoms([((), tail)], atom_budget):
-                    late.append((_digest_authority(a), (origin, declared, None)))
-            if is_principal and budget > 0:
-                for g in span_ngrams(span_text[:budget]):
-                    grams.append((_digest_ngram(g), declared))
-            budget -= len(span_text)
-        if lg.pid != os.getpid():
-            return RecordOutcome.NO_LEDGER
-        with lg.lock:
-            ok_dest = _apply_unit(lg, dests, [])
-            ok_gram = _apply_unit(lg, [], grams) if grams else True
-            ok_late = _apply_unit(lg, late, []) if late else True
-            if atom_budget.hit:
-                lg.atoms_incomplete = True     # visible (extraction_incomplete), never a block
-        _log_saturation_once(lg)
-        return (RecordOutcome.RECORDED if (ok_dest and ok_gram and ok_late)
-                else RecordOutcome.SATURATED)
+        return _record_spans(lg, span_list, declared, _principal_clean(input_clean))
     except Exception:
         _log.exception("value origin: record_principal_input faulted")
         return _lost()
+
+
+def record_input_parts(parts: Sequence[Tuple[str, Writer]], *, declared: bool,
+                       truncated: bool = False) -> RecordOutcome:
+    """Record one input made of several strings as ONE write: a framework run's
+    input list, a kickoff's input values. ``parts`` are (text, writer) in order,
+    the writer already settled by each part's own scan (a part whose scan was not
+    clean is UNTRUSTED). Each part is its own span, so no n-gram crosses two of
+    them. ``declared`` says the seam knows the span structure (template
+    variables), as declared spans do. Binds like ``record_principal_input``."""
+    try:
+        parts = [(t, w) for t, w in parts if isinstance(t, str) and isinstance(w, Writer)]
+        lg = _bind_for_input(_input_key([t for t, w in parts if w is Writer.PRINCIPAL]))
+        if truncated and lg is not None:
+            lg.input_truncated = True
+        return _record_spans(lg, parts, declared, True)
+    except Exception:
+        _log.exception("value origin: record_input_parts faulted")
+        return _lost()
+
+
+def _principal_texts(text, spans) -> List[str]:
+    if spans is None:
+        return [text] if isinstance(text, str) else []
+    try:
+        return [s.text for s in spans
+                if isinstance(s, Span) and s.writer is Writer.PRINCIPAL and isinstance(s.text, str)]
+    except Exception:
+        return []
+
+
+def _record_spans(lg: _Ledger, span_list, declared: bool, clean: bool) -> RecordOutcome:
+    dests: List[Tuple[bytes, Entry]] = []
+    grams: List[Tuple[bytes, bool]] = []
+    late: List[Tuple[bytes, Entry]] = []   # atoms past the examined window
+    atom_budget = AtomBudget()             # one call's WORK budget (2026-10-06)
+    budget = MAX_INPUT_NGRAM_CHARS   # key n-grams: the 64 KiB window; atoms past it: the WORK budget
+    if lg is not None and sum(len(t) for t, _ in span_list) > MAX_INPUT_NGRAM_CHARS:
+        lg.input_truncated = True     # visible; it no longer blocks
+    for span_text, writer in span_list:            # left to right (V-24)
+        is_principal = writer is Writer.PRINCIPAL and clean
+        origin = Origin.PRINCIPAL if is_principal else Origin.UNTRUSTED_SOURCE
+        window = span_text[:max(budget, 0)]
+        for _, a in prose_candidates(window):      # the examined window: per span
+            dests.append((_digest_authority(a), (origin, declared, None)))
+        if len(span_text) > len(window):
+            # Past the window: the WORK-bounded atom pass (2026-10-06), from the
+            # last whitespace before the cut so a straddling atom is whole; its
+            # atoms go in their OWN write, last (milestone review).
+            cut = span_text.rfind(" ", max(0, len(window) - 2048), len(window))
+            # No whitespace near the cut: overlap 2,048 chars anyway, so an atom
+            # straddling it is still whole (silent-failure review, LOW).
+            tail = span_text[cut + 1 if cut >= 0 else max(0, len(window) - 2048):]
+            for _, a in budgeted_atoms([((), tail)], atom_budget):
+                late.append((_digest_authority(a), (origin, declared, None)))
+        if is_principal and budget > 0:
+            for g in span_ngrams(span_text[:budget]):
+                grams.append((_digest_ngram(g), declared))
+        budget -= len(span_text)
+    if lg.pid != os.getpid():
+        return RecordOutcome.NO_LEDGER
+    with lg.lock:
+        ok_dest = _apply_unit(lg, dests, [])
+        ok_gram = _apply_unit(lg, [], grams) if grams else True
+        ok_late = _apply_unit(lg, late, []) if late else True
+        if atom_budget.hit:
+            lg.atoms_incomplete = True     # visible (extraction_incomplete), never a block
+    _log_saturation_once(lg)
+    return (RecordOutcome.RECORDED if (ok_dest and ok_gram and ok_late)
+            else RecordOutcome.SATURATED)
 
 
 # ── tool results ─────────────────────────────────────────────────────────────
@@ -631,6 +685,32 @@ def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
         return RecordOutcome.RECORDED if (ok and ok_late) else RecordOutcome.SATURATED
     except Exception:
         _log.exception("value origin: record_tool_result faulted")
+        return _lost()
+
+
+def record_replayed_result(result: object, *, key: str) -> RecordOutcome:
+    """Record a tool output a later request REPLAYS from history (a ToolMessage in
+    a LangChain message list, a function_call_output in an Agents SDK input
+    list): nameless and untrusted, as a read whose scan this request did not see.
+    ``key`` names the output (its call id and text); an output this ledger has
+    already replayed is not walked again, so a middleware that replays the
+    history before every model call pays for each output once. Does not bind."""
+    try:
+        lg = _current()
+        if lg is None:
+            return RecordOutcome.NO_LEDGER
+        d = hmac.new(_KEY, b"r\x00" + str(key).encode("utf-8", "surrogatepass"),
+                     hashlib.sha256).digest()
+        with lg.lock:
+            if d in lg.replayed:
+                return RecordOutcome.RECORDED
+        out = record_tool_result("", None, result, designations=(), result_blocked=None)
+        if out is RecordOutcome.RECORDED:
+            with lg.lock:
+                lg.replayed.add(d)
+        return out
+    except Exception:
+        _log.exception("value origin: record_replayed_result faulted")
         return _lost()
 
 

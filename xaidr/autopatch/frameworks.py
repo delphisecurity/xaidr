@@ -21,6 +21,7 @@ with the concrete reason, not omitted.
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 
 from .. import _vo_seams
@@ -727,11 +728,58 @@ def _patch_deepagents(ctx: PatchContext) -> None:
 
 def _principal_turn(item: Any) -> bool:
     """An Agents SDK run-input item the principal wrote: a string, or a message
-    whose role is user, system or developer."""
+    whose role is user. System and developer text is the agent author's, not the
+    principal's, and assistant and tool text is the model's and the tools'."""
     if isinstance(item, str):
         return True
-    role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
-    return role in ("user", "system", "developer")
+    return _item_field(item, "role") == "user"
+
+
+def _item_field(item: Any, name: str) -> Any:
+    return item.get(name) if isinstance(item, dict) else getattr(item, name, None)
+
+
+def _turn_texts(item: Any) -> list:
+    """The text a run-input message carries: its string content, or the text of
+    each content part."""
+    if isinstance(item, str):
+        return [item]
+    content = _item_field(item, "content")
+    if isinstance(content, str):
+        return [content]
+    out = []
+    for part in content if isinstance(content, (list, tuple)) else ():
+        text = _item_field(part, "text")
+        if isinstance(text, str):
+            out.append(text)
+    return out
+
+
+def _replay_tool_outputs(sensor: Any, items: Any) -> None:
+    """Value origin: a tool output in a run's input (the history of an earlier
+    run) is recorded as the tool output it is, untrusted, in this run's request."""
+    replay = getattr(sensor, "_vo_replay_result", None)
+    if replay is None or not isinstance(items, (list, tuple)):
+        return
+    calls = {}
+    for i in items:
+        if _item_field(i, "type") == "function_call" and _item_field(i, "call_id"):
+            calls[_item_field(i, "call_id")] = i
+    for i in items:
+        kind = _item_field(i, "type")
+        if not (isinstance(kind, str) and kind.endswith("_call_output")):
+            continue
+        output = _item_field(i, "output")
+        text = output if isinstance(output, str) else "\n".join(
+            strings_in(output, limit=64))
+        call = calls.get(_item_field(i, "call_id"))
+        args = _item_field(call, "arguments") if call is not None else None
+        try:
+            args = json.loads(args) if isinstance(args, str) else args
+        except ValueError:
+            args = None
+        replay(_item_field(call, "name") if call is not None else None,
+               args if isinstance(args, dict) else None, text, _item_field(i, "call_id"))
 
 
 def _patch_openai_agents(ctx: PatchContext) -> None:
@@ -744,12 +792,16 @@ def _patch_openai_agents(ctx: PatchContext) -> None:
             if value is None and len(args) > 2:
                 value = args[2]
             # Only the principal's own turns are principal input: a plain string,
-            # or a user, system or developer message. A replayed tool output or
-            # assistant turn is scanned the same way and not recorded as the
-            # principal's (ruling 1: untrusted content never raises authority).
-            own = set(strings_in(value if isinstance(value, str) else
-                                 [i for i in value or () if _principal_turn(i)]
-                                 if isinstance(value, (list, tuple)) else value, limit=64))
+            # or a user message. A replayed tool output, an assistant turn and
+            # system or developer text are scanned the same way and not recorded
+            # as the principal's (ruling 1: untrusted content never raises
+            # authority).
+            if isinstance(value, str):
+                own = {value}
+            elif isinstance(value, (list, tuple)):
+                own = {t for i in value if _principal_turn(i) for t in _turn_texts(i)}
+            else:
+                own = set(strings_in(value, limit=64))
             texts = strings_in(value, limit=8)
             # The newest user turn is the request this run serves: it is always
             # scanned, however long the history in front of it.
@@ -757,12 +809,17 @@ def _patch_openai_agents(ctx: PatchContext) -> None:
                 newest = next((i for i in reversed(value) if _principal_turn(i)
                                and not isinstance(i, str)), None)
                 texts += [t for t in strings_in(newest, limit=8) if t not in texts]
-            for text in texts:
-                token = _vo_seams.NOT_PRINCIPAL.set(text not in own)
-                try:
-                    scan_text_boundary(ctx.sensor, text, "input")
-                finally:
-                    _vo_seams.NOT_PRINCIPAL.reset(token)
+            batch = getattr(ctx.sensor, "_vo_input_batch", None)
+            # The run's input is ONE input, recorded in one write.
+            with batch() if batch is not None else contextlib.nullcontext():
+                for text in texts:
+                    token = _vo_seams.NOT_PRINCIPAL.set(text not in own)
+                    try:
+                        scan_text_boundary(ctx.sensor, text, "input")
+                    finally:
+                        _vo_seams.NOT_PRINCIPAL.reset(token)
+            if not _vo_seams.NESTED_RUN.get():
+                _replay_tool_outputs(ctx.sensor, value)
             return None
 
         def after(result: Any, args: tuple, kwargs: dict) -> Any:
@@ -824,8 +881,13 @@ def _patch_crewai(ctx: PatchContext) -> None:
             value = kwargs.get("inputs")
             if value is None and len(args) > 1:
                 value = args[1]
-            for text in strings_in(value, limit=32):
-                scan_text_boundary(ctx.sensor, text, "input")
+            # Each value is one template variable the crew's task and agent text
+            # is filled from: one input, recorded in one write, a declared span
+            # per variable (the template text itself is the crew author's).
+            batch = getattr(ctx.sensor, "_vo_input_batch", None)
+            with batch(declared=True) if batch is not None else contextlib.nullcontext():
+                for text in strings_in(value, limit=32):
+                    scan_text_boundary(ctx.sensor, text, "input")
             return None
 
         # Each kickoff is one request (ruling 4), as Runner.run is above.
@@ -1092,6 +1154,18 @@ def _patch_haystack(ctx: PatchContext) -> None:
         "before_tool tool-argument scan (the call is removed before it "
         "executes), after_run output scan — all on the same sensor",
     )
+    try:
+        from ..integrations.haystack import run_variables
+    except Exception as exc:  # pragma: no cover - import of our own module
+        raise PatchUnavailable(f"xaidr Haystack integration unavailable: {exc}") from exc
+    for name in ("run", "run_async"):
+        ctx.install(
+            module_name, f"Agent.{name}", "input",
+            lambda orig: run_variables(make_wrapper(orig)),     # make_wrapper: the patch token
+            "makes the run's string template variables visible to the before_run hook, "
+            "so with a user_prompt only those variables are recorded as the principal's "
+            "input and the rendered template text is not",
+        )
     ctx.unpatchable(
         f"{module_name}.Agent.hooks['after_tool']", "tool result",
         "tool RESULTS are not scanned — only tool ARGUMENTS are. Haystack does "

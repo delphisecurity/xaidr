@@ -71,6 +71,9 @@ L0+L1+L2+compositional+DLP stack and emits through the sensor's reporter.
 
 from __future__ import annotations
 
+import contextvars
+import functools
+import inspect
 import logging
 from typing import Any
 
@@ -218,7 +221,25 @@ class _DelphiHook:
         if last_user is None or not last_user.text.strip():
             return
 
-        result = self.sensor.scan(last_user.text, direction="input")
+        variables = _RUN_VARIABLES.get()
+        batch = getattr(self.sensor, "_vo_input_batch", None)
+        if variables is None or batch is None:
+            result = self.sensor.scan(last_user.text, direction="input")
+        else:
+            # Value origin: the Agent rendered this message from its user_prompt
+            # template, so it is the template author's text with the run's
+            # variables filled in, and a variable may be a retrieved document. Only
+            # the string variables are the principal's input: each is a declared
+            # span, recorded with the rendered message's own scan verdict, in one
+            # write. The rest of the rendered text is scanned and not recorded.
+            with batch(declared=True) as parts:
+                result = self.sensor.scan(last_user.text, direction="input")
+                if parts:
+                    _, writer, truncated = parts.pop()
+                    parts.extend((v, writer, truncated) for v in variables
+                                 if v in last_user.text)
+                    if not parts:
+                        parts.append(("", writer, truncated))   # a new input still binds
         if not getattr(result, "must_halt", False):
             return
 
@@ -361,6 +382,42 @@ class _DelphiHook:
         opt-in; only loading does.
         """
         return cls(**data.get("init_parameters", {}))
+
+
+#: The string template variables of the ``Agent.run`` in progress, when the Agent
+#: renders a ``user_prompt``: set by protect()'s ``Agent.run``/``run_async``
+#: wrapper (``run_variables``), read by the before_run hook. None otherwise.
+_RUN_VARIABLES: contextvars.ContextVar = contextvars.ContextVar(
+    "xaidr_haystack_run_variables", default=None)
+
+
+def run_variables(fn):
+    """``fn`` (``Agent.run`` or ``Agent.run_async``) with the run's string template
+    variables visible to the before_run hook for the duration of the call."""
+    def variables(agent, kwargs):
+        builder = getattr(agent, "_user_chat_prompt_builder", None)
+        if builder is None:
+            return None
+        names = getattr(builder, "variables", None) or ()
+        return [kwargs[k] for k in names if isinstance(kwargs.get(k), str)]
+
+    if inspect.iscoroutinefunction(fn):
+        @functools.wraps(fn)
+        async def wrapped(self, *args, **kwargs):
+            token = _RUN_VARIABLES.set(variables(self, kwargs))
+            try:
+                return await fn(self, *args, **kwargs)
+            finally:
+                _RUN_VARIABLES.reset(token)
+    else:
+        @functools.wraps(fn)
+        def wrapped(self, *args, **kwargs):
+            token = _RUN_VARIABLES.set(variables(self, kwargs))
+            try:
+                return fn(self, *args, **kwargs)
+            finally:
+                _RUN_VARIABLES.reset(token)
+    return wrapped
 
 
 def _refusal_text(result: Any) -> str:
