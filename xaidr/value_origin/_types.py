@@ -188,6 +188,10 @@ class CallVerdict:
     detail: str                                    # the normative row text (row_text)
     findings: tuple[DestinationFinding, ...]       # empty for every absence state
     truncated: bool                                # argument walk hit its bound
+    # Destination atoms in a value examined whole that is not wholly one
+    # destination (prose, a command line), each with its ledger origin. Recorded
+    # only: they never decide the wire, the verdict or an action (L5 F4).
+    observed: tuple[DestinationFinding, ...] = ()
 
 
 # (No per-feature generation constant — ruling 2026-09-24; see C-21.)

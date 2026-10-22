@@ -27,6 +27,7 @@ from typing import Any, Iterator, List, Mapping, Tuple
 
 from ._authority import ParseFailure, classify_value
 from ._types import (
+    ATOM_COST,
     MAX_ARG_DEPTH,
     MAX_ARG_LEAVES,
     MAX_KEY_TOKENS,
@@ -269,36 +270,58 @@ def extract_destinations(arguments: Mapping[str, object] | None
     fault is one PARSE_FAILURE finding, because an unparseable call is not a
     call with no destination.
     """
+    found, truncated, _ = extract_with_observed(arguments)
+    return found, truncated
+
+
+def extract_with_observed(arguments: Mapping[str, object] | None
+                          ) -> tuple[tuple[Finding, ...], bool, tuple[Finding, ...]]:
+    """``extract_destinations`` plus the OBSERVED findings: the destination atoms
+    in a value the walk examined whole that is not wholly one destination (prose,
+    a command line, a mailbox part that does not parse). They are recorded and
+    never decide the wire (L5 F4, record only). Past a bound the atoms decide, as
+    the value's whole reading does there, so a value names the same destinations
+    wherever it sits."""
     try:
         if arguments is None:
-            return (), False
+            return (), False, ()
         skipped: list = []
         leaves, truncated, _ = _walk(arguments, leaf_cap=MAX_ARG_LEAVES,
                                   char_cap=MAX_LEAF_CHARS, truncate_long=False, skipped=skipped)
         out: List[Finding] = []
+        seen: set = set()
+        budget = AtomBudget()        # ONE budget: the atoms, the walk past a bound, the reads there
+        atoms: List[Tuple[Path, str]] = []
+        short: List[Tuple[Path, str]] = []
         for path, leaf in leaves:
-            res = classify_value(leaf, arg_mode=True)
-            if res is None:
-                continue
-            if isinstance(res, ParseFailure):
-                out.append(Finding(path=path, destination=None,
-                                   reason=UnresolvedReason.PARSE_FAILURE))
-                out.extend(Finding(path=path, destination=a, reason=None)
-                           for a in res.parsed)
-            elif isinstance(res, list):
-                out.extend(Finding(path=path, destination=a, reason=None) for a in res)
-            else:
-                out.append(Finding(path=path, destination=res, reason=None))
+            if not _read_whole(out, seen, path, classify_value(leaf, arg_mode=True)):
+                short.append((path, leaf))
         if truncated:
             # Owner, 2026-10-05: what the bound kept from examination is still
-            # searched for destination ATOMS, so a padded destination is found.
-            seen = {f.destination for f in out if f.destination is not None}
-            budget = AtomBudget()               # ONE budget: the walk, then the atoms
+            # searched for destination ATOMS, so a padded destination is found;
+            # and a value there short enough to read whole is read whole, so it
+            # names what it names as a leaf of its own (L5 F4).
             strings, faulted, exhausted = _all_strings(skipped, budget=budget)
-            for path, a in budgeted_atoms(strings, budget):
-                if a not in seen:
-                    seen.add(a)
-                    out.append(Finding(path=path, destination=a, reason=None))
+            for path, s in strings:
+                if budget.left <= 0:
+                    budget.hit = True
+                    break
+                budget.left -= len(s) + ATOM_COST
+                if not _read_whole(out, seen, path, classify_value(s, arg_mode=True)):
+                    atoms.append((path, s))
+        for path, a in budgeted_atoms(atoms, budget):
+            if a not in seen:
+                seen.add(a)
+                out.append(Finding(path=path, destination=a, reason=None))
+        # Every value the walk examined whole that is not wholly one destination
+        # is scanned for atoms too, and what that finds is OBSERVED (record only).
+        observed: List[Finding] = []
+        obs_budget = AtomBudget()
+        for path, a in budgeted_atoms(short, obs_budget):
+            if a not in seen:
+                seen.add(a)
+                observed.append(Finding(path=path, destination=a, reason=None))
+        if truncated:
             if faulted:     # a node past the bound could not be examined: visible
                 out.append(Finding(path=(), destination=None,
                                    reason=UnresolvedReason.PARSE_FAILURE))
@@ -307,10 +330,28 @@ def extract_destinations(arguments: Mapping[str, object] | None
                                    reason=UnresolvedReason.ATOM_BUDGET))
             out.append(Finding(path=(), destination=None,
                                reason=UnresolvedReason.WALK_BOUND))
-        return tuple(out), truncated
+        return tuple(out), truncated, tuple(observed)
     except Exception:
         return (Finding(path=(), destination=None,
-                        reason=UnresolvedReason.PARSE_FAILURE),), False
+                        reason=UnresolvedReason.PARSE_FAILURE),), False, ()
+
+
+def _read_whole(out: List[Finding], seen: set, path: Path, res) -> bool:
+    """Append a value's whole-value reading to ``out``; True iff the value is
+    wholly one destination (or one address list), so it needs no atom scan."""
+    if res is None:
+        return False
+    if isinstance(res, ParseFailure):
+        out.append(Finding(path=path, destination=None, reason=UnresolvedReason.PARSE_FAILURE))
+        found = list(res.parsed)
+    elif isinstance(res, list):
+        found = res
+    else:
+        found = [res]
+    for a in found:
+        seen.add(a)
+        out.append(Finding(path=path, destination=a, reason=None))
+    return not isinstance(res, ParseFailure)
 
 
 # ── results (V-15) ───────────────────────────────────────────────────────────

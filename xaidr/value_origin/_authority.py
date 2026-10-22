@@ -604,6 +604,17 @@ def _mailbox_in_junk(part: str) -> Optional[Authority]:
     return mailbox_authority(found.group(0).rstrip(".-"))
 
 
+# One address-like token (text, `@`, text, no space), or a display name and an
+# angle address, alone in a part: an address the grammar may still refuse
+# (`jürgen@x.example`), which stays an unparseable address list (3.6).
+_ADDRESS_SHAPED_RE = re.compile(r"\s*(?:[^\s<>@,;]+@[^\s<>@,;]+|[^<>@]*<[^<>]*@[^<>]*>?)\s*")
+
+
+def _address_shaped(value: str) -> bool:
+    parts = _split_mailbox_list(value) or re.split(r"[,;]", value)
+    return any(_ADDRESS_SHAPED_RE.fullmatch(p) for p in parts if p.strip())
+
+
 def mailbox_list(value: str):
     """Ruling 3.2: a value with '@' that is not a URL is a mailbox list. Every
     part must parse, or the WHOLE value is a ParseFailure. Empty parts (a
@@ -667,8 +678,9 @@ def classify_value(value: str, *, arg_mode: bool):
     including a special scheme with no `//`, a scheme-less `host[:port]/path`,
     a strict IP literal followed by a port, path, query or fragment, and, for
     an argument, an address in any inet_aton spelling followed by one;
-    otherwise a value with '@' is a mailbox list; then a phone; then a bare
-    strict IP. Bare hostnames are never destinations here.
+    otherwise a value with '@' is a mailbox list when any part of it is an
+    address; then a phone; then a bare strict IP. Bare hostnames are never
+    destinations here.
     """
     c0 = value.strip(_C0_OR_SPACE)        # what WHATWG and urlsplit strip from a URL
     v = c0.strip()
@@ -704,7 +716,11 @@ def classify_value(value: str, *, arg_mode: bool):
                 return res
     if "@" in v:
         res = mailbox_list(v)
-        return res if arg_mode else _single(res)
+        if not (isinstance(res, ParseFailure) and not res.parsed) or _address_shaped(v):
+            return res if arg_mode else _single(res)
+        # No part of it is an address, or shaped like one (`ping me @ 5pm`,
+        # `curl -d @file ...`): an `@` alone does not make a value an address
+        # list, so it is read like any other value.
     if v.startswith("+"):
         a = phone_authority(v)
         if a is not None:
@@ -773,6 +789,17 @@ def _blank(text: str, spans: List[Tuple[int, int]]) -> str:
     return "".join(chars)
 
 
+def _mid_word(text: str, i: int) -> bool:
+    """True when ``text[i]`` continues a word: a letter before it in a script that
+    puts spaces between words (below U+0E00: Latin, Greek, Cyrillic, Hebrew,
+    Arabic, the Indic scripts). Thai and the CJK scripts do not, so an address
+    right after their text still starts there."""
+    if i == 0:
+        return False
+    ch = text[i - 1]
+    return ch.isalpha() and ord(ch) < 0x0E00
+
+
 def prose_candidates(text: str, counter: Optional[List[int]] = None) -> List[Tuple[int, Authority]]:
     """Every destination candidate in prose, as (position, authority), in text
     order. URLs first and blanked; then mailboxes, blanked so a mailbox never
@@ -800,6 +827,8 @@ def prose_candidates(text: str, counter: Optional[List[int]] = None) -> List[Tup
             counter[0] += 1
         cand = m.group(0).rstrip(".-")
         taken.append((m.start(), m.end()))
+        if _mid_word(text, m.start()):
+            continue                           # `jürgen@x.example` is not `rgen@x.example`
         a = mailbox_authority(cand)
         if a is not None:
             out.append((m.start(), a))

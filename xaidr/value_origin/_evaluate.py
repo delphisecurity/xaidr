@@ -6,7 +6,7 @@ import logging
 from typing import List, Mapping, Optional, Tuple
 
 from . import _ledger
-from ._extract import extract_destinations
+from ._extract import extract_with_observed
 from ._types import (UnresolvedReason, 
     WIRE_STRENGTH,
     CallVerdict,
@@ -158,10 +158,23 @@ def row_text(wire: str | None, scan_mode: str | None) -> tuple[RowState, str]:
 
 
 def _verdict(wire: WireValue, findings: Tuple[DestinationFinding, ...],
-             truncated: bool) -> CallVerdict:
+             truncated: bool, observed: Tuple[DestinationFinding, ...] = ()) -> CallVerdict:
     state, detail = row_text(wire.value, "tool_call")
     return CallVerdict(wire=wire, verdict=verdict_of(wire), row_state=state,
-                       detail=detail, findings=findings, truncated=truncated)
+                       detail=detail, findings=findings, truncated=truncated,
+                       observed=observed)
+
+
+def _looked_up(f, e) -> DestinationFinding:
+    if e is None:
+        return DestinationFinding(path=f.path, destination=f.destination, reason=None,
+                                  origin=Origin.UNRESOLVED, span_declared=None,
+                                  source_label=None)
+    origin, declared, label = e
+    return DestinationFinding(
+        path=f.path, destination=f.destination, reason=None, origin=origin,
+        span_declared=declared if origin in (Origin.PRINCIPAL, Origin.TRUSTED_SOURCE) else None,
+        source_label=label if origin is Origin.TRUSTED_SOURCE else None)
 
 
 def _finding_wire(f: DestinationFinding) -> WireValue:
@@ -204,13 +217,17 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
         if lg is None:
             return _verdict(WireValue.LEDGER_ABSENT if flow_active else WireValue.NO_FLOW,
                             (), False)
-        found, truncated = extract_destinations(arguments)
-        if not found:
+        found, truncated, seen_only = extract_with_observed(arguments)
+        if not found and not seen_only:
             return _verdict(WireValue.NO_DESTINATION, (), truncated)
         auths = [f.destination for f in found if f.destination is not None]
         (entries, saturated, input_truncated, result_truncated, result_unread,
-         atoms_incomplete, dests_dropped) = _ledger.lookup(lg, auths)
-        it = iter(entries)
+         atoms_incomplete, dests_dropped) = _ledger.lookup(
+             lg, auths + [f.destination for f in seen_only])
+        observed = tuple(_looked_up(f, e) for f, e in zip(seen_only, entries[len(auths):]))
+        if not found:
+            return _verdict(WireValue.NO_DESTINATION, (), truncated, observed)
+        it = iter(entries[:len(auths)])
         out: List[DestinationFinding] = []
         saturated_miss = False
         truncated_miss = False
@@ -265,7 +282,7 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
                 wire = WireValue.RESULT_TRUNCATED
             elif truncated_miss:
                 wire = WireValue.INPUT_TRUNCATED
-        return _verdict(wire, findings, truncated)
+        return _verdict(wire, findings, truncated, observed)
     except Exception:
         _log.exception("value origin: evaluate_call faulted")
         return None

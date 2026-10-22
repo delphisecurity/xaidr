@@ -85,7 +85,7 @@ rate on the user's own destinations.
 
 | bound | wire on a destination that traces to nothing | past the bound |
 |---|---|---|
-| an argument leaf over 4,000 chars, more than 64 argument leaves, nesting deeper than 6 | `argument_bound` | the skipped parts are searched for destination atoms, and each atom is evaluated |
+| an argument leaf over 4,000 chars, more than 64 argument leaves, nesting deeper than 6 | `argument_bound` | a skipped value short enough is read whole; the skipped parts are searched for destination atoms; each is evaluated |
 | a tool-result leaf over 65,536 chars, more than 64 result leaves, nesting deeper than 6 | `result_truncated` | the skipped parts are searched for atoms, and each is recorded with the result's origin |
 | a principal input over 65,536 chars | `input_truncated` | atoms are recorded from all of it; key n-grams from the first 64 KiB |
 | the atom pass's work budget | `extraction_incomplete` | the rest is not scanned |
@@ -122,11 +122,15 @@ rate on the user's own destinations.
   benign documents trips `write_dropped` alone. A flow that names more than
   10,000 distinct destinations (a crawl across many link-heavy pages) reads
   `write_dropped` for a destination it then cannot trace, and that blocks.
-- **Whole values and atoms.** An argument leaf is a destination only if its
-  whole value is one (or a mailbox list). Past 4,000 chars the leaf is searched
-  for atoms instead. So a 3,999-char email body that quotes a URL names no
-  destination, and a 4,001-char one names the URL it quotes; pinned by
-  `test_known_artefact_the_4000_char_cliff`.
+- **Whole values and atoms.** An argument leaf decides the wire only if its
+  whole value is one destination (or a mailbox list). A leaf that is not is still
+  scanned for destination atoms, and what that finds is OBSERVED: each atom is on
+  `CallVerdict.observed` with its origin, and never decides the wire, the verdict
+  or an action. Past a bound a value short enough is read whole and its atoms
+  decide, so a value names the same destinations wherever it sits. So a 3,999-char
+  email body that quotes a URL decides `no_destination` and observes the URL, and a
+  4,001-char one decides on the URL it quotes; pinned by
+  `test_known_artefact_the_4000_char_cliff` and `tests/test_value_origin_padding.py`.
 - **A tool that returns a raw response object** (`httpx.Response`,
   `requests.Response`, an unpreloaded `urllib3.HTTPResponse`) makes a later call
   whose destination traces to nothing block, as `result_unread`. Return the read

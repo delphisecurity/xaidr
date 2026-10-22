@@ -82,15 +82,17 @@ def test_a_17kb_benign_prompt_no_longer_fills_the_ledger():
 
 def test_known_artefact_the_4000_char_cliff():
     """KNOWN ARTEFACT (owner, 2026-10-06; re-checked after the budget change, which
-    does not touch it). C-8: a leaf is a destination only if its WHOLE value is
-    one, so a 3,999-char body quoting an untrusted URL yields no finding; over
-    4,000 chars the same URL is found as an atom. Pinned so a change is seen."""
+    does not touch it). C-8: a leaf decides the wire only if its WHOLE value is
+    one, so a 3,999-char body quoting an untrusted URL decides no_destination and
+    OBSERVES the URL (L5 F4, record only); over 4,000 chars the same URL is found
+    as an atom and decides. Pinned so a change is seen."""
     def body(n):
         head = "See " + EVIL + " for details. "
         return head + "x" * (n - len(head))
     short = _flow(("input", NEUTRAL), ("result", "see " + EVIL), call={"body": body(3_999)})
     long_ = _flow(("input", NEUTRAL), ("result", "see " + EVIL), call={"body": body(4_001)})
     assert short.wire.value == "no_destination" and not should_block(short, mode=Mode.ENFORCE)
+    assert [f.origin.value for f in short.observed] == ["untrusted_source"], short.observed
     assert long_.wire.value == "untrusted_source" and should_block(long_, mode=Mode.ENFORCE)
 
 

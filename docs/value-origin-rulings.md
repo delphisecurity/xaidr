@@ -255,6 +255,14 @@ it:
 - **A value with `@` that is not a URL is a mailbox-list candidate** (3.2). It is
   split on `,` and `;` outside `<…>` and `"…"`. Without `@` it goes to the other
   schemes or `no_destination`. An empty part (`"a@x.example; "`) is skipped.
+- **An `@` that is not an address does not make an address list** (L5 F3). When
+  no part is an address, or shaped like one (one token with text on both sides of
+  the `@`, or a display name and an angle address), the value is read like any
+  other: `ping me @ 5pm` names nothing, and in `curl -d @file https://host` the
+  argument walk observes the host. One address the grammar refuses
+  (`jürgen@x.example`) is still an unparseable address list (3.6).
+  *Pinned by:* `test_an_at_sign_that_is_not_an_address_is_not_an_address_list`,
+  `test_a_call_whose_text_has_an_at_sign_stays_authorized`.
 - **One failing part makes the whole value `unresolved`, and every part that
   parsed is its own finding** (R1), so an untrusted part decides the wire. A
   trusted or principal part beside junk stays `unresolved` as a whole.
@@ -330,6 +338,15 @@ value with two authorities, exactly as for a two-mailbox list, and
   WORK: each scanned character costs 1 and each candidate examined costs 64,
   500,000 units per seam call (`ATOM_WORK_BUDGET`); a result's examined pass is
   bounded the same way at 1,000,000 units (`EXAMINED_WORK_BUDGET`).
+- **Observed atoms** (L5 F4, record only): an argument value the walk examines
+  whole that is not wholly one destination is scanned for destination atoms
+  (prose, a command line, a mailbox part that does not parse). Each atom is on
+  `CallVerdict.observed` with its ledger origin, and never decides the wire, the
+  verdict or an action. Past a bound a value short enough to read whole is read
+  whole, and its atoms decide as before, so the same value names the same
+  destinations wherever it sits. A mailbox atom that starts mid-word in a script
+  that spaces its words (`jürgen@x.example`) is not read as the address after the
+  letter. *Pinned by:* `tests/test_value_origin_padding.py`.
 - **The argument walk**: depth-first in insertion order, a dict's keys walked as
   leaves before its values, sets in sorted order (hash randomisation would
   otherwise change which leaves the 64-leaf bound selects). A walk that hits a
