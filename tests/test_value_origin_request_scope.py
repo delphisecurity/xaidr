@@ -567,3 +567,25 @@ def test_a_ledger_bound_after_clear_flow_inside_a_flow_closes_when_the_flow_exit
     assert after not in AUTHORITY and not bound, (
         f"after the flow exited the next request read {after!r} (ledger bound: {bound}): "
         "a ledger bound after clear_flow() outlived the scope")
+
+
+def test_a_flow_entered_and_never_exited_is_reported_once_per_process(caplog):
+    import logging
+    from xaidr import provenance_chain as pc_mod
+    pc_mod._unexited_flow_warned = False
+    s = _sensor()
+
+    def user_a():
+        xaidr.flow(principal="alice").__enter__()            # never exited
+        s.scan(f"Email {ALICE} the report.", direction="input")
+
+    def user_b():
+        with xaidr.flow(principal="bob"):
+            return _wire(s)
+    with caplog.at_level(logging.WARNING, logger="xaidr"):
+        with ThreadPoolExecutor(1) as pool:
+            for _ in range(2):
+                pool.submit(user_a).result()
+                pool.submit(user_b).result()
+    hits = [r for r in caplog.records if "never exited" in r.getMessage()]
+    assert len(hits) == 1, [r.getMessage() for r in caplog.records]

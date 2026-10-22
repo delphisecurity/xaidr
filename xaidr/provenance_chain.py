@@ -431,6 +431,28 @@ def _put_back(saved: tuple) -> None:
     _inbound_ctx.set(inbound)
 
 
+_unexited_flow_warned = False
+
+
+def _warn_unexited(entries) -> None:
+    """Once per process: a scope entered and never exited, found after the request
+    it ran in ended. Its flow's chain, tiers and correlation id stay in that
+    context for whatever runs there next (Q-G (b) leaves an active flow's chain
+    alone), so provenance can name the earlier request's principal."""
+    global _unexited_flow_warned
+    if _unexited_flow_warned:
+        return
+    if not any(e.alive[0] for e in entries):
+        return                                # closed by clear_flow() or an outer exit
+    _unexited_flow_warned = True
+    _vo_log.warning(
+        "xaidr.flow(): a scope was entered and never exited, and the request it ran "
+        "in has ended. Its value-origin ledger is closed, but its flow's chain and "
+        "correlation id stay in this context, so later provenance here can name that "
+        "request's principal. Use `with xaidr.flow(...):` so every scope exits. "
+        "Logged once per process.")
+
+
 def _close_scopes(entries) -> None:
     """Mark these entries' scopes as closed by something else, so their own exits,
     whenever they come, change nothing else. Each one's value-origin request stays
@@ -524,8 +546,11 @@ class _FlowScope(contextlib.ContextDecorator):
             # An entry whose scope has ended is not a request to join: it reaches
             # this context only through a copy made while it was open (a worker
             # task created inside it), and its request is over.
-            stack = tuple(e for e in _SCOPES.get()
+            found = _SCOPES.get()
+            stack = tuple(e for e in found
                           if e.alive[0] and (e.within is None or e.within.live))
+            if len(stack) != len(found):
+                _warn_unexited(found)
             if stack:                                  # an open scope here: join it
                 _SCOPES.set(stack + (_ScopeEntry(self, False, None),))
                 return current_correlation_id()

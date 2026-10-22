@@ -43,7 +43,12 @@ reads its authority. The requests are:
   `async with`);
 - each CrewAI kickoff (`Crew.kickoff`, `akickoff`, `kickoff_async`) and each
   Agents SDK run (`Runner.run`, `run_sync`) hooked by `protect()`;
-- each fresh `xaidr.flow()` scope.
+- each fresh `xaidr.flow()` scope;
+- each `multiprocessing.pool.ThreadPool` task (an `apply`, or one chunk of a
+  `map`), for pools created after the first such `Sensor`;
+- each request through `xaidr.integrations.web.RequestScopeMiddleware` (WSGI;
+  the request lasts until the server closes the response body) or
+  `RequestScopeASGIMiddleware` (ASGI; lifespan messages pass through).
 
 `request_scope()` always starts a new request. A hooked run joins a live hooked
 run (an Agents SDK `Agent.as_tool`, a crew kicked off from a tool) or a live
@@ -67,7 +72,24 @@ run's model text. In an Agents SDK run's input list, only a string or a user,
 system or developer message is principal input; a replayed tool output or
 assistant turn is scanned the same way and not recorded as the principal's. A
 `flow()` scope joins only a scope that is still open, inside a request that is
-still live. A `flow()` scope opened
+still live. A `clear_flow()` inside a `flow()` closes the scope, and the scope's
+request stays open, joined by nothing, until the scope's own exit, so a ledger
+bound in between closes then.
+
+**Where the host's own code decides how long a request lasts:**
+
+- A `flow()` entered by hand (`__enter__()`) and never exited keeps its flow's
+  chain, tiers and correlation id in that context; its value-origin ledger closes
+  with the request it ran in. A `flow()` opened later in that context finds the
+  flow active and, as above, leaves its chain alone, so provenance there can name
+  the earlier request's principal. The first time a scope finds such an entry it
+  logs one warning per process. `with xaidr.flow(...):` always exits.
+- A hooked framework run whose coroutine is started and never finished (driven by
+  hand, without a task, and abandoned) keeps its request open in the context that
+  started it, until that context's enclosing request ends.
+- Executor jobs, ThreadPool tasks, hooked runs, `flow()` and the middleware above
+  are the requests the sensor sees begin; any other server loop marks each request
+  with `request_scope()`. A `flow()` scope opened
 while a flow is already active (a `begin_flow()`, an `extract_context()`, a
 recorded hop) leaves that flow's chain, tiers, correlation id and inbound mark
 exactly as they are, on entry and on exit, so it never loosens the privilege-tier
