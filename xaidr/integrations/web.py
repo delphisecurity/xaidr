@@ -10,8 +10,9 @@ close when it ends, and the next request on that thread reads none of them::
 
 The WSGI scope stays open until the server closes the response body, so a
 streamed body is part of its request. The ASGI scope covers the whole
-application call; lifespan messages pass through untouched. Neither touches the
-provenance chain, tiers or the inbound mark.
+application call; lifespan messages pass through untouched. The chain, tiers and
+inbound mark an ``extract_context()`` sets in a request end with it too, so a
+request whose headers are stripped never inherits the previous one's tier.
 """
 from __future__ import annotations
 

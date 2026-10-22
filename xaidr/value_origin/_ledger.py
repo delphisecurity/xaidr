@@ -25,9 +25,9 @@ and hides any ledger no live request owns; every ledger bound while the record i
 live is registered with it; ``request_exit()`` CLOSES each of them and puts back
 what was there before. A closed ledger reads as not bound everywhere, including
 in a context copied from the request (a worker task, an executor job), so no
-later request reads its authority. A request opened inside a live one, or inside
-a host's own flow, joins it and changes nothing. The record holds no tier state:
-the provenance chain, tiers and inbound mark are untouched.
+later request reads its authority. A request opened inside a live one joins it
+(_JOINS). The chain, correlation id, tiers and inbound mark set inside a request
+are put back at its exit (_REQUEST_STATE); entry changes none of them.
 
     sensor's executor seam     each ThreadPoolExecutor work item is a request
     framework entry hooks      each CrewAI kickoff and Agents SDK run is a request
@@ -162,7 +162,8 @@ def _current() -> Optional[_Ledger]:
 
 # ── the request (ruling 4) ───────────────────────────────────────────────────
 class _Request:
-    __slots__ = ("live", "ledgers", "saved_ledger", "saved_request", "accumulate", "kind")
+    __slots__ = ("live", "ledgers", "saved_ledger", "saved_request", "accumulate", "kind",
+                 "saved_state")
 
     def __init__(self, saved_ledger, saved_request, accumulate=False, kind="job") -> None:
         self.live = True
@@ -170,6 +171,7 @@ class _Request:
         # (request_scope()), "run" (a hooked framework run) or "flow" (a fresh
         # xaidr.flow()). See _JOINS for which kind joins which.
         self.kind = kind
+        self.saved_state = None             # the registered request state at entry
         # True for a request the host or a framework declares (request_scope(), a
         # hooked run): every input in it keeps authorizing in it. An executor job
         # may be a loop serving many users, so there a new input still ends the
@@ -181,6 +183,18 @@ class _Request:
 
 
 _REQUEST: ContextVar[Optional[_Request]] = ContextVar("xaidr_value_origin_request", default=None)
+
+# Other per-request state that ends with a request: (get, put) pairs registered by
+# provenance_chain for the chain, correlation id, tiers and inbound mark. A
+# request saves it at entry and puts it back at its exit, so state set inside a
+# request (an extract_context(), a begin_flow() never cleared) ends with it.
+# Entry changes none of it: a request opened inside a delegated one still sees
+# the delegation. A flow() keeps its own (Q-G (b)), so it is skipped.
+_REQUEST_STATE: list = []
+
+
+def register_request_state(get, put) -> None:
+    _REQUEST_STATE.append((get, put))
 
 
 def _bound(lg: _Ledger) -> _Ledger:
@@ -215,6 +229,8 @@ def request_enter(*, accumulate: bool = False, kind: str = "job") -> Optional[_R
             return None
         lg = _LEDGER.get()
         new = _Request(lg, rec, accumulate, kind)
+        if kind != "flow":
+            new.saved_state = [get() for get, _ in _REQUEST_STATE]
         _REQUEST.set(new)
         _LEDGER.set(None)
         return new
@@ -264,6 +280,9 @@ def request_exit(rec: Optional[_Request], *, only: bool = False) -> None:
         if found:
             _LEDGER.set(rec.saved_ledger)
             _REQUEST.set(rec.saved_request)
+            if rec.saved_state is not None:
+                for (_, put), value in zip(_REQUEST_STATE, rec.saved_state):
+                    put(value)
     except Exception:
         _log.exception("value origin: ending a request faulted")
 

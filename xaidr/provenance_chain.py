@@ -402,6 +402,23 @@ class _ScopeEntry:
 
 _SCOPES: contextvars.ContextVar[tuple] = contextvars.ContextVar("xaidr_flow_scopes", default=())
 _NO_FLOW = (None, None, None, False, None)
+
+
+def _tier_state_get() -> tuple:
+    return (_chain_ctx.get(), _corr_ctx.get(), _tiers_ctx.get(), _inbound_ctx.get())
+
+
+def _tier_state_put(state: tuple) -> None:
+    chain, corr, tiers, inbound = state
+    _chain_ctx.set(chain)
+    _corr_ctx.set(corr)
+    _tiers_ctx.set(tiers)
+    _inbound_ctx.set(inbound)
+
+
+# The chain, correlation id, tiers and inbound mark end with the request they are
+# set in, as its value-origin ledger does (value_origin/_ledger.py, THE REQUEST).
+_vo_ledger.register_request_state(_tier_state_get, _tier_state_put)
 _scope_fault_count = 0
 _scope_lock = threading.Lock()
 
@@ -761,8 +778,9 @@ def request_scope() -> _RequestScope:
     run inside the block is a request of its own; a ``flow()`` inside it joins it.
     Every input inside the block keeps authorizing for the rest of the block. An
     exit in another context (a generator closed on another thread) still ends
-    the request. It never touches the provenance chain, tiers or the inbound
-    mark.
+    the request. The chain, correlation id, tiers and inbound mark set inside
+    the block are put back at its exit; entry changes none of them, so a block
+    inside a delegated request still sees the delegation.
 
     Each ``ThreadPoolExecutor`` work item, each CrewAI kickoff, each Agents SDK
     ``Runner.run`` and each fresh :func:`flow` is already a request; this is for

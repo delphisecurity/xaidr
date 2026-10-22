@@ -94,9 +94,12 @@ while a flow is already active (a `begin_flow()`, an `extract_context()`, a
 recorded hop) leaves that flow's chain, tiers, correlation id and inbound mark
 exactly as they are, on entry and on exit, so it never loosens the privilege-tier
 gate; it gets its own ledger (Q-G (b), 2026-10-21;
-`test_a_scope_over_an_active_flow_leaves_its_chain_and_tiers_alone`). The request seam holds no
-tier state: the provenance chain, tiers and inbound mark are untouched by it.
-*Pinned by:* `tests/test_value_origin_reuse.py`,
+`test_a_scope_over_an_active_flow_leaves_its_chain_and_tiers_alone`). Every other
+request puts back, at its exit, the chain, correlation id, tiers and inbound mark
+set inside it, so a request whose headers are stripped never inherits the
+previous request's tier on a reused thread; entry changes none of them, so a
+request opened inside a delegated one still sees the delegation.
+*Pinned by:* `tests/test_value_origin_reuse.py`, `tests/test_value_origin_servers.py`,
 `tests/test_value_origin_request_scope.py`.
 
 **An inbound A2A message starts a fresh ledger** through the input path (an
