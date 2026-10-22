@@ -69,6 +69,7 @@ HAVE_DEEPAGENTS = HAVE_LANGGRAPH and _installed("deepagents")
 # than the package is what makes the skip mean "cannot run these", not
 # "something called haystack is importable".
 HAVE_HAYSTACK = _installed("haystack") and _installed("haystack.hooks")
+HAVE_AGENTS = _installed("agents") and _installed("openai")
 
 requires_crewai = pytest.mark.skipif(
     not HAVE_CREWAI,
@@ -89,6 +90,11 @@ requires_deepagents = pytest.mark.skipif(
 requires_haystack = pytest.mark.skipif(
     not HAVE_HAYSTACK,
     reason="real haystack-ai>=3 not installed — pip install 'xaidr[haystack]' to run",
+)
+
+requires_agents = pytest.mark.skipif(
+    not HAVE_AGENTS,
+    reason="real openai-agents not installed — pip install openai-agents to run",
 )
 
 DESTRUCTIVE = "rm -rf / --no-preserve-root"
@@ -2328,3 +2334,59 @@ emit(missing=[n for n in needed if n not in sys.modules],
         assert isinstance(restored["before_tool"][0], _DelphiHook)
         assert restored["before_tool"][0].point == "before_tool"
         assert restored["before_tool"][0].sensor.enforcement_mode == "block"
+
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# OpenAI Agents SDK: protect_tools on a real FunctionTool
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@requires_agents
+class TestRealAgentsFunctionTool:
+    """protect_tools hands back a FunctionTool, so an Agent can name and call it,
+    and every call through it is scanned before the tool runs."""
+
+    def _protected(self):
+        import warnings
+        from agents import function_tool
+
+        ran = []
+
+        @function_tool
+        def run_command(command: str) -> str:
+            """Run a shell command."""
+            ran.append(command)
+            return f"ran {command}"
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sensor = xaidr.Sensor(agent_id="agents-fn-tool", enforcement_mode="block",
+                                  reporter=type("N", (), {"report": lambda *a, **k: None})())
+        return run_command, sensor.protect_tools([run_command])[0], ran
+
+    def test_a_protected_function_tool_is_still_a_function_tool(self):
+        import asyncio
+        from agents import Agent, FunctionTool
+        original, protected, _ = self._protected()
+        assert isinstance(protected, FunctionTool), type(protected)
+        assert (protected.name, protected.params_json_schema) == (
+            original.name, original.params_json_schema)
+        tools = asyncio.run(Agent(name="a", tools=[protected]).get_all_tools(None))
+        assert [t.name for t in tools] == ["run_command"]
+        assert protected is not original and original.on_invoke_tool is not protected.on_invoke_tool
+
+    def test_a_call_through_it_is_scanned_before_the_tool_runs(self):
+        import asyncio
+        import json
+        from agents.tool_context import ToolContext
+        _, protected, ran = self._protected()
+
+        def call(command):
+            ctx = ToolContext(context=None, tool_name="run_command", tool_call_id="c1",
+                              tool_arguments=json.dumps({"command": command}))
+            return asyncio.run(protected.on_invoke_tool(ctx, json.dumps({"command": command})))
+        assert call("ls -la") == "ran ls -la"
+        refused = call(DESTRUCTIVE)
+        assert str(refused).startswith("[BLOCKED]"), refused
+        assert ran == ["ls -la"], f"the blocked call ran the tool: {ran}"

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextvars
 import functools
+import dataclasses
 import inspect
 import json
 import logging
@@ -3439,6 +3440,30 @@ class DelphiSensor:
             seen += 1
         return False
 
+    def _agents_invoke(self, invoke, tool_name, tool_verdict):
+        """An Agents SDK ``on_invoke_tool`` that decides each call first. The
+        arguments arrive as one JSON string; a value that is not a JSON object is
+        scanned as ``{"input": value}``."""
+        import json as _json
+
+        async def on_invoke_tool(ctx, input_json, *args, **kwargs):
+            try:
+                arguments = _json.loads(input_json) if input_json else {}
+            except (TypeError, ValueError):
+                arguments = {"input": input_json}
+            if not isinstance(arguments, dict):
+                arguments = {"input": arguments}
+            refusal = tool_verdict(None, tool_name, (), {}, arguments=arguments)
+            if refusal is not None:
+                return refusal
+            out = invoke(ctx, input_json, *args, **kwargs)
+            if inspect.isawaitable(out):
+                out = await out
+            if not _vo_seams.RESULT_SEAM.get():
+                self._vo_record_result(tool_name, arguments, out, None)
+            return out
+        return on_invoke_tool
+
     def protect_tools(self, tools: list) -> list:
         """Wrap tools so every invocation is scanned and enforced before it runs.
 
@@ -3660,7 +3685,7 @@ class DelphiSensor:
                     arguments.update(kwargs)
                     return arguments
 
-            def tool_verdict(orig_func, tname, args, kwargs):
+            def tool_verdict(orig_func, tname, args, kwargs, arguments=None):
                 """The whole decision, shared by the sync and async wrappers.
 
                 Returns the in-band refusal STRING when the call must not run,
@@ -3679,7 +3704,8 @@ class DelphiSensor:
                 needs both is an async tool called positionally with a
                 dangerous argument.
                 """
-                arguments = bind_arguments(orig_func, tname, args, kwargs)
+                if arguments is None:
+                    arguments = bind_arguments(orig_func, tname, args, kwargs)
                 # scan_tool_call applies blocked-tools + L1 arg scan +
                 # local YAML policy, emits telemetry, and NEVER raises
                 # (internal faults fail open with a degraded signal).
@@ -3798,6 +3824,22 @@ class DelphiSensor:
             # what this branch did before the async split. Building it
             # unconditionally keeps that, and keeps the `else` branch below able
             # to set __name__ on it.
+            # An OpenAI Agents SDK FunctionTool: a dataclass whose implementation
+            # is its `on_invoke_tool(ctx, input_json)` field. The copy keeps every
+            # other field (name, schema, guardrails), so an Agent still names and
+            # calls the tool, and each call is decided on its parsed arguments.
+            invoke = getattr(t, "on_invoke_tool", None)
+            if (callable(invoke) and hasattr(t, "params_json_schema")
+                    and dataclasses.is_dataclass(t)
+                    and type(t).__module__.split(".")[0] == "agents"):
+                if self._wrapped_by_self(invoke):
+                    wrapped.append(t)
+                    continue
+                wrapped.append(dataclasses.replace(
+                    t, on_invoke_tool=mark(self._agents_invoke(invoke, tool_name, tool_verdict),
+                                           invoke)))
+                continue
+
             new_func = protect_half(original_func)
 
             # CrewAI first: it also has model_copy, but its implementation hangs

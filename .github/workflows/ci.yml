@@ -165,8 +165,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install . pytest \
             "langchain-core==1.6.1" "langchain==1.4.1" \
-            "langgraph==1.2.12" "langgraph-prebuilt==1.1.0"
-          pip list 2>/dev/null | grep -iE '^(langchain|langgraph)'
+            "langgraph==1.2.12" "langgraph-prebuilt==1.1.0" \
+            "openai-agents==0.24.0"
+          pip list 2>/dev/null | grep -iE '^(langchain|langgraph|openai-agents)'
 
       - name: Run tests/test_real_frameworks.py and tests/test_run_tree.py
         run: python -m pytest tests/test_real_frameworks.py tests/test_run_tree.py -q -rs --junitxml=real-frameworks.xml
