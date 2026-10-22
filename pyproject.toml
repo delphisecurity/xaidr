@@ -261,6 +261,9 @@ exclude = [
     "/asi_battery",
     "/heldout",
     "/docs/releasing.md",
+    # evidence scripts kept beside a doc are repository material: the sdist ships
+    # Python only under its named roots (tests/test_sdist_contents.py)
+    "/docs/**/*.py",
     "_phase1",
     "**/__pycache__",
     "*.pyc",
