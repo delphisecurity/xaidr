@@ -888,25 +888,30 @@ def _p99_us(samples_ns):
     return s[int(len(s) * 0.99)] / 1000
 
 
-def _stable_p99_us(one_event, *, rounds=7, per_round=5_000, warmup=2_000):
+def _stable_p99_us(prepare, timed, *, rounds=7, per_round=5_000, warmup=2_000):
     """The budget's percentile, measured so that one burst of host noise cannot
     decide it: an untimed warm-up (caches, the interpreter's specialisation),
-    then ``rounds`` independent rounds of ``per_round`` timed events, and the
-    MEDIAN of the rounds' p99. A stall on a shared runner inflates one round;
-    real per-event cost inflates every round. Returns (p99 us, median us)."""
+    then ``rounds`` independent rounds of ``per_round`` events, and the MEDIAN of
+    the rounds' p99. ``prepare()`` builds each event's argument untimed; only
+    ``timed(arg)`` is inside the clock, so the timed region is the call under
+    budget and nothing else. A stall on a shared runner inflates one round; real
+    per-event cost inflates every round. Returns (p99 us, median us, every
+    round's p99)."""
     for _ in range(warmup):
-        one_event()
+        timed(prepare())
     p99s, everything = [], []
     for _ in range(rounds):
         samples = []
         for _ in range(per_round):
+            arg = prepare()
             t0 = time.perf_counter_ns()
-            one_event()
+            timed(arg)
             samples.append(time.perf_counter_ns() - t0)
         p99s.append(_p99_us(samples))
         everything.extend(samples)
-    p99s.sort()
-    return p99s[len(p99s) // 2], sorted(everything)[len(everything) // 2] / 1000
+    rounds_p99 = sorted(p99s)
+    return (rounds_p99[len(rounds_p99) // 2], sorted(everything)[len(everything) // 2] / 1000,
+            [round(p, 2) for p in p99s])
 
 
 @requires_stack
@@ -926,13 +931,12 @@ def test_d4_budget_stamp_p99_at_most_10us():
     run_tree.activate()
     last = {}
 
-    def one_event():
-        data = {"direction": "tool_call", "action": "allowed"}
-        run_tree.stamp(data)
-        last["data"] = data
+    def prepare():
+        last["data"] = {"direction": "tool_call", "action": "allowed"}
+        return last["data"]
     try:
         gc.disable()
-        p99, median = _stable_p99_us(one_event)
+        p99, median, rounds = _stable_p99_us(prepare, run_tree.stamp)
         assert last["data"]["runTree"] == "stamped", last["data"]
     finally:
         gc.enable()
@@ -940,8 +944,9 @@ def test_d4_budget_stamp_p99_at_most_10us():
         if not was_active:
             run_tree.deactivate()
         run_tree.INDEX.end(root)
-    print(f"stamp p99 {p99:.2f} us, median {median:.2f} us")
-    assert p99 <= 10.0, f"stamp p99 {p99:.2f} us exceeds the 10 us per-event budget"
+    print(f"stamp p99 {p99:.2f} us, median {median:.2f} us, rounds {rounds}")
+    assert p99 <= 10.0, (
+        f"stamp p99 {p99:.2f} us exceeds the 10 us per-event budget (rounds' p99: {rounds})")
 
 
 @requires_stack
@@ -955,34 +960,37 @@ def test_d4_budget_callback_p99_at_most_10us():
     run_tree.activate()            # an inactive handler returns at once: time the real work
     state = {"step": 0, "root": None, "child": None}
 
-    def one_event():
-        # The four callbacks of one tool run, one per timed event, in order.
+    def prepare():
+        # The four callbacks of one tool run, one per event, in order; the
+        # callable is built here, untimed, as the lambdas it replaces were.
         step = state["step"] % 4
+        state["step"] += 1
         if step == 0:
             state["root"], state["child"] = uuid.uuid4(), uuid.uuid4()
         root, child = state["root"], state["child"]
-        if step == 0:
-            handler.on_chain_start({}, {}, run_id=root, parent_run_id=None,
-                                   name="LangGraph", metadata={})
-        elif step == 1:
-            handler.on_tool_start({}, "x", run_id=child, parent_run_id=root,
-                                  name="lookup", metadata={"langgraph_node": "tools"})
-        elif step == 2:
-            handler.on_tool_end("ok", run_id=child, parent_run_id=root)
-        else:
-            handler.on_chain_end({}, run_id=root, parent_run_id=None)
-        state["step"] += 1
+        return (
+            lambda: handler.on_chain_start({}, {}, run_id=root, parent_run_id=None,
+                                           name="LangGraph", metadata={}),
+            lambda: handler.on_tool_start({}, "x", run_id=child, parent_run_id=root,
+                                          name="lookup", metadata={"langgraph_node": "tools"}),
+            lambda: handler.on_tool_end("ok", run_id=child, parent_run_id=root),
+            lambda: handler.on_chain_end({}, run_id=root, parent_run_id=None),
+        )[step]
+
+    def call(fn):
+        fn()
     try:
         gc.disable()
-        p99, median = _stable_p99_us(one_event, per_round=8_000)
+        p99, median, rounds = _stable_p99_us(prepare, call, per_round=8_000)
         root = state["root"]
         indexed = root.int in run_tree.INDEX._ended     # before deactivate() clears it
     finally:
         gc.enable()
         if not was_active:
             run_tree.deactivate()
-    print(f"callback p99 {p99:.2f} us, median {median:.2f} us")
-    assert p99 <= 10.0, f"handler callback p99 {p99:.2f} us exceeds the 10 us budget"
+    print(f"callback p99 {p99:.2f} us, median {median:.2f} us, rounds {rounds}")
+    assert p99 <= 10.0, (
+        f"handler callback p99 {p99:.2f} us exceeds the 10 us budget (rounds' p99: {rounds})")
     assert indexed, (
         "the benchmark timed callbacks that indexed nothing: the last root's end "
         "found no entry to remove")
