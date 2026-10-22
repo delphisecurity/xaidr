@@ -138,3 +138,67 @@ def install_executor_requests() -> bool:
             return True
     except Exception:
         return False
+
+
+_threadpool_installed = False
+
+
+class _RequestTasks:
+    """A ThreadPool worker's task queue whose every task runs as one request."""
+    __slots__ = ("_queue",)
+
+    def __init__(self, queue) -> None:
+        self._queue = queue
+
+    def get(self, *args, **kwargs):
+        task = self._queue.get(*args, **kwargs)
+        try:
+            job, i, func, fargs, fkwargs = task
+        except (TypeError, ValueError):
+            return task                       # the sentinel, or a shape not ours to touch
+        return (job, i, _one_request(func), fargs, fkwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._queue, name)
+
+
+def _one_request(func):
+    from .value_origin import _ledger
+
+    @functools.wraps(func)
+    def run(*args, **kwargs):
+        rec = _ledger.request_enter()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            _ledger.request_exit(rec)
+    return run
+
+
+def install_threadpool_requests() -> bool:
+    """Make each ``multiprocessing.pool.ThreadPool`` task one request (an
+    ``apply``, or one chunk of a ``map``), once per process, for pools created
+    after it. Process pools are untouched. Never raises."""
+    global _threadpool_installed
+    try:
+        with _executor_lock:
+            if _threadpool_installed:
+                return True
+            import multiprocessing.pool as _pool
+            import queue as _queue
+            original = _pool.worker
+            if getattr(original, "__xaidr_request__", False):
+                _threadpool_installed = True
+                return True
+
+            @functools.wraps(original)
+            def worker(inqueue, outqueue, *args, **kwargs):
+                if isinstance(inqueue, _queue.SimpleQueue):       # a ThreadPool's own queue
+                    inqueue = _RequestTasks(inqueue)
+                return original(inqueue, outqueue, *args, **kwargs)
+            worker.__xaidr_request__ = True
+            _pool.worker = worker
+            _threadpool_installed = True
+            return True
+    except Exception:
+        return False

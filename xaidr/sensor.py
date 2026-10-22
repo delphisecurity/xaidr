@@ -872,6 +872,7 @@ class DelphiSensor:
             # Ruling 4: each ThreadPoolExecutor work item is one request, so a pool
             # thread never hands one job's ledger, and its authority, to the next.
             _vo_seams.install_executor_requests()
+            _vo_seams.install_threadpool_requests()
         if self._value_origin is _vo.Mode.ENFORCE:
             # ONE warning, and only for ENFORCE. Two facts an operator must not
             # learn from an incident (the owner's Q6 principle: a configuration
