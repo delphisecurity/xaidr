@@ -1,4 +1,4 @@
-"""A host the principal names authorizes that host and its subdomains (L5 F5).
+"""A host the principal names authorizes that host and its subdomains.
 
 Its siblings under the same registrable domain are the same owner's, and
 authorized too, unless the registrable domain is a shared-tenant apex

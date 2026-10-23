@@ -190,7 +190,7 @@ class CallVerdict:
     truncated: bool                                # argument walk hit its bound
     # Destination atoms in a value examined whole that is not wholly one
     # destination (prose, a command line), each with its ledger origin. Recorded
-    # only: they never decide the wire, the verdict or an action (L5 F4).
+    # only: they never decide the wire, the verdict or an action.
     observed: tuple[DestinationFinding, ...] = ()
 
 

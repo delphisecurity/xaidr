@@ -111,8 +111,8 @@ class Clients:
         except Exception:
             pass
         try:
-            h = urlsplit(v).hostname
-            if h and urlsplit(v).scheme in _HTTP:
+            h = urlsplit(v).hostname               # a covered consumer, any scheme
+            if h:
                 try:
                     out.append(("urllib.parse", h.encode("idna").decode("ascii")))
                 except UnicodeError:
@@ -129,10 +129,14 @@ class Clients:
 
     @staticmethod
     def mailboxes(v):
-        """[(client, addr)]: each mailbox an email parser returns for ``v``."""
+        """[(client, addr)]: each mailbox an email parser returns for ``v``. A
+        whole message (a header line after a newline) is not a header value, so
+        the parsers are not run on it."""
         import email.utils as eu
         from email import policy
         out = []
+        if re.search(r"\n\s*[!-9;-~]+:", v) or re.match(r"[!-9;-~]+:.*\n\s*\n", v, re.S):
+            return out
         for strict in (True, False):
             name = "strict" if strict else "lenient"
             try:
@@ -164,10 +168,12 @@ def _has_strict():
 
 
 # ── keying (never the core's reader) ─────────────────────────────────────────
-_LDH = re.compile(r"[a-z0-9_\-]+(?:\.[a-z0-9_\-]+)*")
+_LDH = re.compile(r"[a-z0-9_\-]{1,63}(?:\.[a-z0-9_\-]{1,63})*")
 _ATEXT = r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~\-]+"
 _DOT_STRING = re.compile(_ATEXT + r"(?:\." + _ATEXT + r")*")
 _QUOTED = re.compile(r'"(?:[\x20\x21\x23-\x5b\x5d-\x7e]|\\[\x20-\x7e])*"')
+#: RFC 5321 address literals: an IPv4 dotted quad, or IPv6: and an IPv6 address.
+_ADDRESS_LITERAL = re.compile(r"\[(?:\d{1,3}(?:\.\d{1,3}){3}|ipv6:[0-9a-f:.]+)\]")
 
 
 def _ip_key(ip):
@@ -205,15 +211,23 @@ def host_key(h):
     ip = _numeric(h)
     if ip is not None:
         return _ip_key(ip)
-    if not _LDH.fullmatch(h) or h.rsplit(".", 1)[-1].isdigit():
-        return None
+    if not _LDH.fullmatch(h) or len(h) > 253 or h.rsplit(".", 1)[-1].isdigit():
+        return None                            # DNS: a label <= 63, a name <= 253
     return "dns:" + dns_key(h)
 
 
 def _encode_domain(d):
     import idna
     if d.startswith("[") and d.endswith("]"):
-        return d.lower()
+        lit = d.lower()
+        if not _ADDRESS_LITERAL.fullmatch(lit):
+            return None
+        inner = lit[1:-1]
+        try:
+            ipaddress.ip_address(inner[5:] if inner.startswith("ipv6:") else inner)
+        except ValueError:
+            return None
+        return lit
     try:
         return idna.encode(d, uts46=True, transitional=False).decode("ascii").lower()
     except Exception:
@@ -228,7 +242,8 @@ def mail_key(addr):
             or (not local.isascii() and "@" not in local and " " not in local)):
         return None
     d = _encode_domain(domain.rstrip("."))
-    if d is None or not (_LDH.fullmatch(d) or (d.startswith("[") and d.endswith("]"))):
+    if d is None or not ((_LDH.fullmatch(d) and len(d) <= 253)
+                         or (d.startswith("[") and d.endswith("]"))):
         return None
     return f"mailto:{local.lower()}@{d}"
 
@@ -271,27 +286,37 @@ def _raw_hosts(v):
 
 
 def _alternatives(raw):
-    """Keys of the encodings the rulings document as not the core's (S-4):
-    IDNA 2003, UTS-46 transitional, and UTS-46 of a newer Unicode where the host
-    holds a code point Unicode 13.0 does not allow."""
+    """Names (A-label form) from the encodings the rulings document as not the
+    core's (S-4): IDNA 2003, IDNA 2008 without the UTS-46 mapping, UTS-46
+    transitional, and UTS-46 of a newer Unicode where it allows or maps a code
+    point of the host otherwise than Unicode 13.0."""
     import idna
-    from xaidr.value_origin import _idna_data as D
+    from urllib.parse import unquote
     from xaidr.value_origin._idna import _status
+    raw = unquote(raw) if "%" in raw else raw
     out = set()
+    try:                                       # IDNA 2008 without the UTS-46 mapping (libidn2)
+        out.add(idna.encode(raw).decode("ascii"))
+    except Exception:
+        pass
     try:
-        out.add(host_key(raw.encode("idna").decode("ascii")))
+        out.add(raw.encode("idna").decode("ascii"))
     except (UnicodeError, ValueError):
         pass
     try:
-        out.add(host_key(idna.encode(raw, uts46=True, transitional=True).decode("ascii")))
+        out.add(idna.encode(raw, uts46=True, transitional=True).decode("ascii"))
     except Exception:
         pass
-    if any(_status(c) == "D" for c in raw):
-        try:
-            out.add(host_key(idna.encode(raw, uts46=True).decode("ascii")))
+    try:
+        newer = idna.uts46_remap(raw, std3_rules=False, transitional=False)
+    except Exception:
+        newer = None
+    from xaidr.value_origin._idna import _map
+    if any(_status(c) == "D" for c in raw) or (newer is not None and newer != _map(raw)):
+        try:                                   # the newer Unicode reads (or maps) otherwise
+            out.add(idna.encode(raw, uts46=True).decode("ascii"))
         except Exception:
             pass
-    del D
     out.discard(None)
     return out
 
@@ -312,6 +337,15 @@ def _core_refuses(raw):
 _HAS_SCHEME = re.compile(r"\s*[A-Za-z][A-Za-z0-9+.\-]*:")
 
 
+def _cls_mailbox_not_url(v, client, key, core):
+    """§2 Mailboxes (3.2): a value with `@` that is not a URL is a mailbox list.
+    urllib3 and requests read a scheme-less `user@host` as userinfo and a host;
+    the core reads the mailbox, not its domain as a URL host."""
+    s = v.strip()
+    return (client in ("urllib3", "requests") and key.startswith(("dns:", "ip:"))
+            and not _HAS_SCHEME.match(s) and "@" in re.split(r"[/?#]", s, 1)[0])
+
+
 def _cls_schemeless(v, client, key, core):
     """§2 Scheme-less values, 'Not destinations': a bare hostname or address with
     no locator (V-19, §9 item 13), a bare number, a single-label host or a name
@@ -319,7 +353,7 @@ def _cls_schemeless(v, client, key, core):
     s = v.strip()
     if key.startswith("mailto:"):
         return False
-    if _HAS_SCHEME.match(s) and not re.match(r"\s*[^:/?#@\s]+:\d+(?:[/?#]|$)", s):
+    if _HAS_SCHEME.match(s) and not re.match(r"\s*[^:/?#@\s]+:(?:\d+(?:[/?#]|$)|$)", s):
         return False
     host = re.split(r"[/?#]", s, 1)[0].rpartition("@")[2]
     host = host.rsplit(":", 1)[0] if re.search(r":\d*$", host) else host
@@ -335,7 +369,12 @@ def _cls_uts46(v, client, key, core):
     encodes with IDNA 2003, transitionally, or with a newer Unicode reads another
     name."""
     for raw in _raw_hosts(v) + [m.group(1) for m in re.finditer(r"@([^\s<>,;@\"]+)", v)]:
-        if _core_refuses(raw) or key in _alternatives(raw):
+        if _core_refuses(raw):
+            return True
+        alts = {a.lower().rstrip(".") for a in _alternatives(raw)}
+        if key.startswith("mailto:") and key.rpartition("@")[2] in alts:
+            return True
+        if key in {host_key(a) for a in alts}:
             return True
     return False
 
@@ -353,8 +392,50 @@ def _cls_url_first(v, client, key, core):
     host/path is a URL even when it carries @; an email parser's mailbox reading of
     it is not read."""
     return key.startswith("mailto:") and client != "suite" and (
-        bool(re.match(r"\s*[A-Za-z][A-Za-z0-9+.\-]*://", v)) or
-        bool(re.match(r"\s*[\w.\-]+\.[A-Za-z]+(?::\d+)?/", v)))
+        bool(re.match(r"\s*[A-Za-z0-9+.\-]*://", v)) or v.lstrip().startswith("//") or
+        bool(re.match(r"\s*(?:https?|wss?|ftp):", v, re.I)) or
+        bool(re.match(r"\s*[\w.\-]+\.[A-Za-z]+(?::\d+)?[/?#]", v)))
+
+
+def _cls_spaced_at(v, client, key, core):
+    """§2 Mailboxes: an `@` with whitespace on both sides is not an
+    address; an email parser that joins the words around it reads one."""
+    return key.startswith("mailto:") and bool(re.search(r"\s@\s|\s@$|^@\s", v)) and \
+        not re.search(r"[^\s<>@,;]@[^\s<>@,;]", v)
+
+
+def _cls_local_not_written(v, client, key, core):
+    """§2 Mailboxes: a local part is read as the value writes it. One that a
+    parser's error recovery writes and the value does not contain (the words
+    before an `@` quoted into it, quotes inside it dropped) is not read: the value
+    is prose or a malformed address."""
+    if not key.startswith("mailto:"):
+        return False
+    local = key[7:].rpartition("@")[0]
+    flat = re.sub(r"\s+", " ", v.lower())
+    return local not in flat and local.strip('"') not in flat
+
+
+def _cls_junk_around(v, client, key, core):
+    """§2 Mailboxes: an address with other text run into it, and no separator (a
+    second address after a space, a stray `)` or `>`), is prose and not a recipient
+    list (`bob@corp.example is the owner`)."""
+    if not key.startswith("mailto:"):
+        return False
+    addr = key[7:]
+    low = v.lower()
+    i = low.find(addr)
+    if i < 0:
+        return False
+    before = low[:i].rstrip()
+    after = low[i + len(addr):].lstrip()
+    return bool((after and after[0] not in ",;>") or (before and before[-1] not in "<,;:\""))
+
+
+def _cls_mailto(v, client, key, core):
+    """§2 URLs: `mailto:<addr>` is a mailbox, so the host urllib.parse splits
+    out of `mailto://...` is not read."""
+    return v.strip().lower().startswith("mailto:") and client == "urllib.parse"
 
 
 def _cls_utf8_local(v, client, key, core):
@@ -370,10 +451,15 @@ def _cls_file(v, client, key, core):
 
 #: (class, ruling, predicate), tried in order.
 CLASSES = (
+    ("mailbox-not-a-url-host", "§2 Mailboxes: a value with @ is a mailbox list (3.2)", _cls_mailbox_not_url),
     ("schemeless-not-a-destination", "§2 Scheme-less values: Not destinations (V-19)", _cls_schemeless),
     ("file-or-data-scheme", "§2 URLs: file: and data:", _cls_file),
     ("url-before-mailbox", "§2 URLs: a URL is tried before the mailbox rule (S-3)", _cls_url_first),
     ("utf8-local-part", "§2 Mailboxes: the local part is ASCII (3.6)", _cls_utf8_local),
+    ("spaced-at-sign", "§2 Mailboxes: an @ that is not an address", _cls_spaced_at),
+    ("mailto-is-a-mailbox", "§2 URLs: mailto: is a mailbox", _cls_mailto),
+    ("local-part-not-written", "§2 Mailboxes: a local part is read as written", _cls_local_not_written),
+    ("text-run-into-an-address", "§2 Mailboxes: prose is not a recipient list", _cls_junk_around),
     ("name-read-as-number", "§2 Addresses: an empty hex part is 0", _cls_number),
     ("uts46-encoding", "§2 URLs: UTS-46 nontransitional, Unicode 13.0 (S-4)", _cls_uts46),
 )
@@ -432,8 +518,14 @@ def main(argv=None) -> int:
     ap.add_argument("--json")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--show", type=int, default=60)
+    ap.add_argument("--core-out", help="write every vector's core reading, for the "
+                                       "cross-interpreter comparison")
     a = ap.parse_args(argv)
     res = run(a.limit)
+    if a.core_out:
+        values = sorted({json.loads(line)["v"] for line in VECTORS.open(encoding="utf-8")})
+        Path(a.core_out).write_text(json.dumps(
+            {v: sorted(core_keys(v)) for v in values}, sort_keys=True))
     print(f"python {sys.version.split()[0]} {sys.platform}: {res['vectors']} vectors")
     for cls, n in sorted(res["under"].items(), key=lambda x: -x[1]):
         doc = next((d for c, d, _ in CLASSES if c == cls), "no ruling")
@@ -441,7 +533,7 @@ def main(argv=None) -> int:
     for u in res["undocumented"][:a.show]:
         print(f"  UNDOCUMENTED {u['src']}: {u['v']!r} -> {u['client']} {u['key']}; core {u['core']}")
     if a.json:
-        Path(a.json).write_text(json.dumps(res, ensure_ascii=False, indent=1))
+        Path(a.json).write_text(json.dumps(res, indent=1))
     if res["undocumented"]:
         print(f"PUBLISHED DIFFERENTIAL: RED ({len(res['undocumented'])} under-reads no ruling documents)")
         return 1

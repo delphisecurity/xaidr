@@ -62,7 +62,7 @@ FIELDS = {
     "DestinationFinding": ["path", "destination", "reason", "origin", "span_declared",
                            "source_label"],
     "CallVerdict": ["wire", "verdict", "row_state", "detail", "findings", "truncated",
-                    "observed"],                       # L5 F4: record only
+                    "observed"],                       # record only
 }
 
 ENUMS = {

@@ -182,13 +182,39 @@ more than one reading names every one of them. This applies to every rule below.
 - **Percent-encoded hosts are decoded before UTS-46**, as WHATWG host parsing
   does (`https://ev%69l.test/` names `evil.test`; `R36-percent-host`).
 - **UTS-46: nontransitional, Unicode 13.0** (S-4). ß stays ß (`xn--zca`), as
-  browsers resolve it. CheckBidi on; STD3 rules off; CheckHyphens and
-  VerifyDnsLength off. ZWJ/ZWNJ labels fail (CONTEXTJ needs Joining_Type data
-  the stdlib lacks). The mapping table, bidi classes and combining marks are
-  vendored from Unicode 13.0 (`_idna_data.py`), Python 3.10's `unicodedata`
-  version. A URL host that fails UTS-46 yields `dns:<raw host lowercased>`,
-  which matches only itself. Unicode domain labels are accepted and compared as
-  A-labels (3.6); `R36-homoglyph-*`.
+  browsers resolve it. CheckBidi on; CheckJoiners on (CONTEXTJ, RFC 5892 A.1 and
+  A.2); STD3 rules, CheckHyphens and VerifyDnsLength off. The mapping table
+  (its STD3 statuses kept apart), bidi classes, combining marks, Joining_Type and
+  the viramas are vendored from Unicode 13.0 (`_idna_data.py`), Python 3.10's
+  `unicodedata` version. With all three of those flags on (`strict`), the core
+  reads every row of IdnaTestV2 13.0.0 as the file does
+  (`tests/value_origin_conformance/test_idna_v2.py`). A URL host that fails UTS-46
+  yields `dns:<host>`, the host as written with the table's case mapping
+  (`fold`), which matches only itself. Unicode domain labels are accepted and
+  compared as A-labels (3.6); `R36-homoglyph-*`.
+- **Case is the table's, and every lowercase a client applies is a reading.** A
+  host is mapped by the UTS-46 table, never by the interpreter's `str.lower`,
+  which follows its own Unicode version and applies Final_Sigma. httpx lowercases
+  the whole host with `str.lower` before encoding it, and urllib3 and requests each
+  label; where that reads another name that passes those clients' STD3 and hyphen
+  rules, it is one more finding (`http://ΒΌΛΟΣ/` names the σ and the ς names), and
+  where no client sends to a name, it is not read. A full stop the table maps to
+  `.` (U+3002, U+FF0E, U+FF61) is a dot before keying, so a trailing one keys like
+  a trailing `.`. The reading is the same on every interpreter: every published
+  vector reads alike on 3.10, 3.12.2, the newest 3.12 and 3.14
+  (`scripts/published_agreement.py`). *Pinned by:*
+  `tests/test_value_origin_published_readings.py`.
+- **A scheme token is anything before `://` made of letters, digits, `+`, `.` and
+  `-`, of any length**, as urllib.parse on 3.10 and WHATWG split it. When urllib3
+  refuses it as a scheme (one that is not a letter, then letters, digits, `+` and
+  `-`), urllib3 connects to it as the HOST: `hej.hej://example.net` names both
+  `hej.hej` and `example.net`, `0://x` names 0.0.0.0, and the call is authorized
+  only if every reading is. `//host/x` is a scheme-relative reference urllib3
+  sends to `host`.
+- **An IPv6 literal with a zone** is read without the zone, and both ways a client
+  reads a `%` in it: as RFC 6874's `%25` with the address part percent-decoded
+  (urllib3, requests), and as the zone itself (urllib.parse hands it to the socket),
+  so `[fe80::%31]` names fe80::1 and fe80::.
 - **A URL is tried before the mailbox rule** (S-3): a value that opens with
   `scheme://`, or is a scheme-less `host/path`, is a URL even when it carries
   `@` (`R32-url-first`).
@@ -201,9 +227,11 @@ more than one reading names every one of them. This applies to every rule below.
 A client that guesses `http://` (curl) sends each of these where the core reads
 it:
 
-- **`host[:port]/path`**: a name of at least two labels with an alphabetic last
-  label, an optional port, then a path (`evil.test/x`, `evil.test:8080/x`). It is
-  read as `http://` + the value, every reading included.
+- **`host[:port]` and then a path, a query or a fragment**: a name of at least two
+  labels with an alphabetic last label (`evil.test/x`, `evil.test:8080/x`,
+  `ldap.example.com?special`, `pop3.example.com:100#foobar`). It is read as
+  `http://` + the value, every reading included. A single-label host stays unread
+  (`localhost/x`, `g?y`).
 - **An address literal followed by a port, path, query or fragment**: a dotted
   quad or IPv6 in brackets, in a result or an argument
   (`169.254.169.254/latest`, `10.0.0.5:80`).
@@ -211,8 +239,8 @@ it:
   fragment**, in an argument: hex, octal, decimal and short dotted forms
   (`0xA9FEA9FE/latest`, `2852039166/latest`, `0251.0376.0251.0376/latest`,
   `169.254.43518/latest` all read 169.254.169.254; `2024/report` reads
-  0.0.7.232). Results record only the strict forms above, so a path in a file
-  listing is not recorded as an address. *Pinned by:*
+  0.0.7.232). A tool result that is such a value records the same address: a
+  whole result value is read as an argument value is (§5). *Pinned by:*
   `test_integer_ip_forms_with_no_scheme_read_as_the_address_they_reach`,
   `test_an_integer_host_with_a_path_reads_as_its_address`.
 - **Not destinations:** a bare hostname (V-19), with or without a port; a bare
@@ -227,7 +255,7 @@ it:
   sections with the default `*` rule; a host that is itself a public suffix, or
   one label, is kept whole. So `docs.northbank.example` and a principal's
   `northbank.example` are the same destination (`pos-drift-*`).
-- **Under a shared-tenant apex a name is keyed by the whole host** (L5 F5):
+- **Under a shared-tenant apex a name is keyed by the whole host**:
   apexes whose hosts serve other parties' content, endpoints or tenants and that
   the PSL does not split (`google.com`, `slack.com`, `sharepoint.com`, ...; the
   vendored list is `xaidr/value_origin/_shared_tenant_data.py`). A host named
@@ -266,7 +294,7 @@ it:
 - **A value with `@` that is not a URL is a mailbox-list candidate** (3.2). It is
   split on `,` and `;` outside `<…>` and `"…"`. Without `@` it goes to the other
   schemes or `no_destination`. An empty part (`"a@x.example; "`) is skipped.
-- **An `@` that is not an address does not make an address list** (L5 F3). When
+- **An `@` that is not an address does not make an address list**. When
   no part is an address, or shaped like one (one token with text on both sides of
   the `@`, or a display name and an angle address), the value is read like any
   other: `ping me @ 5pm` names nothing, and in `curl -d @file https://host` the
@@ -293,6 +321,25 @@ it:
 - **Quoting that does not balance is junk**: the whole value fails, and its `,` and
   `;` are taken literally to find the parts that parse
   (`R32-untrusted-unbalanced-quote`).
+- **An address list is read as RFC 5322 reads it**: comments dropped, groups
+  (`Team: a@x.example, b@y.example;`), quoted local parts (`"roy a bug"@…`, and
+  `"dinsdale"@…` also as `dinsdale@…`, as email.headerregistry writes it), address
+  literals (`user@[192.0.2.1]`), obs-route (`<@relay:jdoe@…>`), a single-label
+  domain (`user@host`), and an ASCII domain UTS-46 refuses as written, since a
+  mail client sends it unvalidated. A value that is not one still names every
+  angle address in it, every addr-spec when a part of it is exactly one mailbox
+  or it has no whitespace at all, and the address list of each `Header:` line, as
+  the legacy parser (`email.utils.getaddresses(strict=False)`) reads them. An
+  addr-spec is read only where it stands alone: after the start or a separator,
+  before the end or a separator. *Pinned by:*
+  `tests/test_value_origin_published_readings.py`.
+- **Not read, and each can be overruled:** a local part the value does not
+  write, which a parser's error recovery makes up (email.headerregistry quotes
+  the words before an `@` into one, `John Doe@x.example` → `"john doe"@x.example`,
+  or drops the quotes inside one); and an address with other text run into it and
+  no separator (`a@b c@d`, `alice@example.org )Alice(`), which is prose. Both are
+  the shape of `Please send the report to bob@corp.example.`, which is not a
+  recipient list.
 - **The local part is ASCII by grammar, and lowercased.** A non-ASCII local part
   is `unresolved` (3.6; `R36-nonascii-local`). The domain may be Unicode and is
   UTS-46-encoded. Lowercasing is the one fold applied to a local part
@@ -309,6 +356,25 @@ it:
   (S-5): one candidate extractor serves spans and results. A filename that ends in
   a real TLD (`notes.md`) records `dns:notes.md`; that matters only if an action
   goes to that host (`R34-icann-tld-cost`).
+
+### The published-suite differential
+
+`scripts/published_differential.py` (a CI job on Linux and macOS, on 3.10,
+3.12.2, the newest 3.12 and 3.14) runs every vector of WPT, CPython's urlparse and
+email tests, IdnaTestV2 13.0.0 and 18.0.0, curl's lib1560 and Go's url and mail
+tests (vendored with their licences and sources in `tests/published_vectors/`)
+through httpx, urllib3, requests, urllib.parse, a WHATWG parser and the email
+parsers, and fails on a destination a client reads that the core does not and no
+ruling here names. The rulings it accepts an under-read under, each above: a bare
+hostname or number and a single-label host before a path (V-19); `file:` and
+`data:`; a URL before the mailbox rule (S-3); a mailbox is not its domain as a URL
+host (3.2); an ASCII local part (3.6); an `@` that is not an address; `mailto:` is
+a mailbox; a local part the value does not write; text run into an address; an
+empty hex part where the resolver refuses it; and UTS-46 as S-4 pins it (IDNA
+2003, IDNA 2008 without the mapping, transitional processing and newer Unicode
+versions read some names otherwise, and S-4's fallback key matches only itself).
+`scripts/published_agreement.py` checks that the core reads every vector the same
+in every cell.
 
 ## 3. A value that names more than one destination
 
@@ -339,6 +405,13 @@ value with two authorities, exactly as for a two-mailbox list, and
 
 ## 5. Recording and its bounds
 
+- **A tool result is read as an argument is.** Each whole result value gets the
+  argument reader's whole-value reading (every reading of the split, the
+  scheme-less forms, S-4's fallback key, mailbox lists), and a URL in result prose
+  keeps S-4's fallback key, so a destination a result named reads
+  `untrusted_source` when a later call sends to it. *Pinned by:*
+  `test_result_keys_contain_argument_keys_over_every_published_vector`.
+
 - **`record_principal_input` writes two all-or-none units** (S-6): its
   destinations, then its key n-grams, so a long prompt's n-grams can be dropped
   without dropping the principal's addresses. `record_tool_result` is one unit,
@@ -349,7 +422,7 @@ value with two authorities, exactly as for a two-mailbox list, and
   WORK: each scanned character costs 1 and each candidate examined costs 64,
   500,000 units per seam call (`ATOM_WORK_BUDGET`); a result's examined pass is
   bounded the same way at 1,000,000 units (`EXAMINED_WORK_BUDGET`).
-- **Observed atoms** (L5 F4, record only): an argument value the walk examines
+- **Observed atoms** (record only): an argument value the walk examines
   whole that is not wholly one destination is scanned for destination atoms
   (prose, a command line, a mailbox part that does not parse). Each atom is on
   `CallVerdict.observed` with its ledger origin, and never decides the wire, the
@@ -423,8 +496,10 @@ Each is current behaviour and can still be overruled.
    (`test_r1_a_parsed_part_that_misses_in_a_saturated_ledger_reports_saturation`).
 4. After an address literal, a port alone (`10.0.0.5:80`), a query, a fragment or
    a path counts, and so does IPv6 in brackets.
-5. Results record scheme-less addresses only in the strict literal forms; the
-   inet_aton forms are read in arguments (§2, Scheme-less values).
+5. A tool result records every key the argument reader reads from the same text,
+   the inet_aton scheme-less forms and S-4's fallback key included
+   (`tests/test_value_origin_result_reader.py`, over every published vector), so a
+   path in a file listing that reads as an address is recorded as that address.
 6. A CIDR like `10.0.0.0/8` reads `ip:10.0.0.0`, which is `unresolved` unless
    something recorded it. `HTTP: 404` is not a URL (a space follows the colon).
 7. The prose URL scan records `http:///evil.test` as `evil.test`; prose

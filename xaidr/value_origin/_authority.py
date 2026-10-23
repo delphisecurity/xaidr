@@ -21,11 +21,10 @@ from __future__ import annotations
 
 import ipaddress
 import re
-import unicodedata
 from typing import List, Optional, Tuple
 from urllib.parse import unquote_to_bytes, urlsplit
 
-from ._idna import to_ascii
+from ._idna import _status, fold, to_ascii
 from ._psl_data import ICANN_RULES, PRIVATE_RULES
 from ._shared_tenant_data import SHARED_TENANT_APEXES
 from ._types import MAX_LEAF_CHARS, Authority
@@ -69,7 +68,7 @@ def registrable_domain(host: str) -> str:
 def dns_key(ascii_host: str) -> str:
     """The key of an A-label host: its registrable domain, or the whole host under
     a shared-tenant apex (``_shared_tenant_data``), whose hosts are not one
-    party's (L5 F5)."""
+    party's."""
     rd = registrable_domain(ascii_host)
     return ascii_host if rd in SHARED_TENANT_APEXES else rd
 
@@ -77,7 +76,7 @@ def dns_key(ascii_host: str) -> str:
 def key_chain(a: Authority) -> List[Authority]:
     """The keys a lookup of ``a`` reads, most specific first: ``a`` itself, then,
     for a host under a shared-tenant apex, each parent up to the apex, so a host
-    the principal named authorizes its subdomains (L5 F5)."""
+    the principal named authorizes its subdomains."""
     if a.scheme != "dns":
         return [a]
     rd = registrable_domain(a.value)
@@ -160,12 +159,44 @@ def coerce_ip(host: str):
 
 def ip_key(ip) -> str:
     """Canonical text of an address: mapped v6 unwrapped first, then IPv4
-    dotted or IPv6 ``.compressed`` — the same on every interpreter."""
+    dotted or IPv6 ``.compressed`` — the same on every interpreter. An IPv6
+    zone is not part of the destination's key."""
+    if isinstance(ip, ipaddress.IPv6Address) and ip.scope_id:
+        ip = ipaddress.IPv6Address(ip.compressed.partition("%")[0])
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
     if isinstance(ip, ipaddress.IPv6Address):
         return ip.compressed
     return str(ip)
+
+
+def _zoned_ip(inside: str):
+    """An IPv6 literal with a zone (RFC 6874, ``%25`` then the zone), its address
+    part percent-decoded first, as httpx, urllib3 and requests send it."""
+    addr = inside.partition("%25")[0] if "%25" in inside else inside
+    try:
+        addr = unquote_to_bytes(addr).decode("ascii")
+    except (UnicodeDecodeError, ValueError):
+        return None
+    ip = _strict_ip(addr.partition("%")[0])
+    return ip if isinstance(ip, ipaddress.IPv6Address) else None
+
+
+def _zone_readings(host: str) -> List[Authority]:
+    """An IPv6 literal with a `%` in it is two addresses to Python's clients:
+    urllib.parse hands the socket the text after `%` as a zone, and urllib3 and
+    requests percent-decode it first (`fe80::%31` is fe80:: to one, fe80::1 to the
+    other). Both are destinations."""
+    h = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    if ":" not in h or "%" not in h:
+        return []
+    out = []
+    for ip in (_zoned_ip(h), _strict_ip(h.partition("%")[0])):
+        if isinstance(ip, ipaddress.IPv6Address):
+            a = Authority(scheme="ip", value=ip_key(ip))
+            if a not in out:
+                out.append(a)
+    return out
 
 
 def _strict_ip(value: str):
@@ -182,42 +213,16 @@ def _strict_ip(value: str):
 
 
 # ── hosts ────────────────────────────────────────────────────────────────────
-def _host_authority(raw_host: str, *, arg_fallback: bool) -> Optional[Authority]:
-    """Authority of a URL host. ``raw_host`` is as the URL spelled it.
+def _fallback(raw_host: str) -> Authority:
+    """S-4's key for a host UTS-46 refuses: the host as written, case-mapped by
+    the table (``fold``, never the interpreter's ``str.lower``), trailing dots
+    removed. It matches only itself."""
+    return Authority(scheme="dns", value=fold(raw_host).rstrip("."))
 
-    WHATWG order: percent-decode, then UTS-46, then (if the result is an
-    address in any spelling) IP. On a UTS-46 failure an ARGUMENT host still
-    yields ``dns:<raw host lowercased>``, which matches only itself and is
-    never ``no_destination``; a prose candidate is dropped.
-    """
-    host = raw_host.strip()
-    if any(c.isspace() for c in host):
-        return None                            # no resolver reads a name with a space
-    if host.startswith("[") and host.endswith("]"):
-        ip = _strict_ip(host)
-        return Authority(scheme="ip", value=ip_key(ip)) if ip is not None else None
-    host = host.rstrip(".")
-    if not host:
-        return None
-    if ":" in host:                            # only an IPv6 literal has a colon
-        ip = _strict_ip(host)
-        if ip is not None:
-            return Authority(scheme="ip", value=ip_key(ip))
-        return (Authority(scheme="dns", value=raw_host.lower().rstrip("."))
-                if arg_fallback else None)
-    if "%" in host:
-        try:
-            host = unquote_to_bytes(host).decode("utf-8")
-        except (UnicodeDecodeError, ValueError):
-            return (Authority(scheme="dns", value=raw_host.lower().rstrip("."))
-                    if arg_fallback else None)
-        host = host.rstrip(".")
-        if not host or any(c.isspace() for c in host):
-            return None
-    ascii_host = to_ascii(host)
-    if ascii_host is None or not ascii_host:
-        if arg_fallback:
-            return Authority(scheme="dns", value=raw_host.lower().rstrip("."))
+
+def _name_authority(ascii_host: str) -> Optional[Authority]:
+    ascii_host = ascii_host.rstrip(".")        # a mapped full stop is a dot too
+    if not ascii_host:
         return None
     ip = coerce_ip(ascii_host)
     if ip is not None:
@@ -225,8 +230,70 @@ def _host_authority(raw_host: str, *, arg_fallback: bool) -> Optional[Authority]
     return Authority(scheme="dns", value=dns_key(ascii_host))
 
 
+def _host_authority(raw_host: str, *, arg_fallback: bool) -> Optional[Authority]:
+    """Authority of a URL host. ``raw_host`` is as the URL spelled it, case
+    included.
+
+    WHATWG order: percent-decode, then UTS-46 (the table maps case), then (if
+    the result is an address in any spelling) IP. On a UTS-46 failure an
+    ARGUMENT host still yields S-4's fallback key, which matches only itself and
+    is never ``no_destination``; a prose candidate is dropped.
+    """
+    host = raw_host.strip()
+    if any(c.isspace() for c in host):
+        return None                            # no resolver reads a name with a space
+    if host.startswith("[") and host.endswith("]"):
+        ip = _strict_ip(host) or _zoned_ip(host[1:-1])
+        return Authority(scheme="ip", value=ip_key(ip)) if ip is not None else None
+    host = host.rstrip(".")
+    if not host:
+        return None
+    if ":" in host:                            # only an IPv6 literal has a colon
+        ip = _strict_ip(host) or _zoned_ip(host)
+        if ip is not None:
+            return Authority(scheme="ip", value=ip_key(ip))
+        return _fallback(raw_host) if arg_fallback else None
+    if "%" in host:
+        try:
+            host = unquote_to_bytes(host).decode("utf-8")
+        except (UnicodeDecodeError, ValueError):
+            return _fallback(raw_host) if arg_fallback else None
+        host = host.rstrip(".")
+        if not host or any(c.isspace() for c in host):
+            return None
+    ascii_host = to_ascii(host)
+    if not ascii_host or not ascii_host.rstrip("."):
+        if ascii_host is None and arg_fallback:
+            return _fallback(raw_host)
+        return None
+    return _name_authority(ascii_host)
+
+
+def _case_readings(raw_host: str) -> List[Authority]:
+    """The hosts Python's clients send ``raw_host`` to when they lowercase it with
+    ``str.lower`` before encoding it: httpx lowercases the whole host, urllib3
+    and requests each label, then each encodes with the ``idna`` package, which
+    applies UseSTD3ASCIIRules and CheckHyphens. Where ``str.lower`` reads
+    otherwise than the table (Final_Sigma, a letter the pinned Unicode disallows),
+    that is another destination; where it reads the same, there is none."""
+    host = raw_host.strip().rstrip(".")
+    if host.isascii() or "%" in host or ":" in host or any(c.isspace() for c in host):
+        return []
+    out: List[Authority] = []
+    for lowered in (host.lower(), ".".join(x.lower() for x in host.split("."))):
+        ascii_host = to_ascii(lowered, strict=True)
+        if ascii_host:
+            a = _name_authority(ascii_host)
+            if a is not None and a not in out:
+                out.append(a)
+    return out
+
+
 # ── URLs ─────────────────────────────────────────────────────────────────────
-_SCHEME_RE = re.compile(r"^([A-Za-z][A-Za-z0-9+.\-]{0,31})://")
+# Any scheme token before `://`: urllib.parse on 3.10 splits a scheme that
+# opens with a digit, `.`, `+` or `-`, and WHATWG and urllib.parse read the host
+# after a scheme of any length.
+_SCHEME_RE = re.compile(r"^([A-Za-z0-9+.\-]{1,256})://")
 # A WHATWG special scheme other than file: takes its
 # authority after ANY run of '/' and '\', so `http:evil.test`, `http:/evil.test`,
 # `http:\\evil.test` and `http:///evil.test` all name evil.test. Such a value is
@@ -237,7 +304,7 @@ _SPECIAL_RE = re.compile(r"^(https?|wss?|ftp):[/\\]*(?=[^\s/\\])", re.IGNORECASE
 # port, and a path. Labels are \w so a Unicode host is accepted here too (ruling
 # 3.6). A client that guesses `http://` (curl) sends `evil.test:8080/x` to
 # evil.test (ruling 2).
-_IMPLIED_RE = re.compile(r"^((?:[\w\-]{1,63}\.){1,126}[^\W\d_]{1,63})(?::[0-9]{1,5})?/")
+_IMPLIED_RE = re.compile(r"^((?:[\w\-]{1,63}\.){1,126}[^\W\d_]{1,63})(?::[0-9]{1,5})?[/?#]")
 # No scheme, a host in any inet_aton spelling (integer, hex, octal, short or
 # mixed dotted forms), then a port, path, query or fragment. A client that
 # guesses `http://` sends it to the address that host denotes (ruling 2). Read for
@@ -250,6 +317,11 @@ _IMPLIED_INT_RE = re.compile(r"^([0-9][0-9A-Za-z.]{0,63})(?::[0-9]{1,5}(?![^/?#]
 _IMPLIED_IP_RE = re.compile(r"^(\[[0-9A-Fa-f:.]{2,45}\]|[0-9]{1,3}(?:\.[0-9]{1,3}){3})"
                             r"(?::[0-9]{1,5}(?![^/?#])|(?=[/?#]))")
 _NON_DESTINATION_SCHEMES = frozenset({"file", "data"})
+# urllib3 takes a scheme only when it is a letter then letters, digits, + and -
+# (``parse_url``); before any other `X://` it puts `//`, so X is the HOST it
+# connects to (`hej.hej://example.net` goes to hej.hej, `0://x` to 0.0.0.0).
+_URLLIB3_SCHEME_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+\-]*")
+_SCHEME_AS_HOST_RE = re.compile(r"^([^\s:/?#\[\]@\\]{1,253})://")
 _TAB_NEWLINE = str.maketrans("", "", "\t\n\r")
 _C0_OR_SPACE = "".join(map(chr, range(0x21)))
 # Q1: where an RFC 3986 authority ends (urlsplit's netloc delimiters).
@@ -278,11 +350,18 @@ PARSE_FAILURE = ParseFailure()
 
 
 def _split_host(url: str):
-    """(raw host or None, parse_ok) for ONE authority split of ``url``."""
+    """(host as written or None, parse_ok) for ONE authority split of ``url``:
+    ``urlsplit``'s host, before its ``.hostname`` lowercases it with the
+    interpreter's ``str.lower``."""
     try:
-        return urlsplit(url).hostname, True
+        parts = urlsplit(url)
+        parts.hostname                         # urlsplit's own validation
     except ValueError:
         return None, False
+    hostinfo = parts.netloc.rpartition("@")[2]
+    _, bracket, inside = hostinfo.partition("[")
+    host = inside.partition("]")[0] if bracket else hostinfo.partition(":")[0]
+    return (host or None), True
 
 
 def _whatwg(value: str) -> str:
@@ -314,8 +393,10 @@ def _urlsplit_3_12_2_refuses(netloc: str) -> bool:
             except ValueError:
                 return True
     if not netloc.isascii():
+        # urlsplit asks NFKC; the pinned table's mapping answers the same for the
+        # code points it maps, and does not change with the interpreter (V-4).
         bare = netloc.replace("@", "").replace(":", "").replace("#", "").replace("?", "")
-        folded = unicodedata.normalize("NFKC", bare)
+        folded = fold(bare)
         if folded != bare and any(c in folded for c in "/?#@:"):
             return True
     return False
@@ -363,7 +444,7 @@ def _authority_host(url: str, *, whatwg: bool) -> Optional[str]:
     if whatwg:
         if hostinfo.startswith("[") and "]" in hostinfo:
             host = hostinfo[1:].partition("]")[0]
-            if not isinstance(_strict_ip(host), ipaddress.IPv6Address):
+            if not isinstance(_strict_ip(host) or _zoned_ip(host), ipaddress.IPv6Address):
                 return None
         elif "[" in hostinfo or "]" in hostinfo:
             return None
@@ -374,7 +455,6 @@ def _authority_host(url: str, *, whatwg: bool) -> Optional[str]:
             return None
         _, bracket, inside = hostinfo.partition("[")
         host = inside.partition("]")[0] if bracket else hostinfo.partition(":")[0]
-    host = host.lower()
     if not host or "\\" in host:
         return None
     return host
@@ -435,8 +515,8 @@ def _raw_split_host(url: str) -> Optional[str]:
     end = _AUTHORITY_END_RE.search(rest)
     hostinfo = (rest[:end.start()] if end else rest).rpartition("@")[2]
     if hostinfo.startswith("[") and "]" in hostinfo:
-        return hostinfo[1:].partition("]")[0].lower()
-    return hostinfo.partition(":")[0].lower() or None
+        return hostinfo[1:].partition("]")[0]
+    return hostinfo.partition(":")[0] or None
 
 
 def _macos_readings(raw_host: Optional[str]) -> List[Authority]:
@@ -452,7 +532,7 @@ def _macos_readings(raw_host: Optional[str]) -> List[Authority]:
         except (UnicodeDecodeError, ValueError):
             return []
     if ":" not in h:
-        h = to_ascii(h) or ""
+        h = (to_ascii(h) or "").rstrip(".")
     try:
         ip = _macos_resolver_ip(h) if h else None
     except ValueError:
@@ -506,6 +586,10 @@ def url_authority(value: str, *, arg_mode: bool, written: Optional[str] = None):
         a = _host_authority(h, arg_fallback=arg_mode) if h else None
         if a is not None and a != primary and a not in extra:
             extra.append(a)
+    for h in [host] + others:                    # the str.lower readings; IPv6 zones
+        for a in (_case_readings(h) + _zone_readings(h)) if h else ():
+            if a != primary and a not in extra:
+                extra.append(a)
     for raw in (_raw_split_host(whatwg), _raw_split_host(value if written is None else written)):
         for a in _macos_readings(raw):               # Q22, re-ruled 2026-10-04
             if a != primary and a not in extra:
@@ -548,26 +632,52 @@ def _implied_ip_authority(value: str, *, arg_mode: bool):
 
 # ── mailboxes (rulings 3.2 / 3.6) ───────────────────────────────────────────
 _LOCAL_RE = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~\-]{1,64}")
-_ASCII_DOMAIN_RE = re.compile(r"[A-Za-z0-9\-]{1,63}(?:\.[A-Za-z0-9\-]{1,63}){1,126}")
+_ASCII_DOMAIN_RE = re.compile(r"[A-Za-z0-9\-_]{1,63}(?:\.[A-Za-z0-9\-_]{1,63}){0,126}")
 _DISPLAY_RE = re.compile(r"^(?P<display>[^<>]{0,256})<(?P<addr>[^<>]{1,320})>$")
+
+
+_QUOTED_LOCAL_RE = re.compile(r'"(?:[\x20\x21\x23-\x5b\x5d-\x7e]|\\[\x20-\x7e]){0,62}"')
+_DOMAIN_LITERAL_RE = re.compile(r"\[(?:[0-9.]{7,15}|IPv6:[0-9A-Fa-f:.]{2,45})\]", re.I)
 
 
 def mailbox_authority(addr: str) -> Optional[Authority]:
     """``local@domain`` → ``mailto:`` authority, or None if it fails the grammar.
 
-    The local part is ASCII by grammar: a non-ASCII local part is not a mailbox
-    this core can compare (ruling 3.6: UNRESOLVED when it is an argument). The
-    domain may be Unicode and is UTS-46-encoded first.
+    The local part is ASCII by grammar, a dot-atom or a quoted string: a
+    non-ASCII local part is not a mailbox this core can compare (ruling 3.6:
+    UNRESOLVED when it is an argument). The domain may be Unicode and is
+    UTS-46-encoded first; an address literal (``[192.0.2.1]``) is kept as written.
     """
-    if addr.count("@") != 1:
+    local, at, domain = addr.rpartition("@")
+    if not at or "@" in local.replace('\\"', "").strip('"') and not local.startswith('"'):
         return None
-    local, domain = addr.split("@")
-    if not _LOCAL_RE.fullmatch(local):
+    if not (_LOCAL_RE.fullmatch(local) or _QUOTED_LOCAL_RE.fullmatch(local)):
         return None
-    ascii_domain = to_ascii(domain)
-    if ascii_domain is None or not _ASCII_DOMAIN_RE.fullmatch(ascii_domain):
+    if _DOMAIN_LITERAL_RE.fullmatch(domain):
+        inner = domain[1:-1]
+        ip = _strict_ip(inner[5:] if inner.lower().startswith("ipv6:") else inner)
+        if ip is None:
+            return None
+        return Authority(scheme="mailto", value=f"{local.lower()}@[{inner.lower()}]")
+    ascii_domain = _mail_domain(domain)
+    if ascii_domain is None:
         return None
     return Authority(scheme="mailto", value=f"{local.lower()}@{ascii_domain}")
+
+
+def _mail_domain(domain: str) -> Optional[str]:
+    """The domain a mail client sends to: UTS-46 where it applies; an ASCII
+    name it refuses (an xn-- label that fails CheckBidi, say) as written, since a
+    mail client does not validate it; one label too, as a resolver reads it."""
+    d = domain.rstrip(".") if domain.endswith(".") and not domain.endswith("..") else domain
+    ascii_domain = to_ascii(d)
+    if ascii_domain is not None:
+        ascii_domain = ascii_domain.rstrip(".")
+    elif d.isascii():
+        ascii_domain = d.lower()
+    if ascii_domain is None or not _ASCII_DOMAIN_RE.fullmatch(ascii_domain) or len(ascii_domain) > 253:
+        return None
+    return ascii_domain
 
 
 def _split_mailbox_list(value: str) -> Optional[List[str]]:
@@ -608,6 +718,17 @@ def _mailbox_part(part: str) -> Optional[Authority]:
 _DISPLAY_OPEN_RE = re.compile(r'^\s*(?:"[^"]{0,256}"|[^<>"@,;]{0,256}?)\s*<\s*$')
 
 
+def _known(ch: str) -> bool:
+    """A code point the pinned Unicode (13.0) allows in a name. A letter newer
+    than that is a letter to one interpreter and not to another, so it counts as
+    neither (V-4)."""
+    return ch.isascii() or _status(ch)[0] != "D"
+
+
+def _alnum(ch: str) -> bool:
+    return ch.isalnum() and _known(ch)
+
+
 def _mailbox_in_junk(part: str) -> Optional[Authority]:
     """The one mailbox in a part that does not parse, when everything around it
     is junk (no letter or digit) or a display name opening ``<``; else None."""
@@ -619,11 +740,11 @@ def _mailbox_in_junk(part: str) -> Optional[Authority]:
     if found is None:
         return None
     before, after = part[:found.start()], part[found.end():]
-    if before and before[-1].isalnum():
+    if before and _alnum(before[-1]):
         return None                            # starts mid-word: `jürgen@` is not `rgen@`
-    if any(c.isalnum() for c in after):
+    if any(_alnum(c) for c in after):
         return None                            # `user@evil.test/x`, or prose after it
-    if any(c.isalnum() for c in before) and not _DISPLAY_OPEN_RE.match(before):
+    if any(_alnum(c) for c in before) and not _DISPLAY_OPEN_RE.match(before):
         return None                            # prose before it
     return mailbox_authority(found.group(0).rstrip(".-"))
 
@@ -636,7 +757,244 @@ _ADDRESS_SHAPED_RE = re.compile(r"\s*(?:[^\s<>@,;]+@[^\s<>@,;]+|[^<>@]*<[^<>]*@[
 
 def _address_shaped(value: str) -> bool:
     parts = _split_mailbox_list(value) or re.split(r"[,;]", value)
-    return any(_ADDRESS_SHAPED_RE.fullmatch(p) for p in parts if p.strip())
+    if any(_ADDRESS_SHAPED_RE.fullmatch(p) for p in parts if p.strip()):
+        return True
+    return _shaped_5322(value) or bool(_rfc5322_addresses(value)[0])
+
+
+# ── RFC 5322 address lists ───────────────────────────────────────────────────
+# A backslash outside a quoted string is no RFC 5322 special: it stays in its
+# atom, so a local part or domain holding one is refused, never rejoined.
+_SPECIALS = '()<>@,;:."[]'
+
+
+def _tokens5322(s: str, *, tolerant: bool = False):
+    """``s`` as RFC 5322 tokens: (kind, text) with kind ``atom``, ``quoted``,
+    ``literal`` or one of ``<>@,;:.``. Comments and whitespace (CFWS) are dropped.
+    None when a quoted string, a comment or a literal does not close, unless
+    ``tolerant``: then it runs to the end of the value, as the legacy parser reads it."""
+    out, i, n = [], 0, len(s)
+    while i < n:
+        c = s[i]
+        if c.isspace():
+            i += 1
+        elif c == "(":
+            depth, i = 1, i + 1
+            while i < n and depth:
+                if s[i] == "\\":
+                    i += 1
+                elif s[i] == "(":
+                    depth += 1
+                elif s[i] == ")":
+                    depth -= 1
+                i += 1
+            if depth and not tolerant:
+                return None
+        elif c == '"':
+            j = i + 1
+            while j < n and s[j] != '"':
+                j += 2 if s[j] == "\\" else 1
+            if j >= n:
+                if not tolerant:
+                    return None
+                j = n - 1
+            out.append(("quoted", s[i:j + 1]))
+            i = j + 1
+        elif c == "[":
+            j = s.find("]", i)
+            if j < 0:
+                if not tolerant:
+                    return None
+                j = n - 1
+            out.append(("literal", s[i:j + 1]))
+            i = j + 1
+        elif c in "<>@,;:.":
+            out.append((c, c))
+            i += 1
+        else:
+            j = i
+            while j < n and not s[j].isspace() and s[j] not in _SPECIALS:
+                j += 1
+            if j == i:
+                out.append(("junk", c))          # a stray `)` or `]`: no address runs across it
+                i += 1
+                continue
+            out.append(("atom", s[i:j]))
+            i = j
+    return out
+
+
+_BEFORE_LOCAL = frozenset({",", ";", "<", ":", ">", "@"})
+_AFTER_DOMAIN = frozenset({",", ";", ">", "<", ":"})
+
+
+def _addr_spec_at(toks, k):
+    """The addr-spec around the ``@`` at ``toks[k]``: (start, end, text) or None.
+    It must stand alone: the value's start or a separator before its local part,
+    and its end or a separator after its domain (a trailing dot allowed), so no
+    address is read out of text run into it."""
+    n = len(toks)
+    if k == 0 or toks[k - 1][0] not in ("atom", "quoted") or k + 1 >= n:
+        return None
+    j = k - 1
+    while j >= 2 and toks[j - 1][0] == "." and toks[j - 2][0] in ("atom", "quoted"):
+        j -= 2
+    if j > 0 and toks[j - 1][0] not in _BEFORE_LOCAL:
+        return None
+    local = "".join(text for _, text in toks[j:k])
+    if toks[k + 1][0] == "literal":
+        m = k + 1
+    elif toks[k + 1][0] == "atom":
+        m = k + 1
+        while m + 2 < n and toks[m + 1][0] == "." and toks[m + 2][0] == "atom":
+            m += 2
+    else:
+        return None
+    end = m + 1
+    nxt = end + 1 if end < n and toks[end][0] == "." else end
+    if nxt < n and toks[nxt][0] not in _AFTER_DOMAIN:
+        return None
+    domain = "".join(text for _, text in toks[k + 1:m + 1])
+    return j, end, f"{local}@{domain}"
+
+
+def _parse_mailbox(toks, i):
+    """name-addr / addr-spec at ``toks[i]``: (next index, addr) or None."""
+    n = len(toks)
+    j = i
+    while j < n and toks[j][0] in ("atom", "quoted", "."):
+        j += 1
+    if j < n and toks[j][0] == "<":                # [phrase] < [route] addr-spec >
+        k = j + 1
+        if k < n and toks[k][0] == "@":            # obs-route: @a,@b:
+            while k < n and toks[k][0] != ":":
+                k += 1
+            k += 1
+        at = next((x for x in range(k, n) if toks[x][0] in ("@", ">")), None)
+        if at is None or toks[at][0] != "@":
+            return None
+        spec = _addr_spec_at(toks, at)
+        if spec is None or spec[0] != k or spec[1] >= n or toks[spec[1]][0] != ">":
+            return None
+        return spec[1] + 1, spec[2]
+    at = next((x for x in range(i, n) if toks[x][0] not in ("atom", "quoted", ".")), None)
+    if at is None or toks[at][0] != "@":
+        return None
+    spec = _addr_spec_at(toks, at)
+    if spec is None or spec[0] != i:
+        return None
+    return spec[1], spec[2]
+
+
+def _parse_address_list(toks):
+    """RFC 5322 address-list (groups, obs empty elements): the addr-specs, or None
+    when the tokens are not one."""
+    out, i, n = [], 0, len(toks)
+    while i < n:
+        if toks[i][0] in (",", ";"):
+            i += 1
+            continue
+        j = i
+        while j < n and toks[j][0] in ("atom", "quoted", "."):
+            j += 1
+        if j < n and toks[j][0] == ":" and j > i:      # group: phrase : [list] ;
+            i = j + 1
+            continue
+        got = _parse_mailbox(toks, i)
+        if got is None:
+            return None
+        i, addr = got
+        out.append(addr)
+        if i < n and toks[i][0] not in (",", ";"):
+            return None
+    return out
+
+
+_HEADER_LINE_RE = re.compile(r"^[!-9;-~]{1,76}:[ \t]*(.*)$", re.M)
+_ANGLE_RE = re.compile(r"<[^<>]{0,512}@[^<>]{0,512}>")
+
+
+def _part_is_a_mailbox(toks) -> bool:
+    got = _parse_mailbox(toks, 0) if toks else None
+    return got is not None and got[0] == len(toks)
+
+
+def _shaped_5322(value: str) -> bool:
+    """Some `,`/`;` part of the value is exactly one mailbox, comments aside."""
+    toks = _tokens5322(value, tolerant=True) or []
+    part: list = []
+    for tok in toks + [(",", ",")]:
+        if tok[0] in (",", ";"):
+            if _part_is_a_mailbox(part):
+                return True
+            part = []
+        elif tok[0] == ":" and part and all(k in ("atom", "quoted", ".") for k, _ in part):
+            part = []                            # a group's name
+        else:
+            part.append(tok)
+    return False
+
+
+def _rfc5322_addresses(value: str) -> Tuple[List[str], bool]:
+    """(addr-specs, whether the value IS an address list). A value that is one
+    reads every address in it. One that is not still reads every angle address
+    in it, every addr-spec when a part of it is a mailbox or there is no
+    whitespace in it at all, and the address list of each header line (what
+    the email parsers read, the legacy one included)."""
+    toks = _tokens5322(value)
+    if toks is not None:
+        whole = _parse_address_list(toks)
+        if whole:
+            return whole, True
+    found: List[str] = []
+    loose = _tokens5322(value, tolerant=True) or []
+    if _shaped_5322(value) or not any(c.isspace() for c in value.strip()):
+        for k, tok in enumerate(loose):
+            if tok[0] == "@":
+                spec = _addr_spec_at(loose, k)
+                if spec is not None:
+                    found.append(spec[2])
+    for m in _ANGLE_RE.finditer(value):
+        t2 = _tokens5322(m.group(0)[1:-1])
+        for k, tok in enumerate(t2 or ()):
+            if tok[0] == "@":
+                spec = _addr_spec_at(t2, k)
+                if spec is not None and spec[1] == len(t2):
+                    found.append(spec[2])
+    if "\n" in value:
+        for m in _HEADER_LINE_RE.finditer(value):
+            t3 = _tokens5322(m.group(1))
+            for addr in (_parse_address_list(t3) or ()) if t3 is not None else ():
+                found.append(addr)
+    return found, False
+
+
+def _rfc5322_authorities(value: str) -> Tuple[List[Authority], bool]:
+    addrs, whole = _rfc5322_addresses(value)
+    out: List[Authority] = []
+    ok = 0
+    for addr in addrs:
+        got = False
+        for form in _addr_forms(addr.rstrip(".")):
+            a = mailbox_authority(form)
+            if a is not None:
+                got = True
+                if a not in out:
+                    out.append(a)
+        ok += got
+    return out, whole and ok == len(addrs)
+
+
+_DOT_ATOM_RE = re.compile(r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~\-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~\-]+)*")
+
+
+def _addr_forms(addr: str) -> List[str]:
+    """``addr`` as written and, for a quoted local part that is a dot-atom inside
+    its quotes, unquoted, as email.headerregistry writes it."""
+    local, _, domain = addr.rpartition("@")
+    if local.startswith('"') and local.endswith('"') and _DOT_ATOM_RE.fullmatch(local[1:-1]):
+        return [addr, f"{local[1:-1]}@{domain}"]
+    return [addr]
 
 
 def mailbox_list(value: str):
@@ -670,6 +1028,12 @@ def mailbox_list(value: str):
                 out.append(b)
         else:
             out.append(a)
+    # What an RFC 5322 reader takes from the value (comments, groups, quoted
+    # local parts, address literals, obs-route, every angle address).
+    more, whole = _rfc5322_authorities(value)
+    out.extend(a for a in more if a not in out)
+    if whole and out:
+        return out
     if failed or not out:
         return ParseFailure(out)
     return out
@@ -693,6 +1057,31 @@ def phone_authority(text: str) -> Optional[Authority]:
 
 # ── the public normaliser ───────────────────────────────────────────────────
 def classify_value(value: str, *, arg_mode: bool):
+    """``_classify``, plus the host urllib3 reads in `X://` when X is no scheme
+    urllib3 accepts: one more reading, so the call is authorized only if it
+    is authorized too."""
+    res = _classify(value, arg_mode=arg_mode)
+    m = _SCHEME_AS_HOST_RE.match(value.strip(_C0_OR_SPACE).strip().translate(_TAB_NEWLINE))
+    if m and not _URLLIB3_SCHEME_RE.fullmatch(m.group(1)):
+        a = _host_authority(m.group(1), arg_fallback=arg_mode)
+        if a is not None:
+            res = _with_reading(res, a)
+    return res
+
+
+def _with_reading(res, a: Authority):
+    if res is None:
+        return a
+    if isinstance(res, Authority):
+        return res if res == a else [res, a]
+    if isinstance(res, list):
+        return res if a in res else [*res, a]
+    if isinstance(res, ParseFailure):
+        return res if a in res.parsed else ParseFailure((*res.parsed, a))
+    return res
+
+
+def _classify(value: str, *, arg_mode: bool):
     """The whole-value classifier behind ``authority_of`` and the argument walk.
 
     Returns NOT_A_DESTINATION (None), a ParseFailure (whose ``parsed`` may hold
@@ -720,6 +1109,9 @@ def classify_value(value: str, *, arg_mode: bool):
     m = _SPECIAL_RE.match(url)
     if m:
         url = m.group(1) + "://" + url[m.end():]
+    if url.startswith("//") and not url.startswith("///"):
+        # A scheme-relative reference: urllib3 sends `//host/x` to host.
+        return url_authority("http:" + url, arg_mode=arg_mode, written="http:" + written)
     if _SCHEME_RE.match(url):
         # WHATWG and urlsplit both remove every tab and newline from a URL; other
         # whitespace counts only where it lands. In a host it is no host (that
@@ -821,7 +1213,7 @@ def _mid_word(text: str, i: int) -> bool:
     if i == 0:
         return False
     ch = text[i - 1]
-    return ch.isalpha() and ord(ch) < 0x0E00
+    return ch.isalpha() and ord(ch) < 0x0E00 and _known(ch)
 
 
 def prose_candidates(text: str, counter: Optional[List[int]] = None) -> List[Tuple[int, Authority]]:
@@ -839,11 +1231,15 @@ def prose_candidates(text: str, counter: Optional[List[int]] = None) -> List[Tup
             counter[0] += 1
         cand = m.group(0).rstrip(_TRAILING)
         taken.append((m.start(), m.end()))
-        a = classify_value(cand, arg_mode=False)
+        # Read as an argument value is: every reading of the split (Q1), and S-4's
+        # fallback key for a host UTS-46 refuses, which a client still sends to.
+        a = classify_value(cand, arg_mode=True)
         if isinstance(a, Authority):
             out.append((m.start(), a))
-        elif isinstance(a, list):                # Q1: every reading of the split
+        elif isinstance(a, list):
             out.extend((m.start(), x) for x in a)
+        elif isinstance(a, ParseFailure):
+            out.extend((m.start(), x) for x in a.parsed)
     text = _blank(text, taken)
     taken = []
     for m in _P_EMAIL_RE.finditer(text):
@@ -870,6 +1266,7 @@ def prose_candidates(text: str, counter: Optional[List[int]] = None) -> List[Tup
         a = _host_authority(host, arg_fallback=False)
         if a is not None:
             out.append((m.start(), a))
+            out.extend((m.start(), b) for b in _case_readings(host) if b != a)
     for m in _P_PHONE_RE.finditer(text):
         if counter is not None:
             counter[0] += 1

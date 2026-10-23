@@ -280,12 +280,30 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
           PYTHONDONTWRITEBYTECODE: "1"
-        run: .venv-diff/bin/python scripts/published_differential.py --show 200
+        run: .venv-diff/bin/python scripts/published_differential.py --show 200 --core-out core.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-${{ matrix.os }}-py${{ matrix.python }}
+          path: core.json
       - name: The vendored vectors reproduce from their pinned sources
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.14'
         run: |
           .venv-diff/bin/python scripts/published_vectors.py fetch "$RUNNER_TEMP/vectors-src"
           .venv-diff/bin/python scripts/published_vectors.py verify "$RUNNER_TEMP/vectors-src"
+
+  # The core reads every vector the same in every cell above (V-4): its keys may
+  # not follow the interpreter's Unicode version or the OS.
+  published-agreement:
+    name: published differential, the same reading in every cell
+    needs: published-differential
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: core-*
+          path: cores
+      - run: python3 scripts/published_agreement.py cores/*/core.json
 
   # ── The corpus report, printed into the log ────────────────────────────────
   # A reviewer reading a rule PR should see what the rule did to the corpus

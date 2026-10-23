@@ -6,8 +6,7 @@ same destinations. Past a bound the value is still read whole when it is short
 enough, and every value that is not wholly one destination is also scanned for
 destination atoms, so padding in front of a value, beside it or around it never
 changes what it names. The atoms of a value examined whole are OBSERVED: recorded
-on the verdict, never deciding the wire, the verdict or an action (L5 F4, record
-only); past a bound they decide, as before. And an ``@`` that is not an address
+on the verdict, never deciding the wire, the verdict or an action (record only); past a bound they decide, as before. And an ``@`` that is not an address
 (``ping me @ 5pm``) is not an address list: the value is read like any other.
 """
 from __future__ import annotations

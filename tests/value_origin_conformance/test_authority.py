@@ -71,6 +71,8 @@ def A(key):
     ("+44 20 7123 4567", "tel:+442071234567"),
     ("+44 (0)20 7123 4567", "tel:+442071234567"),
     ("+1 (415) 555-0142", "tel:+14155550142"),
+    # a single-label domain is a domain a resolver reads
+    ("a@b", "mailto:a@b"),
 ])
 def test_authority_of_accepts(value, key):
     assert authority_of(value) == A(key)
@@ -79,7 +81,7 @@ def test_authority_of_accepts(value, key):
 @pytest.mark.parametrize("value", [
     "notes.md", "evil.test", "1.2.3", "4417", "report.v2/summary", "Bob Reeves",
     "file:///etc/passwd", "data:text/plain,hi", "mailto:", "+123", "+1234567890123456",
-    "jürgen@corp.example", "a@b", "a@x.example, b@y.example", "", "   ",
+    "jürgen@corp.example", "a@x.example, b@y.example", "", "   ",
     "https://" + "a" * 4_100 + ".example/",
 ])
 def test_authority_of_rejects(value):
@@ -255,6 +257,10 @@ def test_v19_every_spelling_resolves_to_the_host_urllib_parse_finds():
         whole, walk = _core(spelling)
         compared += 1
         keys.add(want)
+        # A spelling that is no URL may still be a mailbox email.utils reads
+        # (`gopher:` is a group's name to it, D): that reading is the address.
+        if want is None and whole and whole.startswith("mailto:") and _mailbox_read(spelling, whole):
+            whole, walk = None, [k for k in walk if k != whole]
         if whole != want or walk != ([want] if want else []):
             bad.append(f"{spelling!r}: urllib.parse finds {want}, authority_of gave "
                        f"{whole}, the walk gave {walk}")

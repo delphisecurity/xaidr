@@ -279,7 +279,7 @@ def extract_with_observed(arguments: Mapping[str, object] | None
     """``extract_destinations`` plus the OBSERVED findings: the destination atoms
     in a value the walk examined whole that is not wholly one destination (prose,
     a command line, a mailbox part that does not parse). They are recorded and
-    never decide the wire (L5 F4, record only). Past a bound the atoms decide, as
+    never decide the wire (record only). Past a bound the atoms decide, as
     the value's whole reading does there, so a value names the same destinations
     wherever it sits."""
     try:
@@ -300,7 +300,7 @@ def extract_with_observed(arguments: Mapping[str, object] | None
             # Owner, 2026-10-05: what the bound kept from examination is still
             # searched for destination ATOMS, so a padded destination is found;
             # and a value there short enough to read whole is read whole, so it
-            # names what it names as a leaf of its own (L5 F4).
+            # names what it names as a leaf of its own.
             strings, faulted, exhausted = _all_strings(skipped, budget=budget)
             for path, s in strings:
                 # Read whole only what fits once stripped; only that read is charged

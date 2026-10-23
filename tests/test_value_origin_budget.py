@@ -84,7 +84,7 @@ def test_known_artefact_the_4000_char_cliff():
     """KNOWN ARTEFACT (owner, 2026-10-06; re-checked after the budget change, which
     does not touch it). C-8: a leaf decides the wire only if its WHOLE value is
     one, so a 3,999-char body quoting an untrusted URL decides no_destination and
-    OBSERVES the URL (L5 F4, record only); over 4,000 chars the same URL is found
+    OBSERVES the URL (record only); over 4,000 chars the same URL is found
     as an atom and decides. Pinned so a change is seen."""
     def body(n):
         head = "See " + EVIL + " for details. "

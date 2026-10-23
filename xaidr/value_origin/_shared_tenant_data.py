@@ -8,7 +8,7 @@ apex's owner control (``docs.google.com`` and ``script.google.com``,
 ``acme.slack.com`` and ``hooks.slack.com``), and the Public Suffix List does not
 split them into separate registrable domains. A host under one of them is keyed
 by the whole host, and a host the principal names authorizes that host and its
-subdomains only (L5 F5).
+subdomains only.
 
 Apexes the PSL already splits need no entry here: every ``<user>.github.io``,
 ``<bucket>.s3.amazonaws.com``, ``storage.googleapis.com``,
