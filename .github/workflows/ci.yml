@@ -285,11 +285,11 @@ jobs:
         with:
           name: core-${{ matrix.os }}-py${{ matrix.python }}
           path: core.json
-      - name: The vendored vectors reproduce from their pinned sources
+      - name: The vendored files are their upstream bytes
+        run: .venv-diff/bin/python scripts/published_vectors.py verify
+      - name: The vendored files are what their upstream URLs serve
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.14'
-        run: |
-          .venv-diff/bin/python scripts/published_vectors.py fetch "$RUNNER_TEMP/vectors-src"
-          .venv-diff/bin/python scripts/published_vectors.py verify "$RUNNER_TEMP/vectors-src"
+        run: .venv-diff/bin/python scripts/published_vectors.py fetch "$RUNNER_TEMP/vectors-src"
 
   # The core reads every vector the same in every cell above (V-4): its keys may
   # not follow the interpreter's Unicode version or the OS.

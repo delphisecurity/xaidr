@@ -5,17 +5,18 @@ argument: the whole-value reading (every reading of the authority split, the S-4
 fallback key, mailbox lists, the scheme-less forms) and the atoms. Otherwise a
 destination a result named could only ever read ``unresolved`` when a later
 call sends to it. Checked over every vendored published vector
-(``tests/published_vectors/vectors.jsonl``).
+(``tests/published_vectors/``, extracted by ``scripts/published_vectors.py``).
 """
 from __future__ import annotations
 
-import json
+import sys
 from pathlib import Path
 
 from xaidr.value_origin._extract import extract_with_observed
 from xaidr.value_origin._ledger import result_authorities
 
-VECTORS = Path(__file__).resolve().parent / "published_vectors" / "vectors.jsonl"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import published_vectors  # noqa: E402
 
 
 def _arg_keys(v):
@@ -24,7 +25,7 @@ def _arg_keys(v):
 
 
 def test_result_keys_contain_argument_keys_over_every_published_vector():
-    values = sorted({json.loads(line)["v"] for line in VECTORS.open(encoding="utf-8")})
+    values = sorted({r["v"] for r in published_vectors.load()})
     assert len(values) > 15_000
     unrecorded = []
     for v in values:

@@ -1,36 +1,35 @@
 """The published test vectors the value-origin differential reads.
 
-    python scripts/published_vectors.py fetch DIR     download every source into DIR
-                                                     and check it against its sha256
-    python scripts/published_vectors.py extract DIR   write the vendored vector files
-                                                     from the sources in DIR
-    python scripts/published_vectors.py verify DIR    extract again and compare with
-                                                     the vendored files, byte for byte
+    python scripts/published_vectors.py verify        every vendored file matches its sha256
+    python scripts/published_vectors.py fetch DIR     download every file into DIR, and check
+                                                     it against its sha256 and its vendored copy
+    python scripts/published_vectors.py count         the vectors each source yields
 
-``tests/published_vectors/SOURCES.json`` names each source: where it comes from
-(a tag or commit, never a branch), the sha256 of the file, its licence and the
-licence file vendored beside the vectors. The vectors are extracted, never
-hand-written:
+``tests/published_vectors/MANIFEST.json`` lists each file copied byte for byte from
+an upstream project (the test files under ``upstream/`` and their licences under
+``LICENSES/``): its URL, its version (a tag, a commit or a release) and its sha256.
+The vectors are extracted from those files when a test or the differential runs
+(``load()``), never stored:
 
 * CPython's ``test_urlparse.py`` and email tests: every string literal with a
-  ``:``, ``@``, ``/`` or ``.`` in it (an AST walk; run ``extract`` on the newest
-  interpreter, which parses every version's file).
+  ``:``, ``@``, ``/`` or ``.`` in it (an AST walk, which every supported
+  interpreter reads alike).
 * curl's ``lib1560.c`` and Go's ``url_test.go`` and ``message_test.go``: every
   string literal, and the host or address each test table expects.
 * IdnaTestV2 (the UTS-46 version the core pins, and the newest): every source
   framed as ``http://<source>/`` and ``user@<source>``, with toAsciiN as the
   expected host when its status carries no error under the core's flags. The
-  pinned version's rows are also written on their own (``idna-<version>.jsonl``)
-  for the conformance test.
+  pinned version's rows are ``idna_rows()``, for the conformance test.
 * WPT's ``urltestdata.json`` (each input, with the hostname when it parses with
   no base and a special scheme fetch sends to) and ``toascii.json`` (each input
   as ``https://<input>/x``).
 
-``extract`` and ``verify`` read only DIR; only ``fetch`` touches the network.
+Only ``fetch`` touches the network.
 """
 from __future__ import annotations
 
 import ast
+import functools
 import hashlib
 import json
 import re
@@ -39,8 +38,8 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "tests" / "published_vectors"
-SOURCES = OUT / "SOURCES.json"
+HERE = ROOT / "tests" / "published_vectors"
+MANIFEST = HERE / "MANIFEST.json"
 MAX_CHARS = 4000
 
 #: The core's UTS-46 flags (docs/value-origin-rulings.md, S-4): an IdnaTestV2
@@ -52,25 +51,31 @@ def _sha(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
 
-def _sources() -> list:
-    return json.loads(SOURCES.read_text(encoding="utf-8"))["sources"]
+def manifest() -> dict:
+    return json.loads(MANIFEST.read_text(encoding="utf-8"))
+
+
+def verify() -> list:
+    """Each manifest file whose vendored bytes do not match its sha256."""
+    bad = []
+    for f in manifest()["files"]:
+        path = HERE / f["path"]
+        if not path.is_file() or _sha(path.read_bytes()) != f["sha256"]:
+            bad.append(f["path"])
+    return bad
 
 
 def fetch(directory: Path) -> int:
     directory.mkdir(parents=True, exist_ok=True)
     bad = 0
-    for s in _sources():
-        for f in [s] + s.get("licence_sources", []):
-            req = urllib.request.Request(f["url"], headers={"User-Agent": "xaidr-vectors"})
-            with urllib.request.urlopen(req, timeout=60) as r:
-                body = r.read()
-            got = _sha(body)
-            (directory / f["file"]).write_bytes(body)
-            if got != f["sha256"]:
-                bad += 1
-                print(f"MISMATCH {f['file']}: {got} != {f['sha256']}")
-            else:
-                print(f"ok {f['file']}")
+    for f in manifest()["files"]:
+        req = urllib.request.Request(f["url"], headers={"User-Agent": "xaidr-vectors"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            body = r.read()
+        (directory / Path(f["path"]).name).write_bytes(body)
+        same = _sha(body) == f["sha256"] and body == (HERE / f["path"]).read_bytes()
+        bad += not same
+        print(f"{'ok' if same else 'MISMATCH'} {f['path']}  {f['url']}")
     return 1 if bad else 0
 
 
@@ -252,21 +257,25 @@ def _idna_ok(row) -> bool:
 
 
 # ── extraction ───────────────────────────────────────────────────────────────
-def extract(directory: Path) -> dict:
-    """{vendored file name: bytes}."""
+def _read(src) -> bytes:
+    path = HERE / src["file"]
+    raw = path.read_bytes()
+    want = next(f["sha256"] for f in manifest()["files"] if f["path"] == src["file"])
+    if _sha(raw) != want:
+        raise SystemExit(f"{src['file']}: sha256 {_sha(raw)} is not the manifest's {want}")
+    return raw
+
+
+@functools.lru_cache(maxsize=None)
+def _load() -> tuple:
     vectors: dict = {}
 
-    def add(src, v, expect=()):
-        if not isinstance(v, str) or not v or len(v) > MAX_CHARS:
-            return
-        key = (src, v)
-        vectors.setdefault(key, set()).update(expect)
+    def add(sid, v, expect=()):
+        if isinstance(v, str) and v and len(v) <= MAX_CHARS:
+            vectors.setdefault((sid, v), set()).update(expect)
 
-    files = {}
-    for s in _sources():
-        raw = (directory / s["file"]).read_bytes()
-        if _sha(raw) != s["sha256"]:
-            raise SystemExit(f"{s['file']}: sha256 {_sha(raw)} is not {s['sha256']}")
+    for s in manifest()["sources"]:
+        raw = _read(s)
         kind, sid = s["kind"], s["id"]
         if kind == "cpython":
             for v in python_literals(raw.decode("utf-8")):
@@ -283,15 +292,12 @@ def extract(directory: Path) -> dict:
                 if _keep(v):
                     add(sid, v, exp.get(v, ()))
         elif kind == "idna":
-            rows = idna_rows(raw.decode("utf-8"))
-            for r in rows:
+            for r in idna_rows_of(raw):
                 ok = _idna_ok(r)
                 add(sid + ":url", f"http://{r['source']}/",
                     ["host:" + r["to_ascii_n"]] if ok else [])
                 add(sid + ":mail", f"user@{r['source']}",
                     ["mail:user@" + r["to_ascii_n"]] if ok else [])
-            if s.get("pinned"):
-                files[f"idna-{s['version']}.jsonl"] = _jsonl(rows)
         elif kind == "wpt-url":
             for e in json.loads(raw):
                 if not isinstance(e, dict) or not isinstance(e.get("input"), str):
@@ -308,47 +314,46 @@ def extract(directory: Path) -> dict:
                         ["host:" + e["output"]] if isinstance(e.get("output"), str) else [])
         else:
             raise SystemExit(f"unknown kind {kind}")
-    files["vectors.jsonl"] = _jsonl({"src": src, "v": v, "expect": sorted(exp)}
-                                    for (src, v), exp in sorted(vectors.items()))
-    return files
+    return tuple({"src": src, "v": v, "expect": sorted(exp)}
+                 for (src, v), exp in sorted(vectors.items()))
 
 
-def _jsonl(rows) -> bytes:
-    """UTF-8 JSON lines; a lone surrogate (an escape in a source no UTF-8 can
-    hold) is written as its JSON ``\\u`` escape, so every line reads back as written."""
-    return "".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n"
-                   for r in rows).encode("utf-8", "backslashreplace")
+def load() -> list:
+    """Every vector, as {"src", "v", "expect"}, in a fixed order."""
+    return list(_load())
+
+
+def idna_rows_of(raw: bytes) -> list:
+    return idna_rows(raw.decode("utf-8"))
+
+
+def pinned_idna_rows() -> list:
+    """The rows of the IdnaTestV2 of the Unicode version the core pins."""
+    s = next(s for s in manifest()["sources"] if s["kind"] == "idna" and s.get("pinned"))
+    return idna_rows_of(_read(s))
 
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if len(argv) != 2 or argv[0] not in ("fetch", "extract", "verify"):
-        print(__doc__)
-        return 2
-    cmd, directory = argv[0], Path(argv[1])
-    if cmd == "fetch":
-        return fetch(directory)
-    files = extract(directory)
-    manifest = json.loads(SOURCES.read_text(encoding="utf-8"))
-    if cmd == "extract":
-        for name, body in files.items():
-            (OUT / name).write_bytes(body)
-        manifest["extracted"] = {name: {"sha256": _sha(body), "lines": body.count(b"\n")}
-                                 for name, body in sorted(files.items())}
-        SOURCES.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
-                           encoding="utf-8")
-        for name, body in sorted(files.items()):
-            n = body.count(b"\n")
-            print(f"wrote {name}: {n} lines, sha256 {_sha(body)}")
+    if argv[:1] == ["verify"] and len(argv) == 1:
+        bad = verify()
+        for b in bad:
+            print(f"DIFFERS from the manifest: {b}")
+        print(f"{len(manifest()['files']) - len(bad)} of {len(manifest()['files'])} vendored "
+              "files match their sha256")
+        return 1 if bad else 0
+    if argv[:1] == ["fetch"] and len(argv) == 2:
+        return fetch(Path(argv[1]))
+    if argv[:1] == ["count"] and len(argv) == 1:
+        import collections
+        rows = load()
+        for src, n in sorted(collections.Counter(r["src"] for r in rows).items()):
+            print(f"{src:48} {n}")
+        digest = _sha(json.dumps(rows, sort_keys=True).encode("utf-8", "surrogatepass"))
+        print(f"total {len(rows)}  sha256 {digest}")
         return 0
-    bad = 0
-    for name, body in sorted(files.items()):
-        have = (OUT / name).read_bytes()
-        want = manifest["extracted"][name]["sha256"]
-        same = have == body and _sha(have) == want
-        bad += not same
-        print(f"{'ok' if same else 'DIFFERS'} {name}")
-    return 1 if bad else 0
+    print(__doc__)
+    return 2
 
 
 if __name__ == "__main__":

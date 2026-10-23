@@ -2,8 +2,8 @@
 
 The core's ToASCII (``xaidr.value_origin._idna``) is UTS-46 nontransitional on
 the vendored Unicode 13.0 data. IdnaTestV2 13.0.0 is vendored in
-``tests/published_vectors/idna-13.0.0.jsonl`` (extracted by
-``scripts/published_vectors.py``; its source and sha256 are in SOURCES.json).
+``tests/published_vectors/upstream/`` byte for byte (its URL and sha256 are in
+MANIFEST.json) and read by ``scripts/published_vectors.py``.
 That file is computed with UseSTD3ASCIIRules, CheckHyphens, CheckBidi,
 CheckJoiners and VerifyDnsLength all on (13.0 reports a STD3 failure as P1 or
 V6; U1 arrived in 15.1), so it is checked with ``strict=True``, which turns on
@@ -14,17 +14,18 @@ flags.
 """
 from __future__ import annotations
 
-import json
+import sys
 from pathlib import Path
 
 from xaidr.value_origin import _idna_data
 from xaidr.value_origin._idna import to_ascii
 
-ROWS = Path(__file__).resolve().parents[1] / "published_vectors" / "idna-13.0.0.jsonl"
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+import published_vectors  # noqa: E402
 
 
 def _rows():
-    return [json.loads(line) for line in ROWS.open(encoding="utf-8")]
+    return published_vectors.pinned_idna_rows()
 
 
 def test_the_pinned_version_is_the_vendored_tables():

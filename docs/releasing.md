@@ -206,6 +206,21 @@ line and the kind, never the text (`tests/test_release_shipped_text.py`).
   tree so it describes the fix and not the trigger, then rebuild from step 3.
   Never delete text from the built artifact.
 
+The same list is checked against what a push publishes, before every push:
+
+```
+python scripts/disclosure_scan.py --phrases "$XAIDR_TRIGGERS" \
+    --base origin/$BRANCH --public origin/main
+```
+
+It reads every outgoing commit message (less its trailers) and every added line
+not already on a `--public` ref, and exits as step 3a does: 0 clean, 1 a hit, 2
+a scan that cannot run. A file under `tests/published_vectors/` is skipped only
+while its bytes match its entry in that folder's `MANIFEST.json` (its upstream
+URL, version and sha256): it is a published suite or its licence, copied byte for
+byte, and not ours to reword. A changed byte, a file of ours in that folder, and
+every commit message are scanned (`tests/test_disclosure_scan.py`).
+
 ### 4. Prove detection did not move, and name every change that did
 
 The claim to make is **byte-identical, with every intended change named**, and

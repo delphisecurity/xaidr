@@ -4,7 +4,8 @@ reading principle).
 
     python scripts/published_differential.py [--json OUT] [--limit N]
 
-For each vector in ``tests/published_vectors/vectors.jsonl`` it collects what
+For each vector of the published suites vendored in ``tests/published_vectors/``
+(extracted by ``scripts/published_vectors.py``) it collects what
 each client would send to, with that client's own send path and no network:
 
     httpx            Client.build_request(...).url.raw_host (http/https/ws/wss only)
@@ -46,7 +47,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
-VECTORS = ROOT / "tests" / "published_vectors" / "vectors.jsonl"
+sys.path.insert(0, str(ROOT / "scripts"))
+import published_vectors  # noqa: E402
 
 warnings.simplefilter("ignore")
 
@@ -481,7 +483,7 @@ def classify(v, client, key, core):
 def run(limit=None):
     _require()
     clients = Clients()
-    rows = [json.loads(line) for line in VECTORS.open(encoding="utf-8")]
+    rows = published_vectors.load()
     if limit:
         rows = rows[:limit]
     under = collections.Counter()
@@ -525,7 +527,7 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     res = run(a.limit)
     if a.core_out:
-        values = sorted({json.loads(line)["v"] for line in VECTORS.open(encoding="utf-8")})
+        values = sorted({r["v"] for r in published_vectors.load()})
         Path(a.core_out).write_text(json.dumps(
             {v: sorted(core_keys(v)) for v in values}, sort_keys=True))
     print(f"python {sys.version.split()[0]} {sys.platform}: {res['vectors']} vectors")
