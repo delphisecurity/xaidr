@@ -61,7 +61,7 @@ def _scan(repo, phrases):
     return r.returncode, r.stdout
 
 
-UPSTREAM = b"Permission to use; see the " + PHRASE.encode() + b" note.\n"
+UPSTREAM = b"Licence granted; see the " + PHRASE.encode() + b" note.\n"
 
 
 def test_a_vendored_file_matching_its_manifest_entry_is_not_scanned(tmp_path):
@@ -73,7 +73,7 @@ def test_a_vendored_file_matching_its_manifest_entry_is_not_scanned(tmp_path):
 
 
 def test_a_vendored_file_with_one_byte_changed_is_scanned(tmp_path):
-    changed = UPSTREAM.replace(b"Permission", b"Permissiom")
+    changed = UPSTREAM.replace(b"granted", b"grantee")
     repo, phrases = _repo(
         tmp_path, {"tests/published_vectors/upstream/suite.txt": changed},
         manifest_bytes={"upstream/suite.txt": UPSTREAM})
