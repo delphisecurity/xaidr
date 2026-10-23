@@ -48,7 +48,12 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
+# Which xaidr answers is announced before anything else (scripts/_provenance.py):
+# the working tree by default, the installed wheel under XAIDR_FROM_INSTALL=1.
+from _provenance import bind  # noqa: E402
 import published_vectors  # noqa: E402
+
+PROV = bind(__file__)
 
 warnings.simplefilter("ignore")
 
@@ -303,10 +308,11 @@ def _alternatives(raw):
         out.add(idna.encode(raw).decode("ascii"))
     except Exception:
         pass
-    try:
-        out.add(raw.encode("idna").decode("ascii"))
-    except (UnicodeError, ValueError):
-        pass
+    for form in (raw, raw.lower()):            # urllib.parse lowercases, then the socket encodes
+        try:
+            out.add(form.encode("idna").decode("ascii"))
+        except (UnicodeError, ValueError):
+            pass
     try:
         out.add(idna.encode(raw, uts46=True, transitional=True).decode("ascii"))
     except Exception:

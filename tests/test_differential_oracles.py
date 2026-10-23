@@ -182,7 +182,10 @@ _OVER_READ_CLASSES = {
 def _email_utils_reads(url, key):
     """The mailbox is written in the value verbatim (junk around it does not hide
     it), or email.utils reads a mailbox at the same DOMAIN (the destination of a
-    mailbox; junk in a local part does not move it)."""
+    mailbox; junk in a local part does not move it), strictly or as the legacy
+    parser (``strict=False``) reads it: the core reads both, and which one is the
+    default depends on the interpreter's patch release."""
+    import inspect
     from email.utils import getaddresses
     box = key[len("mailto:"):]
     local, _, dom = box.rpartition("@")
@@ -193,7 +196,10 @@ def _email_utils_reads(url, key):
     if box in url.lower() or f"{local}@{ulabel}" in url.lower():
         return True
     domain = key[len("mailto:"):].rpartition("@")[2]
-    for _, addr in getaddresses([url]):
+    pairs = list(getaddresses([url]))
+    if "strict" in inspect.signature(getaddresses).parameters:
+        pairs += getaddresses([url], strict=False)
+    for _, addr in pairs:
         d = addr.rpartition("@")[2].rstrip(".").lower()
         try:
             d = d.encode("idna").decode("ascii") if not d.isascii() else d
