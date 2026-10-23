@@ -326,8 +326,9 @@ _TAB_NEWLINE = str.maketrans("", "", "\t\n\r")
 _C0_OR_SPACE = "".join(map(chr, range(0x21)))
 # Q1: where an RFC 3986 authority ends (urlsplit's netloc delimiters).
 _AUTHORITY_END_RE = re.compile(r"[/?#]")
-# urlsplit's IPvFuture literal (`_check_bracketed_host`).
-_IPVFUTURE_RE = re.compile(r"v[a-fA-F0-9]{1,32}\..{1,64}")
+# urlsplit's IPvFuture literal (`_check_bracketed_host`), its `v` either case:
+# RFC 3986's ABNF is case-insensitive, and urllib.parse on 3.14.9 reads `[V6a.ip]`.
+_IPVFUTURE_RE = re.compile(r"[vV][a-fA-F0-9]{1,32}\..{1,64}")
 
 # Sentinels for the argument walk's three-way answer.
 NOT_A_DESTINATION = None
@@ -383,7 +384,7 @@ def _urlsplit_3_12_2_refuses(netloc: str) -> bool:
         return True
     if "[" in netloc:
         first = netloc.partition("[")[2].partition("]")[0]
-        if first.startswith("v"):
+        if first[:1] in ("v", "V"):
             if not _IPVFUTURE_RE.fullmatch(first):
                 return True
         else:

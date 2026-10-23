@@ -88,6 +88,13 @@ def test_url_readings_the_clients_make(v, want):
     assert [k for k in _keys(v)] == want
 
 
+def test_an_upper_case_ipvfuture_literal_is_read_on_every_interpreter():
+    """RFC 3986's ABNF is case-insensitive, so `V6a.ip` is an IPvFuture literal:
+    urllib.parse on 3.14.9 reads its host, and the core reads it on every
+    interpreter (CPython's test_urlparse)."""
+    assert "dns:v6a.ip" in _keys("scheme://user@[V6a.ip]:1234/path?query")
+
+
 def test_a_single_label_scheme_less_host_stays_unread():
     assert _keys("g?y") == []
     assert _keys("localhost/x") == []
