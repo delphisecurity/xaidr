@@ -27,6 +27,7 @@ from urllib.parse import unquote_to_bytes, urlsplit
 
 from ._idna import to_ascii
 from ._psl_data import ICANN_RULES, PRIVATE_RULES
+from ._shared_tenant_data import SHARED_TENANT_APEXES
 from ._types import MAX_LEAF_CHARS, Authority
 
 # ── the PSL, compiled once ──────────────────────────────────────────────────
@@ -63,6 +64,29 @@ def registrable_domain(host: str) -> str:
     if ps >= len(labels):
         return host
     return ".".join(labels[-(ps + 1):])
+
+
+def dns_key(ascii_host: str) -> str:
+    """The key of an A-label host: its registrable domain, or the whole host under
+    a shared-tenant apex (``_shared_tenant_data``), whose hosts are not one
+    party's (L5 F5)."""
+    rd = registrable_domain(ascii_host)
+    return ascii_host if rd in SHARED_TENANT_APEXES else rd
+
+
+def key_chain(a: Authority) -> List[Authority]:
+    """The keys a lookup of ``a`` reads, most specific first: ``a`` itself, then,
+    for a host under a shared-tenant apex, each parent up to the apex, so a host
+    the principal named authorizes its subdomains (L5 F5)."""
+    if a.scheme != "dns":
+        return [a]
+    rd = registrable_domain(a.value)
+    if rd not in SHARED_TENANT_APEXES or not a.value.endswith("." + rd):
+        return [a]
+    labels = a.value.split(".")
+    keep = rd.count(".") + 1
+    return [Authority(scheme="dns", value=".".join(labels[i:]))
+            for i in range(len(labels) - keep + 1)]
 
 
 def bare_host_tld_ok(ascii_host: str) -> bool:
@@ -198,7 +222,7 @@ def _host_authority(raw_host: str, *, arg_fallback: bool) -> Optional[Authority]
     ip = coerce_ip(ascii_host)
     if ip is not None:
         return Authority(scheme="ip", value=ip_key(ip))
-    return Authority(scheme="dns", value=registrable_domain(ascii_host))
+    return Authority(scheme="dns", value=dns_key(ascii_host))
 
 
 # ── URLs ─────────────────────────────────────────────────────────────────────

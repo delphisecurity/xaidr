@@ -227,6 +227,17 @@ it:
   sections with the default `*` rule; a host that is itself a public suffix, or
   one label, is kept whole. So `docs.northbank.example` and a principal's
   `northbank.example` are the same destination (`pos-drift-*`).
+- **Under a shared-tenant apex a name is keyed by the whole host** (L5 F5):
+  apexes whose hosts serve other parties' content, endpoints or tenants and that
+  the PSL does not split (`google.com`, `slack.com`, `sharepoint.com`, ...; the
+  vendored list is `xaidr/value_origin/_shared_tenant_data.py`). A host named
+  there authorizes that host and its subdomains, never a sibling: naming
+  `docs.google.com` leaves `script.google.com` to its own origin, and
+  `acme.slack.com` leaves `hooks.slack.com`. A principal entry for any parent up
+  to the apex authorizes; otherwise the most specific entry decides. Apexes the
+  PSL already splits (`github.io`, `s3.amazonaws.com`, `storage.googleapis.com`,
+  `blob.core.windows.net`) need no entry, and the test refuses one.
+  *Pinned by:* `tests/test_value_origin_shared_tenant.py`.
 - **One normaliser**: every literal form (hex, octal, decimal, short dotted,
   IPv4-mapped IPv6), mapped addresses unwrapped before rendering
   (`coerce_ip`, `ip_key`).

@@ -90,7 +90,7 @@ import threading
 from contextvars import ContextVar
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from ._authority import classify_value, prose_candidates
+from ._authority import classify_value, key_chain, prose_candidates
 from ._designations import source_matches
 from ._extract import (AtomBudget, argument_value, budgeted_atoms, key_authority, key_ngram,
                        result_leaves_bounded, span_ngrams)
@@ -557,7 +557,26 @@ class _KeyPlan:
         g = key_ngram(value) if present else None
         a = key_authority(value) if present else None
         self.ngram = _digest_ngram(g) if g is not None else None
-        self.authority = _digest_authority(a) if a is not None else None
+        self.authority = _chain_digests(a) if a is not None else None
+
+
+def _chain_digests(a: Authority) -> List[bytes]:
+    return [_digest_authority(c) for c in key_chain(a)]
+
+
+def _entry(lg: _Ledger, chain: List[bytes]) -> Optional[Entry]:
+    """The entry a lookup reads for one destination, given its key chain (most
+    specific first; one key unless the host is under a shared-tenant apex). A
+    principal entry anywhere on the chain authorizes it -- a host the principal
+    named authorizes its subdomains (L5 F5) -- else the most specific entry
+    decides. Caller holds the lock."""
+    if len(chain) == 1:
+        return lg.entries.get(chain[0])
+    found = [e for e in (lg.entries.get(d) for d in chain) if e is not None]
+    for e in found:
+        if e[0] is Origin.PRINCIPAL:
+            return e
+    return found[0] if found else None
 
 
 def _key_basis(lg: _Ledger, k: _KeyPlan) -> Optional[bool]:
@@ -569,7 +588,7 @@ def _key_basis(lg: _Ledger, k: _KeyPlan) -> Optional[bool]:
     if k.ngram is not None and k.ngram in lg.ngrams:
         bases.append(lg.ngrams[k.ngram])
     if k.authority is not None:
-        e = lg.entries.get(k.authority)
+        e = _entry(lg, k.authority)
         if e is not None and e[0] in (Origin.PRINCIPAL, Origin.TRUSTED_SOURCE):
             bases.append(e[1])
     return None if not bases else any(bases)
@@ -721,7 +740,7 @@ def lookup(lg: _Ledger, auths: List[Authority]
     is saturated, whether a principal input was cut, and whether a tool result
     was cut, and whether one was skipped unread — a read racing a multi-entry
     write sees all or none of it."""
-    digests = [_digest_authority(a) for a in auths]
+    chains = [_chain_digests(a) for a in auths]
     with lg.lock:
-        return ([lg.entries.get(d) for d in digests], lg.saturated, lg.input_truncated,
+        return ([_entry(lg, c) for c in chains], lg.saturated, lg.input_truncated,
                 lg.result_truncated, lg.result_unread, lg.atoms_incomplete, lg.dests_dropped)
