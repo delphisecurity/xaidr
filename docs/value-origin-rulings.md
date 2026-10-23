@@ -85,6 +85,12 @@ reads its authority. The requests are:
   `async with`);
 - each CrewAI kickoff (`Crew.kickoff`, `akickoff`, `kickoff_async`) and each
   Agents SDK run (`Runner.run`, `run_sync`) hooked by `protect()`;
+- each run of an agent LangChain's `create_agent` built under `protect()`
+  (LangGraph's `Pregel.stream` and `astream`, which `invoke` and `ainvoke` run
+  through): its ledger is bound when the run starts, outside every node, so the
+  model turns, the tools node and the replayed history share it with no
+  `xaidr.flow()` around the run, sync and async alike, on every interpreter.
+  *Pinned by:* `tests/test_value_origin_real_runs.py`;
 - each fresh `xaidr.flow()` scope;
 - each `multiprocessing.pool.ThreadPool` task (an `apply`, or one chunk of a
   `map`), for pools created after the first such `Sensor`;
@@ -163,9 +169,12 @@ more than one reading names every one of them. This applies to every rule below.
 - **Every reading of the authority split is a destination** (Q1). The readings:
   WHATWG (a backslash is a slash; urllib3 and ada agree); RFC 3986 as CPython
   3.12.2's `urlsplit(...).hostname` reads it (httpx and urllib.parse agree),
-  written out so it is the same on every interpreter; and, where `urlsplit`
-  refuses the WHATWG string, that string's authority split anyway. Each distinct
-  authority is its own finding. *Pinned by:* `Q1-*`,
+  written out so it is the same on every interpreter; and, where that split
+  refuses the WHATWG string, that string's authority split anyway. A backslash is
+  part of the RFC 3986 host: httpx, urllib.parse and urllib.request hand
+  `docs.example\x.evil.test` to the resolver whole, so it is read whole
+  (`dns:evil.test`), beside WHATWG's `docs.example`. Each distinct authority is
+  its own finding. *Pinned by:* `Q1-*`,
   `test_q1_every_reading_of_the_authority_split_is_a_finding`, and
   `tests/test_differential_oracles.py` (spellings × urllib.parse, httpx, urllib3,
   ada-url; it refuses to run unless every oracle is installed).
@@ -179,8 +188,16 @@ more than one reading names every one of them. This applies to every rule below.
   reading; in a path, query or fragment it is percent-encoded by WHATWG, and the
   host stays readable (`https://evil.test/a b` names `evil.test`). *Pinned by:*
   `test_whitespace_in_a_url_path_leaves_its_host_readable`.
-- **Percent-encoded hosts are decoded before UTS-46**, as WHATWG host parsing
-  does (`https://ev%69l.test/` names `evil.test`; `R36-percent-host`).
+- **A host is read in every spelling a client sends it in.** Decoded before
+  UTS-46, as WHATWG host parsing, urllib.request and (for unreserved escapes)
+  urllib3 and requests read it; and as written, as httpx and urllib.parse send it:
+  `https://ev%69l.test/` names `evil.test` and `ev%69l.test`
+  (`R36-percent-host`). A character httpx or requests percent-encodes in a host
+  is read encoded too (`http://a^b.example/` names `a^b.example` and
+  `a%5eb.example`), urllib3's and requests' spellings for http and https only, the
+  schemes they send. Each spelling keys by its registrable domain, so an escape
+  inside the principal's zone (`files%2Eportal.northbank.example`) stays the
+  principal's. *Pinned by:* `tests/test_value_origin_client_spellings.py`.
 - **UTS-46: nontransitional, Unicode 13.0** (S-4). ß stays ß (`xn--zca`), as
   browsers resolve it. CheckBidi on; CheckJoiners on (CONTEXTJ, RFC 5892 A.1 and
   A.2); STD3 rules, CheckHyphens and VerifyDnsLength off. The mapping table
@@ -200,10 +217,20 @@ more than one reading names every one of them. This applies to every rule below.
   rules, it is one more finding (`http://ΒΌΛΟΣ/` names the σ and the ς names), and
   where no client sends to a name, it is not read. A full stop the table maps to
   `.` (U+3002, U+FF0E, U+FF61) is a dot before keying, so a trailing one keys like
-  a trailing `.`. The reading is the same on every interpreter: every published
-  vector reads alike on 3.10, 3.12.2, the newest 3.12 and 3.14
-  (`scripts/published_agreement.py`). *Pinned by:*
-  `tests/test_value_origin_published_readings.py`.
+  a trailing `.`. *Pinned by:* `tests/test_value_origin_published_readings.py`.
+- **The reading is the same on every interpreter: the findings and the wire, not
+  only what blocks.** The core never calls the interpreter's `urlsplit` (its own
+  copy of CPython 3.12.2's rules decides a split and whether it is a parse
+  failure), and it decides every character class (a pattern's `\w` and `\d`,
+  `isalpha`, `casefold`) as Unicode 13.0 does: a code point 13.0 leaves
+  unassigned, which a newer interpreter calls a letter or a digit, is none to the
+  reader (the assigned code points are vendored in `_idna_data.py`; over every
+  code point 13.0 assigns, those classes agree on 3.10.22 and 3.14.9). Every
+  published vector, and values over such code points, give the same findings and
+  the same wire after an empty ledger, the principal's text, a whole tool result
+  and a tool result's sentence on 3.10, 3.12.2, the newest 3.12 and 3.14, Linux
+  and macOS (`scripts/published_agreement.py`). *Pinned by:*
+  `tests/test_value_origin_interpreter_independence.py`.
 - **A scheme token is anything before `://` made of letters, digits, `+`, `.` and
   `-`, of any length**, as urllib.parse on 3.10 and WHATWG split it. When urllib3
   refuses it as a scheme (one that is not a letter, then letters, digits, `+` and
@@ -218,9 +245,10 @@ more than one reading names every one of them. This applies to every rule below.
 - **A URL is tried before the mailbox rule** (S-3): a value that opens with
   `scheme://`, or is a scheme-less `host/path`, is a URL even when it carries
   `@` (`R32-url-first`).
-- **A `scheme://` value that `urlsplit` refuses** (an unterminated IPv6 bracket)
-  is `parse_failure` as a whole, and every host the other readings find is a
-  finding beside it (R1's shape; `Q1-urlsplit-refusal`).
+- **A `scheme://` value CPython 3.12.2's `urlsplit` refuses** (an unterminated
+  IPv6 bracket), as the core's own copy of its rules decides it, is
+  `parse_failure` as a whole, and every host the other readings find is a finding
+  beside it (R1's shape; `Q1-urlsplit-refusal`).
 
 ### Scheme-less values
 
@@ -229,12 +257,16 @@ it:
 
 - **`host[:port]` and then a path, a query or a fragment**: a name of at least two
   labels with an alphabetic last label (`evil.test/x`, `evil.test:8080/x`,
-  `ldap.example.com?special`, `pop3.example.com:100#foobar`). It is read as
-  `http://` + the value, every reading included. A single-label host stays unread
-  (`localhost/x`, `g?y`).
+  `ldap.example.com?special`, `pop3.example.com:100#foobar`), its labels
+  possibly carrying escapes, which urllib3 sends as written. An empty port counts
+  (`evil.test:/x`): urllib3 connects to the default. It is read as `http://` + the
+  value, every reading included. A single-label host stays unread (`localhost/x`,
+  `g?y`).
 - **An address literal followed by a port, path, query or fragment**: a dotted
-  quad or IPv6 in brackets, in a result or an argument
-  (`169.254.169.254/latest`, `10.0.0.5:80`).
+  quad or IPv6 in brackets, with or without a zone, in a result or an argument
+  (`169.254.169.254/latest`, `10.0.0.5:80`, `[fe80::7%en1]:8443`), and with an
+  empty port (`[::6]:/v1`, `[::5]://host/`), which urllib3 connects to. A zoned
+  literal is read as `http://` + the value, both ways a client reads its `%`.
 - **An address in any inet_aton spelling followed by a port, path, query or
   fragment**, in an argument: hex, octal, decimal and short dotted forms
   (`0xA9FEA9FE/latest`, `2852039166/latest`, `0251.0376.0251.0376/latest`,
@@ -281,8 +313,10 @@ it:
 - **Integer parts are digit-checked**, not left to `int()`, which takes `_`
   separators no resolver reads (`0x_1.1.1.1` is a name).
 - **The macOS resolver's readings are read on every platform** (Q22, re-ruled):
-  a leading-zero dotted quad read as decimal, the IPv4 tail of an IPv6 literal
-  read the same way, and one number above 2**32 - 1 wrapped modulo 2**32
+  a leading-zero dotted quad read as decimal, however many zeros a part carries
+  (`0000000000000000012.1.2.3` reads 12.1.2.3 beside inet_aton's 10.1.2.3, and a
+  part with a non-octal digit, which inet_aton refuses, still reads as decimal),
+  the IPv4 tail of an IPv6 literal read the same way, and one number above 2**32 - 1 wrapped modulo 2**32
   (`4294967296` and `0x100000000` read `0.0.0.0`; `0x1A9FEA9FE` reads
   169.254.169.254). Each is one more finding beside the inet_aton reading, public
   addresses included. *Pinned by:* `Q22-rerule-macos-decimal-quad`,
@@ -309,8 +343,9 @@ it:
   `test_r1_an_untrusted_part_beside_junk_blocks_and_a_trusted_one_does_not`.
 - **A mailbox inside a part that does not parse is a finding too**, when the part
   holds one address and only junk (no letter or digit) or a display name opening
-  `<` surrounds it: the address in `evil@x.example <` or `Bob <evil@x.example` is
-  read, as `email.utils` reads it. Prose that mentions an address
+  `<` surrounds it, RFC 5322 comments around it dropped, open or closed: the
+  address in `evil@x.example <`, `Bob <evil@x.example` or `<evil@x.example (ops)`
+  is read, as `email.utils` and smtplib read it. Prose that mentions an address
   (`Please send the report to bob@corp.example.`) is not a recipient list, and a
   candidate that starts mid-word (`jürgen@…` is not `rgen@…`) or runs into more
   text (`user@evil.test/x`) is not a mailbox. *Pinned by:*
@@ -365,7 +400,10 @@ email tests, IdnaTestV2 13.0.0 and 18.0.0, curl's lib1560 and Go's url and mail
 tests (vendored with their licences and sources in `tests/published_vectors/`)
 through httpx, urllib3, requests, urllib.parse, a WHATWG parser and the email
 parsers, and fails on a destination a client reads that the core does not and no
-ruling here names. The rulings it accepts an under-read under, each above: a bare
+ruling here names. A client's host is compared as the client sends it, an escape
+or a backslash included; every address the platform resolver reads a numeric host
+as (`inet_aton` and `getaddrinfo`) is its own requirement; a name with an empty
+label, whitespace or a control character is none a resolver looks up. The rulings it accepts an under-read under, each above: a bare
 hostname or number and a single-label host before a path (V-19); `file:` and
 `data:`; a URL before the mailbox rule (S-3); a mailbox is not its domain as a URL
 host (3.2); an ASCII local part (3.6); an `@` that is not an address; `mailto:` is
@@ -387,9 +425,12 @@ value with two authorities, exactly as for a two-mailbox list, and
 ## 4. Trust
 
 - A `URL_PREFIX` designation matches with no userinfo, equal lowercased schemes,
-  equal lowercased hosts, equal ports after mapping 80/443 to absent, and the
-  pattern's path segments a segment-wise prefix of the value's. Query and fragment
-  are ignored.
+  equal hosts (case-mapped by the pinned table), equal ports after mapping 80/443
+  to absent, and the pattern's path segments a segment-wise prefix of the value's.
+  Query and fragment are ignored. The URL is split by the core's own rules, never
+  the interpreter's `urlsplit`: a value with a backslash, a tab, a newline or
+  another control, a `[` anywhere but around a whole IPv6 literal with no zone, or
+  a port above 65535 never matches.
 - **A value path with a `.` or `..` segment never matches** (percent-decoded
   too): `/public/../private/x` is not trusted as `/public` (R3,
   `S28b-dot-segment`).
@@ -405,12 +446,21 @@ value with two authorities, exactly as for a two-mailbox list, and
 
 ## 5. Recording and its bounds
 
-- **A tool result is read as an argument is.** Each whole result value gets the
-  argument reader's whole-value reading (every reading of the split, the
-  scheme-less forms, S-4's fallback key, mailbox lists), and a URL in result prose
-  keeps S-4's fallback key, so a destination a result named reads
-  `untrusted_source` when a later call sends to it. *Pinned by:*
-  `test_result_keys_contain_argument_keys_over_every_published_vector`.
+- **A tool result is read as an argument is, in prose too.** Each whole result
+  value gets the argument reader's whole-value reading (every reading of the
+  split, the scheme-less forms, S-4's fallback key, mailbox lists); and in result
+  text, every whitespace-separated token and every line that holds whitespace is
+  read as an argument value, and every RFC 5322 addr-spec (a quoted local part,
+  comments around it) is read wherever it stands. So a destination a result names
+  in a sentence or on a line of its own (`//host/x`, `[v6]:port/x`, `https:/host`,
+  a mailbox at a Unicode domain) reads `untrusted_source` when a later call sends
+  to it. Principal text is read by the prose patterns alone: a reading of it
+  authorizes, where a reading of a result only records. The bound: a value that
+  itself holds whitespace or a control character (`http://a b/`) has no edge a
+  sentence or a line can mark, so it is recorded whole, as a whole result value or
+  a leaf, and not from inside prose. *Pinned by:*
+  `test_result_keys_contain_argument_keys_over_every_published_vector` (a whole
+  value, a leaf, a sentence and a line, over every published vector).
 
 - **`record_principal_input` writes two all-or-none units** (S-6): its
   destinations, then its key n-grams, so a long prompt's n-grams can be dropped
@@ -421,7 +471,12 @@ value with two authorities, exactly as for a two-mailbox list, and
   destination atoms come from all of it. The atom pass past a bound is bounded by
   WORK: each scanned character costs 1 and each candidate examined costs 64,
   500,000 units per seam call (`ATOM_WORK_BUDGET`); a result's examined pass is
-  bounded the same way at 1,000,000 units (`EXAMINED_WORK_BUDGET`).
+  bounded the same way at 1,000,000 units (`EXAMINED_WORK_BUDGET`). The same budget
+  bounds memory: the pass past a bound builds a node's path one link at a time
+  and turns it into a tuple only for a finding, charged by its length, so a value
+  nested 16,000 deep costs memory in proportion to the work, never to the square
+  of the depth (`test_memory_stays_bounded_at_every_nesting_depth`, 1,000 to
+  16,000 deep, under 8 MiB).
 - **Observed atoms** (record only): an argument value the walk examines
   whole that is not wholly one destination is scanned for destination atoms
   (prose, a command line, a mailbox part that does not parse). Each atom is on
@@ -506,11 +561,12 @@ Each is current behaviour and can still be overruled.
    `http:evil.test` is recorded by the bare-host scan.
 8. The RFC 3986 reading is a written-out split that reads exactly what CPython
    3.12.2's `urlsplit(...).hostname` reads, the most lenient version measured,
-   so it is the same on every interpreter. Where `urlsplit` refuses the WHATWG
+   so it is the same on every interpreter. Where that split refuses the WHATWG
    string, WHATWG's own bracket rule applies: a `[` must open the host and
    enclose an IPv6 literal.
-9. Where `urlsplit` refuses the WHATWG string, the value is `parse_failure` and
-   every host the split finds is a finding beside it.
+9. Where that split (3.12.2's rules, written out, never the interpreter's
+   `urlsplit`) refuses the WHATWG string, the value is `parse_failure` and every
+   host the split finds is a finding beside it, on every interpreter alike.
 10. `authority_of` returns `None` for a value with two authorities (§3).
 11. One over-read class is named in the differential:
     `urlsplit-bracket-validation`, hosts CPython 3.12.2's urllib.parse reads and
@@ -534,3 +590,15 @@ Each is current behaviour and can still be overruled.
 17. The first-write lock: the S22 first-write test and the all-or-none
     visibility test both stay in the suite; the second is the reliable detector of
     a ledger without its lock.
+18. A result's text is read token by token and line by line as argument values
+    (§5); principal text is not, so a reading only a client's parser makes of a
+    principal's sentence never authorizes.
+19. In a sentence or on a line, a value that itself holds whitespace or a control
+    character is not recorded whole; it is, as a whole result value or a leaf (§5).
+20. urllib3's and requests' host spellings are read for http and https, the only
+    schemes they send; urllib3's parser output for another scheme is not a send.
+21. A code point Unicode 13.0 leaves unassigned is no letter and no digit to the
+    reader on any interpreter, so a scheme-less `host/path` whose host carries one
+    is no destination, as on 3.10 (§2).
+22. A `URL_PREFIX` designation never trusts a value with a backslash, a control,
+    a zoned or misplaced bracket, or a port above 65535 (§4).
