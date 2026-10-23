@@ -237,8 +237,23 @@ def _pad(n, seed):
 _PAD = _pad(70_000, 7)
 
 
+@pytest.fixture
+def unhurried_scan(monkeypatch):
+    """The padding checks are about value origin's bounds (64 KiB of principal
+    input examined whole, 65,536 characters of a tool result). The input scan's
+    own TIME budget (scanner/l1.py, 1 s in all) is a separate rule: a 70,000-char
+    input takes about 1.2 s to scan on a CI runner and is then flagged
+    (LLM04_scan_budget_exceeded), and a flagged input records nothing as the
+    principal's (ruling 3.5). That verdict follows host speed, so these checks
+    lift the time budget and measure the bounds alone."""
+    from xaidr.scanner import l1
+    monkeypatch.setattr(l1, "_L1_SCAN_BUDGET_SEC", 60.0)
+    monkeypatch.setattr(l1.iter_scan_windows, "__kwdefaults__",
+                        {**l1.iter_scan_windows.__kwdefaults__, "budget_sec": 60.0})
+
+
 @pytest.mark.parametrize("mode", MODES)
-def test_lc_padding_past_the_bounds_decides_as_the_unpadded_value(lc, mode):
+def test_lc_padding_past_the_bounds_decides_as_the_unpadded_value(lc, mode, unhurried_scan):
     assert len(_PAD) > 65_536
     # A user message padded past 64 KiB, its URL after the padding: still the user's.
     agent = lc.agent([lc.call("fetch", {"url": USER_URL}, 1), lc.done()])
@@ -375,7 +390,7 @@ def test_oa_system_developer_and_assistant_text_never_authorize(oa, mode):
 
 
 @pytest.mark.parametrize("mode", OA_MODES)
-def test_oa_padding_past_the_bounds_decides_as_the_unpadded_value(oa, mode):
+def test_oa_padding_past_the_bounds_decides_as_the_unpadded_value(oa, mode, unhurried_scan):
     oa.run([oa.call("fetch", {"url": USER_URL}, 1), oa.done()],
            f"{_PAD} Then read {USER_URL} please.", mode)
     assert oa.spy.of("fetch")[-1][0] in AUTHORIZED, oa.spy.calls
