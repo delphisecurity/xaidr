@@ -504,13 +504,11 @@ def _coerce_scannable(value) -> Optional[str]:
 
 
 # ── M9: the valueOrigin wire field, and its consumer gate (owner, 2026-10-06) ──
-# "Do not emit a value no consumer accepts." The consumer (the Brain's
-# VALUE_ORIGINS) accepts exactly the
-# nine below and stores anything else as NULL while counting it rejected (the
-# Brain DEPLOYED on 2026-10-06, 8c01911 per /health, predates that code and
-# ignores the field: milestone review). Withholding applies to EVERY reporter. The
-# sensor names the consumer's vocabulary (Sensor(value_origin_wire=...)):
-#   "v1"  the nine the Brain accepts today -- the DEFAULT, safe to ship now;
+# "Do not emit a value no consumer accepts." The consumer is Delphi Core, which
+# must accept all fifteen values before anything depends on "v2"
+# (docs/value-origin-wire-consumers.md). Withholding applies to EVERY reporter.
+# The sensor names the consumer's vocabulary (Sensor(value_origin_wire=...)):
+#   "v1"  the nine below -- the DEFAULT;
 #   "v2"  all fifteen, for once the consumer accepts them;
 #   "off" emit nothing.
 # A value outside the active vocabulary is WITHHELD -- the key is absent, as for
@@ -2584,9 +2582,8 @@ class DelphiSensor:
                     logger.warning(
                         "xaidr: Sensor(agent_id=%r): value-origin wire value %r withheld from "
                         "telemetry (every reporter): value_origin_wire=%r, the vocabulary the "
-                        "consumer accepts, does not include it. The v1 consumer accepts "
-                        "nine values and stores any other as NULL. It is still on "
-                        "ScanResult.value_origin. Set "
+                        "consumer accepts, does not include it. The v1 vocabulary is "
+                        "nine values. It is still on ScanResult.value_origin. Set "
                         "value_origin_wire='v2' once the consumer accepts all fifteen.",
                         self.agent_id, wire, self._vo_wire_name)
         except Exception:
