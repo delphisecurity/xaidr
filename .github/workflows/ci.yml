@@ -310,6 +310,70 @@ jobs:
           path: cores
       - run: python3 scripts/published_agreement.py cores/*/core.json
 
+  # ── Value origin on real agent runs, on every OS and interpreter ──────────
+  # tests/test_value_origin_real_runs.py drives real LangChain create_agent graphs
+  # (invoke and ainvoke) and real OpenAI Agents SDK runs (run_sync and run) under
+  # protect() in ENFORCE: a run without xaidr.flow() is a request of its own, the
+  # next turn's replayed history is untrusted, system/developer/assistant text never
+  # authorizes, padding past the bounds decides as the unpadded value does,
+  # shared-tenant siblings stay apart, and a reused thread (executor job, WSGI
+  # request) never inherits the previous request's authority or tier. LangGraph and
+  # asyncio differ by interpreter (a context reaches an async node only from 3.11),
+  # so it runs on Linux and macOS, on 3.10, 3.12.2, the newest 3.12 and 3.14.
+  real-runs:
+    name: value origin on real runs (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.12.2", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install the interpreter, the package and the pinned frameworks
+        env:
+          UV_PYTHON_PREFERENCE: only-managed
+        run: |
+          uv python install ${{ matrix.python }}
+          uv venv -p ${{ matrix.python }} .venv-runs
+          uv pip install --python .venv-runs . pytest \
+            "langchain-core==1.6.1" "langchain==1.4.1" \
+            "langgraph==1.2.12" "langgraph-prebuilt==1.1.0" \
+            "openai-agents==0.24.0"
+          .venv-runs/bin/python -c "import sys; print(sys.version)"
+      - name: Run tests/test_value_origin_real_runs.py against the installed package
+        # From a directory outside the checkout, so `xaidr` is the installed copy.
+        run: |
+          mkdir -p "$RUNNER_TEMP/runs" && cp -R tests "$RUNNER_TEMP/runs/tests"
+          cd "$RUNNER_TEMP/runs"
+          "$GITHUB_WORKSPACE/.venv-runs/bin/python" -c "import xaidr, sys; assert 'site-packages' in xaidr.__file__, xaidr.__file__; print(xaidr.__file__)"
+          "$GITHUB_WORKSPACE/.venv-runs/bin/python" -m pytest tests/test_value_origin_real_runs.py \
+            -q -rs -p no:cacheprovider --junitxml="$GITHUB_WORKSPACE/real-runs.xml"
+      # THE GUARD: pytest exits 0 on an all-skipped run, so read what it did.
+      - name: Guard — every real-run check ran, none skipped
+        run: |
+          .venv-runs/bin/python - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          MINIMUM = 39
+          cases = list(ET.parse("real-runs.xml").iter("testcase"))
+          skipped = [c.get("name") for c in cases if c.find("skipped") is not None]
+          broken = [c.get("name") for c in cases
+                    if c.find("failure") is not None or c.find("error") is not None]
+          print(f"collected={len(cases)} skipped={len(skipped)} failed/errored={len(broken)}")
+          problems = []
+          if len(cases) < MINIMUM:
+              problems.append(f"collected {len(cases)} < {MINIMUM}")
+          if skipped:
+              problems.append(f"skipped: {skipped}")
+          if broken:
+              problems.append(f"failed/errored: {broken}")
+          if problems:
+              sys.exit("GUARD RED: " + "; ".join(problems))
+          print("GUARD GREEN")
+          PY
+
   # ── The corpus report, printed into the log ────────────────────────────────
   # A reviewer reading a rule PR should see what the rule did to the corpus
   # without checking anything out, so the table goes in the job log. The script

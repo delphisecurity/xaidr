@@ -3,9 +3,13 @@
     python scripts/published_agreement.py CORE.json [CORE.json ...]
 
 Each file is ``scripts/published_differential.py --core-out`` from one CI cell (an
-OS and an interpreter): every vector's core reading. Any vector two cells read
-differently is printed, and the run exits 1. Fewer than two files is a refusal,
-never a pass.
+OS and an interpreter): for every vector, and for generated values over code
+points Unicode 13.0 leaves unassigned, the core's findings in order (parse
+failures included) and the wire and ENFORCE decision of a call carrying it with an
+empty ledger, after the principal wrote it, after a tool result was it and after a
+tool result named it in a sentence. The wire must be identical, not only the
+decision. Any vector two cells read differently is printed, and the run exits 1.
+Fewer than two files is a refusal, never a pass.
 """
 from __future__ import annotations
 

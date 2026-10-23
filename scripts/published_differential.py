@@ -20,11 +20,15 @@ each client would send to, with that client's own send path and no network:
                      expects (curl, Go, WPT, IdnaTestV2)
 
 Each reading is reduced to the core's key space without the core's reader: an
-address through ``ipaddress`` and the platform resolver (``inet_aton``,
-``getaddrinfo(AI_NUMERICHOST)``), a name lowercased with its trailing dot removed
-and keyed by the core's PSL function (keying only). A reading no resolver or mail
-server can use (a name outside LDH and ``_``, an all-digit last label, a local
-part outside RFC 5321) is not sendable and not compared.
+address through ``ipaddress`` and the platform resolver (``inet_aton`` and
+``getaddrinfo(AI_NUMERICHOST)``, each reading its own requirement, so a host the
+two read as different addresses requires both), a name lowercased with its
+trailing dot removed and keyed by the core's PSL function (keying only), exactly
+as the client sends it: a ``%``, a ``\\`` or any other byte stays, because httpx,
+urllib.parse and urllib.request hand such a name to the resolver. A reading no
+resolver or mail server can use (a name with an empty label, whitespace or a
+control character, an all-digit last label, a local part outside RFC 5321) is not
+sendable and not compared.
 
 An UNDER-READ is a client key the core's argument walk does not read
 (``extract_destinations``, the findings that decide). Each under-read must belong
@@ -190,37 +194,49 @@ def _ip_key(ip):
 
 
 def _numeric(h):
+    """Every address the platform resolver reads ``h`` as: ``inet_aton`` and
+    ``getaddrinfo(AI_NUMERICHOST)`` each (the macOS resolver reads a leading-zero
+    quad as decimal where inet_aton reads octal)."""
+    out = []
     for fn in (lambda: socket.inet_aton(h),
                lambda: socket.inet_pton(socket.AF_INET, socket.getaddrinfo(
                    h, None, socket.AF_INET, 0, 0, socket.AI_NUMERICHOST)[0][4][0])):
         try:
-            return ipaddress.IPv4Address(fn())
-        except (OSError, ValueError, IndexError):
+            ip = ipaddress.IPv4Address(fn())
+        except (OSError, ValueError, IndexError, UnicodeError):
             continue
-    return None
+        if ip not in out:
+            out.append(ip)
+    return out
 
 
-def host_key(h):
-    """The key a client's host reading reduces to, or None if no resolver can use it."""
+def host_keys(h):
+    """Every key a client's host reading reduces to; empty if no resolver can use it."""
     from xaidr.value_origin._authority import dns_key
     if not h:
-        return None
+        return []
     if h.startswith("[") and h.endswith("]"):
         h = h[1:-1]
     h = re.split(r"%(?:25)?", h, 1)[0] if ":" in h else h       # an IPv6 zone is not compared
     try:
-        return _ip_key(ipaddress.ip_address(h))
+        return [_ip_key(ipaddress.ip_address(h))]
     except ValueError:
         pass
     h = h.lower().rstrip(".")
-    if not h:
-        return None
-    ip = _numeric(h)
-    if ip is not None:
-        return _ip_key(ip)
-    if not _LDH.fullmatch(h) or len(h) > 253 or h.rsplit(".", 1)[-1].isdigit():
-        return None                            # DNS: a label <= 63, a name <= 253
-    return "dns:" + dns_key(h)
+    if not h or any(c.isspace() or c < " " or c == "\x7f" for c in h):
+        return []                  # http.client refuses a host with a space or a control
+    ips = _numeric(h)
+    if ips:
+        return [_ip_key(ip) for ip in ips]
+    if "" in h.split(".") or len(h) > 253 or h.rsplit(".", 1)[-1].isdigit():
+        return []                  # no resolver looks up an empty label
+    return ["dns:" + dns_key(h)]
+
+
+def host_key(h):
+    """The first of ``host_keys`` (the suite tables name one host each)."""
+    keys = host_keys(h)
+    return keys[0] if keys else None
 
 
 def _encode_domain(d):
@@ -266,7 +282,10 @@ def suite_key(e):
             val = val.encode("idna").decode("ascii") if not val.isascii() else val
         except UnicodeError:
             return None
-        return host_key(val)
+        key = host_key(val)
+        # A suite's table is a parser's output, not a name a client sends: one
+        # outside LDH (an IdnaTestV2 error row's `?`, Go's trailing `:`) is not one.
+        return key if key and (not key.startswith("dns:") or _LDH.fullmatch(key[4:])) else None
     return mail_key(val)
 
 
@@ -275,6 +294,53 @@ def core_keys(v):
     from xaidr.value_origin import extract_destinations
     return {f.destination.key() for f in extract_destinations({"v": v})[0]
             if f.destination is not None}
+
+
+#: Letters and digits Unicode added after 13.0, the version the core pins: each is
+#: nothing on 3.10 and a letter or a digit on a newer interpreter, so the agreement
+#: comparison runs every value shape over them as well as over the published suites.
+_NEWER_CODE_POINTS = ("\U0001E290", "\U00011F04", "\U0001E4D0", "\U0001E4F0", "\uA7C0",
+                      "\U00016FF0", "\U0001E030", "\U00011B00", "\u0C5D", "\U0001E5D0")
+
+
+def interpreter_probes():
+    """Value shapes, over the code points above, whose reading a newer Unicode
+    database would change if the core decided a character class from it."""
+    out = []
+    for c in _NEWER_CODE_POINTS:
+        out += [f"a{c}.example/x", f"x.a{c}/x", f"https://a{c}.example/", f"bob@a{c}.example",
+                f"{c}bob@x.example", f"see a{c}.example and bob@a{c}.example now",
+                f"ops {c}@x.example", f"Ref {c}-7 ok", f"http://[::1]{c}/"]
+    return out
+
+
+def core_reading(v):
+    """Everything the core decides about ``v`` that the agreement comparison holds
+    equal across interpreters: the findings in order, parse failures included, and
+    the wire and the ENFORCE decision of a call carrying it with an empty ledger
+    (E), after the principal wrote it (P), after a tool result was it (U) and after
+    a tool result named it in a sentence (S)."""
+    from xaidr.value_origin import (Mode, bind_fresh_ledger, evaluate_call,
+                                    extract_destinations, record_principal_input,
+                                    record_tool_result, should_block, unbind_ledger)
+    found = [f.destination.key() if f.destination is not None else f.reason.value
+             for f in extract_destinations({"v": v})[0]]
+    out = {"findings": found}
+    for name in ("E", "P", "U", "S"):
+        bind_fresh_ledger()
+        try:
+            if name == "P":
+                record_principal_input(v, None, input_clean=True)
+            elif name == "U":
+                record_tool_result("web_fetch", {}, v, designations=(), result_blocked=False)
+            elif name == "S":
+                record_tool_result("web_fetch", {}, f"Moved: {v} , use that.", designations=(),
+                                   result_blocked=False)
+            cv = evaluate_call("http_post", {"v": v}, flow_active=True)
+            out[name] = [cv.wire.value, should_block(cv, mode=Mode.ENFORCE)]
+        finally:
+            unbind_ledger()
+    return out
 
 
 # ── the documented classes ───────────────────────────────────────────────────
@@ -349,11 +415,16 @@ _HAS_SCHEME = re.compile(r"\s*[A-Za-z][A-Za-z0-9+.\-]*:")
 
 def _cls_mailbox_not_url(v, client, key, core):
     """§2 Mailboxes (3.2): a value with `@` that is not a URL is a mailbox list.
-    urllib3 and requests read a scheme-less `user@host` as userinfo and a host;
-    the core reads the mailbox, not its domain as a URL host."""
+    urllib3 and requests (and curl, which guesses a scheme) read a scheme-less
+    `user@host` or `user:pass@host/path` as userinfo and a host; the core reads the
+    mailbox, not its domain as a URL host. Scheme-less as each decides it: to
+    urllib3 a scheme is a letter, then letters, digits, `+` and `-` (`ftp.user:` is
+    none); curl guesses one for any value without `scheme://`."""
     s = v.strip()
-    return (client in ("urllib3", "requests") and key.startswith(("dns:", "ip:"))
-            and not _HAS_SCHEME.match(s) and "@" in re.split(r"[/?#]", s, 1)[0])
+    schemed = (re.match(r"[A-Za-z][A-Za-z0-9+.\-]*://", s) if client == "suite"     # curl
+               else re.match(r"[a-zA-Z][a-zA-Z0-9+\-]*:", s))                         # urllib3
+    return (client in ("urllib3", "requests", "suite") and key.startswith(("dns:", "ip:"))
+            and not schemed and "@" in re.split(r"[/?#]", s, 1)[0])
 
 
 def _cls_schemeless(v, client, key, core):
@@ -365,20 +436,39 @@ def _cls_schemeless(v, client, key, core):
         return False
     if _HAS_SCHEME.match(s) and not re.match(r"\s*[^:/?#@\s]+:(?:\d+(?:[/?#]|$)|$)", s):
         return False
-    host = re.split(r"[/?#]", s, 1)[0].rpartition("@")[2]
-    host = host.rsplit(":", 1)[0] if re.search(r":\d*$", host) else host
-    rest = s[len(re.split(r"[/?#]", s, 1)[0]):]
+    head = re.split(r"[/?#]", s, 1)[0]
+    host = head.rpartition("@")[2]
+    port = re.search(r":\d*$", host) is not None
+    host = host.rsplit(":", 1)[0] if port else host
+    rest = s[len(head):]
+    if host.startswith("[") or ((rest or port) and (_numeric(host) or _strict(host))):
+        return False               # an address literal with a port or a locator is read
     labels = host.rstrip(".").split(".")
     return (not rest or len(labels) < 2 or not labels[-1].isalpha()
             or re.fullmatch(r"[0-9.]+|0x[0-9a-fA-F]+", host) is not None)
+
+
+def _strict(h):
+    try:
+        ipaddress.ip_address(h.strip("[]"))
+        return True
+    except ValueError:
+        return False
 
 
 def _cls_uts46(v, client, key, core):
     """§2 URLs, UTS-46 (S-4): nontransitional, Unicode 13.0, CheckBidi on, joiners
     strict; a host it refuses is keyed whole and matches only itself. A client that
     encodes with IDNA 2003, transitionally, or with a newer Unicode reads another
-    name."""
+    name. A name a client sends with an escape or a backslash in it is that
+    client's spelling, never another encoding of the host."""
+    if re.search(r"%[0-9a-f]{2}", key) or "\\" in key:
+        return False
+    from urllib.parse import unquote
     for raw in _raw_hosts(v) + [m.group(1) for m in re.finditer(r"@([^\s<>,;@\"]+)", v)]:
+        plain = unquote(raw)
+        if plain.isascii() and "xn--" not in plain.lower():
+            continue               # an ASCII host with no A-label has no other encoding
         if _core_refuses(raw):
             return True
         alts = {a.lower().rstrip(".") for a in _alternatives(raw)}
@@ -423,7 +513,12 @@ def _cls_local_not_written(v, client, key, core):
         return False
     local = key[7:].rpartition("@")[0]
     flat = re.sub(r"\s+", " ", v.lower())
-    return local not in flat and local.strip('"') not in flat
+    if local in flat:
+        return False
+    # A quoted local part is written only as itself, or, unquoted, as the one
+    # dot-atom email.headerregistry unquotes (`"dinsdale"@` -> `dinsdale@`).
+    bare = local.strip('"')
+    return not (local.startswith('"') and _DOT_STRING.fullmatch(bare) and bare in flat)
 
 
 def _cls_junk_around(v, client, key, core):
@@ -501,7 +596,7 @@ def run(limit=None):
         if v in vectors_read:
             pass
         vectors_read.add(v)
-        readings = [(c, host_key(h)) for c, h in clients.hosts(v)]
+        readings = [(c, k) for c, h in clients.hosts(v) for k in host_keys(h)]
         readings += [(c, mail_key(a)) for c, a in clients.mailboxes(v)]
         readings += [("suite", suite_key(e)) for e in r["expect"]]
         keys = {(c, k) for c, k in readings if k}
@@ -533,9 +628,9 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     res = run(a.limit)
     if a.core_out:
-        values = sorted({r["v"] for r in published_vectors.load()})
+        values = sorted({r["v"] for r in published_vectors.load()} | set(interpreter_probes()))
         Path(a.core_out).write_text(json.dumps(
-            {v: sorted(core_keys(v)) for v in values}, sort_keys=True))
+            {v: core_reading(v) for v in values}, sort_keys=True))
     print(f"python {sys.version.split()[0]} {sys.platform}: {res['vectors']} vectors")
     for cls, n in sorted(res["under"].items(), key=lambda x: -x[1]):
         doc = next((d for c, d, _ in CLASSES if c == cls), "no ruling")
