@@ -26,6 +26,7 @@ import re
 from typing import Any, Iterator, List, Mapping, Tuple
 
 from ._authority import ParseFailure, classify_value
+from ._idna import pinned_casefold
 from ._types import (
     ATOM_COST,
     MAX_ARG_DEPTH,
@@ -159,6 +160,32 @@ def _walk(root: Any, *, leaf_cap: int, char_cap: int, truncate_long: bool,
     return leaves, truncated, unread
 
 
+class _Path:
+    """A path the unbounded pass builds one step at a time: a link to its parent,
+    so a node thousands deep costs one link and not a copy of every step above it
+    (memory in proportion to the work, never to the square of the depth). Turned
+    into a tuple only for a finding, and that is charged to the work budget."""
+    __slots__ = ("parent", "step", "depth")
+
+    def __init__(self, parent, step) -> None:
+        self.parent, self.step = parent, step
+        self.depth = (parent.depth if isinstance(parent, _Path) else len(parent)) + 1
+
+
+def path_len(p) -> int:
+    return p.depth if isinstance(p, _Path) else len(p)
+
+
+def path_tuple(p) -> Path:
+    if not isinstance(p, _Path):
+        return p
+    steps = []
+    while isinstance(p, _Path):
+        steps.append(p.step)
+        p = p.parent
+    return tuple(p) + tuple(reversed(steps))
+
+
 def _all_strings(items, normalise=None, budget: "AtomBudget | None" = None
                  ) -> Tuple[List[Tuple[Path, str]], bool, bool]:
     """Every string under ``items`` ((path, node) pairs) with no leaf, length or
@@ -205,7 +232,7 @@ def _all_strings(items, normalise=None, budget: "AtomBudget | None" = None
                 if budget.left <= 0:
                     budget.hit = True
                     return out, unread, True
-                batch.append((base + (step,), child))
+                batch.append((_Path(base, step), child))
         except Exception:
             unread = True
             continue
@@ -238,19 +265,22 @@ def _chunks(s: str):
         i = j
 
 
-def budgeted_atoms(strings, budget: AtomBudget):
+def budgeted_atoms(strings, budget: AtomBudget, reader=None):
     """(path, Authority) for each destination atom (C-7's prose pass) in WHOLE
     strings, chunk by chunk, charging 1 per char and ATOM_COST per candidate EXAMINED, until the
-    budget is spent; then ``budget.hit`` is True and the rest is not scanned."""
+    budget is spent; then ``budget.hit`` is True and the rest is not scanned.
+    ``reader`` is ``prose_candidates`` unless given (a result's text is read with
+    ``result_candidates``)."""
     from ._authority import prose_candidates
     from ._types import ATOM_COST
+    reader = reader or prose_candidates
     for path, s in strings:
         for chunk in _chunks(s):
             if budget.left <= 0:
                 budget.hit = True
                 return
             examined = [0]
-            found = prose_candidates(chunk, examined)
+            found = reader(chunk, examined)
             budget.left -= len(chunk) + ATOM_COST * examined[0]   # every candidate, kept or not
             for _, a in found:
                 yield path, a
@@ -304,17 +334,26 @@ def extract_with_observed(arguments: Mapping[str, object] | None
             strings, faulted, exhausted = _all_strings(skipped, budget=budget)
             for path, s in strings:
                 # Read whole only what fits once stripped; only that read is charged
-                # here (the atom pass charges every string it scans itself).
+                # here (the atom pass charges every string it scans itself), and a
+                # path a finding carries is charged by its length.
                 n = len(s) if len(s) <= MAX_LEAF_CHARS else len(s.strip())
                 if n <= MAX_LEAF_CHARS and budget.left > 0:
                     budget.left -= n + ATOM_COST
-                    if _read_whole(out, seen, path, classify_value(s, arg_mode=True)):
+                    res = classify_value(s, arg_mode=True)
+                    if res is not None:
+                        budget.left -= path_len(path)
+                        path = path_tuple(path)
+                    if _read_whole(out, seen, path, res):
                         continue
                 atoms.append((path, s))
+        made: dict = {}
         for path, a in budgeted_atoms(atoms, budget):
             if a not in seen:
                 seen.add(a)
-                out.append(Finding(path=path, destination=a, reason=None))
+                if id(path) not in made:
+                    budget.left -= path_len(path)
+                    made[id(path)] = path_tuple(path)
+                out.append(Finding(path=made[id(path)], destination=a, reason=None))
         # Every value the walk examined whole that is not wholly one destination
         # is scanned for atoms too, and what that finds is OBSERVED (record only).
         observed: List[Finding] = []
@@ -426,7 +465,8 @@ _TOKEN_RE = re.compile(r"[\w@+-]+(?:\.[\w@+-]+)*")
 
 
 def tokens(text: str) -> List[str]:
-    return _TOKEN_RE.findall(text.casefold())
+    folded, scan = pinned_casefold(text)
+    return [folded[m.start():m.end()] for m in _TOKEN_RE.finditer(scan)]
 
 
 def span_ngrams(text: str) -> Iterator[str]:
@@ -454,7 +494,7 @@ def key_ngram(value: Any):
     if not toks or len(toks) > MAX_KEY_TOKENS:
         return None
     joined = " ".join(toks)
-    if joined != " ".join(value.casefold().split()):
+    if joined != " ".join(pinned_casefold(value)[0].split()):
         return None                        # O'Brien, Bob* — refused
     return joined
 

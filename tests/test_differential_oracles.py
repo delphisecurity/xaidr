@@ -83,9 +83,15 @@ def _oracles():
     else:
         def o_ada(u):
             try:
-                return ada_url.URL(u).hostname or None
+                url = ada_url.URL(u)
             except Exception:
                 return None
+            if url.protocol[:-1] not in ("http", "https", "ws", "wss", "ftp"):
+                # A non-special scheme's opaque host is the written host
+                # percent-encoded: a serialisation, not a name anything resolves.
+                from urllib.parse import unquote
+                return unquote(url.hostname) or None
+            return url.hostname or None
         out["ada-url (WHATWG)"] = o_ada
     return out, missing
 
@@ -118,10 +124,11 @@ _HOSTS = ("evil.test", "EVIL.TEST", "sub.evil.test.", "169.254.169.254", "0xA9FE
           "ev[il].test", "[evil.test]")
 _TAILS = ("", "/x", ":8080/x", "\\x", "?q=@corp.example", "#@corp.example", "/@corp.example")
 
-# What a resolver can look up: LDH labels (underscore tolerated, as resolvers
-# do) after the core's IDNA step, or an IP literal. Anything else is not a host
-# any consumer reaches.
-_NAME = re.compile(r"^[a-z0-9._-]+$")
+# A host is keyed as the consumer sends it, a `%`, a `\\` or any other byte
+# included: httpx, urllib.parse and urllib.request hand such a name to the
+# resolver (measured, 2026-10-23), and decoding it first would key the name the
+# core reads instead. A Unicode host goes through the core's IDNA step; a name
+# with an empty label or whitespace is no name any resolver looks up.
 
 
 def _spellings():
@@ -130,13 +137,15 @@ def _spellings():
 
 
 def _reachable_key(host):
-    from xaidr.value_origin._authority import _host_authority
+    from xaidr.value_origin._authority import _host_authority, coerce_ip, dns_key, ip_key
+    if host.isascii() and not host.startswith("[") and ":" not in host:
+        h = host.lower().rstrip(".")
+        if not h or any(c <= " " for c in h) or "" in h.split("."):
+            return None                        # no resolver looks up an empty label
+        ip = coerce_ip(h) if "%" not in h else None
+        return f"ip:{ip_key(ip)}" if ip is not None else "dns:" + dns_key(h)
     a = _host_authority(host, arg_fallback=True)
-    if a is None:
-        return None
-    if a.scheme == "dns" and not _NAME.match(a.value):
-        return None
-    return a.key()
+    return a.key() if a is not None else None
 
 
 def _core_keys(url):
@@ -163,7 +172,19 @@ def _urlsplit_refuses_a_bracketed_host(url):
 # releases refuse some of what it reads, and in THIS process only those
 # spellings can be over-reads. The class is pinned both ways by
 # test_the_named_over_read_class_stands_for_a_measured_interpreter.
+def _urllib_request_decodes(url):
+    """urllib.request percent-decodes the RFC 3986 netloc and resolves the result
+    (measured 2026-10-23: ``http://ev%69l.test\\x/`` resolves ``evil.test\\x``),
+    a reading none of the oracles above makes."""
+    m = re.match(r"[A-Za-z0-9+.\-]+://([^/?#]*)", url)
+    return bool(m) and "%" in m.group(1)
+
+
 _OVER_READ_CLASSES = {
+    "urllib-request-decodes": (
+        _urllib_request_decodes,
+        "urllib.request percent-decodes the netloc before it resolves the host, so "
+        "the decoded RFC 3986 host is a name it sends to; no oracle here decodes it."),
     "urlsplit-bracket-validation": (
         _urlsplit_refuses_a_bracketed_host,
         "CPython 3.12.2's urllib.parse reads these hosts, and the bracketed-host "
@@ -220,6 +241,17 @@ def _urlsplit_reads_like_3_12_2():
         return False
 
 
+def _sends(oracle, url):
+    """Whether the consumer sends where it reads. Every reading excuses an
+    over-read; an under-read counts only where the consumer sends: urllib3
+    connects for http and https alone (PoolManager), so its parser's host for any
+    other scheme, its escapes kept as written, is a host it never sends to."""
+    if oracle != "urllib3":
+        return True
+    m = re.match(r"\s*([A-Za-z][A-Za-z0-9+.\-]*):", url)
+    return m is None or m.group(1).lower() in ("http", "https")
+
+
 @pytest.fixture(scope="module")
 def comparison(oracles):
     under, over = [], collections.defaultdict(list)
@@ -239,7 +271,7 @@ def comparison(oracles):
             per_oracle[name] += 1
             read.add(k)
             keys.add(k)
-            if k not in core:
+            if k not in core and _sends(name, url):
                 under.append((url, name, k, sorted(core)))
         for k in sorted(core - read):
             if k.startswith("mailto:") and _email_utils_reads(url, k):

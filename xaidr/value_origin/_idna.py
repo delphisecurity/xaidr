@@ -62,6 +62,53 @@ def _joining(ch: str):
     return _lookup(_D.JOINING_STARTS, _D.JOINING_VALUES, ord(ch))
 
 
+def assigned(ch: str) -> bool:
+    """Unicode 13.0 assigns ``ch`` (ASCII included)."""
+    return ord(ch) < 0x80 or _lookup(_D.ASSIGNED_STARTS, _D.ASSIGNED_VALUES, ord(ch))
+
+
+_PLACEHOLDER = "\ufffd"
+
+
+def pinned(text: str) -> str:
+    """``text`` with every code point Unicode 13.0 leaves unassigned replaced by
+    U+FFFD, one for one, so a position in it is the same position in ``text``.
+    Every character class the reader decides (a regex's ``\\w`` and ``\\d``,
+    ``isalpha``, ``casefold``) is decided on this text and the value is taken from
+    ``text``: such a code point is a letter or a digit to a newer interpreter and
+    nothing to 3.10, and over the code points 13.0 assigns those classes agree on
+    every supported interpreter (V-4)."""
+    if text.isascii():
+        return text
+    odd = {c for c in set(text) if not assigned(c)}
+    if not odd:
+        return text
+    return "".join(_PLACEHOLDER if c in odd else c for c in text)
+
+
+def pinned_casefold(text: str):
+    """(``text`` case-folded, the same with every code point 13.0 leaves
+    unassigned as U+FFFD), equally long. Such a code point is not folded: a newer
+    interpreter may give it a case pair that 3.10 does not."""
+    if text.isascii():
+        folded = text.casefold()
+        return folded, folded
+    odd = {c for c in set(text) if not assigned(c)}
+    if not odd:
+        folded = text.casefold()
+        return folded, folded
+    out, scan = [], []
+    for c in text:
+        if c in odd:
+            out.append(c)
+            scan.append(_PLACEHOLDER)
+        else:
+            f = c.casefold()
+            out.append(f)
+            scan.append(f)
+    return "".join(out), "".join(scan)
+
+
 def _map(s: str, std3: bool = False):
     out = []
     for ch in s:

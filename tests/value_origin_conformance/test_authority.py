@@ -48,7 +48,10 @@ def A(key):
     # V-23. Q1 (2026-10-03) amends V-23: that value names TWO authorities, so the
     # single-answer normaliser returns None and the walk reports both. See
     # test_q1_authority_of_answers_none_for_a_value_with_two_authorities.
-    ("https://ev%69l.test/", "dns:evil.test"),
+    # `https://ev%69l.test/` -> dns:evil.test was pinned here until 2026-10-23.
+    # httpx and urllib.parse send the literal name `ev%69l.test` (measured), so the
+    # value names two authorities and the single-answer normaliser returns None;
+    # both readings are in test_q1_every_reading_of_the_authority_split_is_a_finding.
     ("https://pаypal.example/", "dns:xn--pypal-4ve.example"),
     ("https://xn--pypal-4ve.example/", "dns:xn--pypal-4ve.example"),
     ("https://ａｂｃ.example/", "dns:abc.example"),
@@ -97,7 +100,13 @@ def test_authority_of_rejects(value):
     ("http://169.254.169.254\\@corp.example/", ["ip:169.254.169.254", "dns:corp.example"]),
     ("http://\\@evil.test/", ["dns:evil.test"]),           # WHATWG: hostless; RFC: evil.test
     ("https://a.corp.example\\@b.corp.example/", ["dns:corp.example"]),   # one authority
-    ("https://evil.test\\x", ["dns:evil.test"]),           # RFC host is unresolvable junk
+    # This row read ["dns:evil.test"] until 2026-10-23, calling the RFC host
+    # "unresolvable junk". It is not: httpx, urllib.parse and urllib.request hand
+    # `evil.test\\x` to the resolver, backslash included (measured 2026-10-23).
+    ("https://evil.test\\x", ["dns:evil.test", "dns:evil.test\\x"]),
+    # A percent-encoded host: WHATWG, urllib3 and requests decode it, httpx and
+    # urllib.parse send it as written.
+    ("https://ev%69l.test/", ["dns:evil.test", "dns:ev%69l.test"]),
     # V-4: the same answer on every interpreter. urlsplit raises on this value on
     # CPython 3.10.21 / 3.12.14 (bracketed-host validation, a security backport)
     # and returns evil.test on 3.12.2; httpx sends it to evil.test on all of

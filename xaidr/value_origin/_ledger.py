@@ -90,7 +90,8 @@ import threading
 from contextvars import ContextVar
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from ._authority import ParseFailure, classify_value, key_chain, prose_candidates
+from ._authority import (ParseFailure, classify_value, key_chain, prose_candidates,
+                         result_candidates)
 from ._designations import source_matches
 from ._extract import (AtomBudget, argument_value, budgeted_atoms, key_authority, key_ngram,
                        result_leaves_bounded, span_ngrams)
@@ -312,6 +313,18 @@ def bind_fresh_ledger() -> None:
         _bound(_Ledger(explicit=True))
     except Exception:
         _log.exception("value origin: bind_fresh_ledger faulted")
+
+
+def bind_run_ledger() -> None:
+    """For a framework run's request only (``_vo_seams``): bind a fresh IMPLICIT
+    ledger there, owned by the run, before the framework runs anything. Every
+    input the run scans then records into it (``_bind_for_input`` keeps a live
+    accumulating request's ledger), and every node copied from the run's context
+    reads it."""
+    try:
+        _bound(_Ledger(explicit=False))
+    except Exception:
+        _log.exception("value origin: bind_run_ledger faulted")
 
 
 def unbind_ledger() -> None:
@@ -659,14 +672,14 @@ def _result_authorities(result: Any) -> Tuple[List[Authority], bool]:
         # scheme-less address forms included, is recorded from it.
         found: List[Authority] = _whole_readings(classify_value(leaf, arg_mode=True))
         counted = [0]
-        found.extend(a for _, a in prose_candidates(leaf, counted))
+        found.extend(a for _, a in result_candidates(leaf, counted))
         examined.left -= len(leaf) + ATOM_COST * counted[0]
         for a in found:
             if a not in seen:
                 seen.add(a)
                 out.append(a)
     late: List[Authority] = []               # past the bound: WORK-bounded, one budget
-    for _, a in budgeted_atoms([((), leaf) for leaf in extra], budget):
+    for _, a in budgeted_atoms([((), leaf) for leaf in extra], budget, result_candidates):
         if a not in seen:
             seen.add(a)
             late.append(a)

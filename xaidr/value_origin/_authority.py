@@ -22,9 +22,9 @@ from __future__ import annotations
 import ipaddress
 import re
 from typing import List, Optional, Tuple
-from urllib.parse import unquote_to_bytes, urlsplit
+from urllib.parse import unquote_to_bytes
 
-from ._idna import _status, fold, to_ascii
+from ._idna import _status, fold, pinned, to_ascii
 from ._psl_data import ICANN_RULES, PRIVATE_RULES
 from ._shared_tenant_data import SHARED_TENANT_APEXES
 from ._types import MAX_LEAF_CHARS, Authority
@@ -289,6 +289,79 @@ def _case_readings(raw_host: str) -> List[Authority]:
     return out
 
 
+# Percent-encoding of an ASCII host, as each Python client sends it. RFC 3986's
+# unreserved characters; httpx's ``encode_host`` keeps the sub-delims and
+# '"`{}%|\\' too, and requests' ``requote_uri`` keeps "!#$%&'()*+,/:;=?@[]~".
+_UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+_HTTPX_KEEPS = _UNRESERVED | frozenset("!$&'()*+,;=\"`{}%|\\")
+_REQUESTS_KEEPS = _UNRESERVED | frozenset("!#$%&'()*+,/:;=?@[]~")
+_PCT_RE = re.compile(r"%([0-9A-Fa-f]{2})")
+
+
+def _quote(host: str, keep) -> str:
+    return "".join(c if c in keep else "%%%02X" % ord(c) for c in host)
+
+
+def _urllib3_host(host: str) -> Optional[str]:
+    """urllib3's ``_normalize_host``: an escape of an unreserved character decoded,
+    every other escape kept; None where it refuses the host (a ``%`` that is no
+    escape, a control or a space)."""
+    if any(c <= " " or c == "\x7f" for c in host):
+        return None
+    out = _PCT_RE.sub(lambda m: chr(int(m.group(1), 16)) if chr(int(m.group(1), 16))
+                      in _UNRESERVED else m.group(0), host)
+    return None if "%" in _PCT_RE.sub("", out) else out
+
+
+def _client_spellings(raw_host: Optional[str], clients) -> List[Authority]:
+    """The names an ASCII host is sent as by ``clients``, beside the decoded
+    reading every split already has (WHATWG's, and urllib.request's of the RFC
+    3986 split): ``"literal"`` as written (urllib.parse), ``"httpx"`` as httpx
+    percent-encodes it, ``"urllib3"`` with only the escapes of unreserved
+    characters decoded, ``"requests"`` that, re-quoted. Every one is a reading:
+    the literal form a client sends counts as well as the decoded one."""
+    host = (raw_host or "").rstrip(".")       # a space is httpx's to encode, not to drop
+    if (not host or not host.isascii() or ":" in host or host.startswith("[")
+            or all(c in _UNRESERVED for c in host)):
+        return []
+    spellings = []
+    if "literal" in clients:
+        spellings.append(host)
+    if "httpx" in clients:
+        spellings.append(_quote(host.lower(), _HTTPX_KEEPS))
+    u3 = _urllib3_host(host) if ("urllib3" in clients or "requests" in clients) else None
+    if u3 is not None:
+        if "urllib3" in clients:
+            spellings.append(u3)
+        if "requests" in clients:
+            spellings.append(_quote(u3, _REQUESTS_KEEPS))
+    out: List[Authority] = []
+    for name in spellings:
+        if any(c.isspace() for c in name):
+            continue
+        ascii_host = to_ascii(name)
+        a = _name_authority(ascii_host) if ascii_host else _fallback(name)
+        if a is not None and a not in out:
+            out.append(a)
+    return out
+
+
+def _httpx_host(url: str) -> Optional[str]:
+    """The host httpx's own parser takes from ``url``: the authority runs to the
+    first ``/``, ``?`` or ``#`` (a backslash is no delimiter), the host follows its
+    last ``@``, and a ``[`` matters only where it opens the host; anywhere else
+    httpx percent-encodes it with the rest of the name."""
+    m = _SCHEME_RE.match(url)
+    if not m:
+        return None
+    rest = url[m.end():]
+    end = _AUTHORITY_END_RE.search(rest)
+    hostinfo = (rest[:end.start()] if end else rest).rpartition("@")[2]
+    if hostinfo.startswith("["):
+        return None                        # a bracketed literal: the other readings' rule
+    return hostinfo.partition(":")[0] or None
+
+
 # ── URLs ─────────────────────────────────────────────────────────────────────
 # Any scheme token before `://`: urllib.parse on 3.10 splits a scheme that
 # opens with a digit, `.`, `+` or `-`, and WHATWG and urllib.parse read the host
@@ -302,20 +375,22 @@ _SCHEME_RE = re.compile(r"^([A-Za-z0-9+.\-]{1,256})://")
 _SPECIAL_RE = re.compile(r"^(https?|wss?|ftp):[/\\]*(?=[^\s/\\])", re.IGNORECASE)
 # `host/path` with no scheme — ≥2 labels, alphabetic final label, an optional
 # port, and a path. Labels are \w so a Unicode host is accepted here too (ruling
-# 3.6). A client that guesses `http://` (curl) sends `evil.test:8080/x` to
-# evil.test (ruling 2).
-_IMPLIED_RE = re.compile(r"^((?:[\w\-]{1,63}\.){1,126}[^\W\d_]{1,63})(?::[0-9]{1,5})?[/?#]")
+# 3.6), and may carry escapes, which urllib3 sends as they are written. A client
+# that guesses `http://` (curl) sends `evil.test:8080/x` to evil.test (ruling 2).
+_IMPLIED_RE = re.compile(r"^((?:[\w\-%]{1,63}\.){1,126}[^\W\d_]{1,63})(?::[0-9]{0,5})?[/?#]")
 # No scheme, a host in any inet_aton spelling (integer, hex, octal, short or
 # mixed dotted forms), then a port, path, query or fragment. A client that
 # guesses `http://` sends it to the address that host denotes (ruling 2). Read for
 # ARGUMENTS only: recorded from a result it would make a numeric path in a file
 # listing an address that a later call to that path matches.
-_IMPLIED_INT_RE = re.compile(r"^([0-9][0-9A-Za-z.]{0,63})(?::[0-9]{1,5}(?![^/?#])|(?=[/?#]))")
-# No scheme, a STRICT address literal (a dotted quad, or IPv6 in
-# brackets), then a port, path, query or fragment.
+_IMPLIED_INT_RE = re.compile(r"^([0-9][0-9A-Za-z.]{0,63})(?::[0-9]{0,5}(?![^/?#])|(?=[/?#]))")
+# No scheme, a STRICT address literal (a dotted quad, or IPv6 in brackets, with
+# or without a zone), then a port (an empty one too: urllib3 connects to the
+# default), path, query or fragment.
 # Read in results too; the integer spellings above are read in arguments only.
-_IMPLIED_IP_RE = re.compile(r"^(\[[0-9A-Fa-f:.]{2,45}\]|[0-9]{1,3}(?:\.[0-9]{1,3}){3})"
-                            r"(?::[0-9]{1,5}(?![^/?#])|(?=[/?#]))")
+_IMPLIED_IP_RE = re.compile(r"^(\[[0-9A-Fa-f:.]{2,45}(?:%[^\]\s/?#@]{1,64})?\]"
+                            r"|[0-9]{1,3}(?:\.[0-9]{1,3}){3})"
+                            r"(?::[0-9]{0,5}(?![^/?#])|(?=[/?#]))")
 _NON_DESTINATION_SCHEMES = frozenset({"file", "data"})
 # urllib3 takes a scheme only when it is a letter then letters, digits, + and -
 # (``parse_url``); before any other `X://` it puts `//`, so X is the HOST it
@@ -351,18 +426,19 @@ PARSE_FAILURE = ParseFailure()
 
 
 def _split_host(url: str):
-    """(host as written or None, parse_ok) for ONE authority split of ``url``:
-    ``urlsplit``'s host, before its ``.hostname`` lowercases it with the
-    interpreter's ``str.lower``."""
-    try:
-        parts = urlsplit(url)
-        parts.hostname                         # urlsplit's own validation
-    except ValueError:
+    """(host as written or None, parse_ok) for ONE authority split of ``url``, as
+    CPython 3.12.2's ``urlsplit`` reads it, written out (``_authority_host``): the
+    interpreter's own ``urlsplit`` refuses different netlocs on different patch
+    releases, so whether a value is a parse failure would follow the interpreter
+    (V-4)."""
+    m = _SCHEME_RE.match(url)
+    if not m:
+        return None, True
+    rest = url[m.end():]
+    end = _AUTHORITY_END_RE.search(rest)
+    if _urlsplit_3_12_2_refuses(rest[:end.start()] if end else rest):
         return None, False
-    hostinfo = parts.netloc.rpartition("@")[2]
-    _, bracket, inside = hostinfo.partition("[")
-    host = inside.partition("]")[0] if bracket else hostinfo.partition(":")[0]
-    return (host or None), True
+    return _authority_host(url, whatwg=False), True
 
 
 def _whatwg(value: str) -> str:
@@ -409,9 +485,10 @@ def _authority_host(url: str, *, whatwg: bool) -> Optional[str]:
 
     The authority runs from ``//`` to the first ``/``, ``?`` or ``#``, and the
     host follows its LAST ``@``. No ``//`` is no authority (R4's
-    ``http:\\\\host``), and a host still carrying a backslash is not a name any
-    resolver can look up. Brackets differ by reading, because the consumers
-    differ:
+    ``http:\\\\host``). A backslash is no delimiter to RFC 3986: httpx,
+    urllib.parse and urllib.request hand the whole name, backslash included, to
+    the resolver, so it is read whole. Brackets differ by reading, because the
+    consumers differ:
 
       * ``whatwg=False``, the RFC 3986 reading (urllib.parse, httpx): exactly
         what CPython 3.12.2's ``urlsplit(...).hostname`` reads, the most
@@ -456,20 +533,24 @@ def _authority_host(url: str, *, whatwg: bool) -> Optional[str]:
             return None
         _, bracket, inside = hostinfo.partition("[")
         host = inside.partition("]")[0] if bracket else hostinfo.partition(":")[0]
-    if not host or "\\" in host:
-        return None
-    return host
+    return host or None
 
 
 # ── the macOS resolver (Q22, RE-RULED 2026-10-04) ───────────────────────────
-_DEC_QUAD_RE = re.compile(r"[0-9]{1,16}(?:\.[0-9]{1,16}){3}")
+_DEC_QUAD_RE = re.compile(r"[0-9]+(?:\.[0-9]+){3}")
 
 
 def _leading_zero_decimal(parts: List[str]):
-    """A leading-zero dotted quad read as DECIMAL, as the macOS resolver does."""
+    """A leading-zero dotted quad read as DECIMAL, as the macOS resolver does,
+    however many zeros a part carries."""
     if not any(len(p) > 1 and p[0] == "0" for p in parts):
         return None
-    vals = [int(p, 10) for p in parts]
+    vals = []
+    for p in parts:
+        digits = p.lstrip("0") or "0"
+        if len(digits) > 3:
+            return None
+        vals.append(int(digits, 10))
     return ".".join(map(str, vals)) if all(v <= 255 for v in vals) else None
 
 
@@ -550,7 +631,8 @@ def url_authority(value: str, *, arg_mode: bool, written: Optional[str] = None):
     real consumer performs is a destination, and the weakest decides the wire.
     The readings are
 
-      * WHATWG (backslash is a slash; urllib3 and ada agree), via ``urlsplit``;
+      * WHATWG (backslash is a slash; urllib3 and ada agree), split as the RFC
+        3986 reading splits (``_split_host``);
       * RFC 3986 (backslash is userinfo; urllib.parse and httpx agree) of the
         value as ``written``, before R4's special-scheme rewrite;
       * where ``urlsplit`` REFUSES the WHATWG string, that string's authority
@@ -578,7 +660,8 @@ def url_authority(value: str, *, arg_mode: bool, written: Optional[str] = None):
     else:
         primary = _host_authority(host, arg_fallback=arg_mode) or PARSE_FAILURE
     as_written = value if written is None else written
-    others = [_authority_host(as_written, whatwg=False),   # RFC 3986, as urlsplit 3.12.2 reads it
+    rfc = _authority_host(as_written, whatwg=False)        # RFC 3986, as urlsplit 3.12.2 reads it
+    others = [rfc,
               _authority_host(as_written, whatwg=True)]    # httpx: brackets checked in the HOST only
     if not ok:
         others.insert(0, _authority_host(whatwg, whatwg=True))          # what urlsplit refused
@@ -591,6 +674,16 @@ def url_authority(value: str, *, arg_mode: bool, written: Optional[str] = None):
         for a in (_case_readings(h) + _zone_readings(h)) if h else ():
             if a != primary and a not in extra:
                 extra.append(a)
+    # The spellings each client sends a host in, by the split it makes: urllib3 and
+    # requests split as WHATWG does and send http and https only; urllib.parse and
+    # httpx keep a backslash.
+    web = m.group(1).lower() in ("http", "https")
+    spelled = (_client_spellings(host, ("urllib3", "requests") if web else ())
+               + _client_spellings(rfc, ("literal",))
+               + _client_spellings(_httpx_host(as_written), ("httpx",)))
+    for a in spelled:
+        if a != primary and a not in extra:
+            extra.append(a)
     for raw in (_raw_split_host(whatwg), _raw_split_host(value if written is None else written)):
         for a in _macos_readings(raw):               # Q22, re-ruled 2026-10-04
             if a != primary and a not in extra:
@@ -610,7 +703,7 @@ def url_authority(value: str, *, arg_mode: bool, written: Optional[str] = None):
 def implied_url_authority(value: str, *, arg_mode: bool):
     """A scheme-less ``host[:port]/path`` read as a URL with an implied ``http://``,
     every reading of its authority included (Q1, ruling 2)."""
-    m = _IMPLIED_RE.match(value)
+    m = _IMPLIED_RE.match(pinned(value))
     if not m:
         return NOT_A_DESTINATION
     res = url_authority("http://" + value, arg_mode=arg_mode)
@@ -730,11 +823,32 @@ def _alnum(ch: str) -> bool:
     return ch.isalnum() and _known(ch)
 
 
+def _drop_comments(s: str) -> str:
+    """``s`` without its RFC 5322 comments (nested, ``\\`` escaping), a comment left
+    open running to the end, as the legacy parser reads it."""
+    if "(" not in s:
+        return s
+    out, depth, i = [], 0, 0
+    while i < len(s):
+        c = s[i]
+        if depth and c == "\\":
+            i += 2
+            continue
+        if c == "(":
+            depth += 1
+        elif c == ")" and depth:
+            depth -= 1
+        elif not depth:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def _mailbox_in_junk(part: str) -> Optional[Authority]:
     """The one mailbox in a part that does not parse, when everything around it
     is junk (no letter or digit) or a display name opening ``<``; else None."""
     found = None
-    for m in _P_EMAIL_RE.finditer(part):
+    for m in _P_EMAIL_RE.finditer(pinned(part)):
         if found is not None:
             return None                        # two addresses: not one mailbox in junk
         found = m
@@ -743,11 +857,13 @@ def _mailbox_in_junk(part: str) -> Optional[Authority]:
     before, after = part[:found.start()], part[found.end():]
     if before and _alnum(before[-1]):
         return None                            # starts mid-word: `jürgen@` is not `rgen@`
+    # RFC 5322 comments are CFWS: the email parsers drop them, open or closed.
+    before, after = _drop_comments(before), _drop_comments(after)
     if any(_alnum(c) for c in after):
         return None                            # `user@evil.test/x`, or prose after it
     if any(_alnum(c) for c in before) and not _DISPLAY_OPEN_RE.match(before):
         return None                            # prose before it
-    return mailbox_authority(found.group(0).rstrip(".-"))
+    return mailbox_authority(part[found.start():found.end()].rstrip(".-"))
 
 
 # One address-like token (text, `@`, text, no space), or a display name and an
@@ -1132,13 +1248,16 @@ def _classify(value: str, *, arg_mode: bool):
         # and the host stays readable (ruling 3).
         return url_authority(url, arg_mode=arg_mode, written=written.translate(_TAB_NEWLINE))
     if not any(c.isspace() for c in v):
-        if _IMPLIED_RE.match(v):
+        if _IMPLIED_RE.match(pinned(v)):
             return implied_url_authority(v, arg_mode=arg_mode)
         m = _IMPLIED_IP_RE.match(v)
         if m:
             ip = _strict_ip(m.group(1))
-            if ip is not None:
+            if ip is not None and "%" not in m.group(1):
                 return Authority(scheme="ip", value=ip_key(ip))
+            res = _implied_ip_authority(v, arg_mode=arg_mode)   # a zone: both readings
+            if res is not NOT_A_DESTINATION:
+                return res
         if arg_mode and _IMPLIED_INT_RE.match(v):
             res = _implied_ip_authority(v, arg_mode=arg_mode)
             if res is not NOT_A_DESTINATION:
@@ -1239,10 +1358,11 @@ def prose_candidates(text: str, counter: Optional[List[int]] = None) -> List[Tup
     rejected candidate costs the same normalisation: milestone review, 2026-10-06)."""
     out: List[Tuple[int, Authority]] = []
     taken: List[Tuple[int, int]] = []
-    for m in _P_URL_RE.finditer(text):
+    scan = pinned(text)                # classes decided here; values taken from ``text``
+    for m in _P_URL_RE.finditer(scan):
         if counter is not None:
             counter[0] += 1
-        cand = m.group(0).rstrip(_TRAILING)
+        cand = text[m.start():m.end()].rstrip(_TRAILING)
         taken.append((m.start(), m.end()))
         # Read as an argument value is: every reading of the split (Q1), and S-4's
         # fallback key for a host UTS-46 refuses, which a client still sends to.
@@ -1253,23 +1373,23 @@ def prose_candidates(text: str, counter: Optional[List[int]] = None) -> List[Tup
             out.extend((m.start(), x) for x in a)
         elif isinstance(a, ParseFailure):
             out.extend((m.start(), x) for x in a.parsed)
-    text = _blank(text, taken)
+    text, scan = _blank(text, taken), _blank(scan, taken)
     taken = []
-    for m in _P_EMAIL_RE.finditer(text):
+    for m in _P_EMAIL_RE.finditer(scan):
         if counter is not None:
             counter[0] += 1
-        cand = m.group(0).rstrip(".-")
+        cand = text[m.start():m.end()].rstrip(".-")
         taken.append((m.start(), m.end()))
         if _mid_word(text, m.start()):
             continue                           # `jürgen@x.example` is not `rgen@x.example`
         a = mailbox_authority(cand)
         if a is not None:
             out.append((m.start(), a))
-    text = _blank(text, taken)
-    for m in _P_HOST_RE.finditer(text):
+    text, scan = _blank(text, taken), _blank(scan, taken)
+    for m in _P_HOST_RE.finditer(scan):
         if counter is not None:
             counter[0] += 1
-        host = m.group(1)
+        host = text[m.start(1):m.end(1)]
         last = host.rsplit(".", 1)[-1]
         if last.isdigit():
             continue                           # dotted numbers are the IP scan's
@@ -1280,19 +1400,19 @@ def prose_candidates(text: str, counter: Optional[List[int]] = None) -> List[Tup
         if a is not None:
             out.append((m.start(), a))
             out.extend((m.start(), b) for b in _case_readings(host) if b != a)
-    for m in _P_PHONE_RE.finditer(text):
+    for m in _P_PHONE_RE.finditer(scan):
         if counter is not None:
             counter[0] += 1
         a = phone_authority(m.group(0))
         if a is not None:
             out.append((m.start(), a))
-    for m in _P_IPV4_RE.finditer(text):
+    for m in _P_IPV4_RE.finditer(scan):
         if counter is not None:
             counter[0] += 1
         ip = _strict_ip(m.group(0))
         if ip is not None:
             out.append((m.start(), Authority(scheme="ip", value=ip_key(ip))))
-    for m in _P_IPV6_RE.finditer(text):
+    for m in _P_IPV6_RE.finditer(scan):
         if counter is not None:
             counter[0] += 1
         if m.group(0).count(":") < 2:
@@ -1302,3 +1422,94 @@ def prose_candidates(text: str, counter: Optional[List[int]] = None) -> List[Tup
             out.append((m.start(), Authority(scheme="ip", value=ip_key(ip))))
     out.sort(key=lambda t: t[0])
     return out
+
+
+# ── a result's text, read as argument values are (§5) ────────────────────────
+# A character without which no whitespace-free token is a destination the
+# argument reader reads, beyond what the prose patterns above find (a bare
+# address, a phone): a scheme, a path, a port, an address literal, a mailbox, an
+# escape, a backslash.
+_VALUE_SIGNS = frozenset("@:/?#[]%\\")
+_LINE_RE = re.compile(r"[^\r\n]+")
+
+
+def result_candidates(text: str, counter: Optional[List[int]] = None
+                      ) -> List[Tuple[int, Authority]]:
+    """``prose_candidates``, plus every key the argument reader reads from each
+    whitespace-separated token of ``text`` and from each line of it that holds
+    whitespace: a tool result is read as an argument is, so a destination the
+    result names in prose is recorded however it is spelled (``//host/x``,
+    ``[v6]:port/x``, ``https:/host``, a mailbox at a Unicode domain). For results
+    only: recording a destination a result named makes it untrusted, while a
+    reading of principal text authorizes, and principal prose stays read by the
+    prose patterns. ``counter`` is charged one per token or line read, as
+    ``prose_candidates`` charges a candidate."""
+    out = prose_candidates(text, counter)
+    for m in _LINE_RE.finditer(text):
+        line = m.group(0)
+        if not any(c in _VALUE_SIGNS for c in line):
+            continue
+        if "@" in line:
+            out.extend((m.start(), a) for a in _addr_specs_in(line, counter))
+        stripped = line.strip()
+        if any(c.isspace() for c in stripped):
+            if counter is not None:
+                counter[0] += 1
+            out.extend((m.start(), a) for a in _whole(classify_value(stripped, arg_mode=True)))
+        for t in re.finditer(r"\S+", line):
+            tok = t.group(0)
+            u = _P_URL_RE.match(tok)
+            if u and u.end() == len(tok) and tok.rstrip(_TRAILING) == tok:
+                continue                   # the prose URL pattern read this very token
+            if any(c in _VALUE_SIGNS for c in tok):
+                if counter is not None:
+                    counter[0] += 1
+                out.extend((m.start() + t.start(), a)
+                           for a in _whole(classify_value(tok, arg_mode=True)))
+    out.sort(key=lambda t: t[0])
+    return out
+
+
+def _addr_specs_in(line: str, counter: Optional[List[int]] = None) -> List[Authority]:
+    """Every RFC 5322 addr-spec in a line of result text, whatever stands around
+    it: the local part a run of atoms and quoted strings joined by dots, the domain
+    a run of atoms joined by dots or an address literal, comments and whitespace
+    between them dropped, as the email parsers drop them. A quoted local part
+    (``"ops desk"@x.example``) or one with comments is read this way; an address
+    the prose pattern already reads is read again and kept once."""
+    toks = _tokens5322(line, tolerant=True) or []
+    out: List[Authority] = []
+    n = len(toks)
+    for k, tok in enumerate(toks):
+        if tok[0] != "@" or k == 0 or k + 1 >= n or toks[k - 1][0] not in ("atom", "quoted"):
+            continue
+        if counter is not None:
+            counter[0] += 1
+        j = k - 1
+        while j >= 2 and toks[j - 1][0] == "." and toks[j - 2][0] in ("atom", "quoted"):
+            j -= 2
+        if toks[k + 1][0] == "literal":
+            end = k + 2
+        elif toks[k + 1][0] == "atom":
+            end = k + 2
+            while end + 1 < n and toks[end][0] == "." and toks[end + 1][0] == "atom":
+                end += 2
+        else:
+            continue
+        addr = "".join(t for _, t in toks[j:k]) + "@" + "".join(t for _, t in toks[k + 1:end])
+        for form in _addr_forms(addr.rstrip(".")):
+            a = mailbox_authority(form)
+            if a is not None and a not in out:
+                out.append(a)
+    return out
+
+
+def _whole(res) -> List[Authority]:
+    if isinstance(res, Authority):
+        return [res]
+    if isinstance(res, list):
+        return list(res)
+    if isinstance(res, ParseFailure):
+        return list(res.parsed)
+    return []
+
