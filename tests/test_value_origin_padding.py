@@ -118,3 +118,20 @@ def test_a_call_whose_text_has_an_at_sign_stays_authorized():
                                           "body": "ping me @ 5pm"}).value_origin.wire.value
     assert got == "principal_undeclared_span", (
         f"a body saying 'ping me @ 5pm' made the principal's own email read {got!r}")
+
+
+def test_a_long_value_past_the_bound_is_charged_once():
+    """A value too long to read whole is only atom-scanned past the bound, and its
+    characters are charged once: a 400,000-char body still finds the URL at its end
+    within the 500,000-unit work budget, as it did before values there were read
+    whole."""
+    from xaidr.value_origin import (bind_fresh_ledger, evaluate_call, record_tool_result,
+                                    unbind_ledger)
+    bind_fresh_ledger()
+    record_tool_result("web_fetch", {}, "see https://evil.test/x", designations=(),
+                       result_blocked=False)
+    v = evaluate_call("post", {"body": "x " * 200_000 + "https://evil.test/x"}, flow_active=True)
+    unbind_ledger()
+    assert v.wire.value == "untrusted_source", (
+        f"a 400,000-char body ending in an untrusted URL read {v.wire.value}: the work "
+        "budget ran out before the atom pass reached it")

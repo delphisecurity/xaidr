@@ -303,12 +303,14 @@ def extract_with_observed(arguments: Mapping[str, object] | None
             # names what it names as a leaf of its own (L5 F4).
             strings, faulted, exhausted = _all_strings(skipped, budget=budget)
             for path, s in strings:
-                if budget.left <= 0:
-                    budget.hit = True
-                    break
-                budget.left -= len(s) + ATOM_COST
-                if not _read_whole(out, seen, path, classify_value(s, arg_mode=True)):
-                    atoms.append((path, s))
+                # Read whole only what fits once stripped; only that read is charged
+                # here (the atom pass charges every string it scans itself).
+                n = len(s) if len(s) <= MAX_LEAF_CHARS else len(s.strip())
+                if n <= MAX_LEAF_CHARS and budget.left > 0:
+                    budget.left -= n + ATOM_COST
+                    if _read_whole(out, seen, path, classify_value(s, arg_mode=True)):
+                        continue
+                atoms.append((path, s))
         for path, a in budgeted_atoms(atoms, budget):
             if a not in seen:
                 seen.add(a)
