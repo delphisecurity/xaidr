@@ -451,9 +451,11 @@ Each is current behaviour and can still be overruled.
     or a `request_scope()`, inside a `request_scope()` does not see input the host
     recorded earlier in the enclosing scope, and a `begin_flow()` with no request
     around it is not visible inside a hooked run; the run records its own input.
-15. An executor job keeps S-2: a new input ends the previous implicit ledger.
-16. In an Agents SDK run's input list, strings and user, system and developer
-    messages are principal input.
+15. An executor job keeps S-2: a new input ends the previous implicit ledger; the
+    same input scanned again is the same request (§1).
+16. In an Agents SDK run's input list, strings and user messages are principal
+    input; system, developer and assistant text is not recorded, and a tool output
+    is recorded as an untrusted tool output (§1).
 17. The first-write lock: the S22 first-write test and the all-or-none
     visibility test both stay in the suite; the second is the reliable detector of
     a ledger without its lock.
