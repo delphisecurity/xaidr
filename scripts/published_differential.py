@@ -52,14 +52,14 @@ warnings.simplefilter("ignore")
 
 
 def _require():
-    missing = []
+    absent = []
     for mod in ("httpx", "urllib3", "requests", "ada_url", "idna"):
         try:
             __import__(mod)
         except ImportError:
-            missing.append(mod)
-    if missing:
-        raise SystemExit(f"REFUSING: the oracles {missing} are not installed; a missing "
+            absent.append(mod)
+    if absent:
+        raise SystemExit(f"REFUSING: the oracles {absent} are not installed; an absent "
                          "client is a silent pass, never a skip (Q3).")
 
 

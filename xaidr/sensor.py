@@ -2109,7 +2109,7 @@ class DelphiSensor:
                 if not self._vo_record_fault_logged:
                     self._vo_record_fault_logged = True
                     logger.exception("xaidr: value origin's input recording faulted; the "
-                                     "verdict is unaffected")
+                                     "verdict stands")
 
     def _vo_replay_result(self, tool, arguments, text, call_id) -> None:
         """Record a tool output a request replays from history (§1.2): the model
@@ -2130,7 +2130,7 @@ class DelphiSensor:
             if not self._vo_result_fault_logged:
                 self._vo_result_fault_logged = True
                 logger.exception("xaidr: value origin's replayed tool-output recording "
-                                 "faulted; the verdict is unaffected")
+                                 "faulted; the verdict stands")
 
     def _vo_inbound_a2a(self) -> None:
         """Q21 (owner, YES): an inbound A2A message starts a fresh ledger. It ends

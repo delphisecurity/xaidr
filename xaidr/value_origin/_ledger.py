@@ -514,7 +514,7 @@ def _record_spans(lg: _Ledger, span_list, declared: bool, clean: bool) -> Record
     atom_budget = AtomBudget()             # one call's WORK budget (2026-10-06)
     budget = MAX_INPUT_NGRAM_CHARS   # key n-grams: the 64 KiB window; atoms past it: the WORK budget
     if lg is not None and sum(len(t) for t, _ in span_list) > MAX_INPUT_NGRAM_CHARS:
-        lg.input_truncated = True     # visible; it no longer blocks
+        lg.input_truncated = True     # visible, and not a block
     for span_text, writer in span_list:            # left to right (V-24)
         is_principal = writer is Writer.PRINCIPAL and clean
         origin = Origin.PRINCIPAL if is_principal else Origin.UNTRUSTED_SOURCE

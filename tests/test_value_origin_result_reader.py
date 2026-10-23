@@ -26,14 +26,14 @@ def _arg_keys(v):
 def test_result_keys_contain_argument_keys_over_every_published_vector():
     values = sorted({json.loads(line)["v"] for line in VECTORS.open(encoding="utf-8")})
     assert len(values) > 15_000
-    missing = []
+    unrecorded = []
     for v in values:
         lost = _arg_keys(v) - {a.key() for a in result_authorities(v)}
         if lost:
-            missing.append((v, sorted(lost)))
-    assert not missing, (
-        f"{len(missing)} of {len(values)} published vectors name destinations as an "
-        f"argument that a tool result of the same text does not record: {missing[:10]}")
+            unrecorded.append((v, sorted(lost)))
+    assert not unrecorded, (
+        f"{len(unrecorded)} of {len(values)} published vectors name destinations as an "
+        f"argument that a tool result of the same text does not record: {unrecorded[:10]}")
 
 
 def test_a_host_utf46_refuses_is_recorded_from_a_result_with_its_fallback_key():
