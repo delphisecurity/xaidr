@@ -228,6 +228,8 @@ def _encode_domain(d):
         except ValueError:
             return None
         return lit
+    if d.isascii():
+        return d.lower()                       # a mail client sends an ASCII domain as it is
     try:
         return idna.encode(d, uts46=True, transitional=False).decode("ascii").lower()
     except Exception:

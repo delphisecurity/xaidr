@@ -774,11 +774,16 @@ def _tokens5322(s: str, *, tolerant: bool = False):
     None when a quoted string, a comment or a literal does not close, unless
     ``tolerant``: then it runs to the end of the value, as the legacy parser reads it."""
     out, i, n = [], 0, len(s)
+    glue = -1                                    # where an atom glues onto the one before
     while i < n:
         c = s[i]
         if c.isspace():
             i += 1
         elif c == "(":
+            if out and out[-1][0] == "atom" and i > 0 and not s[i - 1].isspace():
+                start = i
+            else:
+                start = -1
             depth, i = 1, i + 1
             while i < n and depth:
                 if s[i] == "\\":
@@ -790,6 +795,9 @@ def _tokens5322(s: str, *, tolerant: bool = False):
                 i += 1
             if depth and not tolerant:
                 return None
+            # A comment between two atoms with no space either side joins them,
+            # as the email parsers read `xn--(o)-x` as `xn---x`.
+            glue = i if start >= 0 else -1
         elif c == '"':
             j = i + 1
             while j < n and s[j] != '"':
@@ -819,7 +827,11 @@ def _tokens5322(s: str, *, tolerant: bool = False):
                 out.append(("junk", c))          # a stray `)` or `]`: no address runs across it
                 i += 1
                 continue
-            out.append(("atom", s[i:j]))
+            if glue == i and out and out[-1][0] == "atom":
+                out[-1] = ("atom", out[-1][1] + s[i:j])
+            else:
+                out.append(("atom", s[i:j]))
+            glue = -1
             i = j
     return out
 

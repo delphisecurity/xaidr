@@ -103,6 +103,9 @@ def test_a_single_label_scheme_less_host_stays_unread():
     ("user@0A", ["mailto:user@0a"]),                                          # single label
     ("user@0a.xn--4db", ["mailto:user@0a.xn--4db"]),                          # ASCII, as written
     ("<@route.example:jdoe@machine.example>", ["mailto:jdoe@machine.example"]),  # obs-route
+    # a comment inside a domain atom joins its two halves (IdnaTestV2 mail framing)
+    ("user@1.xn--(o)-7sn88849j.xn--3xb99xpx1yoes3e",
+     ["mailto:user@1.xn---7sn88849j.xn--3xb99xpx1yoes3e"]),
 ])
 def test_mailbox_readings_the_parsers_make(v, want):
     assert _keys(v) == want
