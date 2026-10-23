@@ -271,7 +271,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
       - name: Install the interpreter and the pinned oracles
+        # uv's own builds only: "3.12" and "3.14" are the newest patch releases uv
+        # knows, never whatever interpreter the runner image happens to carry.
+        env:
+          UV_PYTHON_PREFERENCE: only-managed
         run: |
+          uv python install ${{ matrix.python }}
           uv venv -p ${{ matrix.python }} .venv-diff
           uv pip install --python .venv-diff "httpx==0.28.1" "urllib3==2.8.0" \
             "requests==2.34.2" "ada-url==4.0.0" "idna==3.20"
