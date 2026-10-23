@@ -44,6 +44,8 @@ def test_a_named_host_on_a_shared_apex_does_not_authorize_a_sibling():
         f"script.google.com, which only a tool result named, read {got!r} because the "
         "principal named docs.google.com")
     assert _wire("https://drive.google.com/x") == "unresolved"
+    assert _wire("https://sites.google.com/view/x") == "unresolved", (
+        "sites.google.com, a sibling the principal never named, was authorized")
 
 
 def test_a_named_host_authorizes_its_subdomains():
