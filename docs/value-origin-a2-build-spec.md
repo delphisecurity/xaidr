@@ -15,7 +15,10 @@
 >   chain, tiers, correlation id and inbound mark set inside it.
 > - The tier half of Q-G is answered as option (b): a `flow()` scope opened while a
 >   flow is already active leaves its chain, tiers, correlation id and inbound mark
->   as they are, and gets its own ledger.
+>   as they are, and gets its own ledger. **[Superseded 2026-10-23: the outermost
+>   `flow()` starts fresh, setting aside a leftover ledger, chain and correlation
+>   id, and keeps them only where they carry delegation evidence (an inbound mark
+>   or an upstream hop); see docs/value-origin-rulings.md §1.]**
 
 Written before any code, as the owner's handoff requires (STEP 3). Base:
 `832e642` on `feat/value-origin-seams` (main `0502c99` merged in at `8ce8dc4`).
@@ -810,7 +813,9 @@ refuses unless `xaidr.__file__` is in that venv's site-packages
     as the plain pair's limitation, each pinned by a strict xfail whose body
     states its flip condition.
   - **(b) A ledger-only scope.** `flow()` never touches chain, tiers or the
-    inbound mark when a flow is already active. It binds a fresh ledger,
+    inbound mark when a flow is already active. **[Superseded 2026-10-23 for an
+    active flow with no delegation evidence: the outermost scope sets it aside;
+    see docs/value-origin-rulings.md §1.]** It binds a fresh ledger,
     restores the ledger on exit, and seeds a principal chain only when no
     flow is active. That removes counter-case (1) from the scope by
     construction, because tier state stays with `begin_flow` and

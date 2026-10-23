@@ -454,8 +454,8 @@ _unexited_flow_warned = False
 def _warn_unexited(entries) -> None:
     """Once per process: a scope entered and never exited, found after the request
     it ran in ended. Its flow's chain, tiers and correlation id stay in that
-    context for whatever runs there next (Q-G (b) leaves an active flow's chain
-    alone), so provenance can name the earlier request's principal."""
+    context for whatever runs there next, so provenance outside a scope can name
+    the earlier request's principal; the next outermost scope sets them aside."""
     global _unexited_flow_warned
     if _unexited_flow_warned:
         return
@@ -572,17 +572,28 @@ class _FlowScope(contextlib.ContextDecorator):
                 _SCOPES.set(stack + (_ScopeEntry(self, False, None),))
                 return current_correlation_id()
             saved = _saved_state()
+            dead = len(found) - len(stack)
         except Exception:
             self._open_inert(stack, "could not read the current flow to save it")
             return current_correlation_id()
         request = None
         try:
+            # Q-G, decided 2026-10-23: the OUTERMOST scope starts fresh. A ledger,
+            # a correlation id or a chain already here is set aside for the scope,
+            # and put back on exit (D1). Delegation evidence (the inbound mark, or
+            # a hop that is not the principal's own entry, which the tier gate reads
+            # as an upstream) is kept with its chain, tiers and correlation id:
+            # keeping it can only tighten the gate.
+            leftover = _vo_ledger._current()
+            delegated = saved[3] or any(isinstance(h, dict) and h.get("role") != "principal"
+                                        for h in (saved[0] or ()))
+            active = saved[0] is not None or saved[1] is not None
+            _log_set_aside(leftover, saved, dead, keep_flow=active and delegated)
             request = _vo_ledger.request_enter(kind="flow")   # ruling 4: the flow is one request
-            if saved[0] is not None or saved[1] is not None:
-                # A flow is already active (Q-G (b), 2026-10-21): its chain, tiers,
-                # correlation id and inbound mark stay exactly as they are, on entry
-                # and on exit, so the scope never loosens the tier gate. It gets its
-                # own value-origin ledger and nothing else.
+            if active and delegated:
+                # Delegation is active: its chain, tiers, correlation id and inbound
+                # mark stay exactly as they are, on entry and on exit, so the scope
+                # never loosens the tier gate. It gets its own value-origin ledger.
                 _vo.bind_fresh_ledger()
                 if saved[4] is not None and _vo_ledger.ledger_get() is saved[4]:
                     _vo_ledger.ledger_set(None)
@@ -669,6 +680,35 @@ class _FlowScope(contextlib.ContextDecorator):
         return False                                   # the body's exception propagates
 
 
+def _log_set_aside(ledger, saved: tuple, dead: int, *, keep_flow: bool) -> None:
+    """One warning per occurrence: what an outermost scope found and set aside,
+    by kind and count. Never a value: no principal, no correlation id, no
+    destination."""
+    try:
+        parts = []
+        if ledger is not None:
+            kind = "explicit" if ledger.explicit else "implicit"
+            parts.append(f"1 value-origin ledger ({kind}, {len(ledger.entries)} destination "
+                         f"entries, {len(ledger.ngrams)} key n-grams)")
+        if not keep_flow:
+            chain, corr = saved[0], saved[1]
+            if corr is not None:
+                parts.append("a correlation id")
+            if chain:
+                parts.append(f"a chain of {len(chain)} entr{'y' if len(chain) == 1 else 'ies'}")
+        if dead:
+            parts.append(f"{dead} scope{'' if dead == 1 else 's'} left open by an earlier request")
+        if parts:
+            _vo_log.warning(
+                "xaidr.flow(): the outermost scope started fresh and set aside what this "
+                "context already held: %s. It is put back when the scope exits.%s",
+                ", ".join(parts),
+                " The delegation here (inbound mark, upstream hops, tiers) is kept."
+                if keep_flow else "")
+    except Exception:
+        _scope_fault("logging what the scope set aside faulted")
+
+
 def _cannot_decorate(func) -> str:
     return (f"xaidr.flow() cannot decorate {getattr(func, '__qualname__', func)!r}: calling it "
             "returns a coroutine or another body that has not run yet, and it would run "
@@ -697,11 +737,14 @@ def flow(*, principal: str | None = None,
 
     A scope opened inside another one JOINS it: it is the same request, so it
     changes nothing (its ``principal=`` is not applied) and yields that request's
-    correlation id. Opened while a flow is already active with no scope of its own
-    (a ``begin_flow()``, an ``extract_context()``, a recorded hop), it leaves that
-    flow's chain, tiers, correlation id and inbound mark exactly as they are, on
-    entry and on exit, so it never loosens the privilege-tier gate, and its
-    ``principal=`` is not applied; it gets its own value-origin ledger.
+    correlation id. The OUTERMOST scope starts fresh: a ledger, correlation id or
+    chain the context already holds (a ``begin_flow()`` never cleared, a scope an
+    earlier request left open) is set aside until its exit, and a warning names
+    what by kind and count. Delegation evidence is kept: over an inbound mark or
+    an upstream hop (an ``extract_context()``, a recorded hop) the chain, tiers,
+    correlation id and inbound mark stay as they are, so it never loosens the
+    privilege-tier gate, and its ``principal=`` is not applied; it gets its own
+    value-origin ledger.
 
     As a decorator it scopes each call. It refuses an ``async def``, a generator or
     async-generator function, and any call that returns a coroutine, because that

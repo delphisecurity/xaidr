@@ -137,12 +137,23 @@ bound in between closes then.
   started it, until that context's enclosing request ends.
 - Executor jobs, ThreadPool tasks, hooked runs, `flow()` and the middleware above
   are the requests the sensor sees begin; any other server loop marks each request
-  with `request_scope()`. A `flow()` scope opened
-while a flow is already active (a `begin_flow()`, an `extract_context()`, a
-recorded hop) leaves that flow's chain, tiers, correlation id and inbound mark
-exactly as they are, on entry and on exit, so it never loosens the privilege-tier
-gate; it gets its own ledger (Q-G (b), 2026-10-21;
-`test_a_scope_over_an_active_flow_leaves_its_chain_and_tiers_alone`). Every other
+  with `request_scope()`. The OUTERMOST `flow()`
+scope starts fresh (Q-G, decided 2026-10-23; this replaces Q-G (b) of
+2026-10-21, under which a scope opened over any active flow kept its chain and
+correlation id): a ledger, a correlation id or a chain the context already holds
+(a `begin_flow()` never cleared, a scope a request left open, a leftover
+implicit ledger) is set aside for the scope and put back at its exit, and one
+warning per occurrence names what was set aside by kind and count, never by
+value. Delegation evidence is kept: when the context holds the inbound mark or a
+hop that is not the principal's own entry (an `extract_context()`, a recorded
+upstream hop), the chain, tiers, correlation id and inbound mark stay exactly as
+they are, so the scope never loosens the privilege-tier gate, and only the ledger
+is the scope's own. A `flow()` cannot tell a leftover agent hop from the current
+request's, so a leftover chain that carries one is kept too. Call
+`extract_context()` inside the scope or before it; either keeps the delegation.
+*Pinned by:* `tests/test_value_origin_flow_fresh.py`,
+`test_a_scope_over_an_active_flow_leaves_its_chain_and_tiers_alone`,
+`check_tier_gate`. Every other
 request puts back, at its exit, the chain, correlation id, tiers and inbound mark
 set inside it, so a request whose headers are stripped never inherits the
 previous request's tier on a reused thread; entry changes none of them, so a

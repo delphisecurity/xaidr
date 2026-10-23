@@ -263,9 +263,11 @@ def test_the_plain_pair_and_the_request_scope_are_stated_where_users_read():
 
 
 def test_a_scope_over_an_active_flow_leaves_its_chain_and_tiers_alone():
-    """Q-G (b), 2026-10-21: when a flow is already active, xaidr.flow() leaves the
-    chain, tiers and inbound mark as they are, so it never loosens the tier gate.
-    It still gives the scope its own value-origin ledger."""
+    """Q-G (b), 2026-10-21, kept by Q-G of 2026-10-23 for delegation: over an
+    upstream hop, xaidr.flow() leaves the chain, tiers and inbound mark as they
+    are, so it never loosens the tier gate. It still gives the scope its own
+    value-origin ledger. A leftover flow with no delegation evidence is set aside
+    instead (tests/test_value_origin_flow_fresh.py)."""
     import contextvars
     from xaidr import provenance_chain as pc
     from xaidr.value_origin import _ledger

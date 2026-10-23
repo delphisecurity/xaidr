@@ -197,7 +197,7 @@ _REQUEST: ContextVar[Optional[_Request]] = ContextVar("xaidr_value_origin_reques
 # request saves it at entry and puts it back at its exit, so state set inside a
 # request (an extract_context(), a begin_flow() never cleared) ends with it.
 # Entry changes none of it: a request opened inside a delegated one still sees
-# the delegation. A flow() keeps its own (Q-G (b)), so it is skipped.
+# the delegation. A flow() puts back what it set aside itself, so it is skipped.
 _REQUEST_STATE: list = []
 
 
