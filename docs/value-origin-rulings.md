@@ -149,7 +149,7 @@ hop that is not the principal's own entry (an `extract_context()`, a recorded
 upstream hop), the chain, tiers, correlation id and inbound mark stay exactly as
 they are, so the scope never loosens the privilege-tier gate, and only the ledger
 is the scope's own. A `flow()` cannot tell a leftover agent hop from the current
-request's, so a leftover chain that carries one is kept too. Call
+request's, so a leftover chain that carries one is kept too. (Accepted by the owner, 2026-10-23.) Call
 `extract_context()` inside the scope or before it; either keeps the delegation.
 *Pinned by:* `tests/test_value_origin_flow_fresh.py`,
 `test_a_scope_over_an_active_flow_leaves_its_chain_and_tiers_alone`,
@@ -613,3 +613,6 @@ Each is current behaviour and can still be overruled.
     is no destination, as on 3.10 (§2).
 22. A `URL_PREFIX` designation never trusts a value with a backslash, a control,
     a zoned or misplaced bracket, or a port above 65535 (§4).
+
+    Items 18 to 22, and the `flow()` limit on a leftover agent hop (§1), are
+    accepted by the owner (2026-10-23).
