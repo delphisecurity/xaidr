@@ -248,6 +248,45 @@ jobs:
       - name: Guard — TestRealRunTree ran, only the named cases did not
         run: python .github/run_tree_guard.py run-tree.xml py310
 
+  # ── The published-suite differential ──────────────────────────────────────
+  # Every destination a real client reads in a published test vector (WPT,
+  # CPython's urlparse and email tests, IdnaTestV2, curl's lib1560 and Go's url
+  # and mail tables, vendored with their licences in tests/published_vectors/),
+  # the value-origin core reads. An under-read no ruling documents fails the job
+  # (scripts/published_differential.py names the vector, the client and the key).
+  # Clients and resolvers differ by interpreter and by OS, so it runs on Linux
+  # and macOS, on 3.10, on 3.12.2 (the urlsplit the RFC 3986 reading copies), on
+  # the newest 3.12 and on 3.14. uv installs exact patch releases on both OSes.
+  # The oracles are pinned: a client release that reads differently is a change
+  # this job should show, not one it absorbs.
+  published-differential:
+    name: published differential (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.12.2", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install the interpreter and the pinned oracles
+        run: |
+          uv venv -p ${{ matrix.python }} .venv-diff
+          uv pip install --python .venv-diff "httpx==0.28.1" "urllib3==2.8.0" \
+            "requests==2.34.2" "ada-url==4.0.0" "idna==3.20"
+          .venv-diff/bin/python -c "import sys; print(sys.version)"
+      - name: Run scripts/published_differential.py against the tree
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: .venv-diff/bin/python scripts/published_differential.py --show 200
+      - name: The vendored vectors reproduce from their pinned sources
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.14'
+        run: |
+          .venv-diff/bin/python scripts/published_vectors.py fetch "$RUNNER_TEMP/vectors-src"
+          .venv-diff/bin/python scripts/published_vectors.py verify "$RUNNER_TEMP/vectors-src"
+
   # ── The corpus report, printed into the log ────────────────────────────────
   # A reviewer reading a rule PR should see what the rule did to the corpus
   # without checking anything out, so the table goes in the job log. The script
