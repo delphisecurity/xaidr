@@ -2714,8 +2714,9 @@ class DelphiSensor:
                     "xaidr.begin_flow() ... xaidr.clear_flow() pair still works; outside "
                     "a request, if clear_flow() is skipped (for example because the "
                     "request raised) the next request on the same thread inherits the "
-                    "flow. In "
-                    "LangGraph/create_agent the flow must be opened OUTSIDE the graph. "
+                    "flow. Under protect(), each run of an agent LangChain's "
+                    "create_agent built is a request of its own; a LangGraph graph run "
+                    "any other way needs the flow opened OUTSIDE the graph. "
                     "Logged once per sensor.", self.agent_id)
         return cv
 

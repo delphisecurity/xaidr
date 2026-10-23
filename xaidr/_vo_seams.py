@@ -63,11 +63,16 @@ INPUT_BATCH: contextvars.ContextVar = contextvars.ContextVar(
     "xaidr_value_origin_input_batch", default=None)
 
 
-def _enter_run():
+def _enter_run(bind: bool = False):
     from .value_origin import _ledger
     depth = _RUN_DEPTH.get()
-    return (_ledger.request_enter(accumulate=True, kind="run"), _RUN_DEPTH.set(depth + 1),
-            NESTED_RUN.set(depth > 0))
+    rec = _ledger.request_enter(accumulate=True, kind="run")
+    if bind and rec is not None:
+        # The run's ledger, bound here, outside every node: a framework that runs
+        # its nodes in copies of this context (LangGraph) shares this one object,
+        # where a ledger an input scan bound inside a node would die with the node.
+        _ledger.bind_run_ledger()
+    return (rec, _RUN_DEPTH.set(depth + 1), NESTED_RUN.set(depth > 0))
 
 
 def _exit_run(state) -> None:
@@ -106,6 +111,51 @@ def request_scoped_run(fn):
             finally:
                 _exit_run(state)
     return wrapped
+
+
+def request_scoped_stream(fn, applies):
+    """``fn``, a generator or async generator function on a graph object, with
+    each run of a graph ``applies`` accepts one request that binds its ledger
+    before the first node runs; for LangGraph's ``Pregel.stream`` and
+    ``astream``, which ``invoke`` and ``ainvoke`` run through. The request opens
+    when the run is first iterated and ends when it finishes or is closed."""
+    if inspect.isasyncgenfunction(fn):
+        async def scoped_async(agen):
+            state = _enter_run(bind=True)
+            try:
+                async for item in agen:
+                    yield item
+            finally:
+                try:
+                    await agen.aclose()
+                finally:
+                    _exit_run(state)
+
+        @functools.wraps(fn)
+        def awrapped(self, *args, **kwargs):
+            agen = fn(self, *args, **kwargs)
+            return scoped_async(agen) if _applies(applies, self) else agen
+        return awrapped
+
+    def scoped(gen):
+        state = _enter_run(bind=True)
+        try:
+            return (yield from gen)
+        finally:
+            _exit_run(state)
+
+    @functools.wraps(fn)
+    def wrapped(self, *args, **kwargs):
+        gen = fn(self, *args, **kwargs)
+        return scoped(gen) if _applies(applies, self) else gen
+    return wrapped
+
+
+def _applies(applies, obj) -> bool:
+    try:
+        return bool(applies(obj))
+    except Exception:
+        return False
 
 
 _executor_lock = threading.Lock()

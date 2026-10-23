@@ -535,7 +535,15 @@ def _patch_langchain(ctx: PatchContext) -> None:
                 kwargs["middleware"] = existing + [mw]
             return None
 
-        return make_wrapper(orig, before=before)
+        def after(graph: Any, args: tuple, kwargs: dict) -> Any:
+            # Mark the agent on its builder: every copy of the compiled graph
+            # (with_config, copy) carries the same builder object.
+            builder = getattr(graph, "builder", None)
+            if builder is not None:
+                builder.__xaidr_agent_run__ = True
+            return graph
+
+        return make_wrapper(orig, before=before, after=after)
 
     ctx.install(
         "langchain.agents", "create_agent", "input+output+tool", factory,
@@ -543,6 +551,24 @@ def _patch_langchain(ctx: PatchContext) -> None:
         "create_agent() call: before_model input scan, wrap_tool_call tool scan, "
         "after_model output scan — all on the same sensor",
     )
+    # Each run of an agent create_agent built is one request (ruling 4), as each
+    # Agents SDK run and CrewAI kickoff is: its value-origin ledger is bound before
+    # the first node runs, so the model turns, the tools node and the next turn
+    # share it with no xaidr.flow() around the run. invoke and ainvoke run through
+    # stream and astream.
+    if "langgraph.pregel.main" in sys.modules:
+        def is_agent(graph: Any) -> bool:
+            return getattr(getattr(graph, "builder", None), "__xaidr_agent_run__", False)
+
+        def run_factory(orig: Callable) -> Callable:
+            return _vo_seams.request_scoped_stream(orig, is_agent)
+
+        for site in ("Pregel.stream", "Pregel.astream"):
+            ctx.try_install(
+                "langgraph.pregel.main", site, "request", run_factory,
+                "each run of an agent create_agent built is one value-origin request, "
+                "its ledger bound before the first node runs",
+            )
     ctx.note(
         "langchain: create_agent is a MODULE FUNCTION, so a module that already "
         "ran `from langchain.agents import create_agent` before protect() holds "
