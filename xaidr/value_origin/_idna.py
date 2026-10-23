@@ -7,18 +7,23 @@ destinations at all, so a poisoned read naming one could never be recorded and a
 call to it would come back ``unresolved`` — which never blocks. That is an
 evasion, which is why ruling 3.6 accepts Unicode labels and encodes them.
 
-THE FLAGS, as settled 2026-09-24:
+THE FLAGS, as settled 2026-09-24 (CheckJoiners since 1.22.0):
 
     Transitional_Processing   false   ß stays ß (xn--zca), as browsers resolve it
-    UseSTD3ASCIIRules         false   (folded into the generated table)
+    UseSTD3ASCIIRules         false   (the table keeps the STD3 statuses apart)
     CheckHyphens              false
     CheckBidi                 true    RFC 5893, classes from Unicode 13.0
-    CheckJoiners              STRICT  any ZWJ/ZWNJ fails: CONTEXTJ needs
-                                      Joining_Type, which the stdlib lacks
+    CheckJoiners              true    CONTEXTJ (RFC 5892 A.1, A.2): Joining_Type
+                                      and the viramas, from Unicode 13.0
     VerifyDnsLength           false
 
-The mapping table is Unicode 13.0 — see ``scripts/gen_value_origin_data.py`` for
-why that makes the result the same on every supported interpreter.
+``strict=True`` turns on UseSTD3ASCIIRules, CheckHyphens and VerifyDnsLength
+too: the settings IdnaTestV2 13.0.0 is computed with, so the conformance test
+can check every row of it (tests/value_origin_conformance/test_idna_v2.py).
+
+The data is Unicode 13.0 -- see ``scripts/gen_value_origin_data.py`` for why
+that makes the result the same on every supported interpreter. Nothing here
+reads the interpreter's case mapping: ``fold`` is the table's.
 
 Returns ``None`` on any failure; never raises.
 """
@@ -29,12 +34,12 @@ import unicodedata
 
 from . import _idna_data as _D
 
-_ZW_JOINERS = frozenset("‌‍")
 _RTL = frozenset({"R", "AL"})
 _RTL_ALLOWED = frozenset({"R", "AL", "AN", "EN", "ES", "CS", "ET", "ON", "BN", "NSM"})
 _RTL_END = frozenset({"R", "AL", "EN", "AN"})
 _LTR_ALLOWED = frozenset({"L", "EN", "ES", "CS", "ET", "ON", "BN", "NSM"})
 _LTR_END = frozenset({"L", "EN"})
+_ZWNJ, _ZWJ = "\u200c", "\u200d"
 
 
 def _lookup(starts, values, cp):
@@ -53,36 +58,77 @@ def _is_mark(ch: str) -> bool:
     return _lookup(_D.MARK_STARTS, _D.MARK_VALUES, ord(ch))
 
 
-def _map(s: str):
+def _joining(ch: str):
+    return _lookup(_D.JOINING_STARTS, _D.JOINING_VALUES, ord(ch))
+
+
+def _map(s: str, std3: bool = False):
     out = []
     for ch in s:
         st = _status(ch)
-        if st == "V":
+        k = st[0]
+        if k == "V" or (k == "S" and not std3):
             out.append(ch)
-        elif st == "I":
+        elif k == "I":
             continue
-        elif st[0] == "M":
+        elif k == "M" or (k == "T" and not std3):
             out.append(st[1:])
         else:
             return None
     return "".join(out)
 
 
-def _valid_label(label: str) -> bool:
+def fold(s: str) -> str:
+    """``s`` with the table's case mapping and nothing else: each mapped code
+    point replaced by its mapping, every other one kept (a disallowed one too).
+    The interpreter's ``str.lower`` follows its own Unicode version and applies
+    Final_Sigma, so it is never used for a key (V-4)."""
+    out = []
+    for ch in s:
+        st = _status(ch)
+        out.append(st[1:] if st[0] in "MT" else ch)
+    return "".join(out)
+
+
+def _contextj_ok(label: str) -> bool:
+    """RFC 5892 Appendix A.1 (ZWNJ) and A.2 (ZWJ)."""
+    for i, ch in enumerate(label):
+        if ch not in (_ZWNJ, _ZWJ):
+            continue
+        if i > 0 and ord(label[i - 1]) in _D.VIRAMAS:
+            continue
+        if ch == _ZWJ:
+            return False
+        j = i - 1
+        while j >= 0 and _joining(label[j]) == "T":
+            j -= 1
+        if j < 0 or _joining(label[j]) not in ("L", "D"):
+            return False
+        k = i + 1
+        while k < len(label) and _joining(label[k]) == "T":
+            k += 1
+        if k >= len(label) or _joining(label[k]) not in ("R", "D"):
+            return False
+    return True
+
+
+def _valid_label(label: str, std3: bool = False, hyphens: bool = False) -> bool:
+    """UTS-46 4.1, nontransitional."""
     if not label:
         return True
     if unicodedata.normalize("NFC", label) != label:
-        return False
+        return False                                            # V1
+    if hyphens and (label[2:4] == "--" or label[0] == "-" or label[-1] == "-"):
+        return False                                            # V2, V3
     if "." in label:
-        return False
+        return False                                            # V4
     if _is_mark(label[0]):
-        return False
+        return False                                            # V5
     for ch in label:
-        if ch in _ZW_JOINERS:
-            return False
-        if _status(ch) != "V":
-            return False
-    return True
+        k = _status(ch)[0]
+        if not (k == "V" or (k == "S" and not std3)):
+            return False                                        # V6
+    return _contextj_ok(label)                                  # V7, CONTEXTJ
 
 
 def _bidi_ok(labels) -> bool:
@@ -116,9 +162,9 @@ def _bidi_ok(labels) -> bool:
     return True
 
 
-def to_unicode_labels(host: str):
+def to_unicode_labels(host: str, *, strict: bool = False):
     """UTS-46 steps 1-4: the validated U-labels of ``host``, or None."""
-    mapped = _map(host)
+    mapped = _map(host, std3=strict)
     if mapped is None:
         return None
     mapped = unicodedata.normalize("NFC", mapped)
@@ -131,11 +177,11 @@ def to_unicode_labels(host: str):
                 return None
             if not dec or dec.isascii():
                 return None
-            if not _valid_label(dec):
+            if not _valid_label(dec, strict, strict):
                 return None
             labels.append(dec)
         else:
-            if not _valid_label(lab):
+            if not _valid_label(lab, strict, strict):
                 return None
             labels.append(lab)
     if not _bidi_ok(labels):
@@ -143,12 +189,12 @@ def to_unicode_labels(host: str):
     return labels
 
 
-def to_ascii(host: str):
+def to_ascii(host: str, *, strict: bool = False):
     """UTS-46 ToASCII of ``host`` (A-labels, lowercase), or None on failure."""
     try:
         if not isinstance(host, str):
             return None
-        labels = to_unicode_labels(host)
+        labels = to_unicode_labels(host, strict=strict)
         if labels is None:
             return None
         out = []
@@ -157,6 +203,11 @@ def to_ascii(host: str):
                 out.append(lab)
             else:
                 out.append("xn--" + lab.encode("punycode").decode("ascii"))
-        return ".".join(out)
+        result = ".".join(out)
+        if strict:                                              # VerifyDnsLength
+            body = out[:-1] if len(out) > 1 and out[-1] == "" else out
+            if not 1 <= len(".".join(body)) <= 253 or not all(1 <= len(x) <= 63 for x in body):
+                return None
+        return result
     except Exception:
         return None
