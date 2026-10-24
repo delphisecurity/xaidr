@@ -82,9 +82,15 @@ def scan(base: str, public: list, pat) -> list:
         if current is None or skip or not line.startswith("+"):
             continue
         text = line[1:]
-        if any(text in known.setdefault((current, ref), set(
-                _git("show", f"{ref}:{current}").decode("utf-8", "replace").splitlines()))
-               for ref in public):
+        # Each public ref's copy of the file is read once per file. A
+        # ``known.setdefault(key, set(git show ...))`` evaluates its default on every
+        # call, so it ran one ``git show`` per added line: minutes for a vendored
+        # data file of tens of thousands of lines.
+        for ref in public:
+            if (current, ref) not in known:
+                known[(current, ref)] = set(
+                    _git("show", f"{ref}:{current}").decode("utf-8", "replace").splitlines())
+        if any(text in known[(current, ref)] for ref in public):
             continue
         if pat.search(text) and not _TRAILER.match(text):
             hits.append((current, text.strip()[:160]))
