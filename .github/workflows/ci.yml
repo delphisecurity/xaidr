@@ -144,24 +144,26 @@ jobs:
   # backport, and its stringprep predates CPython's fix (an unfixed interpreter
   # encodes a non-ASCII host by its own Unicode). A test red only there was red
   # for a round with every pytest job green (test_differential_oracles.py at
-  # fa73bff), because only the differential ran on 3.12.2. uv installs the exact
-  # patch release.
+  # fa73bff), because only the differential ran on 3.12.2. setup-python installs
+  # the exact patch release as a plain interpreter, as the matrix above does: the
+  # wheel tests build a fresh venv from the running one, which a uv-made venv
+  # cannot nest (ensurepip exits 127 there).
   test-3-12-2:
     name: pytest (py3.12.2, full)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - name: Install 3.12.2, the package and the dev extras
-        env:
-          UV_PYTHON_PREFERENCE: only-managed
+      - name: Set up Python 3.12.2
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.2"
+      - name: Install (full — http, trace, dev extras)
         run: |
-          uv python install 3.12.2
-          uv venv -p 3.12.2 .venv-3122
-          uv pip install --python .venv-3122 ".[http,trace,dev]"
-          .venv-3122/bin/python -c "import sys; assert sys.version_info[:3] == (3, 12, 2), sys.version; print(sys.version)"
+          python -m pip install --upgrade pip
+          pip install ".[http,trace,dev]"
+          python -c "import sys; assert sys.version_info[:3] == (3, 12, 2), sys.version; print(sys.version)"
       - name: Run test suite
-        run: .venv-3122/bin/python -m pytest -q
+        run: python -m pytest -q
 
   # ── Real frameworks, pinned — the only job where they are installed ────────
   # Neither `test` config installs an agent framework (`dev` is pytest +
