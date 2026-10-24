@@ -154,15 +154,56 @@ def _core_keys(url):
     return {f.destination.key() for f in found if f.destination is not None}
 
 
+_SCHEME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+-.")
+
+
+def _refused_by_3_12_2(url):
+    """Which of CPython 3.12.2's bracket checks refuses ``url``, written out from its
+    urlsplit so it can be asked on any interpreter: "unbalanced" (the netloc holds
+    a `[` without a `]` or the reverse, a check every release makes), "bracketed"
+    (the text between its first `[` and `]` is no IP literal), or None."""
+    import ipaddress
+    url = url.lstrip("".join(map(chr, range(33))))
+    for b in "\t\r\n":
+        url = url.replace(b, "")
+    i = url.find(":")
+    if i > 0 and url[0].isascii() and url[0].isalpha() and all(c in _SCHEME_CHARS for c in url[:i]):
+        url = url[i + 1:]
+    if url[:2] != "//":
+        return None
+    netloc = re.split(r"[/?#]", url[2:], 1)[0]
+    if ("[" in netloc) != ("]" in netloc):
+        return "unbalanced"
+    if "[" in netloc:
+        host = netloc.partition("[")[2].partition("]")[0]
+        try:
+            if host.startswith("v"):
+                if not re.match(r"\Av[a-fA-F0-9]+\..+\Z", host):
+                    return "bracketed"
+            elif isinstance(ipaddress.ip_address(host), ipaddress.IPv4Address):
+                return "bracketed"
+        except ValueError:
+            return "bracketed"
+    return None
+
+
 def _urlsplit_refuses_a_bracketed_host(url):
+    """This interpreter's urlsplit refuses ``url`` and 3.12.2's accepts it: the
+    bracketed-host validation backported to later patch releases, and nothing else.
+    A netloc whose brackets do not pair is refused by every release, 3.12.2 too,
+    so it is never this class's (``_a_bracket_no_urlsplit_pairs``)."""
     from urllib.parse import urlsplit
     if "]" not in url:
         return False
     try:
         urlsplit(url)
     except ValueError:
-        return True
+        return _refused_by_3_12_2(url) is None
     return False
+
+
+def _a_bracket_no_urlsplit_pairs(url):
+    return _refused_by_3_12_2(url) == "unbalanced"
 
 
 # Over-reads: a host the core reads that NO oracle in THIS process reads.
@@ -224,6 +265,14 @@ _OVER_READ_CLASSES = {
         "own ProtectedHttpClient._extract_host decides destination policy with it. "
         "urllib.request does NOT send there: it passes the netloc on, percent-decoded "
         "and userinfo included, as one host string."),
+    "unbalanced-bracket": (
+        _a_bracket_no_urlsplit_pairs,
+        "Every urllib.parse release refuses a netloc whose brackets do not pair, "
+        "3.12.2 too, and the core still reads the host after the last '@', as httpx, "
+        "urllib3 and WHATWG do (`http://&a:foo(b]c@d:2/`). Where that host is "
+        "non-ASCII and keeps a backslash, httpx refuses the URL (its IDNA step), so "
+        "no oracle here reads the core's RFC 3986 key; httpx reads the same key "
+        "for the ASCII host. An extra finding can only make the wire unresolved."),
 }
 
 
@@ -366,6 +415,63 @@ def test_the_named_over_read_class_stands_for_a_measured_interpreter(comparison)
         assert absorbed, ("the urlsplit-bracket-validation class absorbed nothing on "
                           "a post-backport interpreter; delete it rather than keep "
                           "an allowance that hides nothing")
+
+
+def test_the_backport_class_holds_nothing_3_12_2_refuses(comparison):
+    """The backport class says CPython 3.12.2's urllib.parse reads its hosts. A URL
+    3.12.2 refuses as well (its brackets do not pair) makes that reason false, and
+    absorbing it hid over-reads behind a premise that did not hold (36 on 3.12.2 at
+    fa73bff), so it is red on every interpreter, not only on 3.12.2."""
+    wrong = [(u, k, _refused_by_3_12_2(u))
+             for u, k in comparison["over"].get("urlsplit-bracket-validation", [])
+             if _refused_by_3_12_2(u) is not None]
+    assert not wrong, (
+        f"{len(wrong)} over-reads absorbed as the bracketed-host backport's, though "
+        f"CPython 3.12.2's urlsplit refuses them too: {wrong[:5]}")
+
+
+def test_the_3_12_2_bracket_checks_are_written_out_as_3_12_2_makes_them():
+    """``_refused_by_3_12_2`` is the class's measure, so on an interpreter whose
+    urlsplit reads like 3.12.2 it must refuse exactly what urlsplit refuses, over
+    every spelling with a bracket; on a later one, everything 3.12.2 refuses is
+    refused here too (the backport only adds refusals)."""
+    from urllib.parse import urlsplit
+    differ, n = [], 0
+    for url in _spellings():
+        if "[" not in url and "]" not in url:
+            continue
+        n += 1
+        try:
+            urlsplit(url)
+            here = False
+        except ValueError:
+            here = True
+        mine = _refused_by_3_12_2(url) is not None
+        if (here != mine) if _urlsplit_reads_like_3_12_2() else (mine and not here):
+            differ.append((url, here, mine))
+    assert n >= 10_000, n
+    assert not differ, f"{len(differ)} spellings differ, e.g. {differ[:5]}"
+
+
+def test_the_unbalanced_bracket_class_is_httpx_refusing_a_unicode_host(comparison):
+    """The class's reason, checked: on every interpreter it is needed, each URL in
+    it is refused by httpx, and its host after the last '@' is non-ASCII and keeps
+    a backslash. A row outside that shape is an over-read the reason does not
+    cover."""
+    import httpx
+    absorbed = comparison["over"].get("unbalanced-bracket", [])
+    assert absorbed, "the unbalanced-bracket class absorbed nothing; delete it"
+    outside = []
+    for url, key in absorbed:
+        host = re.split(r"[/?#]", url.split("//", 1)[-1], 1)[0].rpartition("@")[2]
+        try:
+            httpx.URL(url)
+            refused = False
+        except Exception:
+            refused = True
+        if not (refused and not host.isascii() and "\\" in host):
+            outside.append((url, key))
+    assert not outside, f"{len(outside)} rows the reason does not describe: {outside[:5]}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
