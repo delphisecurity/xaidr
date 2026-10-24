@@ -113,6 +113,8 @@ def test_the_timestamp_is_microsecond_resolution_not_whole_seconds():
     """Whole seconds cannot order sub-millisecond scans, which is the ordering
     an incident review actually reads."""
     events = _drive(lambda s: [s.scan(ATTACK) for _ in range(3)])
+    # Sweep, 2026-10-06: with no events the regex below never ran, and the test passed.
+    assert len(events) >= 3, f"only {len(events)} events: the timestamp format was never checked"
     for e in events:
         ts = e["data"]["timestamp"]
         assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z", ts), ts

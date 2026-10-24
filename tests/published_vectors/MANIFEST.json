@@ -1,0 +1,333 @@
+{
+  "about": "Files in this folder copied byte for byte from an upstream project: each one's upstream URL, version (a tag, a commit or a release) and sha256. scripts/published_vectors.py verifies them, and extracts the test vectors from them when a test or the differential runs; the release disclosure scan (scripts/disclosure_scan.py) skips a file here only while its bytes match its entry.",
+  "files": [
+    {
+      "path": "upstream/cpy3.10.22-test_urlparse.py",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.10.22/Lib/test/test_urlparse.py",
+      "version": "tag v3.10.22",
+      "sha256": "3839d054c4f5e23b7d035dcafc096ad9ecb7bbba2ad2ed52eea00ab9369aeaa7"
+    },
+    {
+      "path": "LICENSES/CPython-3.12.15-LICENSE",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.10.22/LICENSE",
+      "version": "tag v3.10.22",
+      "sha256": "3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf"
+    },
+    {
+      "path": "upstream/cpy3.10.22-test_email.py",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.10.22/Lib/test/test_email/test_email.py",
+      "version": "tag v3.10.22",
+      "sha256": "22097d9a51c5369ba6b6431faccd20c394ef19ef968906d0358516908e26f840"
+    },
+    {
+      "path": "upstream/cpy3.10.22-test__header_value_parser.py",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.10.22/Lib/test/test_email/test__header_value_parser.py",
+      "version": "tag v3.10.22",
+      "sha256": "e4805fbd5ba248e9468c4cb52d7753281c3af96acdb28416ab56a2f38b796390"
+    },
+    {
+      "path": "upstream/cpy3.10.22-test_headerregistry.py",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.10.22/Lib/test/test_email/test_headerregistry.py",
+      "version": "tag v3.10.22",
+      "sha256": "ac98f27ed246f81a53c88cba5e2c9a6d18a7d6c35b14edca7065aa7806dfa385"
+    },
+    {
+      "path": "upstream/cpy3.10.22-test_urllib2.py",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.10.22/Lib/test/test_urllib2.py",
+      "version": "tag v3.10.22",
+      "sha256": "b173ed2cd8538f4d3426ac7b09bc68c914310f0c29093d5c215fbdfd6677ad83"
+    },
+    {
+      "path": "upstream/cpy3.12.15-test_urlparse.py",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.12.15/Lib/test/test_urlparse.py",
+      "version": "tag v3.12.15",
+      "sha256": "35f7ac508b1755f650aa6cc00802fee8f8f26c6a113bd9a07c8b4fdd811f85bc"
+    },
+    {
+      "path": "upstream/cpy3.12.15-test_email.py",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.12.15/Lib/test/test_email/test_email.py",
+      "version": "tag v3.12.15",
+      "sha256": "c6f91ed4b0256e325b648c5b02f23eea7964b72e0d1f6cfd3d64d6c95d357f57"
+    },
+    {
+      "path": "upstream/cpy3.12.15-test__header_value_parser.py",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.12.15/Lib/test/test_email/test__header_value_parser.py",
+      "version": "tag v3.12.15",
+      "sha256": "221ad12205bf81917a7aa22cfd278df335c7cb978619b3a95b4bb892bacb5eb8"
+    },
+    {
+      "path": "upstream/cpy3.12.15-test_headerregistry.py",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.12.15/Lib/test/test_email/test_headerregistry.py",
+      "version": "tag v3.12.15",
+      "sha256": "135ebbf57c4d8b99e70b0c31d53c65c806ebb89db4d2afe897e86f4cd51305c6"
+    },
+    {
+      "path": "upstream/cpy3.12.15-test_urllib2.py",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.12.15/Lib/test/test_urllib2.py",
+      "version": "tag v3.12.15",
+      "sha256": "bb401075e6fa7d0ab806a98dbd8d7d9773b9bf26d432260b291f46193d2d30e8"
+    },
+    {
+      "path": "upstream/cpy3.14.9-test_urlparse.py",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.14.9/Lib/test/test_urlparse.py",
+      "version": "tag v3.14.9",
+      "sha256": "c1b4bf192569399b268d310dd8f4983c5cbce66d182ee2af29fc047b61897730"
+    },
+    {
+      "path": "LICENSES/CPython-3.14.9-LICENSE",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.14.9/LICENSE",
+      "version": "tag v3.14.9",
+      "sha256": "b0e25a78cffb43f4d92de8b61ccfa1f1f98ecbc22330b54b5251e7b6ba010231"
+    },
+    {
+      "path": "upstream/cpy3.14.9-test_email.py",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.14.9/Lib/test/test_email/test_email.py",
+      "version": "tag v3.14.9",
+      "sha256": "bd28a6bad0c459e005c064210869506b80eb74c627299e6e5fe5ba7708cc5538"
+    },
+    {
+      "path": "upstream/cpy3.14.9-test__header_value_parser.py",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.14.9/Lib/test/test_email/test__header_value_parser.py",
+      "version": "tag v3.14.9",
+      "sha256": "72d8f45019e0f84a440b3762754952408f73ef06b9e95c18e115bb47a19dfc57"
+    },
+    {
+      "path": "upstream/cpy3.14.9-test_headerregistry.py",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.14.9/Lib/test/test_email/test_headerregistry.py",
+      "version": "tag v3.14.9",
+      "sha256": "9c37bbe407825b1bb1ea58e1b987ee819c80be108ffdea8af07b41c9d7e3de88"
+    },
+    {
+      "path": "upstream/cpy3.14.9-test_urllib2.py",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.14.9/Lib/test/test_urllib2.py",
+      "version": "tag v3.14.9",
+      "sha256": "c67976367976bc0e5552834e473b207cfbda7f9f68c0e30a57af2a09e7a7d1ba"
+    },
+    {
+      "path": "upstream/lib1560.c",
+      "url": "https://raw.githubusercontent.com/curl/curl/curl-8_23_0/tests/libtest/lib1560.c",
+      "version": "tag curl-8_23_0",
+      "sha256": "11e196e071295c5b866a421d03ca4d815c12dbc406c2908594ca472b722782ee"
+    },
+    {
+      "path": "LICENSES/curl-COPYING",
+      "url": "https://raw.githubusercontent.com/curl/curl/curl-8_23_0/COPYING",
+      "version": "tag curl-8_23_0",
+      "sha256": "82f2f4427d6545ee5aaac4f0b80428da6cc8ba41c2cf5da3a03680ec327b9681"
+    },
+    {
+      "path": "upstream/go-url_test.go",
+      "url": "https://raw.githubusercontent.com/golang/go/go1.27.3/src/net/url/url_test.go",
+      "version": "tag go1.27.3",
+      "sha256": "6a65494bd54a807be1350ec2a952075a623a91fbf5b9b6f370fe534c9440bdd3"
+    },
+    {
+      "path": "LICENSES/Go-LICENSE",
+      "url": "https://raw.githubusercontent.com/golang/go/go1.27.3/LICENSE",
+      "version": "tag go1.27.3",
+      "sha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+    },
+    {
+      "path": "upstream/go-message_test.go",
+      "url": "https://raw.githubusercontent.com/golang/go/go1.27.3/src/net/mail/message_test.go",
+      "version": "tag go1.27.3",
+      "sha256": "a88aad1c1532ab9d9d640cedcfa8e8ea26da625e3fff902166ff4b2a5cef9839"
+    },
+    {
+      "path": "upstream/IdnaTestV2-13.0.0.txt",
+      "url": "https://www.unicode.org/Public/idna/13.0.0/IdnaTestV2.txt",
+      "version": "Unicode 13.0.0",
+      "sha256": "c6f3778b0545fd150c8063286c7f5adc901e16557eddccc3751213646d07593d"
+    },
+    {
+      "path": "LICENSES/Unicode-license.txt",
+      "url": "https://www.unicode.org/license.txt",
+      "version": "Unicode 13.0.0",
+      "sha256": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96"
+    },
+    {
+      "path": "upstream/IdnaTestV2-18.0.0.txt",
+      "url": "https://www.unicode.org/Public/18.0.0/idna/IdnaTestV2.txt",
+      "version": "Unicode 18.0.0",
+      "sha256": "0236b75c5b20dfd857b3b5cf75509887959d6ab00d6c7bda9b7dc3df518c1fde"
+    },
+    {
+      "path": "upstream/wpt-urltestdata.json",
+      "url": "https://raw.githubusercontent.com/web-platform-tests/wpt/514913ff14fde47147cc4fa84444d86dc8bc3112/url/resources/urltestdata.json",
+      "version": "commit 514913ff14fde47147cc4fa84444d86dc8bc3112",
+      "sha256": "81e85fd3c199c08ef9c34cf651b3580eeedd080316493bfaf277a6b5ff8cf652"
+    },
+    {
+      "path": "LICENSES/WPT-LICENSE.md",
+      "url": "https://raw.githubusercontent.com/web-platform-tests/wpt/514913ff14fde47147cc4fa84444d86dc8bc3112/LICENSE.md",
+      "version": "commit 514913ff14fde47147cc4fa84444d86dc8bc3112",
+      "sha256": "5fac07febb0e2a97fb0d7b0def149ec08b642e1ba4b9c345283ab1cbd2af6570"
+    },
+    {
+      "path": "upstream/wpt-toascii.json",
+      "url": "https://raw.githubusercontent.com/web-platform-tests/wpt/514913ff14fde47147cc4fa84444d86dc8bc3112/url/resources/toascii.json",
+      "version": "commit 514913ff14fde47147cc4fa84444d86dc8bc3112",
+      "sha256": "644eba9d5b593df8095cfa307222f3014542ff9cc02d555f8e5660059d80470f"
+    }
+  ],
+  "sources": [
+    {
+      "id": "cpython-3.10.22:test_urlparse.py",
+      "kind": "cpython",
+      "licence": "PSF-2.0",
+      "licence_file": "LICENSES/CPython-3.12.15-LICENSE",
+      "file": "upstream/cpy3.10.22-test_urlparse.py"
+    },
+    {
+      "id": "cpython-3.10.22:test_email.py",
+      "kind": "cpython",
+      "licence": "PSF-2.0",
+      "licence_file": "LICENSES/CPython-3.12.15-LICENSE",
+      "file": "upstream/cpy3.10.22-test_email.py"
+    },
+    {
+      "id": "cpython-3.10.22:test__header_value_parser.py",
+      "kind": "cpython",
+      "licence": "PSF-2.0",
+      "licence_file": "LICENSES/CPython-3.12.15-LICENSE",
+      "file": "upstream/cpy3.10.22-test__header_value_parser.py"
+    },
+    {
+      "id": "cpython-3.10.22:test_headerregistry.py",
+      "kind": "cpython",
+      "licence": "PSF-2.0",
+      "licence_file": "LICENSES/CPython-3.12.15-LICENSE",
+      "file": "upstream/cpy3.10.22-test_headerregistry.py"
+    },
+    {
+      "id": "cpython-3.10.22:test_urllib2.py",
+      "kind": "cpython",
+      "licence": "PSF-2.0",
+      "licence_file": "LICENSES/CPython-3.12.15-LICENSE",
+      "file": "upstream/cpy3.10.22-test_urllib2.py"
+    },
+    {
+      "id": "cpython-3.12.15:test_urlparse.py",
+      "kind": "cpython",
+      "licence": "PSF-2.0",
+      "licence_file": "LICENSES/CPython-3.12.15-LICENSE",
+      "file": "upstream/cpy3.12.15-test_urlparse.py"
+    },
+    {
+      "id": "cpython-3.12.15:test_email.py",
+      "kind": "cpython",
+      "licence": "PSF-2.0",
+      "licence_file": "LICENSES/CPython-3.12.15-LICENSE",
+      "file": "upstream/cpy3.12.15-test_email.py"
+    },
+    {
+      "id": "cpython-3.12.15:test__header_value_parser.py",
+      "kind": "cpython",
+      "licence": "PSF-2.0",
+      "licence_file": "LICENSES/CPython-3.12.15-LICENSE",
+      "file": "upstream/cpy3.12.15-test__header_value_parser.py"
+    },
+    {
+      "id": "cpython-3.12.15:test_headerregistry.py",
+      "kind": "cpython",
+      "licence": "PSF-2.0",
+      "licence_file": "LICENSES/CPython-3.12.15-LICENSE",
+      "file": "upstream/cpy3.12.15-test_headerregistry.py"
+    },
+    {
+      "id": "cpython-3.12.15:test_urllib2.py",
+      "kind": "cpython",
+      "licence": "PSF-2.0",
+      "licence_file": "LICENSES/CPython-3.12.15-LICENSE",
+      "file": "upstream/cpy3.12.15-test_urllib2.py"
+    },
+    {
+      "id": "cpython-3.14.9:test_urlparse.py",
+      "kind": "cpython",
+      "licence": "PSF-2.0",
+      "licence_file": "LICENSES/CPython-3.14.9-LICENSE",
+      "file": "upstream/cpy3.14.9-test_urlparse.py"
+    },
+    {
+      "id": "cpython-3.14.9:test_email.py",
+      "kind": "cpython",
+      "licence": "PSF-2.0",
+      "licence_file": "LICENSES/CPython-3.14.9-LICENSE",
+      "file": "upstream/cpy3.14.9-test_email.py"
+    },
+    {
+      "id": "cpython-3.14.9:test__header_value_parser.py",
+      "kind": "cpython",
+      "licence": "PSF-2.0",
+      "licence_file": "LICENSES/CPython-3.14.9-LICENSE",
+      "file": "upstream/cpy3.14.9-test__header_value_parser.py"
+    },
+    {
+      "id": "cpython-3.14.9:test_headerregistry.py",
+      "kind": "cpython",
+      "licence": "PSF-2.0",
+      "licence_file": "LICENSES/CPython-3.14.9-LICENSE",
+      "file": "upstream/cpy3.14.9-test_headerregistry.py"
+    },
+    {
+      "id": "cpython-3.14.9:test_urllib2.py",
+      "kind": "cpython",
+      "licence": "PSF-2.0",
+      "licence_file": "LICENSES/CPython-3.14.9-LICENSE",
+      "file": "upstream/cpy3.14.9-test_urllib2.py"
+    },
+    {
+      "id": "curl-8_23_0:lib1560.c",
+      "kind": "curl",
+      "licence": "curl",
+      "licence_file": "LICENSES/curl-COPYING",
+      "file": "upstream/lib1560.c"
+    },
+    {
+      "id": "go1.27.3:net/url/url_test.go",
+      "kind": "go-url",
+      "licence": "BSD-3-Clause",
+      "licence_file": "LICENSES/Go-LICENSE",
+      "file": "upstream/go-url_test.go"
+    },
+    {
+      "id": "go1.27.3:net/mail/message_test.go",
+      "kind": "go-mail",
+      "licence": "BSD-3-Clause",
+      "licence_file": "LICENSES/Go-LICENSE",
+      "file": "upstream/go-message_test.go"
+    },
+    {
+      "id": "IdnaTestV2-13.0.0",
+      "kind": "idna",
+      "licence": "Unicode-3.0",
+      "licence_file": "LICENSES/Unicode-license.txt",
+      "file": "upstream/IdnaTestV2-13.0.0.txt",
+      "version": "13.0.0",
+      "pinned": true
+    },
+    {
+      "id": "IdnaTestV2-18.0.0",
+      "kind": "idna",
+      "licence": "Unicode-3.0",
+      "licence_file": "LICENSES/Unicode-license.txt",
+      "file": "upstream/IdnaTestV2-18.0.0.txt",
+      "version": "18.0.0",
+      "pinned": false
+    },
+    {
+      "id": "wpt:urltestdata.json",
+      "kind": "wpt-url",
+      "licence": "BSD-3-Clause",
+      "licence_file": "LICENSES/WPT-LICENSE.md",
+      "file": "upstream/wpt-urltestdata.json"
+    },
+    {
+      "id": "wpt:toascii.json",
+      "kind": "wpt-toascii",
+      "licence": "BSD-3-Clause",
+      "licence_file": "LICENSES/WPT-LICENSE.md",
+      "file": "upstream/wpt-toascii.json"
+    }
+  ]
+}

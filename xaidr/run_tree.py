@@ -81,7 +81,7 @@ class _Run:
     the index keeps no wrapper alive of its own. ``members``, ``seq`` and
     ``collided`` are used on a root's entry only."""
 
-    __slots__ = ("root", "parent", "path", "members", "seq", "collided")
+    __slots__ = ("root", "parent", "path", "members", "seq", "collided", "keys")
 
     def __init__(self, root: int, parent: Optional[int], path: tuple) -> None:
         self.root = root
@@ -90,6 +90,10 @@ class _Run:
         self.members: Optional[set] = None
         self.seq = 0
         self.collided = False
+        # (root id, own id, parent id) as event strings, built once by the first
+        # stamp and reused: a UUID's text never changes, and building it is most
+        # of a stamp's cost.
+        self.keys: Optional[tuple] = None
 
 
 def _bounded(name: Any) -> Optional[str]:
@@ -472,10 +476,14 @@ def stamp(data: dict) -> None:
         data["runTree"] = status
         if run is None:
             return
-        data["runRootId"] = str(UUID(int=run.root))
-        data["runTaskId"] = str(enclosing)
-        if run.parent is not None:
-            data["runParentId"] = str(UUID(int=run.parent))
+        keys = run.keys
+        if keys is None:
+            keys = run.keys = (str(UUID(int=run.root)), str(enclosing),
+                               None if run.parent is None else str(UUID(int=run.parent)))
+        data["runRootId"] = keys[0]
+        data["runTaskId"] = keys[1]
+        if keys[2] is not None:
+            data["runParentId"] = keys[2]
         metadata = cfg.get("metadata") if cfg else None
         if isinstance(metadata, dict):
             node = _bounded(metadata.get("langgraph_node"))

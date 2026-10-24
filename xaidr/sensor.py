@@ -6,9 +6,14 @@ model (allow / flag / block). No account, no backend, no network escalation.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+import functools
+import dataclasses
 import inspect
 import json
 import logging
+import threading
 import time
 from dataclasses import replace
 from typing import Mapping, Optional, Sequence
@@ -53,6 +58,10 @@ from .failclosed import (
     resolve as _resolve_fail_closed,
 )
 from .extensions import DestinationView, ScanRequest, SensorExtension
+from . import value_origin as _vo
+from . import _vo_seams
+from .value_origin import _ledger as _vo_ledger  # noqa: F401  (the input batch, the replay)
+from .value_origin._designations import source_matches as _vo_source_matches
 from .reporters import Reporter, safe_fault
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
 from .scanner.command_parse import reconstruct as _reconstruct_command
@@ -403,6 +412,28 @@ _TOOL_ARG_KEEP_CATEGORIES = _TOOL_ARG_BLOCK_CATEGORIES | _TOOL_ARG_FLAG_CATEGORI
 _BIND_FAILURES: set = set()
 
 
+# A2 M6: the principal input value origin records, capped like a tool-result leaf.
+_VO_INPUT_CAP = 65_536   # the core's key n-gram window (MAX_INPUT_NGRAM_CHARS); the input is no longer cut at it
+# V-31 as ruled by the owner (2026-10-04): a value-origin block's category and rule.
+_VO_BLOCK_CATEGORY = "untrusted_destination"
+_VO_BLOCK_RULE = "ORIGIN_UNTRUSTED_DESTINATION"
+# The spec's V-31 audit key (the value-origin architecture specification,
+# V-31/C-19): the waterfall renders the intent stage `decided` iff findings carry
+# it. Carried beside the owner's rule so the cross-repo contract is not broken
+# while the two namings are reconciled (M8 report).
+_VO_AUDIT_RULE = "intent.value_origin_untrusted"
+# Owner, 2026-10-05: a call blocked because a source could not be examined
+# (result_unread) is NOT an untrusted destination; saying so would be a false
+# statement in the audit record. Its own names:
+_VO_UNEXAMINABLE_CATEGORY = "unexaminable_source"
+_VO_UNEXAMINABLE_RULE = "ORIGIN_UNEXAMINABLE_SOURCE"
+# Q18: a raw result from these modules may hold an unread stream; recording it
+# would consume it under default RECORD, a host-behaviour change no verdict sees.
+_IO_BACKED_MODULES = frozenset({"httpx", "requests", "urllib3", "aiohttp"})
+
+
+
+
 def _resolve_provenance(
     agent_id: str,
     per_call: dict | None = None,
@@ -472,6 +503,57 @@ def _coerce_scannable(value) -> Optional[str]:
     return None
 
 
+# ── M9: the valueOrigin wire field, and its consumer gate (owner, 2026-10-06) ──
+# "Do not emit a value no consumer accepts." The consumer is Delphi Core, which
+# must accept all fifteen values before anything depends on "v2"
+# (docs/value-origin-wire-consumers.md). Withholding applies to EVERY reporter.
+# The sensor names the consumer's vocabulary (Sensor(value_origin_wire=...)):
+#   "v1"  the nine below -- the DEFAULT;
+#   "v2"  all fifteen, for once the consumer accepts them;
+#   "off" emit nothing.
+# A value outside the active vocabulary is WITHHELD -- the key is absent, as for
+# a sensor that does not report -- and named in a once-per-value warning; it is
+# always on ScanResult.value_origin. Literals, not WireValue, so this module
+# reaches into the core only inside guarded calls (the fault-isolation sweep);
+# tests/test_value_origin_m9.py pins v2 == every WireValue.
+_VO_WIRE_V1 = frozenset({
+    "principal", "principal_undeclared_span", "trusted_source", "untrusted_source",
+    "unresolved", "no_destination", "no_flow", "ledger_absent", "ledger_saturated",
+})
+_VO_WIRE_VOCABULARIES = {
+    "off": frozenset(),
+    "v1": _VO_WIRE_V1,
+    "v2": _VO_WIRE_V1 | frozenset({"input_truncated", "argument_bound", "result_truncated",
+                                    "result_unread", "extraction_incomplete",
+                                    "write_dropped"}),
+}
+# One tool call's wire value, scoped by @_vo_call_scope around scan_tool_call so
+# every emitter that call reaches -- main, circuit-open, scan-error, fail-closed,
+# gate, not-scannable -- sees it at the one choke point, _enqueue_event.
+_VO_CALL_WIRE: "contextvars.ContextVar[list | None]" = contextvars.ContextVar(
+    "xaidr_value_origin_call_wire", default=None)
+
+
+def _vo_call_scope(fn):
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        token = _VO_CALL_WIRE.set([None])
+        try:
+            return fn(self, *args, **kwargs)
+        finally:
+            _VO_CALL_WIRE.reset(token)
+    return wrapper
+
+
+def _vo_note_wire(cv) -> None:
+    """Record this call's wire value for its events (absent on OFF or a fault)."""
+    holder = _VO_CALL_WIRE.get()
+    if holder is not None:
+        wire = getattr(getattr(cv, "wire", None), "value", None)
+        holder[0] = wire if isinstance(wire, str) and wire else None
+
+
+
 class DelphiSensor:
     """Standalone agent security sensor.
 
@@ -509,6 +591,9 @@ class DelphiSensor:
         extensions: Sequence[SensorExtension] = (),
         emit_provenance_headers: bool = False,
         fail_closed=(),
+        value_origin="record",
+        value_origin_sources: Sequence = (),
+        value_origin_wire: str = "v1",
     ):
         if not agent_id:
             raise ValueError("agent_id is required")
@@ -753,6 +838,71 @@ class DelphiSensor:
                 )
                 self._breaker._emit_hook = self._emit_circuit_event
 
+        # ── value origin (A2): validated LOUDLY here, inert until wired ───
+        # ``Sensor(value_origin="off"|"record"|"enforce", value_origin_sources=
+        # [SourceDesignation, ...])`` (spec V-34). RECORD is the default (C-11):
+        # it evaluates and reports and never changes an action. A bad value
+        # raises ValueError naming it (non-negotiable 2), AFTER every existing
+        # check, so the raise order for a constructor given several bad
+        # arguments is what it has always been.
+        #
+        # INERT at this milestone (A2 M1): stored and read by nothing. Each seam
+        # that reads it lands on its own milestone, measured against the C-11
+        # gate (tests/test_value_origin_c11.py), which this storage exists to
+        # let construct OFF and RECORD sensors side by side.
+        # A2 M4: NO LONGER INERT. RECORD (the default) and ENFORCE evaluate every
+        # tool call in scan_tool_call, attach ScanResult.value_origin, and log one
+        # no_flow warning per sensor (Q6). The comment above predates M4.
+        self._value_origin = _vo.validate_mode(value_origin)
+        self._value_origin_sources = _vo.validate_designations(value_origin_sources)
+        # M9: which wire values the consumer accepts (see _VO_WIRE_VOCABULARIES).
+        if value_origin_wire not in _VO_WIRE_VOCABULARIES:
+            raise ValueError(
+                f"value_origin_wire must be one of {sorted(_VO_WIRE_VOCABULARIES)}, "
+                f"not {value_origin_wire!r}")
+        self._vo_wire_name = value_origin_wire
+        self._vo_wire_vocab = _VO_WIRE_VOCABULARIES[value_origin_wire]
+        self._vo_withheld_warned: set = set()
+        self._vo_emit_fault_logged = False
+        self._vo_no_flow_warned = False          # Q6: one no_flow warning per sensor
+        self._vo_attach_fault_logged = False
+        self._vo_spans_warned = False            # M6: spans= on a non-input direction
+        self._vo_record_fault_logged = False     # M6: input recording fault, logged once
+        self._vo_result_fault_logged = False     # M7: result recording fault, logged once
+        self._vo_lock = threading.Lock()
+        if self._value_origin is not _vo.Mode.OFF:
+            # Ruling 4: each ThreadPoolExecutor work item is one request, so a pool
+            # thread never hands one job's ledger, and its authority, to the next.
+            _vo_seams.install_executor_requests()
+            _vo_seams.install_threadpool_requests()
+        if self._value_origin is _vo.Mode.ENFORCE:
+            # ONE warning, and only for ENFORCE. Two facts an operator must not
+            # learn from an incident (the owner's Q6 principle: a configuration
+            # that silently does nothing is a defect):
+            #   * A2 M8 wired ENFORCE: an untrusted destination BLOCKS (V-31).
+            #   * C-11: with no designations no read is ever trusted, so every
+            #     destination any tool result names is blocked. The owner ruled
+            #     ENFORCE off by default until designations exist (V-31).
+            # The blocking states are generated from _UNEXAMINABLE_WIRES, the
+            # set should_block reads, so the warning cannot name a state that
+            # does not block (tests/test_value_origin_m8.py).
+            from .value_origin._evaluate import _UNEXAMINABLE_WIRES
+            unexaminable = ", ".join(sorted(w.value for w in _UNEXAMINABLE_WIRES))
+            logger.warning(
+                "xaidr: Sensor(agent_id=%r, value_origin='enforce'): value origin "
+                "ENFORCES: a tool call whose wire value is untrusted_source (its "
+                "destination traces to an untrusted source; category "
+                "untrusted_destination) or one of %s (a source value origin could "
+                "not examine; category unexaminable_source) gets a block verdict: "
+                "returned as 'blocked' under enforcement_mode='block' and as "
+                "'flagged' under the default 'monitor'.%s", self.agent_id, unexaminable,
+                "" if self._value_origin_sources else
+                " With NO value_origin_sources designations, no tool result can be "
+                "a trusted source, so EVERY tool call whose destination came from a "
+                "tool result gets that verdict; measured block rates on benign "
+                "corpora are in docs/value-origin-enforce.md. Turn ENFORCE on once "
+                "designations exist.")
+
         # ── S1 · attach, part 2 of 2: on_attach ──────────────────────────
         # LAST in the constructor, deliberately: on_attach receives a fully
         # built sensor, so an extension may read the breaker, the policy and
@@ -876,19 +1026,6 @@ class DelphiSensor:
         """
         if "controls" in self._fail_closed:
             raise _FailClosedError("controls", detail)
-
-    def _enqueue_event(self, event: dict) -> None:
-        """Every telemetry event this sensor emits passes here, once.
-
-        The one place an event's ``data`` gains keys that describe where it
-        was emitted rather than what was scanned: the run-tree keys
-        (``xaidr.run_tree``). That stamp never raises and only adds keys, so
-        the event and its verdict reach the reporter exactly as built.
-        """
-        data = event.get("data") if isinstance(event, dict) else None
-        if isinstance(data, dict):
-            _run_tree.stamp(data)
-        self._telemetry.enqueue(event)
 
     def _emit_fail_closed(
         self, direction: str, group: str, detail: str, prompt=None, **extra
@@ -1781,8 +1918,32 @@ class DelphiSensor:
         provider: Optional[str] = None,
         origin_context: dict | None = None,
         parent_context: Optional[ParentContext] = None,
+        *,
+        spans=None,
+        tool: Optional[str] = None,
+        arguments: Optional[Mapping[str, object]] = None,
     ) -> ScanResult:
         """Synchronous scan — used by LangChain middleware and direct calls.
+
+        ``tool=`` / ``arguments=`` (keyword-only; ``direction="tool_result"``
+        only; owner RULING 3a after M8): which tool produced this result and the
+        arguments it was called with. With them the read can match a
+        ``value_origin_sources`` designation and be a trusted source, decided by
+        this scan's own pre-mode verdict; without them it is recorded nameless
+        and untrusted (V-26). On any other direction they are ignored, and
+        a warning says so once.
+
+        A2 M6 (§1.1): with value origin on, EVERY ``direction="input"`` exit
+        records the principal input (``record_principal_input``): the normal
+        path, the gate, circuit-open, fail-closed, scan-error and
+        not-scannable ones, and a raised ``DelphiBlockedError``. A new input is a
+        new request (S-2). ``input_clean`` is True only when the scanner's
+        PRE-mode action was ``allowed`` and ``_post_scan_gate`` left the
+        result unchanged. It is False for a gate verdict, fail-closed or a block,
+        and None for circuit-open or a scan error. ``spans`` (Q8, keyword-only)
+        is a sequence of ``value_origin.Span`` declaring who wrote which part of
+        the input. It is honoured for ``direction="input"`` only; elsewhere it is
+        ignored with one WARNING per sensor.
 
         Wrapped so an UNEXPECTED internal fault fails OPEN with a signal (see
         ``_emit_scan_error``) instead of raising into the host. ``DelphiBlockedError``
@@ -1796,6 +1957,195 @@ class DelphiSensor:
         posture is unchanged: with ``fail_closed=()`` not one line below
         behaves differently from before the option existed.
         """
+        held = {"clean": None}
+        try:
+            return self._scan_unrecorded(prompt, direction, destination, provider,
+                                         origin_context, parent_context, held)
+        finally:
+            self._vo_record_input(prompt, spans, direction, held["clean"])
+            if direction == "tool_result":
+                # V-26, amended by owner RULING 3a after M8: with tool= the public
+                # seam has an identity, so a designation can match and the clean
+                # PRE-mode scan decides trust, exactly as _scan_tool_result does.
+                # With no tool= the read stays nameless and untrusted.
+                if tool:
+                    self._vo_record_result(tool, arguments, prompt, held.get("true"))
+                else:
+                    self._vo_record_result("", None, prompt, None)
+            elif (tool is not None or arguments is not None) and not getattr(
+                    self, "_vo_identity_warned", False):
+                self._vo_identity_warned = True
+                logger.warning(
+                    "xaidr: scan(direction=%r, tool=...): tool= and arguments= name the "
+                    "tool behind a tool RESULT and are ignored on any other direction.",
+                    direction)
+
+    def _scan_tool_result(self, text, *, tool, arguments, raw_result) -> ScanResult:
+        """A2 M7 (§1.2): scan a tool's RESULT exactly as scan(direction=
+        "tool_result") does (same body, telemetry and refusal), then record the
+        RAW result with the tool's identity, its arguments and the PRE-mode
+        verdict (V-2). It never reaches the public seam's nameless V-26 record:
+        that untrusted entry, landing first, would pin a designated read at
+        untrusted (C-18). Recording never raises into the host."""
+        held = {"clean": None}
+        try:
+            return self._scan_unrecorded(text, "tool_result", None, None, None, None, held)
+        finally:
+            self._vo_record_result(tool, arguments, raw_result, held.get("true"))
+
+    def _vo_record_result(self, tool, arguments, raw, true) -> None:
+        """Record one tool read (§1.2). ``true`` is the PRE-mode result scan, or
+        None when the result was not scanned (then the read is untrusted, Q10).
+        Never raises: a fault is logged once per sensor (owner, M7: the safety
+        layer must not crash what it protects)."""
+        try:
+            if self._value_origin is _vo.Mode.OFF:
+                return
+            # Q18: an I/O-backed result is passed on UNREAD. The core never reads
+            # it either (_extract._normalise_result_node), but marks the ledger,
+            # so a later miss reads result_unread and blocks under ENFORCE. This
+            # early-returned until 2026-10-05: the read vanished silently.
+            if isinstance(raw, (bytes, bytearray)):
+                raw = _coerce_scannable(raw)
+            blocked = None
+            if true is not None:
+                blocked = (true.action in ("blocked", "approval_required")
+                           or (true.action == "flagged"
+                               and true.score >= self._scanner.block_threshold))
+            if isinstance(arguments, dict):
+                args = arguments
+            else:
+                args = {} if arguments is None else {"input": arguments}
+            name = tool if isinstance(tool, str) else ""
+            _vo.record_tool_result(name, args, raw,
+                                   designations=self._value_origin_sources if name else (),
+                                   result_blocked=blocked)
+        except Exception:
+            if not self._vo_result_fault_logged:
+                self._vo_result_fault_logged = True
+                logger.exception("xaidr: value origin's tool-result recording faulted; the "
+                                 "verdict and the tool's result are unaffected")
+
+    def _vo_record_input(self, prompt, spans, direction, clean) -> None:
+        """The value-origin input seam (§1.1). Never raises: a fault here is
+        logged once per sensor at ERROR and never becomes a scan verdict."""
+        try:
+            if self._value_origin is _vo.Mode.OFF:
+                return
+            if direction != "input":
+                if spans is not None and not self._vo_spans_warned:
+                    self._vo_spans_warned = True
+                    logger.warning("xaidr: Sensor(agent_id=%r): scan(spans=...) is honoured only "
+                                   "for direction='input'; ignored for %r. Logged once.",
+                                   self.agent_id, direction)
+                return
+            if _vo_seams.NESTED_RUN.get() or _vo_seams.NOT_PRINCIPAL.get():
+                # A run hooked inside another hooked run (its input is the outer
+                # run's model text), or run input that is a tool output or an
+                # assistant turn: scanned above, never principal input.
+                return
+            text = _coerce_scannable(prompt)
+            spans = list(spans) if spans is not None else None
+            truncated = text is not None and len(text) > _VO_INPUT_CAP
+            if truncated:
+                # Deliberately NOT cut here (owner, 2026-10-05): the core bounds its
+                # own work. It reads key n-grams and destination atoms from the first
+                # 64 KiB in full, and destination atoms from the rest under
+                # ATOM_WORK_BUDGET. Past 64 KiB a miss reads input_truncated, or
+                # extraction_incomplete when that budget ran out; neither blocks.
+                pass
+            batch = _vo_seams.INPUT_BATCH.get()
+            if batch is not None and spans is None and text is not None:
+                # One input in several strings: the hook records them in one write.
+                batch.append((text, _vo.Writer.PRINCIPAL if clean is True
+                              else _vo.Writer.UNTRUSTED, truncated))
+                return
+            out = _vo.record_principal_input(text if text is not None else prompt,
+                                             spans, input_clean=clean, truncated=truncated)
+            # A FAULT on a scannable input means the record was dropped (a spans
+            # list that does not concatenate to the text, or a core fault): say
+            # so once (M6 silent-failure review). A non-scannable input FAULTs by
+            # design after binding (S-2), and is not logged.
+            if (out is _vo.RecordOutcome.FAULT and text is not None
+                    and not self._vo_record_fault_logged):
+                self._vo_record_fault_logged = True
+                logger.warning("xaidr: Sensor(agent_id=%r): value origin did not record this "
+                               "input%s. Logged once.", self.agent_id,
+                               " (its spans do not concatenate to the text)"
+                               if spans is not None else "")
+        except Exception:
+            if not self._vo_record_fault_logged:
+                self._vo_record_fault_logged = True
+                logger.exception("xaidr: value origin's input recording faulted; the "
+                                 "verdict is unaffected")
+
+    @contextlib.contextmanager
+    def _vo_input_batch(self, *, declared: bool = False):
+        """Scans inside this block that would each record principal input are
+        recorded together, in ONE write, when it ends: an input a framework hands
+        over as several strings (a run's input list, a kickoff's values) is one
+        input, so a later part never replaces an earlier one's record. Each part
+        keeps its own scan's verdict (a part that was not clean is untrusted) and
+        is its own span. ``declared``: the seam knows the span structure (each
+        part is one template variable's value). Recording never raises."""
+        parts: list = []
+        token = _vo_seams.INPUT_BATCH.set(parts)
+        try:
+            yield parts
+        finally:
+            _vo_seams.INPUT_BATCH.reset(token)
+            try:
+                if parts and self._value_origin is not _vo.Mode.OFF:
+                    out = _vo._ledger.record_input_parts(
+                        [(t, w) for t, w, _ in parts], declared=declared,
+                        truncated=any(tr for _, _, tr in parts))
+                    if out is _vo.RecordOutcome.FAULT and not self._vo_record_fault_logged:
+                        self._vo_record_fault_logged = True
+                        logger.warning("xaidr: Sensor(agent_id=%r): value origin did not "
+                                       "record this input. Logged once.", self.agent_id)
+            except Exception:
+                if not self._vo_record_fault_logged:
+                    self._vo_record_fault_logged = True
+                    logger.exception("xaidr: value origin's input recording faulted; the "
+                                     "verdict stands")
+
+    def _vo_replay_result(self, tool, arguments, text, call_id) -> None:
+        """Record a tool output a request replays from history (§1.2): the model
+        reads it again, so a destination it names is untrusted in this request
+        too. Untrusted and nameless, because this request did not scan it; an
+        output from a designated source is not replayed, so it can never pin a
+        read this request makes of that source again at untrusted (the write rule:
+        a read never raises). Never raises."""
+        try:
+            if self._value_origin is _vo.Mode.OFF or not isinstance(text, str) or not text:
+                return
+            args = arguments if isinstance(arguments, Mapping) else {}
+            if isinstance(tool, str) and tool and any(
+                    _vo_source_matches(d, tool, args) for d in self._value_origin_sources):
+                return
+            _vo._ledger.record_replayed_result(text, key=f"{call_id}\x00{text}")
+        except Exception:
+            if not self._vo_result_fault_logged:
+                self._vo_result_fault_logged = True
+                logger.exception("xaidr: value origin's replayed tool-output recording "
+                                 "faulted; the verdict stands")
+
+    def _vo_inbound_a2a(self) -> None:
+        """Q21 (owner, YES): an inbound A2A message starts a fresh ledger. It ends
+        the previous request's IMPLICIT ledger through S-2's own path (bind for an
+        input, recording nothing) and keeps an EXPLICIT one from begin_flow
+        (ruling 3.1). C-17: it records no destination. Never raises."""
+        try:
+            if self._value_origin is not _vo.Mode.OFF:
+                _vo.record_principal_input("", None, input_clean=None)
+        except Exception:
+            if not self._vo_record_fault_logged:
+                self._vo_record_fault_logged = True
+                logger.exception("xaidr: value origin's inbound-A2A bind faulted")
+
+    def _scan_unrecorded(self, prompt, direction, destination, provider,
+                         origin_context, parent_context, held) -> ScanResult:
+        """``scan``'s body. ``held['clean']`` carries ``input_clean`` out (§1.1)."""
         extra = {
             "destinationType": "external_api",
             "destinationIdentifier": destination or provider or "llm",
@@ -1808,27 +2158,40 @@ class DelphiSensor:
                 **extra,
             )
             if gated is not None:
+                held["clean"] = (None if "CIRCUIT_BREAKER_OPEN" in (gated.rules or [])
+                                 else False)
                 return gated
+            true = []
             result = self._scan_impl(
-                prompt, direction, destination, provider, origin_context, parent_context
+                prompt, direction, destination, provider, origin_context, parent_context,
+                _true=true,
             )
         except (DelphiBlockedError, _ExtensionContractError):
+            held["clean"] = False
             # _VerdictStrengthenedError is a CONTRACT violation in an
             # extension, not an environment fault. Failing it open would
             # turn a mis-written enterprise control into a silent
             # 'allowed', which is the exact shape this sensor refuses.
             raise
         except _FailClosedError as fc:
+            held["clean"] = False
             return self._fail_closed_result(
                 direction, fc.group, fc.detail, prompt, **extra)
         except Exception as exc:
+            held["clean"] = None
             if "internal" in self._fail_closed:
                 return self._fail_closed_result(
                     direction, "internal",
                     f"{type(exc).__name__} in {self._fault_origin(exc)}",
                     prompt, **extra)
             return self._emit_scan_error(direction, exc, prompt, **extra)
-        return self._post_scan_gate(result, direction, prompt, **extra)
+        held["clean"] = False
+        final = self._post_scan_gate(result, direction, prompt, **extra)
+        # the scanner's PRE-mode verdict (monitor softening never yields
+        # "allowed"; an S6 transform runs after it), and no post-scan gate change
+        held["clean"] = bool(true) and true[0].action == "allowed" and final is result
+        held["true"] = true[0] if true else None      # A2 M7: the pre-mode result verdict
+        return final
 
     def _scan_impl(
         self,
@@ -1838,6 +2201,7 @@ class DelphiSensor:
         provider: Optional[str] = None,
         origin_context: dict | None = None,
         parent_context: Optional[ParentContext] = None,
+        _true: Optional[list] = None,
     ) -> ScanResult:
         """Core scan implementation — see ``scan`` for the fail-open wrapper.
 
@@ -1938,6 +2302,8 @@ class DelphiSensor:
 
         # Breaker sees the TRUE verdict — before _apply_mode softens it.
         self._breaker_observe(result)
+        if _true is not None:
+            _true.append(result)            # A2 M6: the pre-mode verdict, for input_clean
         return self._apply_mode(
             result, direction,
             lambda: {"text": prompt if isinstance(prompt, str) else None,
@@ -1985,6 +2351,8 @@ class DelphiSensor:
         after the open-circuit check, mirroring ``scan_tool_call``, so calls
         already rejected by an open circuit do not keep re-counting.
         """
+        if received:
+            self._vo_inbound_a2a()          # Q21, A2 M6 (silent-failure review)
         emit_direction = "a2a_inbound" if received else "a2a"
         extra = {"destinationAgent": destination}
         text = message if isinstance(message, str) else None
@@ -2185,7 +2553,171 @@ class DelphiSensor:
             self._tool_arg_norm = n
         return n
 
+    def _vo_first_withheld(self, wire: str) -> bool:
+        """True the first time ``wire`` is withheld (under the lock: silent-failure review)."""
+        with self._vo_lock:
+            first = wire not in self._vo_withheld_warned
+            self._vo_withheld_warned.add(wire)
+        return first
+
+    def _enqueue_event(self, event: dict) -> None:
+        """Every telemetry event this sensor emits passes here, once.
+
+        Two additions, both keys only, so the event and its verdict reach the
+        reporter exactly as built. A TOOL-CALL event gets ``valueOrigin`` at the
+        top level of ``data`` when its call has a wire value the consumer's
+        vocabulary accepts; otherwise the key stays absent (OFF, an evaluate
+        fault, every other direction, or a withheld value), never None. Every
+        event gets the run-tree keys (``xaidr.run_tree``), which describe where
+        it was emitted rather than what was scanned; that stamp never raises. A
+        fault in either never costs the event."""
+        try:
+            holder = _VO_CALL_WIRE.get()
+            wire = holder[0] if holder else None
+            data = event.get("data") if isinstance(event, dict) else None
+            if wire is not None and isinstance(data, dict) and data.get("direction") == "tool_call":
+                if wire in self._vo_wire_vocab:
+                    data["valueOrigin"] = wire
+                elif self._vo_wire_vocab and self._vo_first_withheld(wire):
+                    logger.warning(
+                        "xaidr: Sensor(agent_id=%r): value-origin wire value %r withheld from "
+                        "telemetry (every reporter): value_origin_wire=%r, the vocabulary the "
+                        "consumer accepts, does not include it. The v1 vocabulary is "
+                        "nine values. It is still on ScanResult.value_origin. Set "
+                        "value_origin_wire='v2' once the consumer accepts all fifteen.",
+                        self.agent_id, wire, self._vo_wire_name)
+        except Exception:
+            if not self._vo_emit_fault_logged:
+                self._vo_emit_fault_logged = True
+                logger.exception("xaidr: value origin's wire-field emission faulted; the event "
+                                 "is sent without valueOrigin")
+        data = event.get("data") if isinstance(event, dict) else None
+        if isinstance(data, dict):
+            _run_tree.stamp(data)
+        self._telemetry.enqueue(event)
+
+    @_vo_call_scope
     def scan_tool_call(
+        self,
+        tool_name: str,
+        arguments: dict | None = None,
+        mcp_server: Optional[str] = None,
+        origin_context: dict | None = None,
+        server_name: Optional[str] = None,
+    ) -> ScanResult:
+        """Scan a tool call. Value origin is evaluated FIRST (A2 M4, V-7a):
+        before the gates, the breaker and ``_resolve_provenance`` (V-7a). Its verdict is attached to whatever comes back, so every
+        exit carries it (C-13): the main path, the circuit-open, gate,
+        fail-closed, scan-error and not-scannable ones. Attaching it once,
+        here, means no exit INSIDE this method can miss it; a caller that
+        builds a fresh result afterwards must carry it, as
+        autopatch.tool_verdict does (M4 review). RECORD and
+        ENFORCE evaluate; nothing acts on the verdict until M8."""
+        cv = self._value_origin_verdict(tool_name, arguments)
+        _vo_note_wire(cv)                 # M9: every event of this call sees it
+        blocked = self._value_origin_block(tool_name, cv)
+        if blocked is not None:
+            return blocked
+        result = self._scan_tool_call_unattached(
+            tool_name, arguments, mcp_server, origin_context, server_name)
+        if cv is None:
+            return result
+        try:
+            return replace(result, value_origin=cv)
+        except Exception:
+            # An S6 transform_verdict may return any object with a valid
+            # `.action`; replace() raises on a non-dataclass. Dropping the
+            # field (absent, never null) is strictly better than raising into
+            # the host. Logged once per sensor (M4 silent-failure review).
+            if not self._vo_attach_fault_logged:
+                self._vo_attach_fault_logged = True
+                logger.exception("xaidr: value origin could not attach its verdict to a "
+                                 "%s result; the field is omitted", type(result).__name__)
+            return result
+
+    def _value_origin_block(self, tool_name, cv):
+        """A2 M8, ENFORCE (V-18, V-31). Runs right after evaluate_call and returns
+        BEFORE the circuit check, the gates and detection, so a value-origin block
+        holds on open's fail-open paths too. It goes through the existing emit
+        path and _apply_mode, so monitor gives `flagged`. It is NOT counted by the
+        circuit breaker (Q13, owner): if this layer could trip the breaker, an
+        open breaker would disable detection generally. Never raises into the
+        host; a should_block fault means no value-origin block, logged."""
+        if cv is None or self._value_origin is not _vo.Mode.ENFORCE:
+            return None
+        try:
+            fire = _vo.should_block(cv, mode=self._value_origin)
+        except Exception:
+            logger.exception("xaidr: value origin's should_block faulted; value origin "
+                             "does not block this call")
+            return None
+        if not fire:
+            return None
+        name = tool_name if isinstance(tool_name, str) else None
+        untrusted = getattr(cv, "verdict", None) is _vo.Verdict.UNAUTHORIZED
+        result = ScanResult(action="blocked", score=1.0, category=(_VO_BLOCK_CATEGORY if untrusted else _VO_UNEXAMINABLE_CATEGORY),
+                            # Both ids on an unexaminable block (owner, 2026-10-06): its
+                            # own rule says WHY; intent.value_origin_untrusted is the
+                            # audit id the Brain-side spec defines (C-19), which the
+                            # intent lens and any filter on it must keep seeing.
+                            rules=([_VO_BLOCK_RULE, _VO_AUDIT_RULE] if untrusted
+                   else [_VO_UNEXAMINABLE_RULE, _VO_AUDIT_RULE]))
+        # Telemetry records the TRUE verdict FIRST, then _apply_mode may soften it
+        # (monitor, an S6 transform), as every other gate in this file does: the
+        # S6 contract is that telemetry has already seen the original verdict.
+        # (M8 silent-failure review: emitting after _apply_mode left a softened
+        # value-origin block with no trace anywhere.)
+        try:
+            # valueOrigin reaches this event through _enqueue_event, behind the
+            # consumer gate (M9). Passing it here explicitly, as 3daf41f did,
+            # bypassed the gate: a result_unread block sent a value the Brain rejects.
+            self._emit_gate_verdict(result, "value_origin", "tool_call", toolName=name)
+        except Exception:
+            pass                                 # telemetry never decides a verdict
+        try:
+            result = self._apply_mode(result, "tool_call", lambda: {"tool_name": name})
+        except (DelphiBlockedError, _ExtensionContractError):
+            raise
+        except Exception:
+            logger.exception("xaidr: _apply_mode faulted on a value-origin block; the "
+                             "block stands")
+        return replace(result, value_origin=cv)
+
+    def _value_origin_verdict(self, tool_name, arguments):
+        """``evaluate_call`` for this call, or None (OFF, or a fault: the field
+        is then omitted, never null). Q6 as the owner ruled it: the FIRST call
+        this sensor sees under ``no_flow`` logs ONE warning naming the fix."""
+        if self._value_origin is _vo.Mode.OFF:
+            return None
+        try:
+            cv = _vo.evaluate_call(tool_name if isinstance(tool_name, str) else "",
+                                   arguments, flow_active=_chain.is_flow_active())
+        except Exception:                       # evaluate_call never raises; belt and braces
+            logger.exception("xaidr: value origin evaluate_call faulted")
+            return None
+        if cv is not None and cv.wire is _vo.WireValue.NO_FLOW and not self._vo_no_flow_warned:
+            with self._vo_lock:
+                first, self._vo_no_flow_warned = not self._vo_no_flow_warned, True
+            if first:
+                logger.warning(
+                    "xaidr: Sensor(agent_id=%r): value origin saw a tool call with NO flow "
+                    "active (wire no_flow), so it can trace no destination and, under "
+                    "ENFORCE, can never block. Open a flow per agent request: run it inside "
+                    "`with xaidr.flow(principal=...):` (a sync request handler can be "
+                    "decorated with @xaidr.flow(...)); for a request that arrived from "
+                    "another service, call extract_context() on its headers. A server "
+                    "loop that handles one request after another on one thread marks "
+                    "each with `with xaidr.request_scope():`. The plain "
+                    "xaidr.begin_flow() ... xaidr.clear_flow() pair still works; outside "
+                    "a request, if clear_flow() is skipped (for example because the "
+                    "request raised) the next request on the same thread inherits the "
+                    "flow. Under protect(), each run of an agent LangChain's "
+                    "create_agent built is a request of its own; a LangGraph graph run "
+                    "any other way needs the flow opened OUTSIDE the graph. "
+                    "Logged once per sensor.", self.agent_id)
+        return cv
+
+    def _scan_tool_call_unattached(
         self,
         tool_name: str,
         arguments: dict | None = None,
@@ -2970,6 +3502,30 @@ class DelphiSensor:
             seen += 1
         return False
 
+    def _agents_invoke(self, invoke, tool_name, tool_verdict):
+        """An Agents SDK ``on_invoke_tool`` that decides each call first. The
+        arguments arrive as one JSON string; a value that is not a JSON object is
+        scanned as ``{"input": value}``."""
+        import json as _json
+
+        async def on_invoke_tool(ctx, input_json, *args, **kwargs):
+            try:
+                arguments = _json.loads(input_json) if input_json else {}
+            except (TypeError, ValueError):
+                arguments = {"input": input_json}
+            if not isinstance(arguments, dict):
+                arguments = {"input": arguments}
+            refusal = tool_verdict(None, tool_name, (), {}, arguments=arguments)
+            if refusal is not None:
+                return refusal
+            out = invoke(ctx, input_json, *args, **kwargs)
+            if inspect.isawaitable(out):
+                out = await out
+            if not _vo_seams.RESULT_SEAM.get():
+                self._vo_record_result(tool_name, arguments, out, None)
+            return out
+        return on_invoke_tool
+
     def protect_tools(self, tools: list) -> list:
         """Wrap tools so every invocation is scanned and enforced before it runs.
 
@@ -3191,7 +3747,7 @@ class DelphiSensor:
                     arguments.update(kwargs)
                     return arguments
 
-            def tool_verdict(orig_func, tname, args, kwargs):
+            def tool_verdict(orig_func, tname, args, kwargs, arguments=None):
                 """The whole decision, shared by the sync and async wrappers.
 
                 Returns the in-band refusal STRING when the call must not run,
@@ -3210,7 +3766,8 @@ class DelphiSensor:
                 needs both is an async tool called positionally with a
                 dangerous argument.
                 """
-                arguments = bind_arguments(orig_func, tname, args, kwargs)
+                if arguments is None:
+                    arguments = bind_arguments(orig_func, tname, args, kwargs)
                 # scan_tool_call applies blocked-tools + L1 arg scan +
                 # local YAML policy, emits telemetry, and NEVER raises
                 # (internal faults fail open with a degraded signal).
@@ -3247,6 +3804,19 @@ class DelphiSensor:
                     )
                 return None
 
+            def record_unscanned(orig_func, tname, args, kwargs, out):
+                """A2 M7, protect_tools' RESULT POSITION (owed since M1). This
+                seam scans no result, so its read is untrusted (Q10). It records
+                only when no scanned seam encloses the call: that outer seam
+                records the same invocation with its verdict (§1.2 item 3, F7)."""
+                if _vo_seams.RESULT_SEAM.get():
+                    return
+                try:
+                    arguments = bind_arguments(orig_func, tname, args, kwargs)
+                except Exception:
+                    arguments = {}
+                self._vo_record_result(tname, arguments, out, None)
+
             def make_wrapper(orig_func, tname):
                 """Wrap one callable, MATCHING ITS SYNC/ASYNC-NESS.
 
@@ -3274,15 +3844,22 @@ class DelphiSensor:
                         refusal = tool_verdict(orig_func, tname, args, kwargs)
                         if refusal is not None:
                             return refusal
-                        return await orig_func(*args, **kwargs)
+                        out = await orig_func(*args, **kwargs)
+                        record_unscanned(orig_func, tname, args, kwargs, out)
+                        return out
                 else:
                     def wrapper(*args, **kwargs):
                         refusal = tool_verdict(orig_func, tname, args, kwargs)
                         if refusal is not None:
                             return refusal
-                        if orig_func is not None:
-                            return orig_func(*args, **kwargs)
-                        return None
+                        if orig_func is None:
+                            # the no-implementation shape: scan, enforce, return
+                            # None (M7 review: the result position read an
+                            # unassigned result here and crashed the host)
+                            return None
+                        out = orig_func(*args, **kwargs)
+                        record_unscanned(orig_func, tname, args, kwargs, out)
+                        return out
                 return wrapper
 
             def mark(fn, orig):
@@ -3309,6 +3886,22 @@ class DelphiSensor:
             # what this branch did before the async split. Building it
             # unconditionally keeps that, and keeps the `else` branch below able
             # to set __name__ on it.
+            # An OpenAI Agents SDK FunctionTool: a dataclass whose implementation
+            # is its `on_invoke_tool(ctx, input_json)` field. The copy keeps every
+            # other field (name, schema, guardrails), so an Agent still names and
+            # calls the tool, and each call is decided on its parsed arguments.
+            invoke = getattr(t, "on_invoke_tool", None)
+            if (callable(invoke) and hasattr(t, "params_json_schema")
+                    and dataclasses.is_dataclass(t)
+                    and type(t).__module__.split(".")[0] == "agents"):
+                if self._wrapped_by_self(invoke):
+                    wrapped.append(t)
+                    continue
+                wrapped.append(dataclasses.replace(
+                    t, on_invoke_tool=mark(self._agents_invoke(invoke, tool_name, tool_verdict),
+                                           invoke)))
+                continue
+
             new_func = protect_half(original_func)
 
             # CrewAI first: it also has model_copy, but its implementation hangs

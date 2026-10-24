@@ -124,8 +124,44 @@ jobs:
       # at collection with ModuleNotFoundError: No module named 'tests' against
       # any non-editable install. This is also the invocation the README's
       # verified suite count is measured with.
+      #
+      # `base` installs no third-party package by design, so it DESELECTS the
+      # tests that need the dev extra's oracles and build tooling, by marker and
+      # in plain sight here. Those tests REFUSE when their oracle is missing; they
+      # never skip (Q3, 2026-10-03), because a skipped oracle is a silent pass.
+      # `full` installs the dev extra and runs every one of them.
       - name: Run test suite
-        run: python -m pytest -q
+        run: |
+          if [ "${{ matrix.config }}" = "base" ]; then
+            python -m pytest -q -m "not requires_dev_extra"
+          else
+            python -m pytest -q
+          fi
+
+  # ── The suite on CPython 3.12.2, full config ───────────────────────────────
+  # setup-python's "3.12" is the newest patch release, and 3.12.2 differs from it
+  # where the core's readings are pinned: its urlsplit predates the bracketed-host
+  # backport, and its stringprep predates CPython's fix (an unfixed interpreter
+  # encodes a non-ASCII host by its own Unicode). A test red only there was red
+  # for a round with every pytest job green (test_differential_oracles.py at
+  # fa73bff), because only the differential ran on 3.12.2. uv installs the exact
+  # patch release.
+  test-3-12-2:
+    name: pytest (py3.12.2, full)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install 3.12.2, the package and the dev extras
+        env:
+          UV_PYTHON_PREFERENCE: only-managed
+        run: |
+          uv python install 3.12.2
+          uv venv -p 3.12.2 .venv-3122
+          uv pip install --python .venv-3122 ".[http,trace,dev]"
+          .venv-3122/bin/python -c "import sys; assert sys.version_info[:3] == (3, 12, 2), sys.version; print(sys.version)"
+      - name: Run test suite
+        run: .venv-3122/bin/python -m pytest -q
 
   # ── Real frameworks, pinned — the only job where they are installed ────────
   # Neither `test` config installs an agent framework (`dev` is pytest +
@@ -154,8 +190,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install . pytest \
             "langchain-core==1.6.1" "langchain==1.4.1" \
-            "langgraph==1.2.12" "langgraph-prebuilt==1.1.0"
-          pip list 2>/dev/null | grep -iE '^(langchain|langgraph)'
+            "langgraph==1.2.12" "langgraph-prebuilt==1.1.0" \
+            "openai-agents==0.24.0"
+          pip list 2>/dev/null | grep -iE '^(langchain|langgraph|openai-agents)'
 
       - name: Run tests/test_real_frameworks.py and tests/test_run_tree.py
         run: python -m pytest tests/test_real_frameworks.py tests/test_run_tree.py -q -rs --junitxml=real-frameworks.xml
@@ -235,6 +272,136 @@ jobs:
 
       - name: Guard — TestRealRunTree ran, only the named cases did not
         run: python .github/run_tree_guard.py run-tree.xml py310
+
+  # ── The published-suite differential ──────────────────────────────────────
+  # Every destination a real client reads in a published test vector (WPT,
+  # CPython's urlparse, urllib2 and email tests, IdnaTestV2, curl's lib1560 and
+  # Go's url and mail tables, vendored with their licences in
+  # tests/published_vectors/), the value-origin core reads. The clients: httpx,
+  # urllib3, requests, urllib.parse, ada-url, the email parsers, and the standard
+  # library's own send path, urllib.request and http.client, with each
+  # interpreter's own copy. An under-read no ruling documents fails the job
+  # (scripts/published_differential.py names the vector, the client and the key),
+  # and so does a client that reads no vector.
+  # Clients and resolvers differ by interpreter and by OS, so it runs on Linux
+  # and macOS, on 3.10, on 3.12.2 (the urlsplit the RFC 3986 reading copies), on
+  # the newest 3.12 and on 3.14. uv installs exact patch releases on both OSes.
+  # The oracles are pinned: a client release that reads differently is a change
+  # this job should show, not one it absorbs.
+  published-differential:
+    name: published differential (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.12.2", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install the interpreter and the pinned oracles
+        # uv's own builds only: "3.12" and "3.14" are the newest patch releases uv
+        # knows, never whatever interpreter the runner image happens to carry.
+        env:
+          UV_PYTHON_PREFERENCE: only-managed
+        run: |
+          uv python install ${{ matrix.python }}
+          uv venv -p ${{ matrix.python }} .venv-diff
+          uv pip install --python .venv-diff "httpx==0.28.1" "urllib3==2.8.0" \
+            "requests==2.34.2" "ada-url==4.0.0" "idna==3.20"
+          .venv-diff/bin/python -c "import sys; print(sys.version)"
+      - name: Run scripts/published_differential.py against the tree
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: .venv-diff/bin/python scripts/published_differential.py --show 200 --core-out core.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-${{ matrix.os }}-py${{ matrix.python }}
+          path: core.json
+      - name: The vendored files are their upstream bytes
+        run: .venv-diff/bin/python scripts/published_vectors.py verify
+      - name: The vendored files are what their upstream URLs serve
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.14'
+        run: .venv-diff/bin/python scripts/published_vectors.py fetch "$RUNNER_TEMP/vectors-src"
+
+  # The core reads every vector the same in every cell above (V-4): its keys may
+  # not follow the interpreter's Unicode version or the OS.
+  published-agreement:
+    name: published differential, the same reading in every cell
+    needs: published-differential
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: core-*
+          path: cores
+      - run: python3 scripts/published_agreement.py cores/*/core.json
+
+  # ── Value origin on real agent runs, on every OS and interpreter ──────────
+  # tests/test_value_origin_real_runs.py drives real LangChain create_agent graphs
+  # (invoke and ainvoke) and real OpenAI Agents SDK runs (run_sync and run) under
+  # protect() in ENFORCE: a run without xaidr.flow() is a request of its own, the
+  # next turn's replayed history is untrusted, system/developer/assistant text never
+  # authorizes, padding past the bounds decides as the unpadded value does,
+  # shared-tenant siblings stay apart, and a reused thread (executor job, WSGI
+  # request) never inherits the previous request's authority or tier. LangGraph and
+  # asyncio differ by interpreter (a context reaches an async node only from 3.11),
+  # so it runs on Linux and macOS, on 3.10, 3.12.2, the newest 3.12 and 3.14.
+  real-runs:
+    name: value origin on real runs (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.12.2", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install the interpreter, the package and the pinned frameworks
+        env:
+          UV_PYTHON_PREFERENCE: only-managed
+        run: |
+          uv python install ${{ matrix.python }}
+          uv venv -p ${{ matrix.python }} .venv-runs
+          uv pip install --python .venv-runs . pytest \
+            "langchain-core==1.6.1" "langchain==1.4.1" \
+            "langgraph==1.2.12" "langgraph-prebuilt==1.1.0" \
+            "openai-agents==0.24.0"
+          .venv-runs/bin/python -c "import sys; print(sys.version)"
+      - name: Run tests/test_value_origin_real_runs.py against the installed package
+        # From a directory outside the checkout, so `xaidr` is the installed copy.
+        run: |
+          mkdir -p "$RUNNER_TEMP/runs" && cp -R tests "$RUNNER_TEMP/runs/tests"
+          cd "$RUNNER_TEMP/runs"
+          "$GITHUB_WORKSPACE/.venv-runs/bin/python" -c "import xaidr, sys; assert 'site-packages' in xaidr.__file__, xaidr.__file__; print(xaidr.__file__)"
+          "$GITHUB_WORKSPACE/.venv-runs/bin/python" -m pytest tests/test_value_origin_real_runs.py \
+            -q -rs -p no:cacheprovider --junitxml="$GITHUB_WORKSPACE/real-runs.xml"
+      # THE GUARD: pytest exits 0 on an all-skipped run, so read what it did.
+      - name: Guard — every real-run check ran, none skipped
+        run: |
+          .venv-runs/bin/python - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          MINIMUM = 39
+          cases = list(ET.parse("real-runs.xml").iter("testcase"))
+          skipped = [c.get("name") for c in cases if c.find("skipped") is not None]
+          broken = [c.get("name") for c in cases
+                    if c.find("failure") is not None or c.find("error") is not None]
+          print(f"collected={len(cases)} skipped={len(skipped)} failed/errored={len(broken)}")
+          problems = []
+          if len(cases) < MINIMUM:
+              problems.append(f"collected {len(cases)} < {MINIMUM}")
+          if skipped:
+              problems.append(f"skipped: {skipped}")
+          if broken:
+              problems.append(f"failed/errored: {broken}")
+          if problems:
+              sys.exit("GUARD RED: " + "; ".join(problems))
+          print("GUARD GREEN")
+          PY
 
   # ── The corpus report, printed into the log ────────────────────────────────
   # A reviewer reading a rule PR should see what the rule did to the corpus

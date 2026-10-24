@@ -21,7 +21,10 @@ with the concrete reason, not omitted.
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
+
+from .. import _vo_seams
 import json
 import sys
 from dataclasses import dataclass
@@ -291,6 +294,26 @@ def _langchain_refusal(text: str, name: str, kwargs: dict) -> Any:
         return text
 
 
+def _record_unscanned(sensor, tool, arguments, raw):
+    """A scanned result seam that found no text to scan still records the read,
+    untrusted (Q10). Its enclosing marker told any inner protect_tools to leave
+    the read to it, so returning early here made the read vanish (M7 review).
+    The sensor's recorder never raises."""
+    fn = getattr(sensor, "_vo_record_result", None)
+    if fn is not None:
+        fn(tool, arguments, raw, None)
+
+
+def _scan_result(sensor, text, tool, arguments, raw):
+    """A2 M7: a scanned result seam scans through the sensor's internal result
+    method, which records the RAW result with the tool's identity and the
+    pre-mode verdict (§1.2). A sensor without it falls back to the public seam."""
+    fn = getattr(sensor, "_scan_tool_result", None)
+    if fn is None:
+        return sensor.scan(text, direction="tool_result")
+    return fn(text, tool=tool, arguments=arguments, raw_result=raw)
+
+
 def _langchain_result_text(result: Any) -> Optional[str]:
     """The scannable text a ``BaseTool.run`` return value carries, or None.
 
@@ -363,16 +386,20 @@ def _patch_langchain_core(ctx: PatchContext) -> None:
             # unscanned. Pinned by
             # tests/test_langchain_tool_result_scan.py::
             # test_the_middleware_guard_suppresses_the_argument_scan_and_not_the_result_scan
-            text = _langchain_result_text(result)
-            if not text or not text.strip():
-                return result
             tool = args[0] if args else None
             name = getattr(tool, "name", None) or "unknown_tool"
+            tool_input = kwargs.get("tool_input")
+            if tool_input is None and len(args) > 1:
+                tool_input = args[1]
+            text = _langchain_result_text(result)
+            if not text or not text.strip():
+                _record_unscanned(ctx.sensor, name, tool_input, result)
+                return result
             # The same tool_call_id the argument scan carried, so the result
             # event joins the call event that produced it (toolCallId).
             token = run_tree.bind_tool_call_id(kwargs.get("tool_call_id"))
             try:
-                verdict = ctx.sensor.scan(text, direction="tool_result")
+                verdict = _scan_result(ctx.sensor, text, name, tool_input, result)
             finally:
                 run_tree.reset_tool_call_id(token)
             if not verdict.must_halt:
@@ -389,7 +416,9 @@ def _patch_langchain_core(ctx: PatchContext) -> None:
             # `tool_call_id` here exactly as it does on the way in.
             return _langchain_refusal(message, name, kwargs)
 
-        return make_wrapper(orig, before=before, after=after)
+        # A2 M7: the scanned result seam encloses the tool, so an inner
+        # protect_tools leaves the read to this seam (one recorder, F7)
+        return _vo_seams.enclosing_result_seam(make_wrapper(orig, before=before, after=after))
 
     ctx.install(
         "langchain_core.tools", "BaseTool.run", "tool", factory,
@@ -461,6 +490,16 @@ def _build_middleware(ctx: PatchContext) -> Any:
                 _MW_TOOL_SCANNED.reset(token)
 
         cls.wrap_tool_call = guarded
+        ainner = getattr(cls, "awrap_tool_call", None)
+        if ainner is not None:
+            async def aguarded(self, request, handler):
+                token = _MW_TOOL_SCANNED.set(True)
+                try:
+                    return await ainner(self, request, handler)
+                finally:
+                    _MW_TOOL_SCANNED.reset(token)
+
+            cls.awrap_tool_call = aguarded
     except Exception:
         ctx.note(
             "langchain: could not install the middleware/BaseTool re-entrancy "
@@ -496,7 +535,15 @@ def _patch_langchain(ctx: PatchContext) -> None:
                 kwargs["middleware"] = existing + [mw]
             return None
 
-        return make_wrapper(orig, before=before)
+        def after(graph: Any, args: tuple, kwargs: dict) -> Any:
+            # Mark the agent on its builder: every copy of the compiled graph
+            # (with_config, copy) carries the same builder object.
+            builder = getattr(graph, "builder", None)
+            if builder is not None:
+                builder.__xaidr_agent_run__ = True
+            return graph
+
+        return make_wrapper(orig, before=before, after=after)
 
     ctx.install(
         "langchain.agents", "create_agent", "input+output+tool", factory,
@@ -504,6 +551,24 @@ def _patch_langchain(ctx: PatchContext) -> None:
         "create_agent() call: before_model input scan, wrap_tool_call tool scan, "
         "after_model output scan — all on the same sensor",
     )
+    # Each run of an agent create_agent built is one request (ruling 4), as each
+    # Agents SDK run and CrewAI kickoff is: its value-origin ledger is bound before
+    # the first node runs, so the model turns, the tools node and the next turn
+    # share it with no xaidr.flow() around the run. invoke and ainvoke run through
+    # stream and astream.
+    if "langgraph.pregel.main" in sys.modules:
+        def is_agent(graph: Any) -> bool:
+            return getattr(getattr(graph, "builder", None), "__xaidr_agent_run__", False)
+
+        def run_factory(orig: Callable) -> Callable:
+            return _vo_seams.request_scoped_stream(orig, is_agent)
+
+        for site in ("Pregel.stream", "Pregel.astream"):
+            ctx.try_install(
+                "langgraph.pregel.main", site, "request", run_factory,
+                "each run of an agent create_agent built is one value-origin request, "
+                "its ledger bound before the first node runs",
+            )
     ctx.note(
         "langchain: create_agent is a MODULE FUNCTION, so a module that already "
         "ran `from langchain.agents import create_agent` before protect() holds "
@@ -687,6 +752,62 @@ def _patch_deepagents(ctx: PatchContext) -> None:
 # ─────────────────────────────────────────────────────────────────────────
 
 
+def _principal_turn(item: Any) -> bool:
+    """An Agents SDK run-input item the principal wrote: a string, or a message
+    whose role is user. System and developer text is the agent author's, not the
+    principal's, and assistant and tool text is the model's and the tools'."""
+    if isinstance(item, str):
+        return True
+    return _item_field(item, "role") == "user"
+
+
+def _item_field(item: Any, name: str) -> Any:
+    return item.get(name) if isinstance(item, dict) else getattr(item, name, None)
+
+
+def _turn_texts(item: Any) -> list:
+    """The text a run-input message carries: its string content, or the text of
+    each content part."""
+    if isinstance(item, str):
+        return [item]
+    content = _item_field(item, "content")
+    if isinstance(content, str):
+        return [content]
+    out = []
+    for part in content if isinstance(content, (list, tuple)) else ():
+        text = _item_field(part, "text")
+        if isinstance(text, str):
+            out.append(text)
+    return out
+
+
+def _replay_tool_outputs(sensor: Any, items: Any) -> None:
+    """Value origin: a tool output in a run's input (the history of an earlier
+    run) is recorded as the tool output it is, untrusted, in this run's request."""
+    replay = getattr(sensor, "_vo_replay_result", None)
+    if replay is None or not isinstance(items, (list, tuple)):
+        return
+    calls = {}
+    for i in items:
+        if _item_field(i, "type") == "function_call" and _item_field(i, "call_id"):
+            calls[_item_field(i, "call_id")] = i
+    for i in items:
+        kind = _item_field(i, "type")
+        if not (isinstance(kind, str) and kind.endswith("_call_output")):
+            continue
+        output = _item_field(i, "output")
+        text = output if isinstance(output, str) else "\n".join(
+            strings_in(output, limit=64))
+        call = calls.get(_item_field(i, "call_id"))
+        args = _item_field(call, "arguments") if call is not None else None
+        try:
+            args = json.loads(args) if isinstance(args, str) else args
+        except ValueError:
+            args = None
+        replay(_item_field(call, "name") if call is not None else None,
+               args if isinstance(args, dict) else None, text, _item_field(i, "call_id"))
+
+
 def _patch_openai_agents(ctx: PatchContext) -> None:
     ctx.module("agents")
 
@@ -696,15 +817,45 @@ def _patch_openai_agents(ctx: PatchContext) -> None:
             value = kwargs.get("input")
             if value is None and len(args) > 2:
                 value = args[2]
-            for text in strings_in(value, limit=8):
-                scan_text_boundary(ctx.sensor, text, "input")
+            # Only the principal's own turns are principal input: a plain string,
+            # or a user message. A replayed tool output, an assistant turn and
+            # system or developer text are scanned the same way and not recorded
+            # as the principal's (ruling 1: untrusted content never raises
+            # authority).
+            if isinstance(value, str):
+                own = {value}
+            elif isinstance(value, (list, tuple)):
+                own = {t for i in value if _principal_turn(i) for t in _turn_texts(i)}
+            else:
+                own = set(strings_in(value, limit=64))
+            texts = strings_in(value, limit=8)
+            # The newest user turn is the request this run serves: it is always
+            # scanned, however long the history in front of it.
+            if isinstance(value, (list, tuple)):
+                newest = next((i for i in reversed(value) if _principal_turn(i)
+                               and not isinstance(i, str)), None)
+                texts += [t for t in strings_in(newest, limit=8) if t not in texts]
+            batch = getattr(ctx.sensor, "_vo_input_batch", None)
+            # The run's input is ONE input, recorded in one write.
+            with batch() if batch is not None else contextlib.nullcontext():
+                for text in texts:
+                    token = _vo_seams.NOT_PRINCIPAL.set(text not in own)
+                    try:
+                        scan_text_boundary(ctx.sensor, text, "input")
+                    finally:
+                        _vo_seams.NOT_PRINCIPAL.reset(token)
+            if not _vo_seams.NESTED_RUN.get():
+                _replay_tool_outputs(ctx.sensor, value)
             return None
 
         def after(result: Any, args: tuple, kwargs: dict) -> Any:
             scan_text_boundary(ctx.sensor, getattr(result, "final_output", None), "output")
             return result
 
-        return make_wrapper(orig, before=before, after=after)
+        # Each run is one request (ruling 4): the value-origin ledger its input
+        # binds ends with the run, so a later run on the same thread or worker
+        # never reads this run's principal authority.
+        return _vo_seams.request_scoped_run(make_wrapper(orig, before=before, after=after))
 
     ctx.try_install(
         "agents", "Runner.run", "input+output", factory,
@@ -756,11 +907,17 @@ def _patch_crewai(ctx: PatchContext) -> None:
             value = kwargs.get("inputs")
             if value is None and len(args) > 1:
                 value = args[1]
-            for text in strings_in(value, limit=32):
-                scan_text_boundary(ctx.sensor, text, "input")
+            # Each value is one template variable the crew's task and agent text
+            # is filled from: one input, recorded in one write, a declared span
+            # per variable (the template text itself is the crew author's).
+            batch = getattr(ctx.sensor, "_vo_input_batch", None)
+            with batch(declared=True) if batch is not None else contextlib.nullcontext():
+                for text in strings_in(value, limit=32):
+                    scan_text_boundary(ctx.sensor, text, "input")
             return None
 
-        return make_wrapper(orig, before=before)
+        # Each kickoff is one request (ruling 4), as Runner.run is above.
+        return _vo_seams.request_scoped_run(make_wrapper(orig, before=before))
 
     # ── TOOL boundary — crewai.hooks, the framework's own registry ───────
     # ctx.module() first so a build without the hook API is reported as
@@ -1023,6 +1180,18 @@ def _patch_haystack(ctx: PatchContext) -> None:
         "before_tool tool-argument scan (the call is removed before it "
         "executes), after_run output scan — all on the same sensor",
     )
+    try:
+        from ..integrations.haystack import run_variables
+    except Exception as exc:  # pragma: no cover - import of our own module
+        raise PatchUnavailable(f"xaidr Haystack integration unavailable: {exc}") from exc
+    for name in ("run", "run_async"):
+        ctx.install(
+            module_name, f"Agent.{name}", "input",
+            lambda orig: run_variables(make_wrapper(orig)),     # make_wrapper: the patch token
+            "makes the run's string template variables visible to the before_run hook, "
+            "so with a user_prompt only those variables are recorded as the principal's "
+            "input and the rendered template text is not",
+        )
     ctx.unpatchable(
         f"{module_name}.Agent.hooks['after_tool']", "tool result",
         "tool RESULTS are not scanned — only tool ARGUMENTS are. Haystack does "
@@ -1119,15 +1288,20 @@ def _patch_mcp(ctx: PatchContext) -> None:
             # type level from a value a principal SUPPLIED — the strongest and the weakest provenance in the estate
             # sharing one label, on the surface where the difference matters
             # most. Detection is unchanged (`_INBOUND_CHAT_DIRECTIONS` in
-            # scanner/local.py keeps the two labels one pipeline); telemetry,
-            # and any extension's `ScanRequest`, can tell them apart.
+            # scanner/local.py keeps the two labels one pipeline); what changes
+            # is that telemetry, and any extension's `ScanRequest`, can now tell
+            # them apart.
+            name = kwargs.get("name") or (args[1] if len(args) > 1 else "unknown_tool")
+            arguments = kwargs.get("arguments")
+            if arguments is None and len(args) > 2:
+                arguments = args[2]
             text = _mcp_result_text(result)
             if not text:
+                _record_unscanned(ctx.sensor, name, arguments, result)
                 return result
-            verdict = ctx.sensor.scan(text, direction="tool_result")
+            verdict = _scan_result(ctx.sensor, text, name, arguments, result)
             if not verdict.must_halt:
                 return result
-            name = kwargs.get("name") or (args[1] if len(args) > 1 else "unknown_tool")
             message = (
                 f"[BLOCKED] The result returned by MCP tool '{name}' was blocked "
                 f"by security policy ({verdict.category or 'policy'})."
@@ -1137,7 +1311,7 @@ def _patch_mcp(ctx: PatchContext) -> None:
                 raise DelphiBlockedError(verdict)
             return error
 
-        return make_wrapper(orig, before=before, after=after)
+        return _vo_seams.enclosing_result_seam(make_wrapper(orig, before=before, after=after))
 
     ctx.install(
         "mcp", "ClientSession.call_tool", "tool", factory,

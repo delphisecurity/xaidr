@@ -10,8 +10,17 @@ Two things to know about the sensor under test:
     so every test is isolated via the autouse ``_clean_provenance_state`` fixture
     — otherwise a ``begin_flow`` in one test leaks into the next.
 """
-
 from __future__ import annotations
+
+# Standing rule (ARCHITECTURE.md §5), FIRST, before anything imports xaidr:
+# this run neither reads nor writes in-tree bytecode. sys.pycache_prefix points
+# both at a fresh empty directory, so a stale __pycache__/*.pyc left by a
+# sabotage cannot be read even when the restored source has the same size and
+# mtime. dont_write_bytecode alone stops writes, not reads (M5 milestone review).
+import sys as _sys
+import tempfile as _tempfile
+_sys.dont_write_bytecode = True
+_sys.pycache_prefix = _tempfile.mkdtemp(prefix="xaidr-nopyc-")
 
 import time
 from pathlib import Path
@@ -19,6 +28,22 @@ from pathlib import Path
 import pytest
 
 from xaidr import Sensor, clear_flow, clear_origin
+
+
+def pytest_configure(config):
+    # Tests that need the dev extra's oracles or build tooling REFUSE when it is
+    # missing (Q3): they never skip. The `base` CI config, which installs no
+    # third-party package by design, deselects them explicitly by this marker.
+    config.addinivalue_line(
+        "markers",
+        "requires_dev_extra: needs '.[dev]' (urllib3, ada-url, hatchling); refuses, "
+        "never skips, without it")
+    # One hook for both markers: two module-level pytest_configure functions would
+    # leave only the second, and the first marker would silently go unregistered.
+    config.addinivalue_line(
+        "markers",
+        "asi_battery: reads asi_battery/, which the sdist does not ship; skipped "
+        "in an extracted sdist and run everywhere else")
 
 
 class CapturingReporter:
@@ -117,13 +142,6 @@ _REPO = Path(__file__).resolve().parent.parent
 #: so the `.git` half keeps a checkout from ever skipping. A deleted battery in a
 #: clone fails loudly instead of skipping, which would read as a pass.
 _NO_ASI_BATTERY = not (_REPO / "asi_battery").is_dir() and not (_REPO / ".git").exists()
-
-
-def pytest_configure(config):
-    config.addinivalue_line(
-        "markers",
-        "asi_battery: reads asi_battery/, which the sdist does not ship; skipped "
-        "in an extracted sdist and run everywhere else")
 
 
 def pytest_collection_modifyitems(config, items):

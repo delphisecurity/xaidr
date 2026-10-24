@@ -1,0 +1,42 @@
+{
+  "about": "Inputs scripts/gen_value_origin_data.py --nameprep reads to write xaidr/value_origin/_nameprep_data.py, copied byte for byte from upstream: each one's URL, version and sha256. The generator refuses a file whose bytes differ from its entry, and tests/test_value_origin_idna2003.py checks every entry and that the generated module is what these files generate. Nothing here ships in the wheel.",
+  "files": [
+    {
+      "path": "rfc3454.txt",
+      "url": "https://www.rfc-editor.org/rfc/rfc3454.txt",
+      "version": "RFC 3454 (December 2002)",
+      "licence": "the RFC's own Full Copyright Statement (The Internet Society, 2002), in the file",
+      "sha256": "eb722fa698fb7e8823b835d9fd263e4cdb8f1c7b0d234edf7f0e3bd2ccbb2c79"
+    },
+    {
+      "path": "UnicodeData-16.0.0.txt",
+      "url": "https://www.unicode.org/Public/16.0.0/ucd/UnicodeData.txt",
+      "version": "Unicode 16.0.0",
+      "licence": "Unicode-3.0",
+      "licence_file": "LICENSES/Unicode-license.txt",
+      "sha256": "ff58e5823bd095166564a006e47d111130813dcf8bf234ef79fa51a870edb48f"
+    },
+    {
+      "path": "DerivedAge-16.0.0.txt",
+      "url": "https://www.unicode.org/Public/16.0.0/ucd/DerivedAge.txt",
+      "version": "Unicode 16.0.0",
+      "licence": "Unicode-3.0",
+      "licence_file": "LICENSES/Unicode-license.txt",
+      "sha256": "60caa81b99a4dfb0bc5d38440d323073e3f356f46f9ca7869da848cd0715408b"
+    },
+    {
+      "path": "SpecialCasing-16.0.0.txt",
+      "url": "https://www.unicode.org/Public/16.0.0/ucd/SpecialCasing.txt",
+      "version": "Unicode 16.0.0",
+      "licence": "Unicode-3.0",
+      "licence_file": "LICENSES/Unicode-license.txt",
+      "sha256": "8d5de354eef79f2395a54c9c7dcebbaf3d30fc962d0f85611ea97aa973a0c451"
+    },
+    {
+      "path": "LICENSES/Unicode-license.txt",
+      "url": "https://www.unicode.org/license.txt",
+      "version": "fetched 2026-10-24",
+      "sha256": "e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96"
+    }
+  ]
+}
