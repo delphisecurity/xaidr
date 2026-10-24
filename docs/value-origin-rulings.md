@@ -221,13 +221,28 @@ more than one reading names every one of them. This applies to every rule below.
   read as the key the resolver reaches. A non-ASCII host is read as the socket
   layer encodes it, IDNA 2003 (`straße` is `strasse`): written out from RFC 3454's
   tables and Unicode 3.2 (`_idna.idna2003`, data in `_nameprep_data.py`), so the
-  name is the same on every interpreter, and read also as an interpreter whose
-  `stringprep` predates CPython's fix encodes it (3.12.2 lowercases `Ⴜ` by its own
-  Unicode, 3.12.15 keeps it). That older lowercase is taken for the code points
-  Unicode 13.0 assigns; one it leaves unassigned is kept (§9 item 21; 40 code
-  points an unfixed 3.12 lowercases). *Pinned by:* the published-suite
-  differential, whose urllib.request and http.client clients no other ruling
-  excuses.
+  name is the same on every interpreter, and read also as every interpreter whose
+  `stringprep` predates CPython's fix encodes it. A fixed one (3.10.22, 3.12.15,
+  3.14.9) encodes by RFC 3454's table B.3; an unfixed one (3.10.20, 3.11.15,
+  3.12.2, 3.12.13 and 3.14.5, measured 2026-10-24) lowercases a code point B.3
+  does not map by its own Unicode, so 3.12.2 lowercases `Ⴜ` and 3.12.15 keeps it,
+  and only an unfixed 3.14 lowercases a code point Unicode 16.0 assigned. The core
+  writes out each of those encodings from vendored data (RFC 3454, and Unicode
+  16.0's lowercase with each code point's age, in `scripts/value_origin_sources/`),
+  the same list on every interpreter. *Corrected 2026-10-24:* until then this
+  paragraph said the older lowercase was taken only for the code points Unicode
+  13.0 assigns and that one it leaves unassigned is kept, and a report of the same
+  round said the encoder matched every interpreter's codec on every code point.
+  Both described a fixed interpreter and an unfixed 3.10 only: the encoder missed
+  the reading of an unfixed 3.11 or 3.12 for 40 code points and of an unfixed 3.14
+  for 67. It now misses none on any of the eight interpreters named above, over
+  every code point (`tests/test_value_origin_idna2003.py`).
+  A URL urllib.request refuses (its `Request` runs `urlparse`, which refuses a
+  bracket that does not pair) has no urllib.request host, and the core still reads
+  one for it: found 2026-10-24, not fixed, pinned by
+  `tests/test_value_origin_stdlib_refusals.py` (strict xfail). *Pinned by:* the
+  published-suite differential, whose urllib.request and http.client clients no
+  other ruling excuses, and `tests/test_value_origin_idna2003.py`.
 - **A special scheme takes its authority after any run of `/` and `\`** (R4):
   `http:evil.test`, `http:/evil.test`, `http:\\evil.test` and
   `http:///evil.test` all name `evil.test`. The special schemes are `http`,
@@ -476,8 +491,15 @@ in every cell.
 The core never picks one. Every destination a value names is its own finding,
 and the weakest decides the wire (R1, Q1). `authority_of` returns `None` for a
 value with two authorities, exactly as for a two-mailbox list, and
-`extract_destinations` reports all of them.
-*Pinned by:* `test_q1_authority_of_answers_none_for_a_value_with_two_authorities`.
+`extract_destinations` reports all of them. A value a client resolves under a
+second name (urllib.request's userinfo host, the socket layer's IDNA 2003 name) is
+two authorities too (2026-10-24): `authority_of("https://straße.example/")` is
+`None`. `None` there is no single destination, never no destination: nothing in
+the package calls `authority_of`, and a call naming such a value reads
+`unresolved`.
+*Pinned by:* `test_q1_authority_of_answers_none_for_a_value_with_two_authorities`,
+`test_authority_of_answers_none_for_a_value_a_client_resolves_otherwise`, and
+`tests/test_value_origin_two_readings.py`.
 
 ## 4. Trust
 
@@ -624,11 +646,20 @@ Each is current behaviour and can still be overruled.
 9. Where that split (3.12.2's rules, written out, never the interpreter's
    `urlsplit`) refuses the WHATWG string, the value is `parse_failure` and every
    host the split finds is a finding beside it, on every interpreter alike.
-10. `authority_of` returns `None` for a value with two authorities (§3).
-11. One over-read class is named in the differential:
-    `urlsplit-bracket-validation`, hosts CPython 3.12.2's urllib.parse reads and
+10. `authority_of` returns `None` for a value with two authorities, and for one a
+    client resolves under a second name (§3).
+11. Two bracket over-read classes are named in the differential.
+    `urlsplit-bracket-validation`: hosts CPython 3.12.2's urllib.parse reads and
     later patch releases refuse. It is checked both ways: it absorbs nothing on an
     interpreter that reads like 3.12.2 and must be needed on one that does not.
+    `unbalanced-bracket`: a netloc whose brackets do not pair, which every
+    urllib.parse refuses, 3.12.2 too, where the host after `@` is non-ASCII and
+    keeps a backslash, so httpx refuses it as well; it must be needed on every
+    interpreter, and each row is checked for that shape. *Corrected 2026-10-24:*
+    the first class's predicate was any `]` urlsplit refuses, so on 3.12.2 it held
+    the unbalanced-bracket rows, whose premise ("3.12.2 reads these") is false
+    there, and its both-ways test was red on 3.12.2 from `fa73bff` (36 rows) with
+    no pytest job on 3.12.2 to show it. CI now runs the suite on 3.12.2.
     The mailbox reading is named the same way, and each of its findings is checked
     against `email.utils`.
 12. Integer parts are digit-checked (§2, Addresses).
