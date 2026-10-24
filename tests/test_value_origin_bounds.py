@@ -145,10 +145,10 @@ def test_every_destination_in_a_result_of_models_past_the_bound_is_recorded(kind
                     for i in range(_LISTINGS)]
     finally:
         vo.unbind_ledger()
-    missed = [i for i, v in enumerate(verdicts) if not should_block(v, mode=Mode.ENFORCE)]
-    assert not missed, (
-        f"{len(missed)} of {_LISTINGS} untrusted URLs in a result of {kind} items did not "
-        f"block (e.g. item {missed[0]}: {verdicts[missed[0]].wire.value}): an item past the "
+    allowed = [i for i, v in enumerate(verdicts) if not should_block(v, mode=Mode.ENFORCE)]
+    assert not allowed, (
+        f"{len(allowed)} of {_LISTINGS} untrusted URLs in a result of {kind} items did not "
+        f"block (e.g. item {allowed[0]}: {verdicts[allowed[0]].wire.value}): an item past the "
         "bound was skipped as one already seen")
 
 
