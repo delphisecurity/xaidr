@@ -237,12 +237,20 @@ more than one reading names every one of them. This applies to every rule below.
   the reading of an unfixed 3.11 or 3.12 for 40 code points and of an unfixed 3.14
   for 67. It now misses none on any of the eight interpreters named above, over
   every code point (`tests/test_value_origin_idna2003.py`).
-  A URL urllib.request refuses (its `Request` runs `urlparse`, which refuses a
-  bracket that does not pair) has no urllib.request host, and the core still reads
-  one for it: found 2026-10-24, not fixed, pinned by
-  `tests/test_value_origin_stdlib_refusals.py` (strict xfail). *Pinned by:* the
-  published-suite differential, whose urllib.request and http.client clients no
-  other ruling excuses, and `tests/test_value_origin_idna2003.py`.
+  *Pinned by:* the published-suite differential, whose urllib.request and
+  http.client clients no other ruling excuses, and
+  `tests/test_value_origin_idna2003.py`.
+- **A value no client accepts is read conservatively** (decided by the owner,
+  2026-10-24). urllib.request refuses a URL its `urlparse` refuses (a bracket that
+  does not pair, a bracketed host that is no address), and the other clients refuse
+  it or read another host. The core still reads the name urllib.request and
+  http.client would resolve had the split gone through, beside every other reading.
+  The reading errs toward holding: the name is an extra finding, `unresolved`, or
+  `untrusted_source` where an untrusted result wrote the same value, and it never
+  authorizes a call. `https://[::1/` reads `dns:[:`; `https://a]b@evil.test/`
+  reads `dns:evil.test` and `dns:a]b@evil.test`. *Pinned by:*
+  `tests/test_value_origin_stdlib_refusals.py`, and the rows `Q1-urlsplit-refusal`
+  and `R33-unparseable-url`.
 - **A special scheme takes its authority after any run of `/` and `\`** (R4):
   `http:evil.test`, `http:/evil.test`, `http:\\evil.test` and
   `http:///evil.test` all name `evil.test`. The special schemes are `http`,

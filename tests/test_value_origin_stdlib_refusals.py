@@ -1,17 +1,13 @@
-"""A URL urllib.request refuses has no urllib.request host. Found 2026-10-24, not fixed.
+"""A value no client accepts is read conservatively.
 
 ``urllib.request.Request(url)`` computes ``request_host``, which runs
 ``urllib.parse.urlparse``; a URL that refuses there (a bracket that does not
-pair, a bracketed host that is no address) raises before anything is resolved,
-so ``urlopen`` sends nowhere. The core's reading of the standard library's
-clients (``_authority.stdlib_hosts``) does not model that refusal, so for each
-value below it reads a name no client resolves: an over-read, an extra
-``unresolved`` finding (and ``untrusted_source`` where an untrusted result wrote
-the same value). It was found while naming the client behind each finding the
-ruling that a name a client resolves is a destination (2026-10-23) added to the
-pinned rows (Q1-urlsplit-refusal and R33-unparseable-url among them).
-Narrowing the reading is the owner's call; until then the defect is pinned
-here, strict, so the fix turns it green on purpose.
+pair, a bracketed host that is no address) raises before anything is resolved.
+The core still reads the name urllib.request and http.client would resolve had
+the split gone through (``_authority.stdlib_hosts``), beside every other
+reading. That reading errs toward holding: the name is an extra ``unresolved``
+finding, or ``untrusted_source`` where an untrusted result wrote the same value,
+and it never authorizes a call (docs/value-origin-rulings.md §2).
 """
 from __future__ import annotations
 
@@ -37,12 +33,11 @@ def test_urllib_request_refuses_each_of_them(v, key):
         urllib.request.Request(v)
 
 
-@pytest.mark.xfail(strict=True, reason="found 2026-10-24, not fixed: stdlib_hosts reads "
-                   "the urllib.request/http.client name of a URL urllib.request refuses")
 @pytest.mark.parametrize("v,key", REFUSED)
-def test_a_url_urllib_request_refuses_names_no_stdlib_host(v, key):
+def test_a_value_no_client_accepts_keeps_its_stdlib_name(v, key):
     found, _ = extract_destinations({"url": v})
     keys = [f.destination.key() for f in found if f.destination is not None]
-    assert key not in keys, (
-        f"{v!r}: the core reads {key}, a name only urllib.request or http.client would "
-        f"resolve, and urllib.request refuses the URL ({keys})")
+    assert key in keys, (
+        f"{v!r}: the core no longer reads {key}, the name urllib.request and "
+        f"http.client would resolve; a value no client accepts is read conservatively "
+        f"({keys})")
