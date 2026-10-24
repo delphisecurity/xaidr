@@ -24,7 +24,7 @@ import re
 from typing import List, Optional, Tuple
 from urllib.parse import unquote, unquote_to_bytes
 
-from ._idna import _status, assigned, fold, pinned, to_ascii
+from ._idna import _status, assigned, fold, idna2003, pinned, to_ascii
 from ._psl_data import ICANN_RULES, PRIVATE_RULES
 from ._shared_tenant_data import SHARED_TENANT_APEXES
 from ._types import MAX_LEAF_CHARS, Authority
@@ -613,27 +613,29 @@ def stdlib_hosts(value: str) -> List[str]:
 def resolver_keys(host: str) -> List[Authority]:
     """The keys a host string reaches through the platform resolver: an IP literal;
     else the name, encoded as the socket layer encodes a non-ASCII name (IDNA 2003,
-    the older encoding: ``faß`` is ``fass``), every numeric reading of it, and,
-    for a numeric name with a trailing dot, the DNS name it is (no numeric parser
-    takes the dot)."""
+    the older encoding: ``faß`` is ``fass``; ``idna2003`` gives every interpreter's
+    encoding, on every interpreter), every numeric reading of it, and, for a
+    numeric name with a trailing dot or a host with a bracket left in it, the DNS
+    name it is (no numeric parser takes the dot or the bracket)."""
     ip = _strict_ip(host)
     if ip is not None:
         return [Authority(scheme="ip", value=ip_key(ip))]
-    name = host
-    if not name.isascii():
-        try:
-            name = name.encode("idna").decode("ascii")
-        except (UnicodeError, ValueError):
-            return []
-    name = name.lower()
     out: List[Authority] = []
-    a = _name_authority(name)
-    if a is not None:
-        out.append(a)
-    out.extend(b for b in _macos_readings(name) if b not in out)
-    t = _trailing_dot_name(name)
-    if t is not None and t not in out:
-        out.append(t)
+    for name in ([host] if host.isascii() else idna2003(host)):
+        name = name.lower()
+        a = _name_authority(name)
+        if a is not None and a not in out:
+            out.append(a)
+        if "[" in name or "]" in name:
+            # getaddrinfo reads no bracket: a host that keeps one (``[::%x];80``,
+            # whatever ``ipaddress`` makes of its scope) is a name it looks up.
+            d = Authority(scheme="dns", value=dns_key(name.rstrip(".")))
+            if d not in out:
+                out.append(d)
+        out.extend(b for b in _macos_readings(name) if b not in out)
+        t = _trailing_dot_name(name)
+        if t is not None and t not in out:
+            out.append(t)
     return out
 
 
@@ -1304,17 +1306,21 @@ def phone_authority(text: str) -> Optional[Authority]:
 
 
 # ── the public normaliser ───────────────────────────────────────────────────
-def classify_value(value: str, *, arg_mode: bool):
+def classify_value(value: str, *, arg_mode: bool, stdlib: bool = True):
     """``_classify``, plus the host urllib3 reads in `X://` when X is no scheme
     urllib3 accepts: one more reading, so the call is authorized only if it
-    is authorized too."""
+    is authorized too. ``stdlib`` adds the hosts urllib.request and http.client
+    resolve; principal text is read without them, since a name only those clients
+    make of a principal's URL (``faß`` as ``fass``, userinfo kept in the host) is
+    one the principal never gave, and the call to it is not authorized (3.6)."""
     res = _classify(value, arg_mode=arg_mode)
     m = _SCHEME_AS_HOST_RE.match(value.strip(_C0_OR_SPACE).strip().translate(_TAB_NEWLINE))
     if m and not _URLLIB3_SCHEME_RE.fullmatch(m.group(1)):
         a = _host_authority(m.group(1), arg_fallback=arg_mode)
         if a is not None:
             res = _with_reading(res, a)
-    if len(value) <= MAX_LEAF_CHARS and ":" in value:
+    if stdlib and ":" in value and (len(value) <= MAX_LEAF_CHARS
+                                    or len(value.strip()) <= MAX_LEAF_CHARS):
         # urllib.request and http.client: an unwrapped <URL:...>, userinfo kept in
         # the host, an unbracketed IPv6 address split at its last colon.
         for host in stdlib_hosts(value):
@@ -1478,14 +1484,17 @@ def _mid_word(text: str, i: int) -> bool:
     return ch.isalpha() and ord(ch) < 0x0E00 and _known(ch)
 
 
-def prose_candidates(text: str, counter: Optional[List[int]] = None) -> List[Tuple[int, Authority]]:
+def prose_candidates(text: str, counter: Optional[List[int]] = None, *,
+                     stdlib: bool = True) -> List[Tuple[int, Authority]]:
     """Every destination candidate in prose, as (position, authority), in text
     order. URLs first and blanked; then mailboxes, blanked so a mailbox never
     authorizes its own domain; then bare hosts (ruling 3.4: ICANN TLD or
     reserved name only), phones and strict IPs. A candidate for which
     normalisation fails is dropped. ``counter``, if given, is incremented once per
     candidate EXAMINED, accepted or not -- what the work budget charges for (a
-    rejected candidate costs the same normalisation: milestone review, 2026-10-06)."""
+    rejected candidate costs the same normalisation: milestone review, 2026-10-06).
+    ``stdlib=False`` (principal text) leaves out the hosts only urllib.request
+    and http.client resolve (``classify_value``)."""
     out: List[Tuple[int, Authority]] = []
     taken: List[Tuple[int, int]] = []
     scan = pinned(text)                # classes decided here; values taken from ``text``
@@ -1496,7 +1505,7 @@ def prose_candidates(text: str, counter: Optional[List[int]] = None) -> List[Tup
         taken.append((m.start(), m.end()))
         # Read as an argument value is: every reading of the split (Q1), and S-4's
         # fallback key for a host UTS-46 refuses, which a client still sends to.
-        a = classify_value(cand, arg_mode=True)
+        a = classify_value(cand, arg_mode=True, stdlib=stdlib)
         if isinstance(a, Authority):
             out.append((m.start(), a))
         elif isinstance(a, list):

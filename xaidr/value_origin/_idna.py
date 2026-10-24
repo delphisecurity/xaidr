@@ -30,9 +30,11 @@ Returns ``None`` on any failure; never raises.
 from __future__ import annotations
 
 import bisect
+import re
 import unicodedata
 
 from . import _idna_data as _D
+from . import _nameprep_data as _N
 
 _RTL = frozenset({"R", "AL"})
 _RTL_ALLOWED = frozenset({"R", "AL", "AN", "EN", "ES", "CS", "ET", "ON", "BN", "NSM"})
@@ -258,3 +260,110 @@ def to_ascii(host: str, *, strict: bool = False):
         return result
     except Exception:
         return None
+
+
+# ── IDNA 2003: the socket layer's encoding of a non-ASCII host ───────────────
+# urllib.request and http.client hand a str host to the socket layer, which
+# encodes a non-ASCII one with the stdlib ``idna`` codec (RFC 3490 ToASCII over
+# RFC 3491 nameprep): ``faß`` is ``fass``. That codec maps with the interpreter's
+# ``stringprep``, whose table B.3 fell back to the interpreter's ``str.lower``
+# before CPython fixed it, so the same name encodes otherwise on 3.12.2 than on
+# 3.12.15 (``Ⴜ`` lowercased by one, kept by the other). Both are written out here
+# from fixed data, so the reading is the same on every interpreter: RFC 3454's
+# tables (``_nameprep_data``), and Unicode 3.2 (``ucd_3_2_0``, frozen in every
+# interpreter) for NFKC, the prohibited code points and the bidi rule.
+_U32 = unicodedata.ucd_3_2_0
+_IDNA_DOTS = re.compile("[.。．｡]")
+_C22 = frozenset([1757, 1807, 6158, 8204, 8205, 8232, 8233, 65279] + list(range(8288, 8292))
+                 + list(range(8298, 8304)) + list(range(65529, 65533))
+                 + list(range(119155, 119163)))
+_C6 = frozenset(range(65529, 65534))
+_C7 = frozenset(range(12272, 12284))
+_C8 = frozenset([832, 833, 8206, 8207] + list(range(8234, 8239)) + list(range(8298, 8304)))
+_C9 = frozenset([917505] + list(range(917536, 917632)))
+
+
+def _b3_rfc(ch: str) -> str:
+    """Table B.3 as RFC 3454 writes it (CPython's fixed ``stringprep``)."""
+    return _N.B3.get(ord(ch), ch)
+
+
+def _b3_legacy(ch: str) -> str:
+    """Table B.3 as CPython's ``stringprep`` read it before the fix: the RFC's
+    mapping where it is not the code point's lowercase, else ``str.lower``. The
+    lowercase is taken for a code point Unicode 13.0 assigns only, where it is the
+    same on every supported interpreter; another is kept (V-4)."""
+    low = ch.lower() if assigned(ch) else ch
+    r = _N.B3.get(ord(ch))
+    return r if r is not None and r != low else low
+
+
+def _b2(ch: str, b3) -> str:
+    """Table B.2 from B.3 and NFKC, as CPython's ``stringprep.map_table_b2``."""
+    al = b3(ch)
+    b = _U32.normalize("NFKC", al)
+    c = _U32.normalize("NFKC", "".join(b3(x) for x in b))
+    return c if b != c else al
+
+
+def _prohibited(ch: str) -> bool:
+    """RFC 3491 section 5: tables C.1.2, C.2.2, C.3 to C.9."""
+    c, cat = ord(ch), _U32.category(ch)
+    return ((cat == "Zs" and ch != " ") or (c >= 128 and (cat == "Cc" or c in _C22))
+            or cat in ("Co", "Cs") or 0xFDD0 <= c < 0xFDF0 or (c & 0xFFFF) >= 0xFFFE
+            or c in _C6 or c in _C7 or c in _C8 or c in _C9)
+
+
+def _nameprep(label: str, b3) -> str:
+    """RFC 3491 nameprep, as CPython's ``encodings.idna.nameprep``; raises
+    UnicodeError where the codec does."""
+    label = "".join(_b2(ch, b3) for ch in label if ord(ch) not in _N.B1)
+    label = _U32.normalize("NFKC", label)
+    if any(_prohibited(ch) for ch in label):
+        raise UnicodeError("prohibited")
+    ral = [_U32.bidirectional(ch) in ("R", "AL") for ch in label]
+    if any(ral):
+        if any(_U32.bidirectional(ch) == "L" for ch in label):
+            raise UnicodeError("bidi 2")
+        if not ral[0] or not ral[-1]:
+            raise UnicodeError("bidi 3")
+    return label
+
+
+def _to_ascii_2003(label: str, b3) -> str:
+    """RFC 3490 ToASCII of one label, as CPython's ``encodings.idna.ToASCII``."""
+    if label.isascii():
+        if 0 < len(label) < 64:
+            return label
+        raise UnicodeError("label empty or too long")
+    label = _nameprep(label, b3)
+    if label.isascii():
+        if 0 < len(label) < 64:
+            return label
+        raise UnicodeError("label empty or too long")
+    if label.lower().startswith("xn--"):
+        raise UnicodeError("ACE prefix")
+    out = "xn--" + label.encode("punycode").decode("ascii")
+    if len(out) < 64:
+        return out
+    raise UnicodeError("label too long")
+
+
+def idna2003(host: str) -> list:
+    """The names the socket layer resolves for a non-ASCII ``host``: its IDNA 2003
+    encoding with RFC 3454's table B.3, and, where it differs, with the table an
+    unfixed interpreter computes. Empty where neither encodes; an ASCII host is
+    sent as it is and is not this function's."""
+    out = []
+    for b3 in (_b3_rfc, _b3_legacy):
+        try:
+            labels = _IDNA_DOTS.split(host)
+            trailing = "." if labels and not labels[-1] else ""
+            if trailing:
+                del labels[-1]
+            name = ".".join(_to_ascii_2003(lab, b3) for lab in labels) + trailing
+        except (UnicodeError, ValueError):
+            continue
+        if name and name not in out:
+            out.append(name)
+    return out

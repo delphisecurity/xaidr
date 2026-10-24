@@ -109,6 +109,12 @@ from ._types import (
     Writer,
 )
 
+
+def _principal_prose(text, counter=None):
+    """The prose reader for principal text: no stdlib-client readings (3.6)."""
+    return prose_candidates(text, counter, stdlib=False)
+
+
 _log = logging.getLogger("xaidr.value_origin")
 
 _KEY = secrets.token_bytes(32)
@@ -532,7 +538,8 @@ def _record_spans(lg: _Ledger, span_list, declared: bool, clean: bool) -> Record
         is_principal = writer is Writer.PRINCIPAL and clean
         origin = Origin.PRINCIPAL if is_principal else Origin.UNTRUSTED_SOURCE
         window = span_text[:max(budget, 0)]
-        for _, a in prose_candidates(window):      # the examined window: per span
+        # Principal text never gains the stdlib clients' readings (3.6).
+        for _, a in prose_candidates(window, stdlib=not is_principal):
             dests.append((_digest_authority(a), (origin, declared, None)))
         if len(span_text) > len(window):
             # Past the window: the WORK-bounded atom pass (2026-10-06), from the
@@ -542,7 +549,8 @@ def _record_spans(lg: _Ledger, span_list, declared: bool, clean: bool) -> Record
             # No whitespace near the cut: overlap 2,048 chars anyway, so an atom
             # straddling it is still whole (silent-failure review, LOW).
             tail = span_text[cut + 1 if cut >= 0 else max(0, len(window) - 2048):]
-            for _, a in budgeted_atoms([((), tail)], atom_budget):
+            for _, a in budgeted_atoms([((), tail)], atom_budget,
+                                       reader=_principal_prose if is_principal else None):
                 late.append((_digest_authority(a), (origin, declared, None)))
         if is_principal and budget > 0:
             for g in span_ngrams(span_text[:budget]):
