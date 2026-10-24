@@ -637,12 +637,27 @@ def classify(v, client, key, core):
 
 
 # ── the run ──────────────────────────────────────────────────────────────────
+def case_probes():
+    """``http://a<c>.example/`` for every code point Unicode lowercases and RFC
+    3454's table B.3 does not map. A fixed ``stringprep`` keeps it; an unfixed one
+    lowercases it by its interpreter's own Unicode, so urllib.request and
+    http.client resolve a different name per interpreter (3.12.2 and 3.14.5 differ
+    from 3.12.15). No published suite holds most of them. The code points are the
+    generated table's (``_nameprep_data.LOWER``, from the vendored UnicodeData);
+    what each client reads is measured here, never taken from the core."""
+    from xaidr.value_origin import _nameprep_data
+    return [f"http://a{chr(cp)}.example/" for cp in sorted(_nameprep_data.LOWER)]
+
+
 def run(limit=None):
     _require()
     clients = Clients()
     rows = published_vectors.load()
     if limit:
         rows = rows[:limit]
+    else:
+        rows = rows + [{"src": "probe:stringprep-lowercase", "v": v, "expect": []}
+                       for v in case_probes()]
     under = collections.Counter()
     by_client = collections.Counter()
     read_by = collections.Counter()
@@ -687,7 +702,8 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     res = run(a.limit)
     if a.core_out:
-        values = sorted({r["v"] for r in published_vectors.load()} | set(interpreter_probes()))
+        values = sorted({r["v"] for r in published_vectors.load()} | set(interpreter_probes())
+                        | set(case_probes()))
         Path(a.core_out).write_text(json.dumps(
             {v: core_reading(v) for v in values}, sort_keys=True))
     print(f"python {sys.version.split()[0]} {sys.platform}: {res['vectors']} vectors")

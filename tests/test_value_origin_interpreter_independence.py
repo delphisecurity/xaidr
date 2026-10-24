@@ -128,3 +128,21 @@ def test_a_designation_does_not_trust_a_value_with_two_readings():
     assert source_matches(d, "web_fetch", {"url": "https://docs.northbank.example/a"})
     assert not source_matches(d, "web_fetch",
                               {"url": "https://docs.northbank.example\\x.attacker.test/a"})
+
+
+# httpx, urllib3 and requests lowercase a host with the interpreter's own
+# ``str.lower``: on 3.14.9 all three send these to the lowercased name (measured
+# 2026-10-24), and on 3.10.22 all three refuse them. The reading is every
+# interpreter's, read on every interpreter, the principal's text included.
+@pytest.mark.parametrize("v,sent", [
+    ("http://aꟋ.example/", "dns:xn--a-y1a.example"),   # U+A7CB (16.0) -> U+0264
+    ("http://aꟜ.example/", "dns:xn--a-hqa.example"),   # U+A7DC (16.0) -> U+019B
+])
+def test_a_name_a_newer_interpreters_str_lower_makes_is_read_on_every_interpreter(v, sent):
+    from xaidr.value_origin._authority import classify_value
+    res = classify_value(v, arg_mode=True, stdlib=False)
+    keys = [a.key() for a in (res if isinstance(res, list) else [res])]
+    assert sent in keys, (
+        f"{v!r}: httpx on 3.14 sends to {sent}; the principal's reading here is {keys}, "
+        "so whether a principal's URL authorizes the call would follow the interpreter")
+    assert [f.destination.key() for f in extract_destinations({"v": v})[0]][1] == sent

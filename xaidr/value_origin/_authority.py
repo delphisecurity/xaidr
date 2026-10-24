@@ -24,7 +24,7 @@ import re
 from typing import List, Optional, Tuple
 from urllib.parse import unquote, unquote_to_bytes
 
-from ._idna import _status, assigned, fold, idna2003, pinned, to_ascii
+from ._idna import _status, assigned, fold, idna2003, lower_by_unicode, pinned, to_ascii
 from ._psl_data import ICANN_RULES, PRIVATE_RULES
 from ._shared_tenant_data import SHARED_TENANT_APEXES
 from ._types import MAX_LEAF_CHARS, Authority
@@ -275,12 +275,21 @@ def _case_readings(raw_host: str) -> List[Authority]:
     and requests each label, then each encodes with the ``idna`` package, which
     applies UseSTD3ASCIIRules and CheckHyphens. Where ``str.lower`` reads
     otherwise than the table (Final_Sigma, a letter the pinned Unicode disallows),
-    that is another destination; where it reads the same, there is none."""
+    that is another destination; where it reads the same, there is none.
+    ``str.lower`` is taken as every supported interpreter computes it
+    (``lower_by_unicode``), not as this one does, so the readings are the same on
+    every interpreter."""
     host = raw_host.strip().rstrip(".")
     if host.isascii() or "%" in host or ":" in host or any(c.isspace() for c in host):
         return []
     out: List[Authority] = []
-    for lowered in (host.lower(), ".".join(x.lower() for x in host.split("."))):
+    labels = [lower_by_unicode(x) for x in host.split(".")]
+    candidates = []
+    for i, whole in enumerate(lower_by_unicode(host)):
+        for lowered in (whole, ".".join(v[i] for v in labels)):
+            if lowered not in candidates:
+                candidates.append(lowered)
+    for lowered in candidates:
         ascii_host = to_ascii(lowered, strict=True)
         if ascii_host:
             a = _name_authority(ascii_host)

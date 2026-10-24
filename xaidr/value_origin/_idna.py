@@ -293,8 +293,37 @@ def _b3_rfc(ch: str) -> str:
 
 
 #: The Unicode version of each supported CPython line (3.10 to 3.14): an unfixed
-#: release of each lowercases by it.
+#: release of each lowercases by it, and ``str.lower`` follows it everywhere.
 _UNFIXED_UNICODE = ((13, 0), (14, 0), (15, 0), (15, 1), (16, 0))
+
+
+def lower_by_unicode(text: str) -> tuple:
+    """``text.lower()`` as an interpreter of each Unicode in ``_UNFIXED_UNICODE``
+    computes it, one per version in that order, the same on every interpreter.
+    Over the code points Unicode 13.0 assigns, ``str.lower`` is the same
+    everywhere (a lowercase does not change once assigned), so a run of them is
+    lowered whole, Final_Sigma included. A code point 13.0 leaves unassigned is
+    lowered by the pinned table (``_nameprep_data.LOWER``) for each Unicode that
+    assigns it, and kept for one that does not: httpx, urllib3 and requests
+    lowercase a host with ``str.lower``, so 3.14 sends ``aꟋ.example`` to
+    ``aɤ.example`` and 3.10 refuses it. Its limit: such a code point counts as
+    uncased where Final_Sigma looks past it."""
+    if all(assigned(c) for c in text):
+        return (text.lower(),) * len(_UNFIXED_UNICODE)
+    runs, run = [], []
+    for c in text:
+        if assigned(c):
+            run.append(c)
+            continue
+        if run:
+            runs.append("".join(run).lower())
+            run = []
+        runs.append(_N.LOWER.get(ord(c), (c, (0, 0))) + (c,))    # (low, age, kept)
+    if run:
+        runs.append("".join(run).lower())
+    return tuple("".join(r if isinstance(r, str) else (r[0] if r[1] <= unicode else r[2])
+                         for r in runs)
+                 for unicode in _UNFIXED_UNICODE)
 
 
 def _b3_unfixed(unicode):
