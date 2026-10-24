@@ -266,11 +266,15 @@ def to_ascii(host: str, *, strict: bool = False):
 # urllib.request and http.client hand a str host to the socket layer, which
 # encodes a non-ASCII one with the stdlib ``idna`` codec (RFC 3490 ToASCII over
 # RFC 3491 nameprep): ``straße`` is ``strasse``. That codec maps with the interpreter's
-# ``stringprep``, whose table B.3 fell back to the interpreter's ``str.lower``
-# before CPython fixed it, so the same name encodes otherwise on 3.12.2 than on
-# 3.12.15 (``Ⴜ`` lowercased by one, kept by the other). Both are written out here
-# from fixed data, so the reading is the same on every interpreter: RFC 3454's
-# tables (``_nameprep_data``), and Unicode 3.2 (``ucd_3_2_0``, frozen in every
+# ``stringprep``. Fixed (3.10.22, 3.12.15, 3.14.9 and later), its table B.3 is RFC
+# 3454's. Before the fix (3.10.20, 3.11.15, 3.12.2, 3.12.13 and 3.14.5, measured
+# 2026-10-24) a code point B.3 does not map fell back to the interpreter's own
+# ``str.lower``, so each unfixed interpreter encodes by its own Unicode version:
+# ``Ⴜ`` (U+10BC) is lowercased by 3.12.2 and kept by 3.12.15, and a code point
+# Unicode 16.0 assigned is lowercased by 3.14.5 alone. Every one of those encodings
+# is written out here from fixed data, so the readings are the same on every
+# interpreter: RFC 3454's tables and Unicode 16.0's lowercase with each code
+# point's age (``_nameprep_data``), and Unicode 3.2 (``ucd_3_2_0``, frozen in every
 # interpreter) for NFKC, the prohibited code points and the bidi rule.
 _U32 = unicodedata.ucd_3_2_0
 _IDNA_DOTS = re.compile("[.。．｡]")
@@ -288,14 +292,27 @@ def _b3_rfc(ch: str) -> str:
     return _N.B3.get(ord(ch), ch)
 
 
-def _b3_legacy(ch: str) -> str:
-    """Table B.3 as CPython's ``stringprep`` read it before the fix: the RFC's
-    mapping where it is not the code point's lowercase, else ``str.lower``. The
-    lowercase is taken for a code point Unicode 13.0 assigns only, where it is the
-    same on every supported interpreter; another is kept (V-4)."""
-    low = ch.lower() if assigned(ch) else ch
-    r = _N.B3.get(ord(ch))
-    return r if r is not None and r != low else low
+#: The Unicode version of each supported CPython line (3.10 to 3.14): an unfixed
+#: release of each lowercases by it.
+_UNFIXED_UNICODE = ((13, 0), (14, 0), (15, 0), (15, 1), (16, 0))
+
+
+def _b3_unfixed(unicode):
+    """Table B.3 as an unfixed ``stringprep`` reads it on an interpreter whose
+    Unicode is ``unicode``: the RFC's mapping where it has one, else ``str.lower``
+    by that Unicode, which is Unicode 16.0's lowercase for a code point assigned by
+    then and the code point itself otherwise (a lowercase does not change once
+    assigned)."""
+    def b3(ch: str) -> str:
+        r = _N.B3.get(ord(ch))
+        if r is not None:
+            return r
+        low = _N.LOWER.get(ord(ch))
+        return low[0] if low is not None and low[1] <= unicode else ch
+    return b3
+
+
+_B3_UNFIXED = tuple((u, _b3_unfixed(u)) for u in _UNFIXED_UNICODE)
 
 
 def _b2(ch: str, b3) -> str:
@@ -349,13 +366,28 @@ def _to_ascii_2003(label: str, b3) -> str:
     raise UnicodeError("label too long")
 
 
+def _variants(host: str):
+    """RFC 3454's B.3, then each unfixed interpreter's whose encoding of ``host``
+    can differ from the one before it: only a code point a newer Unicode assigned
+    and lowercases tells two of them apart."""
+    yield _b3_rfc
+    seen = set()
+    for unicode, b3 in _B3_UNFIXED:
+        key = frozenset(c for c in host
+                        if ord(c) in _N.LOWER and _N.LOWER[ord(c)][1] <= unicode)
+        if key not in seen:
+            seen.add(key)
+            yield b3
+
+
 def idna2003(host: str) -> list:
     """The names the socket layer resolves for a non-ASCII ``host``: its IDNA 2003
-    encoding with RFC 3454's table B.3, and, where it differs, with the table an
-    unfixed interpreter computes. Empty where neither encodes; an ASCII host is
-    sent as it is and is not this function's."""
+    encoding with RFC 3454's table B.3 (a fixed interpreter's), and, where they
+    differ, with the table each unfixed interpreter computes (3.10 to 3.14, each by
+    its own Unicode). The same list on every interpreter. Empty where none encodes;
+    an ASCII host is sent as it is and is not this function's."""
     out = []
-    for b3 in (_b3_rfc, _b3_legacy):
+    for b3 in _variants(host):
         try:
             labels = _IDNA_DOTS.split(host)
             trailing = "." if labels and not labels[-1] else ""

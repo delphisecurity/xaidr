@@ -11,14 +11,22 @@
 writes ``xaidr/value_origin/_idna_data.py`` and ``xaidr/value_origin/_psl_data.py``
 (``--idna-only`` writes the first alone, leaving the PSL snapshot as it is).
 
-    python scripts/gen_value_origin_data.py --rfc3454 rfc3454.txt
+    python scripts/gen_value_origin_data.py --nameprep
 
-writes ``xaidr/value_origin/_nameprep_data.py`` alone: RFC 3454's tables B.1 and
-B.3, which the core's IDNA 2003 encoding (the socket layer's, ``_idna.idna2003``)
-maps with. The interpreter's ``stringprep`` is not used: before CPython's fix, its
-B.3 fell back to the interpreter's ``str.lower``, so the same name encodes
-otherwise on 3.12.2 than on 3.12.15 (``Ⴜ`` is kept by one and lowercased by the
-other).
+writes ``xaidr/value_origin/_nameprep_data.py`` alone, from the files vendored in
+``scripts/value_origin_sources/`` (SOURCES.json holds each one's URL, version and
+sha256, and the generator refuses a file whose bytes differ): RFC 3454's tables
+B.1 and B.3, which the core's IDNA 2003 encoding (the socket layer's,
+``_idna.idna2003``) maps with, and Unicode 16.0's lowercase mapping of every code
+point B.3 leaves alone, with the version that assigned it. The interpreter's
+``stringprep`` is not used: before CPython's fix (3.10.22, 3.12.15, 3.14.9), its
+B.3 fell back to the interpreter's own ``str.lower``, so an unfixed interpreter
+encodes a name by its own Unicode version (``Ⴜ`` is lowercased by 3.12.2 and kept
+by 3.12.15). The age lets the core write out each of those encodings on every
+interpreter: a code point's lowercase does not change once it is assigned
+(measured 2026-10-24 over every code point: ``str.lower`` on 3.10.20, 3.11.15,
+3.12.13 and 3.14.5 is this table restricted to the code points each one's Unicode
+assigns, 0 exceptions).
 
 WHY GENERATED MODULES AND NOT DATA FILES. A downstream package that vendors
 ``xaidr/value_origin/**`` byte-identically may build its wheel with an
@@ -34,7 +42,8 @@ WHERE THE INPUTS COME FROM. Nothing here fetches. The operator downloads:
     https://www.unicode.org/Public/13.0.0/ucd/extracted/DerivedGeneralCategory.txt
     https://www.unicode.org/Public/13.0.0/ucd/extracted/DerivedJoiningType.txt
     https://www.unicode.org/Public/13.0.0/ucd/extracted/DerivedCombiningClass.txt
-    https://www.rfc-editor.org/rfc/rfc3454.txt
+
+except the inputs of ``--nameprep``, which are vendored (see above).
 
 WHY UNICODE 13.0 (docs/value-origin-rulings.md, ruling 3.6). UTS-46 maps, then
 NFC-normalises with the interpreter's ``unicodedata``. That database is Unicode
@@ -209,7 +218,64 @@ def _rfc3454_table(text: str, name: str):
     return rows
 
 
-def gen_nameprep(rfc: Path) -> str:
+SOURCES = ROOT / "scripts" / "value_origin_sources"
+
+
+def _vendored(src: Path):
+    """{path: Path} of the vendored inputs, each checked against SOURCES.json."""
+    import json
+    manifest = json.loads((src / "SOURCES.json").read_text(encoding="utf-8"))
+    out = {}
+    for entry in manifest["files"]:
+        p = src / entry["path"]
+        if _sha(p) != entry["sha256"]:
+            raise SystemExit(f"{p} sha256 {_sha(p)} differs from SOURCES.json "
+                             f"({entry['sha256']}); refusing")
+        out[entry["path"]] = p
+    return out
+
+
+def _unicode_lower(unicode_data: Path, special: Path):
+    """{code point: its full lowercase} wherever that is not the code point: the
+    simple mapping (UnicodeData field 13), or an unconditional SpecialCasing one,
+    as ``str.lower`` takes it for a single code point."""
+    lower = {}
+    for line in unicode_data.read_text(encoding="utf-8").splitlines():
+        f = line.split(";")
+        if f[13]:
+            lower[int(f[0], 16)] = chr(int(f[13], 16))
+    for raw in special.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        f = [x.strip() for x in line.split(";")]
+        if len(f) > 4 and f[4]:
+            continue                       # a conditional mapping (context, language)
+        cp = int(f[0], 16)
+        low = "".join(chr(int(h, 16)) for h in f[1].split())
+        if low != chr(cp):
+            lower[cp] = low
+    return lower
+
+
+def _ages(derived_age: Path):
+    """{code point: (major, minor)} of every code point DerivedAge assigns."""
+    age = {}
+    for raw in derived_age.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        rng, ver = (x.strip() for x in line.split(";"))
+        a, _, b = rng.partition("..")
+        major, minor = (int(x) for x in ver.split("."))
+        for cp in range(int(a, 16), int(b or a, 16) + 1):
+            age[cp] = (major, minor)
+    return age
+
+
+def gen_nameprep(src: Path = SOURCES) -> str:
+    files = _vendored(src)
+    rfc = files["rfc3454.txt"]
     text = rfc.read_text(encoding="utf-8")
     if "Request for Comments: 3454" not in text:
         raise SystemExit(f"{rfc} is not RFC 3454")
@@ -219,20 +285,39 @@ def gen_nameprep(rfc: Path) -> str:
     b3 = {cp: "".join(chr(c) for c in to) for cp, to in _rfc3454_table(text, "B.3")}
     if len(b1) != 27 or len(b3) != 838:               # the RFC's own row counts
         raise SystemExit(f"tables B.1 ({len(b1)}) or B.3 ({len(b3)}) look truncated")
+    lower = _unicode_lower(files["UnicodeData-16.0.0.txt"], files["SpecialCasing-16.0.0.txt"])
+    age = _ages(files["DerivedAge-16.0.0.txt"])
+    # Only the code points B.3 does not map: B.3's own rows are B.3's answer on
+    # every interpreter, fixed or not.
+    legacy = {cp: (low, age[cp]) for cp, low in sorted(lower.items()) if cp not in b3}
+    if any(cp not in age for cp in lower):
+        raise SystemExit("a lowercase mapping for a code point DerivedAge does not assign")
     lines = [
-        '"""GENERATED by scripts/gen_value_origin_data.py — DO NOT EDIT.',
+        '"""GENERATED by scripts/gen_value_origin_data.py --nameprep — DO NOT EDIT.',
         "",
         "RFC 3454 (stringprep) table B.1 (commonly mapped to nothing) and table B.3",
         "(case folding, no normalization), for the IDNA 2003 encoding the socket layer",
-        "applies to a non-ASCII host (``_idna.idna2003``).",
+        "applies to a non-ASCII host (``_idna.idna2003``); and LOWER, Unicode 16.0's",
+        "lowercase of every code point B.3 does not map, with the Unicode version that",
+        "assigned it, for the encoding an interpreter whose ``stringprep`` predates",
+        "CPython's fix computes.",
         "",
-        "Source: https://www.rfc-editor.org/rfc/rfc3454.txt",
-        f"sha256:  {_sha(rfc)}",
+        "Sources, vendored in scripts/value_origin_sources/ (SOURCES.json):",
+    ]
+    for name in ("rfc3454.txt", "UnicodeData-16.0.0.txt", "DerivedAge-16.0.0.txt",
+                 "SpecialCasing-16.0.0.txt"):
+        lines.append(f"    {name:<26} sha256 {_sha(files[name])}")
+    lines += [
         '"""',
         "",
         f"B1 = frozenset({tuple(b1)!r})",
         "",
         f"B3 = {dict(sorted(b3.items()))!r}",
+        "",
+        "#: code point -> (its lowercase, (major, minor) of the Unicode that assigned it)",
+        # ascii(), not repr(): repr() escapes a code point the RUNNING interpreter's
+        # Unicode leaves unassigned, so the module would differ by interpreter.
+        f"LOWER = {ascii(legacy)}",
         "",
     ]
     return "\n".join(lines)
@@ -322,7 +407,8 @@ def gen_psl(psl: Path) -> str:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--psl", type=Path)
-    ap.add_argument("--rfc3454", type=Path)
+    ap.add_argument("--nameprep", action="store_true",
+                    help="write _nameprep_data.py alone, from scripts/value_origin_sources/")
     ap.add_argument("--idna", type=Path)
     ap.add_argument("--bidi", type=Path)
     ap.add_argument("--gc", type=Path)
@@ -330,8 +416,8 @@ def main(argv=None) -> int:
     ap.add_argument("--ccc", type=Path)
     ap.add_argument("--idna-only", action="store_true")
     a = ap.parse_args(argv)
-    if a.rfc3454 is not None:
-        (PKG / "_nameprep_data.py").write_text(gen_nameprep(a.rfc3454), encoding="utf-8")
+    if a.nameprep:
+        (PKG / "_nameprep_data.py").write_text(gen_nameprep(), encoding="utf-8")
         print("wrote", PKG / "_nameprep_data.py")
         return 0
     if None in (a.idna, a.bidi, a.gc, a.joining, a.ccc):
