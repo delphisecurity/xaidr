@@ -265,7 +265,7 @@ def to_ascii(host: str, *, strict: bool = False):
 # ── IDNA 2003: the socket layer's encoding of a non-ASCII host ───────────────
 # urllib.request and http.client hand a str host to the socket layer, which
 # encodes a non-ASCII one with the stdlib ``idna`` codec (RFC 3490 ToASCII over
-# RFC 3491 nameprep): ``faß`` is ``fass``. That codec maps with the interpreter's
+# RFC 3491 nameprep): ``straße`` is ``strasse``. That codec maps with the interpreter's
 # ``stringprep``, whose table B.3 fell back to the interpreter's ``str.lower``
 # before CPython fixed it, so the same name encodes otherwise on 3.12.2 than on
 # 3.12.15 (``Ⴜ`` lowercased by one, kept by the other). Both are written out here

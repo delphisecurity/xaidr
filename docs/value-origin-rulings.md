@@ -210,16 +210,16 @@ more than one reading names every one of them. This applies to every rule below.
   2026-10-23). urllib.request and http.client hand the resolver the host as they
   split it, and each such host is read, beside every other reading:
   urllib.request unwraps `<URL:…>`, `<…>` and `URL:…`, percent-decodes the netloc
-  and keeps its userinfo in the host (`http://user@evil.test/` resolves
-  `user@evil.test`); http.client takes a port after the last `:` that follows any
+  and keeps its userinfo in the host (`http://ops@sink.example/` resolves
+  `ops@sink.example`); http.client takes a port after the last `:` that follows any
   `]`, so an unbracketed IPv6 address loses its last group to the port and a host
-  can keep a colon (`https://example.com:80:` resolves `example.com:80`) or a
+  can keep a colon (`https://sink.example:8443:` resolves `sink.example:8443`) or a
   bracket, which no numeric parser reads; and a numeric host with a trailing dot
-  (`127.0.0.1.`) is a DNS name to the resolver and to every Python client. No
+  (`10.9.8.7.`) is a DNS name to the resolver and to every Python client. No
   public DNS zone holds a label with `@`, `:` or `[`, or a numeric top label, but a
   hosts file, a search domain or a private resolver can answer one, so each is
   read as the key the resolver reaches. A non-ASCII host is read as the socket
-  layer encodes it, IDNA 2003 (`faß` is `fass`): written out from RFC 3454's
+  layer encodes it, IDNA 2003 (`straße` is `strasse`): written out from RFC 3454's
   tables and Unicode 3.2 (`_idna.idna2003`, data in `_nameprep_data.py`), so the
   name is the same on every interpreter, and read also as an interpreter whose
   `stringprep` predates CPython's fix encodes it (3.12.2 lowercases `Ⴜ` by its own

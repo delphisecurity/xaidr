@@ -613,7 +613,7 @@ def stdlib_hosts(value: str) -> List[str]:
 def resolver_keys(host: str) -> List[Authority]:
     """The keys a host string reaches through the platform resolver: an IP literal;
     else the name, encoded as the socket layer encodes a non-ASCII name (IDNA 2003,
-    the older encoding: ``faß`` is ``fass``; ``idna2003`` gives every interpreter's
+    the older encoding: ``straße`` is ``strasse``; ``idna2003`` gives every interpreter's
     encoding, on every interpreter), every numeric reading of it, and, for a
     numeric name with a trailing dot or a host with a bracket left in it, the DNS
     name it is (no numeric parser takes the dot or the bracket)."""
@@ -1311,7 +1311,7 @@ def classify_value(value: str, *, arg_mode: bool, stdlib: bool = True):
     urllib3 accepts: one more reading, so the call is authorized only if it
     is authorized too. ``stdlib`` adds the hosts urllib.request and http.client
     resolve; principal text is read without them, since a name only those clients
-    make of a principal's URL (``faß`` as ``fass``, userinfo kept in the host) is
+    make of a principal's URL (``straße`` as ``strasse``, userinfo kept in the host) is
     one the principal never gave, and the call to it is not authorized (3.6)."""
     res = _classify(value, arg_mode=arg_mode)
     m = _SCHEME_AS_HOST_RE.match(value.strip(_C0_OR_SPACE).strip().translate(_TAB_NEWLINE))
