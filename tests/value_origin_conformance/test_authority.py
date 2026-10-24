@@ -43,7 +43,11 @@ def A(key):
     ("https://s3.amazonaws.com/bucket", "dns:s3.amazonaws.com"),
     ("http://intranet/", "dns:intranet"),
     ("HTTPS://Corp.Example./", "dns:corp.example"),
-    ("https://corp.example@evil.test/", "dns:evil.test"),
+    # `https://corp.example@evil.test/` -> dns:evil.test was pinned here until
+    # 2026-10-24. urllib.request keeps the userinfo in the host it resolves
+    # (`corp.example@evil.test`; rulings §2, a name a client resolves), so the
+    # value names two authorities and the single-answer normaliser returns None; see
+    # test_authority_of_answers_none_for_a_value_a_client_resolves_otherwise.
     # `https://evil.test\@corp.example/` -> dns:evil.test was pinned here under
     # V-23. Q1 (2026-10-03) amends V-23: that value names TWO authorities, so the
     # single-answer normaliser returns None and the walk reports both. See
@@ -55,7 +59,9 @@ def A(key):
     ("https://pаypal.example/", "dns:xn--pypal-4ve.example"),
     ("https://xn--pypal-4ve.example/", "dns:xn--pypal-4ve.example"),
     ("https://ａｂｃ.example/", "dns:abc.example"),
-    ("https://straße.example/", "dns:xn--strae-oqa.example"),
+    # `https://straße.example/` -> dns:xn--strae-oqa.example was pinned here until
+    # 2026-10-24. The socket layer resolves `strasse.example` (IDNA 2003), so the
+    # value names two authorities; see the same test.
     ("evil.test/x", "dns:evil.test"),
     ("http:evil.test", "dns:evil.test"),               # R4: special scheme, no //
     ("http:///evil.test", "dns:evil.test"),            # R4: WHATWG ignores the slashes
@@ -95,10 +101,10 @@ def test_authority_of_rejects(value):
     # Q1 (2026-10-03, amends V-23): WHATWG reads the backslash as a slash, RFC
     # 3986 (urllib, httpx) reads it as userinfo. Each reading is a finding,
     # WHATWG first, so neither consumer's host can be walked past.
-    ("https://corp.example\\@evil.test/x", ["dns:corp.example", "dns:evil.test"]),
-    ("https://evil.test\\@corp.example/x", ["dns:evil.test", "dns:corp.example"]),
-    ("http://169.254.169.254\\@corp.example/", ["ip:169.254.169.254", "dns:corp.example"]),
-    ("http://\\@evil.test/", ["dns:evil.test"]),           # WHATWG: hostless; RFC: evil.test
+    ("https://corp.example\\@evil.test/x", ["dns:corp.example", "dns:evil.test", "dns:example\\@evil.test"]),
+    ("https://evil.test\\@corp.example/x", ["dns:evil.test", "dns:corp.example", "dns:test\\@corp.example"]),
+    ("http://169.254.169.254\\@corp.example/", ["ip:169.254.169.254", "dns:corp.example", "dns:254\\@corp.example"]),
+    ("http://\\@evil.test/", ["dns:evil.test", "dns:\\@evil.test"]),           # WHATWG: hostless; RFC: evil.test
     ("https://a.corp.example\\@b.corp.example/", ["dns:corp.example"]),   # one authority
     # This row read ["dns:evil.test"] until 2026-10-23, calling the RFC host
     # "unresolvable junk". It is not: httpx, urllib.parse and urllib.request hand
@@ -111,11 +117,11 @@ def test_authority_of_rejects(value):
     # CPython 3.10.21 / 3.12.14 (bracketed-host validation, a security backport)
     # and returns evil.test on 3.12.2; httpx sends it to evil.test on all of
     # them. The RFC 3986 reading must not inherit that patch-level difference.
-    ("http://[::1]\\@evil.test/x", ["ip:::1", "dns:evil.test"]),
+    ("http://[::1]\\@evil.test/x", ["ip:::1", "dns:evil.test", "dns:[::1]\\@evil.test"]),
     # The WPT adversarial run (2026-10-03): urlsplit REFUSES a ']' in userinfo;
     # httpx, urllib3 and WHATWG send it to the host after '@'. The value stays
     # parse_failure (decision 7) and the host is a finding beside it (R1's shape).
-    ("http://&a:foo(b]c@d:2/", ["dns:d"]),
+    ("http://&a:foo(b]c@d:2/", ["dns:d", "dns:&a:foo(b]c@d"]),
 ])
 def test_q1_every_reading_of_the_authority_split_is_a_finding(value, keys):
     found, _ = extract_destinations({"url": value})
@@ -130,9 +136,29 @@ def test_q1_authority_of_answers_none_for_a_value_with_two_authorities():
     assert authority_of("https://a.corp.example\\@b.corp.example/") == A("dns:corp.example")
 
 
+@pytest.mark.parametrize("value,was", [
+    ("https://corp.example@evil.test/", "dns:evil.test"),
+    ("https://straße.example/", "dns:xn--strae-oqa.example"),
+    ("https://a\u200db.example/", "dns:a\u200db.example"),
+])
+def test_authority_of_answers_none_for_a_value_a_client_resolves_otherwise(value, was):
+    """A client that resolves a second name for the value (urllib.request keeps the
+    userinfo in the host; the socket layer encodes the host as IDNA 2003) makes the
+    value two destinations: the single-answer normaliser returns None, and the one
+    it answered until 2026-10-24 is still a finding of the walk."""
+    found, _ = extract_destinations({"url": value})
+    keys = [f.destination.key() for f in found if f.destination is not None]
+    assert authority_of(value) is None
+    assert was in keys and len(keys) >= 2, keys
+
+
 def test_idna_failure_in_an_argument_still_yields_the_raw_host():
-    """An IDNA failure is never no_destination; it matches only itself."""
-    assert authority_of("https://a‍b.example/") == A("dns:a‍b.example")
+    """An IDNA failure is never no_destination; it matches only itself. The raw
+    host is still read (V-23); the socket layer also resolves the name without the
+    joiner, so the value is two destinations and ``authority_of`` answers None."""
+    found, _ = extract_destinations({"url": "https://a‍b.example/"})
+    assert "dns:a‍b.example" in [f.destination.key() for f in found if f.destination]
+    assert authority_of("https://a‍b.example/") is None
 
 
 # ── address spellings: a differential against urllib.parse (R4) ──────────────

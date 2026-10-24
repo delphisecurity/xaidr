@@ -23,7 +23,7 @@ def _keys(v):
     # first, and str.lower makes it ς at the end of a word.
     ("http://ΒΌΛΟΣ/", ["dns:xn--nxasmm1c", "dns:xn--nxasmq6b"]),
     ("http://ΒΌΛΟΣ.COM/", ["dns:xn--nxasmm1c.com", "dns:xn--nxasmq6b.com"]),
-    ("http://𞤈.Σ/", ["dns:xn--ie6h.xn--3xa", "dns:xn--ie6h.xn--4xa"]),
+    ("http://𞤈.Σ/", ["dns:xn--ie6h.xn--3xa", "dns:xn--ie6h.xn--4xa", "dns:xn--jd6h.xn--4xa"]),
 ])
 def test_every_case_reading_a_client_sends_to(v, want):
     assert _keys(v) == want
@@ -60,7 +60,7 @@ def test_a_principal_url_does_not_authorize_the_scheme_host():
 @pytest.mark.parametrize("v,want", [
     ("http://a.b．c。d｡/", ["dns:c.d"]),
     ("http://-。。/", ["dns:-"]),
-    ("http://-𐋷𖾑。󠆬/", ["dns:xn----991iq40y"]),
+    ("http://-𐋷𖾑。󠆬/", ["dns:xn----991iq40y", "dns:xn----991iq40y.xn--8h36e"]),
 ])
 def test_ideographic_full_stops_key_as_dots(v, want):
     assert _keys(v) == want
@@ -70,8 +70,7 @@ def test_ideographic_full_stops_key_as_dots(v, want):
 def test_the_fallback_key_is_the_tables():
     """3.14's str.lower lowercases Garay (Unicode 16); 3.10's does not. The key is
     the same on both because only the pinned table maps."""
-    assert _keys("http://‍-。󠄄。SS哑‌\U00010d5f/") == [
-        "dns:‍-.󠄄.ss哑‌\U00010d5f"]
+    assert _keys("http://‍-。󠄄。SS哑‌\U00010d5f/") == ["dns:xn--gd36e.xn--ss-h46c5711e", "dns:xn--gd36e.xn--ss-h46cl311e", "dns:\u200d-.󠄄.ss哑\u200c\U00010d5f"]
 
 
 # ── what the clients read: URLs and mailboxes ────────────────────────────────
@@ -81,7 +80,7 @@ def test_the_fallback_key_is_the_tables():
     ("pop3.example.com:100#foobar", ["dns:example.com"]),              # name:port#frag
     ("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA://hostname/path", ["dns:hostname"]),
     (".://www.example.net", ["dns:example.net"]),                      # 3.10's urlsplit
-    ("http://[fe80::%31%25en0]/", ["ip:fe80::", "ip:fe80::1"]),        # IPv6 zones
+    ("http://[fe80::%31%25en0]/", ["dns:fe80::%31%25en0", "ip:fe80::", "ip:fe80::1"]),        # IPv6 zones
     ("http://[fe80::1%25eth0]:8080/", ["ip:fe80::1"]),
 ])
 def test_url_readings_the_clients_make(v, want):

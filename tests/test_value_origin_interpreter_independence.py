@@ -52,9 +52,9 @@ def test_the_core_never_calls_the_interpreters_url_parser():
 # CPython 3.12.2's urlsplit reads each of these; 3.10.22, 3.12.15 and 3.14.9 refuse
 # them (a bracket that does not end the host).
 @pytest.mark.parametrize("v,want", [
-    ("http://[::5]q.example/", ["ip:::5"]),
+    ("http://[::5]q.example/", ["ip:::5", "dns:[::5]q.example"]),
     ("scheme://[::6].tail", ["ip:::6"]),
-    ("https://[fe80::9]-80/x", ["ip:fe80::9"]),
+    ("https://[fe80::9]-80/x", ["ip:fe80::9", "dns:[fe80::9]-80"]),
 ])
 def test_a_bracket_later_patch_releases_refuse_reads_as_3_12_2_reads_it(v, want):
     assert _readings(v) == want

@@ -36,7 +36,7 @@ def test_finding_1_is_closed_in_the_built_wheel(installed):
     assert case["wire"] == "untrusted_source" and case["blocks_under_enforce"], (
         f"the INSTALLED core authorizes {case['url']!r} (wire {case['wire']}, findings "
         f"{case['findings']}) while httpx sends it to the untrusted evil.test")
-    assert case["findings"] == ["dns:corp.example", "dns:evil.test"]
+    assert case["findings"] == ["dns:corp.example", "dns:evil.test", "dns:example\\@evil.test"]
 
 
 def test_the_mirror_and_a_plain_call_still_block_and_one_authority_does_not(installed):

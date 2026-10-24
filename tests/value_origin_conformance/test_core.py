@@ -325,8 +325,12 @@ def test_c0_controls_and_userinfo_brackets_leave_the_host_readable(call):
     assert should_block(v, mode=Mode.ENFORCE)
 
 
-def test_a_non_c0_space_before_a_scheme_is_not_a_url():
-    """No client strips U+00A0 before a scheme."""
+def test_a_non_c0_space_before_a_scheme_is_read_as_urllib_request_reads_it():
+    """WHATWG and urlsplit strip only C0 controls and spaces, so neither reads a URL
+    after U+00A0. urllib.request strips it (``Request`` unwraps with ``str.strip``)
+    and resolves ``evil.test`` (measured 2026-10-24). This test said "No client
+    strips U+00A0 before a scheme" until 2026-10-24; that was false."""
     from xaidr.value_origin import extract_destinations
     found, _ = extract_destinations({"url": "\xa0https://evil.test/x"})
-    assert [f.destination for f in found if f.destination is not None] == [], found
+    assert [f.destination.key() for f in found if f.destination is not None] == [
+        "dns:evil.test"], found
