@@ -1,5 +1,5 @@
 {
-  "about": "Files in this folder copied byte for byte from an upstream project: each one's upstream URL, version (a tag, a commit or a release) and sha256. scripts/published_vectors.py verifies them, and extracts the test vectors from them when a test or the differential runs; the release disclosure scan (scripts/disclosure_scan.py) skips a file here only while its bytes match its entry.",
+  "about": "Files in this folder copied byte for byte from an upstream project: each one's upstream URL, version (a tag, a commit or a release) and sha256. scripts/published_vectors.py verifies them, and extracts the test vectors from them when a test or the differential runs; the release disclosure scan (scripts/disclosure_scan.py) skips a file here only while its bytes match its entry. A source of kind data (RFC 3454, Unicode 16.0's UnicodeData, DerivedAge and SpecialCasing) yields no vectors: it is the input scripts/gen_value_origin_data.py --nameprep generates the core's IDNA 2003 tables from.",
   "files": [
     {
       "path": "upstream/cpy3.10.22-test_urlparse.py",
@@ -168,6 +168,30 @@
       "url": "https://raw.githubusercontent.com/web-platform-tests/wpt/514913ff14fde47147cc4fa84444d86dc8bc3112/url/resources/toascii.json",
       "version": "commit 514913ff14fde47147cc4fa84444d86dc8bc3112",
       "sha256": "644eba9d5b593df8095cfa307222f3014542ff9cc02d555f8e5660059d80470f"
+    },
+    {
+      "path": "upstream/rfc3454.txt",
+      "url": "https://www.rfc-editor.org/rfc/rfc3454.txt",
+      "version": "RFC 3454 (December 2002)",
+      "sha256": "eb722fa698fb7e8823b835d9fd263e4cdb8f1c7b0d234edf7f0e3bd2ccbb2c79"
+    },
+    {
+      "path": "upstream/UnicodeData-16.0.0.txt",
+      "url": "https://www.unicode.org/Public/16.0.0/ucd/UnicodeData.txt",
+      "version": "Unicode 16.0.0",
+      "sha256": "ff58e5823bd095166564a006e47d111130813dcf8bf234ef79fa51a870edb48f"
+    },
+    {
+      "path": "upstream/DerivedAge-16.0.0.txt",
+      "url": "https://www.unicode.org/Public/16.0.0/ucd/DerivedAge.txt",
+      "version": "Unicode 16.0.0",
+      "sha256": "60caa81b99a4dfb0bc5d38440d323073e3f356f46f9ca7869da848cd0715408b"
+    },
+    {
+      "path": "upstream/SpecialCasing-16.0.0.txt",
+      "url": "https://www.unicode.org/Public/16.0.0/ucd/SpecialCasing.txt",
+      "version": "Unicode 16.0.0",
+      "sha256": "8d5de354eef79f2395a54c9c7dcebbaf3d30fc962d0f85611ea97aa973a0c451"
     }
   ],
   "sources": [
@@ -328,6 +352,37 @@
       "licence": "BSD-3-Clause",
       "licence_file": "LICENSES/WPT-LICENSE.md",
       "file": "upstream/wpt-toascii.json"
+    },
+    {
+      "id": "rfc3454",
+      "kind": "data",
+      "licence": "RFC 3454 Full Copyright Statement (The Internet Society, 2002), in the file",
+      "licence_file": "upstream/rfc3454.txt",
+      "file": "upstream/rfc3454.txt"
+    },
+    {
+      "id": "unicode-16.0.0:UnicodeData.txt",
+      "kind": "data",
+      "licence": "Unicode-3.0",
+      "licence_file": "LICENSES/Unicode-license.txt",
+      "file": "upstream/UnicodeData-16.0.0.txt",
+      "version": "16.0.0"
+    },
+    {
+      "id": "unicode-16.0.0:DerivedAge.txt",
+      "kind": "data",
+      "licence": "Unicode-3.0",
+      "licence_file": "LICENSES/Unicode-license.txt",
+      "file": "upstream/DerivedAge-16.0.0.txt",
+      "version": "16.0.0"
+    },
+    {
+      "id": "unicode-16.0.0:SpecialCasing.txt",
+      "kind": "data",
+      "licence": "Unicode-3.0",
+      "licence_file": "LICENSES/Unicode-license.txt",
+      "file": "upstream/SpecialCasing-16.0.0.txt",
+      "version": "16.0.0"
     }
   ]
 }

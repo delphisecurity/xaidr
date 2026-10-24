@@ -228,7 +228,7 @@ more than one reading names every one of them. This applies to every rule below.
   does not map by its own Unicode, so 3.12.2 lowercases `Ⴜ` and 3.12.15 keeps it,
   and only an unfixed 3.14 lowercases a code point Unicode 16.0 assigned. The core
   writes out each of those encodings from vendored data (RFC 3454, and Unicode
-  16.0's lowercase with each code point's age, in `scripts/value_origin_sources/`),
+  16.0's lowercase with each code point's age, in `tests/published_vectors/`),
   the same list on every interpreter. *Corrected 2026-10-24:* until then this
   paragraph said the older lowercase was taken only for the code points Unicode
   13.0 assigns and that one it leaves unassigned is kept, and a report of the same

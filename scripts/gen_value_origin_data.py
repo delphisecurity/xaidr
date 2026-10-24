@@ -14,8 +14,9 @@ writes ``xaidr/value_origin/_idna_data.py`` and ``xaidr/value_origin/_psl_data.p
     python scripts/gen_value_origin_data.py --nameprep
 
 writes ``xaidr/value_origin/_nameprep_data.py`` alone, from the files vendored in
-``scripts/value_origin_sources/`` (SOURCES.json holds each one's URL, version and
-sha256, and the generator refuses a file whose bytes differ): RFC 3454's tables
+``tests/published_vectors/upstream/`` (``MANIFEST.json`` holds each one's URL,
+version, sha256 and licence, as for the published suites, and the generator
+refuses a file whose bytes differ): RFC 3454's tables
 B.1 and B.3, which the core's IDNA 2003 encoding (the socket layer's,
 ``_idna.idna2003``) maps with, and Unicode 16.0's lowercase mapping of every code
 point B.3 leaves alone, with the version that assigned it. The interpreter's
@@ -218,20 +219,26 @@ def _rfc3454_table(text: str, name: str):
     return rows
 
 
-SOURCES = ROOT / "scripts" / "value_origin_sources"
+SOURCES = ROOT / "tests" / "published_vectors"
+NAMEPREP_INPUTS = ("rfc3454.txt", "UnicodeData-16.0.0.txt", "DerivedAge-16.0.0.txt",
+                   "SpecialCasing-16.0.0.txt")
 
 
 def _vendored(src: Path):
-    """{path: Path} of the vendored inputs, each checked against SOURCES.json."""
+    """{name: Path} of the vendored inputs, each checked against MANIFEST.json."""
     import json
-    manifest = json.loads((src / "SOURCES.json").read_text(encoding="utf-8"))
+    manifest = json.loads((src / "MANIFEST.json").read_text(encoding="utf-8"))
+    want = {e["path"]: e["sha256"] for e in manifest["files"]}
     out = {}
-    for entry in manifest["files"]:
-        p = src / entry["path"]
-        if _sha(p) != entry["sha256"]:
-            raise SystemExit(f"{p} sha256 {_sha(p)} differs from SOURCES.json "
-                             f"({entry['sha256']}); refusing")
-        out[entry["path"]] = p
+    for name in NAMEPREP_INPUTS:
+        rel = "upstream/" + name
+        if rel not in want:
+            raise SystemExit(f"MANIFEST.json lists no {rel}; refusing")
+        p = src / rel
+        if _sha(p) != want[rel]:
+            raise SystemExit(f"{p} sha256 {_sha(p)} differs from MANIFEST.json "
+                             f"({want[rel]}); refusing")
+        out[name] = p
     return out
 
 
@@ -302,10 +309,9 @@ def gen_nameprep(src: Path = SOURCES) -> str:
         "assigned it, for the encoding an interpreter whose ``stringprep`` predates",
         "CPython's fix computes.",
         "",
-        "Sources, vendored in scripts/value_origin_sources/ (SOURCES.json):",
+        "Sources, vendored in tests/published_vectors/upstream/ (MANIFEST.json):",
     ]
-    for name in ("rfc3454.txt", "UnicodeData-16.0.0.txt", "DerivedAge-16.0.0.txt",
-                 "SpecialCasing-16.0.0.txt"):
+    for name in NAMEPREP_INPUTS:
         lines.append(f"    {name:<26} sha256 {_sha(files[name])}")
     lines += [
         '"""',
@@ -408,7 +414,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--psl", type=Path)
     ap.add_argument("--nameprep", action="store_true",
-                    help="write _nameprep_data.py alone, from scripts/value_origin_sources/")
+                    help="write _nameprep_data.py alone, from tests/published_vectors/")
     ap.add_argument("--idna", type=Path)
     ap.add_argument("--bidi", type=Path)
     ap.add_argument("--gc", type=Path)

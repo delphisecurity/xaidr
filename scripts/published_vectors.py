@@ -9,7 +9,10 @@
 an upstream project (the test files under ``upstream/`` and their licences under
 ``LICENSES/``): its URL, its version (a tag, a commit or a release) and its sha256.
 The vectors are extracted from those files when a test or the differential runs
-(``load()``), never stored:
+(``load()``), never stored. A source of kind ``data`` (RFC 3454, and Unicode
+16.0's UnicodeData, DerivedAge and SpecialCasing) yields no vectors: it is the
+input ``scripts/gen_value_origin_data.py --nameprep`` writes the core's IDNA 2003
+tables from, vendored here so its bytes are checked as every suite's are.
 
 * CPython's ``test_urlparse.py``, ``test_urllib2.py`` and email tests: every string literal with a
   ``:``, ``@``, ``/`` or ``.`` in it (an AST walk, which every supported
@@ -275,6 +278,8 @@ def _load() -> tuple:
             vectors.setdefault((sid, v), set()).update(expect)
 
     for s in manifest()["sources"]:
+        if s["kind"] == "data":
+            continue                 # a generator's input (RFC 3454, Unicode), not a suite
         raw = _read(s)
         kind, sid = s["kind"], s["id"]
         if kind == "cpython":

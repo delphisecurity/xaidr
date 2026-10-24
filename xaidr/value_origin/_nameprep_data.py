@@ -7,7 +7,7 @@ lowercase of every code point B.3 does not map, with the Unicode version that
 assigned it, for the encoding an interpreter whose ``stringprep`` predates
 CPython's fix computes.
 
-Sources, vendored in scripts/value_origin_sources/ (SOURCES.json):
+Sources, vendored in tests/published_vectors/upstream/ (MANIFEST.json):
     rfc3454.txt                sha256 eb722fa698fb7e8823b835d9fd263e4cdb8f1c7b0d234edf7f0e3bd2ccbb2c79
     UnicodeData-16.0.0.txt     sha256 ff58e5823bd095166564a006e47d111130813dcf8bf234ef79fa51a870edb48f
     DerivedAge-16.0.0.txt      sha256 60caa81b99a4dfb0bc5d38440d323073e3f356f46f9ca7869da848cd0715408b
