@@ -660,12 +660,7 @@ class _FlowScope(contextlib.ContextDecorator):
             _SCOPES.set(stack[:i])
             entry.alive[0] = False
             _vo_ledger.request_exit(entry.request)     # its ledgers close with it
-            if entry.fresh and entry.ledger_only:
-                try:
-                    _vo_ledger.ledger_set(entry.saved[4])
-                except Exception:
-                    _scope_fault("putting the ledger back faulted")
-            elif entry.fresh:
+            if entry.fresh:
                 try:
                     _put_back(entry.saved)
                 except Exception:
@@ -954,6 +949,14 @@ def extract_context(headers: dict[str, str] | None) -> bool:
         _vo_fault("extract_context")
     # Set before any early return (see the docstring).
     _inbound_ctx.set(True)
+    # The inbound request's chain, tiers and correlation id are what its headers
+    # carry and nothing else: a chain already in this context (a scope's
+    # principal entry, an earlier request's hops on a reused thread) would name
+    # an upstream the request never had, and stop a stripped request from
+    # resolving to tier 4.
+    _chain_ctx.set(None)
+    _tiers_ctx.set(None)
+    _corr_ctx.set(None)
     if not headers:
         return False
     # case-insensitive header lookup

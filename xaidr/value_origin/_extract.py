@@ -198,7 +198,10 @@ def _all_strings(items, normalise=None, budget: "AtomBudget | None" = None
     budget = budget if budget is not None else AtomBudget()
     out: List[Tuple[Path, str]] = []
     unread = False
-    seen = set()
+    # id -> the object itself: holding it keeps the id from being reused by the
+    # next temporary a normaliser returns (a model_dump() dict, an asdict()), so
+    # every node is examined exactly once and no node is taken for another.
+    seen: dict = {}
     stack = list(reversed(items))
     while stack:
         if budget.left <= 0:
@@ -213,6 +216,9 @@ def _all_strings(items, normalise=None, budget: "AtomBudget | None" = None
             if isinstance(node, _Rest):
                 kids, base = node.it, node.path
             else:
+                if id(node) in seen:
+                    continue                 # this very object, met again (a cycle, a share)
+                seen[id(node)] = node
                 if normalise is not None:
                     node = normalise(node)
                     if node is _UNREAD:
@@ -222,9 +228,11 @@ def _all_strings(items, normalise=None, budget: "AtomBudget | None" = None
                         out.append((path, node))
                         continue
                 is_container, kids = _children(node)
-                if not is_container or id(node) in seen:
+                if not is_container:
                     continue
-                seen.add(id(node))
+                if id(node) in seen and seen[id(node)] is not node:
+                    continue
+                seen[id(node)] = node        # a normaliser's temporary: kept, so examined once
                 base = path
             batch = []
             for step, child, _ in kids:      # one at a time, each one charged
@@ -336,9 +344,10 @@ def extract_with_observed(arguments: Mapping[str, object] | None
                 # Read whole only what fits once stripped; only that read is charged
                 # here (the atom pass charges every string it scans itself), and a
                 # path a finding carries is charged by its length.
-                n = len(s) if len(s) <= MAX_LEAF_CHARS else len(s.strip())
+                n = (len(s) if len(s) <= MAX_LEAF_CHARS else len(s.strip())
+                     ) if budget.left > 0 else MAX_LEAF_CHARS + 1
                 if n <= MAX_LEAF_CHARS and budget.left > 0:
-                    budget.left -= n + ATOM_COST
+                    budget.left -= len(s) + ATOM_COST     # the read strips all of it
                     res = classify_value(s, arg_mode=True)
                     if res is not None:
                         budget.left -= path_len(path)

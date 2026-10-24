@@ -22,9 +22,9 @@ from __future__ import annotations
 import ipaddress
 import re
 from typing import List, Optional, Tuple
-from urllib.parse import unquote_to_bytes
+from urllib.parse import unquote, unquote_to_bytes
 
-from ._idna import _status, fold, pinned, to_ascii
+from ._idna import _status, assigned, fold, pinned, to_ascii
 from ._psl_data import ICANN_RULES, PRIVATE_RULES
 from ._shared_tenant_data import SHARED_TENANT_APEXES
 from ._types import MAX_LEAF_CHARS, Authority
@@ -536,6 +536,119 @@ def _authority_host(url: str, *, whatwg: bool) -> Optional[str]:
     return host or None
 
 
+# ── the standard library's clients: urllib.request and http.client ──────────
+# Written out from CPython's urllib.request.Request (unwrap, _splittag, _splittype,
+# _splithost, unquote) and http.client.HTTPConnection (_get_hostport,
+# _validate_host), the same on every supported interpreter.
+_STDLIB_TYPE_RE = re.compile(r"([^/:]+):(.*)", re.DOTALL)
+_STDLIB_HOST_RE = re.compile(r"//([^/#?]*)(.*)", re.DOTALL)
+_STDLIB_CTRL_RE = re.compile(r"[\x00-\x20\x7f]")
+_STDLIB_SCHEMES = ("http", "https")
+
+
+def _unwrap(url: str) -> str:
+    """urllib.parse.unwrap: ``<URL:scheme://host/path>`` -> ``scheme://host/path``."""
+    url = url.strip()
+    if url[:1] == "<" and url[-1:] == ">":
+        url = url[1:-1].strip()
+    if url[:4] == "URL:":
+        url = url[4:].strip()
+    return url
+
+
+def _int_port(text: str) -> bool:
+    """What ``int()`` accepts as a port: an optional sign, decimal digits (Unicode
+    13.0's, so no interpreter decides otherwise) with single underscores between."""
+    t = text.strip()
+    t = t[1:] if t[:1] in "+-" else t
+    parts = t.split("_")
+    return bool(t) and all(p and all(c.isdecimal() and assigned(c) for c in p) for p in parts)
+
+
+def _http_client_host(hostport: str) -> Optional[str]:
+    """http.client's host for ``HTTPConnection(hostport)``: a port after the LAST
+    ``:`` that follows any ``]`` (an unbracketed IPv6 address loses its last group
+    to the port), brackets around the rest removed; None where it refuses."""
+    i, j = hostport.rfind(":"), hostport.rfind("]")
+    host = hostport
+    if i > j:
+        port = hostport[i + 1:]
+        if port and not _int_port(port):
+            return None                        # InvalidURL: nonnumeric port
+        host = hostport[:i]
+    if host[:1] == "[" and host[-1:] == "]":
+        host = host[1:-1]
+    if not host or _STDLIB_CTRL_RE.search(host):
+        return None
+    return host
+
+
+def stdlib_hosts(value: str) -> List[str]:
+    """The hosts the standard library's clients hand the resolver for ``value``:
+    ``urllib.request.urlopen`` (the value unwrapped, the netloc percent-decoded,
+    userinfo included) and ``http.client.HTTPConnection`` given the netloc as
+    written."""
+    out: List[str] = []
+    url = _unwrap(value)
+    url = url.rpartition("#")[0] if "#" in url else url
+    m = _STDLIB_TYPE_RE.match(url)
+    if m and m.group(1).lower() in _STDLIB_SCHEMES:
+        h = _STDLIB_HOST_RE.match(m.group(2))
+        if h and h.group(1):
+            host = _http_client_host(unquote(h.group(1)))
+            if host:
+                out.append(host)
+    written = value.strip(_C0_OR_SPACE).strip().translate(_TAB_NEWLINE)
+    m = _SCHEME_RE.match(written)
+    if m and m.group(1).lower() in _STDLIB_SCHEMES:
+        rest = written[m.end():]
+        end = _AUTHORITY_END_RE.search(rest)
+        netloc = rest[:end.start()] if end else rest
+        host = _http_client_host(netloc) if netloc else None
+        if host and host not in out:
+            out.append(host)
+    return out
+
+
+def resolver_keys(host: str) -> List[Authority]:
+    """The keys a host string reaches through the platform resolver: an IP literal;
+    else the name, encoded as the socket layer encodes a non-ASCII name (IDNA 2003,
+    the older encoding: ``faß`` is ``fass``), every numeric reading of it, and,
+    for a numeric name with a trailing dot, the DNS name it is (no numeric parser
+    takes the dot)."""
+    ip = _strict_ip(host)
+    if ip is not None:
+        return [Authority(scheme="ip", value=ip_key(ip))]
+    name = host
+    if not name.isascii():
+        try:
+            name = name.encode("idna").decode("ascii")
+        except (UnicodeError, ValueError):
+            return []
+    name = name.lower()
+    out: List[Authority] = []
+    a = _name_authority(name)
+    if a is not None:
+        out.append(a)
+    out.extend(b for b in _macos_readings(name) if b not in out)
+    t = _trailing_dot_name(name)
+    if t is not None and t not in out:
+        out.append(t)
+    return out
+
+
+def _trailing_dot_name(host: str) -> Optional[Authority]:
+    """A numeric host written with a trailing dot (``127.0.0.1.``) is a DNS NAME to
+    the resolver and to every Python client, though WHATWG reads the address."""
+    h = host.strip()
+    if not h.endswith(".") or ":" in h:
+        return None
+    bare = h.rstrip(".")
+    if not bare or coerce_ip(bare) is None:
+        return None
+    return Authority(scheme="dns", value=dns_key(bare.lower()))
+
+
 # ── the macOS resolver (Q22, RE-RULED 2026-10-04) ───────────────────────────
 _DEC_QUAD_RE = re.compile(r"[0-9]+(?:\.[0-9]+){3}")
 
@@ -670,10 +783,13 @@ def url_authority(value: str, *, arg_mode: bool, written: Optional[str] = None):
         a = _host_authority(h, arg_fallback=arg_mode) if h else None
         if a is not None and a != primary and a not in extra:
             extra.append(a)
-    for h in [host] + others:                    # the str.lower readings; IPv6 zones
+    for h in [host] + others:      # the str.lower readings; IPv6 zones; numeric names
         for a in (_case_readings(h) + _zone_readings(h)) if h else ():
             if a != primary and a not in extra:
                 extra.append(a)
+        t = _trailing_dot_name(h) if h else None
+        if t is not None and t != primary and t not in extra:
+            extra.append(t)
     # The spellings each client sends a host in, by the split it makes: urllib3 and
     # requests split as WHATWG does and send http and https only; urllib.parse and
     # httpx keep a backslash.
@@ -848,7 +964,7 @@ def _mailbox_in_junk(part: str) -> Optional[Authority]:
     """The one mailbox in a part that does not parse, when everything around it
     is junk (no letter or digit) or a display name opening ``<``; else None."""
     found = None
-    for m in _P_EMAIL_RE.finditer(pinned(part)):
+    for m in _J_EMAIL_RE.finditer(pinned(part)):
         if found is not None:
             return None                        # two addresses: not one mailbox in junk
         found = m
@@ -873,6 +989,9 @@ _ADDRESS_SHAPED_RE = re.compile(r"\s*(?:[^\s<>@,;]+@[^\s<>@,;]+|[^<>@]*<[^<>]*@[
 
 
 def _address_shaped(value: str) -> bool:
+    v = value.strip()
+    if v[:1] == "<" and v[-1:] == ">" and "@" in v:
+        return True                  # one angle address, whatever the grammar makes of it
     parts = _split_mailbox_list(value) or re.split(r"[,;]", value)
     if any(_ADDRESS_SHAPED_RE.fullmatch(p) for p in parts if p.strip()):
         return True
@@ -1195,6 +1314,12 @@ def classify_value(value: str, *, arg_mode: bool):
         a = _host_authority(m.group(1), arg_fallback=arg_mode)
         if a is not None:
             res = _with_reading(res, a)
+    if len(value) <= MAX_LEAF_CHARS and ":" in value:
+        # urllib.request and http.client: an unwrapped <URL:...>, userinfo kept in
+        # the host, an unbracketed IPv6 address split at its last colon.
+        for host in stdlib_hosts(value):
+            for a in resolver_keys(host):
+                res = _with_reading(res, a)
     return res
 
 
@@ -1320,6 +1445,11 @@ _P_URL_RE = re.compile(r"(?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]{0,31}://[^\
 _P_EMAIL_RE = re.compile(
     r"(?<![A-Za-z0-9.!#$%&'*+/=?^_`{|}~\-@])"
     r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~\-]{1,64}@[\w\-]{1,63}(?:\.[\w\-]{1,63}){1,126}")
+# The same, its domain allowed a single label (``user@host``, ruling 3.2): read only
+# in a part that does not parse, where junk alone surrounds the one address.
+_J_EMAIL_RE = re.compile(
+    r"(?<![A-Za-z0-9.!#$%&'*+/=?^_`{|}~\-@])"
+    r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~\-]{1,64}@[\w\-]{1,63}(?:\.[\w\-]{1,63}){0,126}")
 _P_HOST_RE = re.compile(r"(?<![\w.@/\-])((?:[\w\-]{1,63}\.){1,126}[\w\-]{1,63})(?![\w@\-])(/[^\s\"'<>]{0,2048})?")
 _P_PHONE_RE = re.compile(r"(?<![\w+])" + _PHONE_BODY + r"(?!\d)")
 _P_IPV4_RE = re.compile(r"(?<![\w.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?!\w)(?!\.\w)")
