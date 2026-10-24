@@ -134,3 +134,30 @@ def test_a_long_value_past_the_bound_is_charged_once():
     assert v.wire.value == "untrusted_source", (
         f"a 400,000-char body ending in an untrusted URL read {v.wire.value}: the work "
         "budget ran out before the atom pass reached it")
+
+
+def test_whitespace_past_the_bound_is_charged_as_it_is_scanned(monkeypatch):
+    """Past the bound a value is read whole when it is short once stripped, and the
+    read scans all of it, so all of it is charged: an argument that repeats one
+    whitespace-padded value hundreds of times scans no more than the WORK budget
+    (and one value's overshoot), however many times it repeats, and says the budget
+    ran out."""
+    from xaidr.value_origin import _extract
+    from xaidr.value_origin._types import ATOM_WORK_BUDGET
+    scanned = []
+    read = _extract.classify_value
+
+    def counting(value, **kw):
+        scanned.append(len(value))
+        return read(value, **kw)
+    monkeypatch.setattr(_extract, "classify_value", counting)
+    padded = "\n" * 50_000 + "https://sink.example/a" + "\n" * 7
+    for times in (100, 300):
+        scanned.clear()
+        found, _, _ = extract_with_observed({"rows": [padded] * times})
+        assert sum(scanned) <= ATOM_WORK_BUDGET + len(padded), (
+            f"{times} references to one {len(padded):,}-char padded value scanned "
+            f"{sum(scanned):,} characters against a {ATOM_WORK_BUDGET:,}-unit budget: the "
+            "whitespace a read strips was not charged, so the work grows with the count")
+        assert "atom_budget" in [f.reason.value for f in found if f.destination is None], (
+            "the budget ran out and no finding says so")

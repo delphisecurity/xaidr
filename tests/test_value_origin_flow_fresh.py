@@ -108,3 +108,141 @@ def test_a_fresh_context_sets_nothing_aside(caplog):
     with caplog.at_level(logging.WARNING, logger="xaidr.provenance_chain"):
         _run(run)
     assert not _flow_logs(caplog), _flow_logs(caplog)
+
+
+# ── the privilege-tier gate across a scope: its verdict, not only its state ──
+_TIER_POLICY = {"version": "1", "defaults": {"effect": "allow", "unclassified": "allow"},
+                "rules": [{"id": "keys-need-a-trusted-chain", "effect": "require_approval",
+                           "match": {"tools": ["rotate_keys"]},
+                           "conditions": {"min_chain_tier_above": 2}}]}
+GATED, OPEN = "approval_required", "allowed"
+_SENSOR = {}
+
+
+class _Null:
+    def report(self, *a, **k):
+        pass
+
+
+def _gate():
+    """The tier gate's verdict on a privileged call by a tier-1 receiver."""
+    if "s" not in _SENSOR:
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            s = xaidr.Sensor(agent_id="keys-service", privilege_tier=1,
+                             enforcement_mode="block", reporter=_Null())
+        assert s.set_policy(_TIER_POLICY) is True
+        _SENSOR["s"] = s
+    return _SENSOR["s"].scan_tool_call("rotate_keys", {"vault": "ops"}).action
+
+
+def _headers(tier):
+    """What an upstream agent at ``tier`` sends, made in a context of its own."""
+    def make():
+        pc.begin_flow(principal="user:upstream")
+        pc.record_hop("scheduler-agent", tier=tier)
+        headers = dict(pc.inject_context())
+        pc.clear_flow()
+        return headers
+    return _run(make)
+
+
+def test_stripped_headers_inside_a_principal_scope_gate_as_they_do_outside_it():
+    def outside():
+        pc.extract_context({})
+        return _gate()
+
+    def tiered_inside():
+        with xaidr.flow(principal="user:dana"):
+            pc.extract_context(_headers(tier=4))
+            return _gate()
+
+    def local():
+        with xaidr.flow(principal="user:dana"):
+            return _gate()
+
+    def stripped_inside():
+        with xaidr.flow(principal="user:dana"):
+            pc.extract_context({})
+            return _gate()
+    assert _run(local) == OPEN, "precondition: the scope's own local work is not gated"
+    assert _run(outside) == GATED, "precondition: a stripped inbound request gates"
+    assert _run(tiered_inside) == GATED, "precondition: tier-4 headers inside the scope gate"
+    got = _run(stripped_inside)
+    assert got == GATED, (
+        f"an inbound request whose headers were stripped read {got!r} inside "
+        "flow(principal=...): removing the headers opened the gate that tier-4 headers "
+        "keep closed, so less header information gave a looser verdict than more")
+
+
+def test_a_delegated_scope_puts_the_tier_back_at_exit():
+    def run():
+        pc.extract_context(_headers(tier=4))
+        before = _gate()
+        with xaidr.flow():
+            pc.extract_context(_headers(tier=1))
+            inside = _gate()
+        return before, inside, _gate()
+    before, inside, after = _run(run)
+    assert (before, inside) == (GATED, OPEN), (
+        f"precondition: tier-4 delegation gates and tier-1 headers inside the scope do not "
+        f"({before!r}, {inside!r})")
+    assert after == GATED, (
+        f"after the scope the tier-4 request's privileged call read {after!r}: the scope "
+        "put back its ledger and left the tier-1 delegation read inside it in place")
+
+
+def test_a_stripped_request_after_a_tiered_one_on_the_same_thread_gates():
+    def run():
+        verdicts = []
+        for headers in (_headers(tier=1), {}):        # one worker, two requests
+            pc.extract_context(headers)
+            with xaidr.flow(principal="user:erin"):
+                verdicts.append(_gate())
+        return verdicts
+    first, second = _run(run)
+    assert first == OPEN, f"precondition: a tier-1 request is not gated, got {first!r}"
+    assert second == GATED, (
+        f"a request with its headers stripped read {second!r} after a tier-1 request on "
+        "the same thread: it inherited the previous request's chain and tier")
+
+
+def test_over_an_inbound_mark_alone_the_scope_mints_a_correlation_id_of_its_own():
+    """Over the inbound mark and no flow, the chain, tiers and mark stay as they are
+    (``principal=`` is not applied) and the scope mints a correlation id for its own
+    duration, put back to none at exit (docs/value-origin-rulings.md §1)."""
+    def run():
+        pc.extract_context({})
+        with xaidr.flow(principal="user:frank"):
+            inside = (pc.current_correlation_id(), pc.current_chain(), pc._inbound_ctx.get())
+        return inside, pc.current_correlation_id()
+    (corr, chain, inbound), after = _run(run)
+    assert corr is not None and after is None, (corr, after)
+    assert not chain and inbound is True, (
+        f"over a bare inbound mark the scope changed the chain to {chain}: a principal "
+        "entry there would hide the stripped request from the tier-4 fallback")
+
+
+def test_a_leftover_flow_a_scan_ran_in_is_kept_and_the_warning_says_why(caplog):
+    """A sensor's own scan hop is a hop that is not the principal's: a leftover
+    ``begin_flow()`` a scan ran inside is kept, chain and correlation id with it, and
+    the one warning says the chain was kept and why, by kind, never by value."""
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = xaidr.Sensor(agent_id="notes-agent", reporter=_Null())
+
+    def run():
+        corr = pc.begin_flow(principal="user:gail")                # never cleared
+        s.scan("tidy up the meeting notes", direction="input")
+        with xaidr.flow(principal="user:hank"):
+            return corr, pc.current_correlation_id(), [h["agent_id"] for h in pc.current_chain()]
+    with caplog.at_level(logging.WARNING, logger="xaidr.provenance_chain"):
+        corr, inside, hops = _run(run)
+    assert inside == corr and hops[0] == "user:gail", (corr, inside, hops)
+    logs = _flow_logs(caplog)
+    assert len(logs) == 1 and "kept" in logs[0] and "scan hop" in logs[0], (
+        f"the warning does not say the leftover chain was kept, or why: {logs}")
+    for value in (corr, "gail", "hank", "notes-agent", "meeting"):
+        assert value not in logs[0], f"the line carries a value ({value!r}): {logs[0]}"

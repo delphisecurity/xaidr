@@ -22,6 +22,7 @@ from xaidr.value_origin import (
     WireValue,
     bind_fresh_ledger,
     evaluate_call,
+    extract_destinations,
     record_tool_result,
     row_text,
     should_block,
@@ -215,6 +216,43 @@ def test_an_untrusted_mailbox_beside_junk_in_the_same_part_decides_the_wire():
     assert [f.origin for f in v.findings] == [Origin.UNRESOLVED, Origin.UNTRUSTED_SOURCE], (
         "the whole value stays unresolved (one parse_failure finding), then each mailbox "
         "read out of it, in text order")
+
+
+def test_one_angle_address_the_grammar_refuses_is_an_unparseable_address_list():
+    """One address the grammar refuses is still an unparseable address list (3.6):
+    a single angle address with an ``@`` in it reads ``parse_failure``, never
+    ``no_destination``, whatever its local part holds."""
+    v = '<ops"x<y>z@drop.example>'
+    found = extract_destinations({"to": v})[0]
+    assert [f.reason.value if f.destination is None else f.destination.key()
+            for f in found][:1] == ["parse_failure"], (
+        f"{v!r} read {found}: a refused angle address left no finding, so the call reads "
+        "no_destination and its address is invisible")
+    bind_fresh_ledger()
+    try:
+        record_tool_result("web_fetch", {}, v, designations=(), result_blocked=False)
+        w = evaluate_call("send_email", {"to": v}, flow_active=True).wire
+    finally:
+        unbind_ledger()
+    assert w is WireValue.UNRESOLVED, f"wire {w.value}, not unresolved"
+
+
+@pytest.mark.parametrize("v", ["__ops@relayhost >", ".ops@relayhost >>"])
+def test_a_single_label_mailbox_behind_junk_is_read(v):
+    """A mailbox inside a part that does not parse is a finding when only junk
+    surrounds it, at a single-label domain as at a dotted one (ruling 3.2)."""
+    bind_fresh_ledger()
+    try:
+        record_tool_result("directory_lookup", {}, v.split()[0], designations=(),
+                           result_blocked=False)
+        cv = evaluate_call("send_email", {"to": v}, flow_active=True)
+    finally:
+        unbind_ledger()
+    keys = [f.destination.key() for f in cv.findings if f.destination is not None]
+    assert keys == ["mailto:" + v.split()[0]], (
+        f"{v!r} read {keys}: the single-label mailbox behind junk was not read, though "
+        "the same shape at a dotted domain is")
+    assert cv.wire is WireValue.UNTRUSTED_SOURCE and should_block(cv, mode=Mode.ENFORCE)
 
 
 def test_row_text_matches_the_committed_export():

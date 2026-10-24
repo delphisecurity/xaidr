@@ -26,6 +26,7 @@ in it is dropped; a declared-span input padded past the cap hides what follows.
 from __future__ import annotations
 
 import contextvars
+import dataclasses
 import importlib
 import io
 import warnings
@@ -102,6 +103,53 @@ def test_a_destination_past_a_result_bound_is_recorded(shape):
         f"not record, and the call read {v.wire.value!r} -- exactly like a destination "
         "never seen, so ENFORCE allowed it")
     assert should_block(v, mode=Mode.ENFORCE)
+
+
+class _Listing:
+    """A result item a framework hands over as a model: ``model_dump()`` returns a
+    new dict on every call, as pydantic's does."""
+
+    def __init__(self, i):
+        self.i = i
+
+    def model_dump(self, **_):
+        return {"label": f"listing {self.i}", "href": _listing_url(self.i)}
+
+
+@dataclasses.dataclass
+class _Row:
+    label: str
+    href: str
+
+
+def _listing_url(i):
+    return f"https://n{i}.sink{i}.example/r"
+
+
+_LISTINGS = 90        # two fields each: most of them sit past the 64-leaf bound
+
+
+@pytest.mark.parametrize("kind", ["model_dump", "dataclass", "dict"])
+def test_every_destination_in_a_result_of_models_past_the_bound_is_recorded(kind):
+    """Each item of a result past the 64-leaf bound is examined, however the item is
+    made: a ``model_dump()`` or ``asdict()`` temporary is a node of its own, never
+    taken for the one before it, so the result reads the same on every interpreter."""
+    make = {"model_dump": _Listing,
+            "dataclass": lambda i: _Row(f"listing {i}", _listing_url(i)),
+            "dict": lambda i: {"label": f"listing {i}", "href": _listing_url(i)}}[kind]
+    vo.bind_fresh_ledger()
+    try:
+        vo.record_tool_result("catalog_search", {"q": "lamps"}, [make(i) for i in range(_LISTINGS)],
+                              designations=(), result_blocked=False)
+        verdicts = [vo.evaluate_call("http_get", {"url": _listing_url(i)}, flow_active=True)
+                    for i in range(_LISTINGS)]
+    finally:
+        vo.unbind_ledger()
+    missed = [i for i, v in enumerate(verdicts) if not should_block(v, mode=Mode.ENFORCE)]
+    assert not missed, (
+        f"{len(missed)} of {_LISTINGS} untrusted URLs in a result of {kind} items did not "
+        f"block (e.g. item {missed[0]}: {verdicts[missed[0]].wire.value}): an item past the "
+        "bound was skipped as one already seen")
 
 
 @pytest.mark.parametrize("shape", sorted(RESULT_OK))
