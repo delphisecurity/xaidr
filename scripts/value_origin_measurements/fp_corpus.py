@@ -7,7 +7,7 @@ ROOTS = ["/etc", "/private/etc", "/opt/homebrew/etc", "/opt/homebrew/share/doc",
          "/usr/share/man", "/opt/homebrew/Cellar"]
 SITE = sys.argv[2:]   # site-packages dirs to include (package manifests), e.g. $(python -c "import site;print(site.getsitepackages()[0])")
 EXT = re.compile(r"\.(md|txt|rst|conf|cfg|ini|ya?ml|json|toml|[1-9]|gz|html?)$|/(README|NEWS|CHANGES|CHANGELOG|METADATA|hosts|services|protocols)[^/]*$", re.I)
-SKIP = re.compile(r"/(tests?|testing|testdata|test_data|fixtures?)/|opena2a|value-origin|delphi|blank-canvas|xaidr", re.I)
+SKIP = re.compile(r"/(tests?|testing|testdata|test_data|fixtures?)/|opena2a|value-origin|delphi|xaidr", re.I)
 URL = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]{1,15}://([^\s/?#\"'<>)\]]{1,253})")
 QUAD = re.compile(r"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w.])")
 EMB = re.compile(r"\[?[0-9a-fA-F:]*:\d{1,3}(?:\.\d{1,3}){3}\]?")
@@ -16,7 +16,7 @@ def files():
     seen = 0
     for root in ROOTS + SITE:
         for dp, dn, fn in os.walk(root):
-            if SKIP.search(dp + "/"):
+            if SKIP.search(dp + "/") or ".git" in dn:   # a git checkout: ours, or a sibling's
                 dn[:] = []; continue
             for f in fn:
                 p = os.path.join(dp, f)

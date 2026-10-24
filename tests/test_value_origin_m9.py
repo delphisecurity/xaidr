@@ -5,9 +5,9 @@ all six emitters: main, circuit-open, scan-error, fail-closed, gate and
 not-scannable. It is absent in OFF, on an `evaluate_call` fault and on every
 non-tool-call event, and it is never null.
 
-THE GATE (owner: "Do not emit a value no consumer accepts"). The Brain accepts
-nine values (delphi-sentinel origin/main 01450c7, src/value-origin.ts
-VALUE_ORIGINS) and stores anything else as NULL while counting it rejected.
+THE GATE (owner: "Do not emit a value no consumer accepts"). The consumer accepts
+nine values (the `v1` column of docs/value-origin-wire-consumers.md) and stores
+anything else as NULL while counting it rejected.
 `Sensor(value_origin_wire=...)` names the vocabulary the consumer accepts:
 "v1" (the default) is those nine, "v2" is all fourteen, and "off" emits nothing.
 A value outside the active vocabulary is WITHHELD (the key is absent) and named
