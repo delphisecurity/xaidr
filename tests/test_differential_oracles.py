@@ -171,7 +171,7 @@ def _refused_by_3_12_2(url):
         url = url[i + 1:]
     if url[:2] != "//":
         return None
-    netloc = re.split(r"[/?#]", url[2:], 1)[0]
+    netloc = re.split(r"[/?#]", url[2:], maxsplit=1)[0]
     if ("[" in netloc) != ("]" in netloc):
         return "unbalanced"
     if "[" in netloc:
@@ -463,7 +463,7 @@ def test_the_unbalanced_bracket_class_is_httpx_refusing_a_unicode_host(compariso
     assert absorbed, "the unbalanced-bracket class absorbed nothing; delete it"
     outside = []
     for url, key in absorbed:
-        host = re.split(r"[/?#]", url.split("//", 1)[-1], 1)[0].rpartition("@")[2]
+        host = re.split(r"[/?#]", url.split("//", 1)[-1], maxsplit=1)[0].rpartition("@")[2]
         try:
             httpx.URL(url)
             refused = False
