@@ -592,8 +592,8 @@ class _FlowScope(contextlib.ContextDecorator):
             request = _vo_ledger.request_enter(kind="flow")   # ruling 4: the flow is one request
             if active and delegated:
                 # Delegation is active: its chain, tiers, correlation id and inbound
-                # mark stay exactly as they are, on entry and on exit, so the scope
-                # never loosens the tier gate. It gets its own value-origin ledger.
+                # mark stay as they are on entry, and all of them are put back at exit,
+                # so the scope never loosens the tier gate. It gets its own ledger.
                 _vo.bind_fresh_ledger()
                 if saved[4] is not None and _vo_ledger.ledger_get() is saved[4]:
                     _vo_ledger.ledger_set(None)
@@ -698,8 +698,10 @@ def _log_set_aside(ledger, saved: tuple, dead: int, *, keep_flow: bool) -> None:
                 "xaidr.flow(): the outermost scope started fresh and set aside what this "
                 "context already held: %s. It is put back when the scope exits.%s",
                 ", ".join(parts),
-                " The delegation here (inbound mark, upstream hops, tiers) is kept."
-                if keep_flow else "")
+                " The chain here carries delegation evidence (the inbound mark, or a hop "
+                "that is not the principal's own, a sensor's own scan hop included), so "
+                "it is kept with its tiers and correlation id, and principal= is not "
+                "applied." if keep_flow else "")
     except Exception:
         _scope_fault("logging what the scope set aside faulted")
 
@@ -736,10 +738,12 @@ def flow(*, principal: str | None = None,
     chain the context already holds (a ``begin_flow()`` never cleared, a scope an
     earlier request left open) is set aside until its exit, and a warning names
     what by kind and count. Delegation evidence is kept: over an inbound mark or
-    an upstream hop (an ``extract_context()``, a recorded hop) the chain, tiers,
-    correlation id and inbound mark stay as they are, so it never loosens the
-    privilege-tier gate, and its ``principal=`` is not applied; it gets its own
-    value-origin ledger.
+    a hop that is not the principal's own (an ``extract_context()``, a recorded
+    hop, the hop a sensor records for its own scan) the chain, tiers and inbound
+    mark stay as they are, so it never loosens the privilege-tier gate, and its
+    ``principal=`` is not applied; it gets its own value-origin ledger. The
+    correlation id stays with them when a flow is active; over an inbound mark
+    alone the scope mints one. On exit all of it is put back as it was.
 
     As a decorator it scopes each call. It refuses an ``async def``, a generator or
     async-generator function, and any call that returns a coroutine, because that
@@ -934,10 +938,13 @@ def extract_context(headers: dict[str, str] | None) -> bool:
     Calling this function is the trusted-ingress signal: the caller is
     processing a request that arrived from somewhere else. It binds a fresh
     value-origin ledger and sets the inbound mark first, before any header is
-    read, and the mark stays set whether or not a chain is restored. With no
-    chain, ``is_delegated()`` reports delegation with no provenance, which
-    resolves the upstream to tier 4. So less header information never yields a
-    looser tier verdict than more, as THREAT_MODEL.md states.
+    read, and the mark stays set whether or not a chain is restored. The chain,
+    tiers and correlation id the context held are replaced by what the headers
+    carry, nothing when they carry nothing, inside a ``flow()`` scope and on a
+    reused thread alike. With no chain, ``is_delegated()`` reports delegation with
+    no provenance, which resolves the upstream to tier 4. So less header
+    information never yields a looser tier verdict than more, as THREAT_MODEL.md
+    states.
     """
     # An inbound request starts with a fresh ledger, before the inbound mark and
     # every early return, whatever its headers carry.

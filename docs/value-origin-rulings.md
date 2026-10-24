@@ -141,19 +141,36 @@ bound in between closes then.
 scope starts fresh (Q-G, decided 2026-10-23; this replaces Q-G (b) of
 2026-10-21, under which a scope opened over any active flow kept its chain and
 correlation id): a ledger, a correlation id or a chain the context already holds
-(a `begin_flow()` never cleared, a scope a request left open, a leftover
-implicit ledger) is set aside for the scope and put back at its exit, and one
-warning per occurrence names what was set aside by kind and count, never by
-value. Delegation evidence is kept: when the context holds the inbound mark or a
-hop that is not the principal's own entry (an `extract_context()`, a recorded
-upstream hop), the chain, tiers, correlation id and inbound mark stay exactly as
-they are, so the scope never loosens the privilege-tier gate, and only the ledger
-is the scope's own. A `flow()` cannot tell a leftover agent hop from the current
-request's, so a leftover chain that carries one is kept too. (Accepted by the owner, 2026-10-23.) Call
-`extract_context()` inside the scope or before it; either keeps the delegation.
-*Pinned by:* `tests/test_value_origin_flow_fresh.py`,
+(a `begin_flow()` never cleared that recorded no hop after its principal entry, a
+scope a request left open, a leftover implicit ledger) is set aside for the scope
+and put back at its exit, and one warning per occurrence names what was set aside
+by kind and count, never by value. Delegation evidence is kept: when the context
+holds the inbound mark or a hop that is not the principal's own entry (an
+`extract_context()`, a recorded upstream hop), the chain, tiers and inbound mark
+stay as they are on entry, so the scope never loosens the privilege-tier gate,
+its `principal=` is not applied, and only the ledger is the scope's own. The
+correlation id is kept with them when the context holds a flow; over the inbound
+mark and no flow, the scope mints one of its own. At exit the scope puts back
+everything as it was at entry, the delegation included, so a tier an
+`extract_context()` read inside the scope ends with it. A `flow()` cannot tell a
+leftover agent hop from the current request's, so a leftover chain that carries
+one is kept too. (Accepted by the owner, 2026-10-23.) The hop a sensor records
+for its own scan is such a hop: a `begin_flow()` never cleared that a scan ran
+inside is kept, chain and correlation id with it, and the warning says the chain
+was kept. `extract_context()` reads the chain, tiers and correlation id from the
+headers alone, replacing what the context held, so stripped headers read tier 4
+before the scope, inside it, and after an earlier request on the same thread.
+Call `extract_context()` inside the scope or before it; either keeps the
+delegation. *Pinned by:* `tests/test_value_origin_flow_fresh.py`,
 `test_a_scope_over_an_active_flow_leaves_its_chain_and_tiers_alone`,
-`check_tier_gate`. Every other
+`test_flow_scope[tier_gate]`. *(Corrected 2026-10-23: this paragraph said that
+over delegation evidence the chain, tiers, correlation id and inbound mark "stay
+exactly as they are", and named every `begin_flow()` never cleared as set aside.
+A correlation id is minted over the inbound mark alone, a scan inside a leftover
+`begin_flow()` makes it delegation evidence, and (fixed in this build) a
+delegated scope's exit put back only its ledger. It also listed
+`check_tier_gate`, a helper, as a test.)*
+Every other
 request puts back, at its exit, the chain, correlation id, tiers and inbound mark
 set inside it, so a request whose headers are stripped never inherits the
 previous request's tier on a reused thread; entry changes none of them, so a
@@ -189,6 +206,28 @@ more than one reading names every one of them. This applies to every rule below.
   `test_q1_every_reading_of_the_authority_split_is_a_finding`, and
   `tests/test_differential_oracles.py` (spellings × urllib.parse, httpx, urllib3,
   ada-url; it refuses to run unless every oracle is installed).
+- **A name a client resolves is read as a destination** (decided by the owner,
+  2026-10-23). urllib.request and http.client hand the resolver the host as they
+  split it, and each such host is read, beside every other reading:
+  urllib.request unwraps `<URL:…>`, `<…>` and `URL:…`, percent-decodes the netloc
+  and keeps its userinfo in the host (`http://user@evil.test/` resolves
+  `user@evil.test`); http.client takes a port after the last `:` that follows any
+  `]`, so an unbracketed IPv6 address loses its last group to the port and a host
+  can keep a colon (`https://example.com:80:` resolves `example.com:80`) or a
+  bracket, which no numeric parser reads; and a numeric host with a trailing dot
+  (`127.0.0.1.`) is a DNS name to the resolver and to every Python client. No
+  public DNS zone holds a label with `@`, `:` or `[`, or a numeric top label, but a
+  hosts file, a search domain or a private resolver can answer one, so each is
+  read as the key the resolver reaches. A non-ASCII host is read as the socket
+  layer encodes it, IDNA 2003 (`faß` is `fass`): written out from RFC 3454's
+  tables and Unicode 3.2 (`_idna.idna2003`, data in `_nameprep_data.py`), so the
+  name is the same on every interpreter, and read also as an interpreter whose
+  `stringprep` predates CPython's fix encodes it (3.12.2 lowercases `Ⴜ` by its own
+  Unicode, 3.12.15 keeps it). That older lowercase is taken for the code points
+  Unicode 13.0 assigns; one it leaves unassigned is kept (§9 item 21; 40 code
+  points an unfixed 3.12 lowercases). *Pinned by:* the published-suite
+  differential, whose urllib.request and http.client clients no other ruling
+  excuses.
 - **A special scheme takes its authority after any run of `/` and `\`** (R4):
   `http:evil.test`, `http:/evil.test`, `http:\\evil.test` and
   `http:///evil.test` all name `evil.test`. The special schemes are `http`,
@@ -406,15 +445,22 @@ it:
 ### The published-suite differential
 
 `scripts/published_differential.py` (a CI job on Linux and macOS, on 3.10,
-3.12.2, the newest 3.12 and 3.14) runs every vector of WPT, CPython's urlparse and
-email tests, IdnaTestV2 13.0.0 and 18.0.0, curl's lib1560 and Go's url and mail
-tests (vendored with their licences and sources in `tests/published_vectors/`)
-through httpx, urllib3, requests, urllib.parse, a WHATWG parser and the email
-parsers, and fails on a destination a client reads that the core does not and no
-ruling here names. A client's host is compared as the client sends it, an escape
-or a backslash included; every address the platform resolver reads a numeric host
-as (`inet_aton` and `getaddrinfo`) is its own requirement; a name with an empty
-label, whitespace or a control character is none a resolver looks up. The rulings it accepts an under-read under, each above: a bare
+3.12.2, the newest 3.12 and 3.14) runs every vector of WPT, CPython's urlparse,
+urllib2 and email tests, IdnaTestV2 13.0.0 and 18.0.0, curl's lib1560 and Go's url
+and mail tests (vendored with their licences and sources in
+`tests/published_vectors/`) through httpx, urllib3, requests, urllib.parse,
+urllib.request (`HTTPConnection(Request(v).host).host`, what urlopen resolves),
+http.client (`HTTPConnection(urlsplit(v).netloc).host`), a WHATWG parser and the
+email parsers, and fails on a destination a client reads that the core does not
+and no ruling here names. A client's host is compared as the client sends it, an
+escape or a backslash included, and a non-ASCII host as the socket layer encodes
+it; every address the platform resolver reads a numeric host as (`inet_aton` and
+`getaddrinfo`) is its own requirement, and a numeric host with a trailing dot is a
+DNS name as well; a name with an empty label, whitespace or a control character is
+none a resolver looks up. A client that reads no vector at all is a refusal, never
+a clean run. An under-read of urllib.request or http.client is excused only where
+the platform resolver refuses an empty hex part (below); no scheme-less, mailbox or
+encoding ruling applies to them, since both send only an http or https URL. The rulings it accepts an under-read under, each above: a bare
 hostname or number and a single-label host before a path (V-19); `file:` and
 `data:`; a URL before the mailbox rule (S-3); a mailbox is not its domain as a URL
 host (3.2); an ASCII local part (3.6); an `@` that is not an address; `mailto:` is
