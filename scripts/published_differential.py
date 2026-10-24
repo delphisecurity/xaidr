@@ -14,6 +14,10 @@ each client would send to, with that client's own send path and no network:
     urllib.parse     urlsplit(v).hostname, encoded as the socket layer encodes it
                      (the stdlib ``idna`` codec, IDNA 2003)
     whatwg           ada-url (the WHATWG parser Node.js uses), special schemes
+    urllib.request   HTTPConnection(Request(v).host).host, what urlopen hands the
+                     socket layer (http/https), encoded as the socket layer does
+    http.client      HTTPConnection(urlsplit(v).netloc).host, the netloc as
+                     written (http/https), encoded the same way
     email            email.utils.getaddresses and parseaddr, strict and lenient,
                      and email.headerregistry's To header
     suite            the vector's own table: the host or address its project
@@ -76,6 +80,10 @@ def _require():
 
 # ── clients ──────────────────────────────────────────────────────────────────
 _HTTP = ("http", "https", "ws", "wss")
+_STDLIB_CLIENTS = ("urllib.request", "http.client")
+#: Every client whose readings are compared; each must read at least one vector.
+CLIENTS = ("httpx", "urllib3", "requests", "urllib.parse", "whatwg") + _STDLIB_CLIENTS + (
+    "getaddresses.strict", "parseaddr.strict", "headerregistry", "suite")
 
 
 def _scheme(v):
@@ -136,7 +144,41 @@ class Clients:
                 out.append(("whatwg", u.hostname))
         except Exception:
             pass
+        out += self.stdlib_hosts(v)
         return out
+
+    @staticmethod
+    def stdlib_hosts(v):
+        """[(client, host)]: the standard library's own send paths, http and https
+        (the schemes urlopen's HTTP handlers open). urllib.request: what urlopen
+        hands the socket layer, ``HTTPConnection(Request(v).host).host`` (the value
+        unwrapped, the netloc percent-decoded with its userinfo, then http.client's
+        port split). http.client: ``HTTPConnection(urlsplit(v).netloc).host``, the
+        netloc as written. Each host is encoded as the socket layer encodes a str
+        host (the stdlib ``idna`` codec, IDNA 2003); one it cannot encode is never
+        sent."""
+        import http.client
+        import urllib.request
+        out = []
+        try:
+            req = urllib.request.Request(v)
+            if req.type in ("http", "https") and req.host:
+                out.append(("urllib.request", http.client.HTTPConnection(req.host).host))
+        except Exception:
+            pass
+        try:
+            u = urlsplit(v)
+            if u.scheme in ("http", "https") and u.netloc:
+                out.append(("http.client", http.client.HTTPConnection(u.netloc).host))
+        except Exception:
+            pass
+        sent = []
+        for client, h in out:
+            try:
+                sent.append((client, h.encode("idna").decode("ascii") if h else h))
+            except UnicodeError:
+                pass
+        return [(c, h) for c, h in sent if h]
 
     @staticmethod
     def mailboxes(v):
@@ -217,17 +259,20 @@ def host_keys(h):
         return []
     if h.startswith("[") and h.endswith("]"):
         h = h[1:-1]
-    h = re.split(r"%(?:25)?", h, 1)[0] if ":" in h else h       # an IPv6 zone is not compared
+    unzoned = re.split(r"%(?:25)?", h, 1)[0] if ":" in h else h  # an IPv6 zone is not compared
     try:
-        return [_ip_key(ipaddress.ip_address(h))]
+        return [_ip_key(ipaddress.ip_address(unzoned))]
     except ValueError:
-        pass
+        pass                       # not an address: a name, its `%` included, is sent whole
+    dotted = h.endswith(".") and ":" not in h
     h = h.lower().rstrip(".")
     if not h or any(c.isspace() or c < " " or c == "\x7f" for c in h):
         return []                  # http.client refuses a host with a space or a control
     ips = _numeric(h)
     if ips:
-        return [_ip_key(ip) for ip in ips]
+        # A numeric host written with a trailing dot is a DNS name to the resolver
+        # (no numeric parser takes the dot): the name a client resolves is read too.
+        return [_ip_key(ip) for ip in ips] + (["dns:" + dns_key(h)] if dotted else [])
     if "" in h.split(".") or len(h) > 253 or h.rsplit(".", 1)[-1].isdigit():
         return []                  # no resolver looks up an empty label
     return ["dns:" + dns_key(h)]
@@ -461,7 +506,9 @@ def _cls_uts46(v, client, key, core):
     strict; a host it refuses is keyed whole and matches only itself. A client that
     encodes with IDNA 2003, transitionally, or with a newer Unicode reads another
     name. A name a client sends with an escape or a backslash in it is that
-    client's spelling, never another encoding of the host."""
+    client's spelling, never another encoding of the host. urllib.request's and
+    http.client's IDNA 2003 name is read (the socket layer's encoding), so it is
+    never excused here (``_STDLIB_CLASSES``)."""
     if re.search(r"%[0-9a-f]{2}", key) or "\\" in key:
         return False
     from urllib.parse import unquote
@@ -570,8 +617,17 @@ CLASSES = (
 )
 
 
+#: The classes an under-read of urllib.request or http.client can fall in. Both
+#: send only an http or https URL, with the host the socket layer resolves (an
+#: unwrapped ``<URL:...>`` included), so no scheme-less, mailbox or encoding
+#: ruling excuses one.
+_STDLIB_CLASSES = ("name-read-as-number",)
+
+
 def classify(v, client, key, core):
     for name, _, fn in CLASSES:
+        if client in _STDLIB_CLIENTS and name not in _STDLIB_CLASSES:
+            continue
         try:
             if fn(v, client, key, core):
                 return name
@@ -589,6 +645,7 @@ def run(limit=None):
         rows = rows[:limit]
     under = collections.Counter()
     by_client = collections.Counter()
+    read_by = collections.Counter()
     undocumented = []
     vectors_read = set()
     for r in rows:
@@ -600,6 +657,7 @@ def run(limit=None):
         readings += [(c, mail_key(a)) for c, a in clients.mailboxes(v)]
         readings += [("suite", suite_key(e)) for e in r["expect"]]
         keys = {(c, k) for c, k in readings if k}
+        read_by.update({c for c, _ in keys})
         if not keys:
             continue
         core = core_keys(v)
@@ -614,6 +672,7 @@ def run(limit=None):
             under[cls] += 1
             by_client[(cls, c)] += 1
     return {"vectors": len(rows), "distinct": len(vectors_read), "under": dict(under),
+            "read_by": dict(read_by),
             "by_client": {f"{a}|{b}": n for (a, b), n in sorted(by_client.items())},
             "undocumented": undocumented}
 
@@ -632,6 +691,8 @@ def main(argv=None) -> int:
         Path(a.core_out).write_text(json.dumps(
             {v: core_reading(v) for v in values}, sort_keys=True))
     print(f"python {sys.version.split()[0]} {sys.platform}: {res['vectors']} vectors")
+    print("  vectors each client read: " + ", ".join(
+        f"{c} {res['read_by'].get(c, 0)}" for c in CLIENTS))
     for cls, n in sorted(res["under"].items(), key=lambda x: -x[1]):
         doc = next((d for c, d, _ in CLASSES if c == cls), "no ruling")
         print(f"  under-read {cls:32} {n:6}  ({doc})")
@@ -639,6 +700,11 @@ def main(argv=None) -> int:
         print(f"  UNDOCUMENTED {u['src']}: {u['v']!r} -> {u['client']} {u['key']}; core {u['core']}")
     if a.json:
         Path(a.json).write_text(json.dumps(res, indent=1))
+    silent = [c for c in CLIENTS if not res["read_by"].get(c)]
+    if silent and not a.limit:
+        print(f"REFUSING: {silent} read no vector; a client that reads nothing is a "
+              "silent pass, never a clean run")
+        return 2
     if res["undocumented"]:
         print(f"PUBLISHED DIFFERENTIAL: RED ({len(res['undocumented'])} under-reads no ruling documents)")
         return 1

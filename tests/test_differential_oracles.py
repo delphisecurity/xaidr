@@ -180,6 +180,37 @@ def _urllib_request_decodes(url):
     return bool(m) and "%" in m.group(1)
 
 
+def _stdlib_client_keys(url):
+    """The keys of the hosts the standard library's clients resolve for ``url``:
+    urlopen's ``HTTPConnection(Request(url).host).host``, and http.client given the
+    netloc as written. Each host comes from the real client; only the keying is the
+    core's (``resolver_keys``). An over-read among them is a reading of those two
+    clients, which ``scripts/published_differential.py`` measures over the
+    published suites (docs/value-origin-rulings.md §2, a name a client resolves);
+    these hand-written spellings do not judge it, so the class can only excuse."""
+    import http.client
+    import urllib.request
+    from xaidr.value_origin._authority import resolver_keys
+    hosts = []
+    try:
+        req = urllib.request.Request(url)
+        if req.type in ("http", "https") and req.host:
+            hosts.append(http.client.HTTPConnection(req.host).host)
+    except Exception:
+        pass
+    written = re.sub(r"[\t\n\r]", "", url).strip("\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0b"
+                                                      "\x0c\x0e\x0f\x10\x11\x12\x13\x14\x15"
+                                                      "\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e"
+                                                      "\x1f ")
+    m = re.match(r"(?i)(https?)://([^/?#]*)", written)
+    if m and m.group(2):
+        try:
+            hosts.append(http.client.HTTPConnection(m.group(2)).host)
+        except Exception:
+            pass
+    return {a.key() for h in hosts if h for a in resolver_keys(h)}
+
+
 _OVER_READ_CLASSES = {
     "urllib-request-decodes": (
         _urllib_request_decodes,
@@ -273,9 +304,14 @@ def comparison(oracles):
             keys.add(k)
             if k not in core and _sends(name, url):
                 under.append((url, name, k, sorted(core)))
+        stdlib = None
         for k in sorted(core - read):
             if k.startswith("mailto:") and _email_utils_reads(url, k):
                 over["mailbox-reading"].append((url, k))
+                continue
+            stdlib = _stdlib_client_keys(url) if stdlib is None else stdlib
+            if k in stdlib:
+                over["stdlib-client-host"].append((url, k))
                 continue
             cls = next((c for c, (pred, _) in _OVER_READ_CLASSES.items() if pred(url)), None)
             over[cls].append((url, k))

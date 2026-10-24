@@ -250,10 +250,14 @@ jobs:
 
   # ── The published-suite differential ──────────────────────────────────────
   # Every destination a real client reads in a published test vector (WPT,
-  # CPython's urlparse and email tests, IdnaTestV2, curl's lib1560 and Go's url
-  # and mail tables, vendored with their licences in tests/published_vectors/),
-  # the value-origin core reads. An under-read no ruling documents fails the job
-  # (scripts/published_differential.py names the vector, the client and the key).
+  # CPython's urlparse, urllib2 and email tests, IdnaTestV2, curl's lib1560 and
+  # Go's url and mail tables, vendored with their licences in
+  # tests/published_vectors/), the value-origin core reads. The clients: httpx,
+  # urllib3, requests, urllib.parse, ada-url, the email parsers, and the standard
+  # library's own send path, urllib.request and http.client, with each
+  # interpreter's own copy. An under-read no ruling documents fails the job
+  # (scripts/published_differential.py names the vector, the client and the key),
+  # and so does a client that reads no vector.
   # Clients and resolvers differ by interpreter and by OS, so it runs on Linux
   # and macOS, on 3.10, on 3.12.2 (the urlsplit the RFC 3986 reading copies), on
   # the newest 3.12 and on 3.14. uv installs exact patch releases on both OSes.

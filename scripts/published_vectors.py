@@ -11,7 +11,7 @@ an upstream project (the test files under ``upstream/`` and their licences under
 The vectors are extracted from those files when a test or the differential runs
 (``load()``), never stored:
 
-* CPython's ``test_urlparse.py`` and email tests: every string literal with a
+* CPython's ``test_urlparse.py``, ``test_urllib2.py`` and email tests: every string literal with a
   ``:``, ``@``, ``/`` or ``.`` in it (an AST walk, which every supported
   interpreter reads alike).
 * curl's ``lib1560.c`` and Go's ``url_test.go`` and ``message_test.go``: every

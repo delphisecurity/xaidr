@@ -32,6 +32,12 @@
       "sha256": "ac98f27ed246f81a53c88cba5e2c9a6d18a7d6c35b14edca7065aa7806dfa385"
     },
     {
+      "path": "upstream/cpy3.10.22-test_urllib2.py",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.10.22/Lib/test/test_urllib2.py",
+      "version": "tag v3.10.22",
+      "sha256": "b173ed2cd8538f4d3426ac7b09bc68c914310f0c29093d5c215fbdfd6677ad83"
+    },
+    {
       "path": "upstream/cpy3.12.15-test_urlparse.py",
       "url": "https://raw.githubusercontent.com/python/cpython/v3.12.15/Lib/test/test_urlparse.py",
       "version": "tag v3.12.15",
@@ -54,6 +60,12 @@
       "url": "https://raw.githubusercontent.com/python/cpython/v3.12.15/Lib/test/test_email/test_headerregistry.py",
       "version": "tag v3.12.15",
       "sha256": "135ebbf57c4d8b99e70b0c31d53c65c806ebb89db4d2afe897e86f4cd51305c6"
+    },
+    {
+      "path": "upstream/cpy3.12.15-test_urllib2.py",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.12.15/Lib/test/test_urllib2.py",
+      "version": "tag v3.12.15",
+      "sha256": "bb401075e6fa7d0ab806a98dbd8d7d9773b9bf26d432260b291f46193d2d30e8"
     },
     {
       "path": "upstream/cpy3.14.9-test_urlparse.py",
@@ -84,6 +96,12 @@
       "url": "https://raw.githubusercontent.com/python/cpython/v3.14.9/Lib/test/test_email/test_headerregistry.py",
       "version": "tag v3.14.9",
       "sha256": "9c37bbe407825b1bb1ea58e1b987ee819c80be108ffdea8af07b41c9d7e3de88"
+    },
+    {
+      "path": "upstream/cpy3.14.9-test_urllib2.py",
+      "url": "https://raw.githubusercontent.com/python/cpython/v3.14.9/Lib/test/test_urllib2.py",
+      "version": "tag v3.14.9",
+      "sha256": "c67976367976bc0e5552834e473b207cfbda7f9f68c0e30a57af2a09e7a7d1ba"
     },
     {
       "path": "upstream/lib1560.c",
@@ -182,6 +200,13 @@
       "file": "upstream/cpy3.10.22-test_headerregistry.py"
     },
     {
+      "id": "cpython-3.10.22:test_urllib2.py",
+      "kind": "cpython",
+      "licence": "PSF-2.0",
+      "licence_file": "LICENSES/CPython-3.12.15-LICENSE",
+      "file": "upstream/cpy3.10.22-test_urllib2.py"
+    },
+    {
       "id": "cpython-3.12.15:test_urlparse.py",
       "kind": "cpython",
       "licence": "PSF-2.0",
@@ -210,6 +235,13 @@
       "file": "upstream/cpy3.12.15-test_headerregistry.py"
     },
     {
+      "id": "cpython-3.12.15:test_urllib2.py",
+      "kind": "cpython",
+      "licence": "PSF-2.0",
+      "licence_file": "LICENSES/CPython-3.12.15-LICENSE",
+      "file": "upstream/cpy3.12.15-test_urllib2.py"
+    },
+    {
       "id": "cpython-3.14.9:test_urlparse.py",
       "kind": "cpython",
       "licence": "PSF-2.0",
@@ -236,6 +268,13 @@
       "licence": "PSF-2.0",
       "licence_file": "LICENSES/CPython-3.14.9-LICENSE",
       "file": "upstream/cpy3.14.9-test_headerregistry.py"
+    },
+    {
+      "id": "cpython-3.14.9:test_urllib2.py",
+      "kind": "cpython",
+      "licence": "PSF-2.0",
+      "licence_file": "LICENSES/CPython-3.14.9-LICENSE",
+      "file": "upstream/cpy3.14.9-test_urllib2.py"
     },
     {
       "id": "curl-8_23_0:lib1560.c",
