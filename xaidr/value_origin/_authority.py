@@ -1419,7 +1419,10 @@ def _single(res):
 
 
 def authority_of(value: str) -> Authority | None:
-    """The per-scheme normaliser. ``None`` = not a destination.
+    """The per-scheme normaliser: the one destination ``value`` names, else ``None``.
+    ``None`` is no SINGLE destination: the value names none, or it names more than
+    one (it reads two ways, or lists two mailboxes), which ``extract_destinations``
+    tells apart.
 
     Accepts one addr-spec mailbox (optionally ``display <addr>`` or
     ``mailto:``), a ``scheme://host…`` URL (a special scheme without the ``//``
@@ -1427,11 +1430,13 @@ def authority_of(value: str) -> Authority | None:
     followed by a port, path, query or fragment (R4), an address in any inet_aton
     spelling followed by one, or a ``+`` phone. A bare hostname is NOT
     a destination (V-19). A URL host
-    that fails UTS-46 still yields ``dns:<raw host lowercased>`` (V-23). A URL
-    whose authority split names two authorities (Q1) is None here, exactly as a
-    two-mailbox list is: one answer cannot name both, and either one alone is a
-    host some real consumer does not send to. ``extract_destinations`` reports
-    both. Never raises.
+    that fails UTS-46 still yields ``dns:<raw host lowercased>`` (V-23), as its one
+    destination when no client resolves it otherwise. A URL whose authority split
+    names two authorities (Q1) is None here, exactly as a two-mailbox list is, and
+    so is one a client resolves under a second name (urllib.request keeps the
+    userinfo in its host; the socket layer encodes ``straße`` as ``strasse``): one
+    answer cannot name both, and either one alone is a host some real client does
+    not send to. ``extract_destinations`` reports every one. Never raises.
     """
     try:
         if not isinstance(value, str):
