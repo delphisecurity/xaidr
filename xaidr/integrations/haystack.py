@@ -44,6 +44,15 @@ place". There is no ``return False`` to block with, as in CrewAI, and no
 * **OUTPUT** (``after_run``) — runs after the loop and before ``_public_outputs``
   builds the return value, so rewriting the last message rewrites both
   ``messages`` and ``last_message``.
+* **TOOL RESULT** (``after_tool``): runs after the tools execute, once their
+  result messages are in ``State`` and before the exit check and the next LLM
+  call, so rewriting a result message rewrites what the model reads next. A
+  halting verdict replaces that result with a refusal tool message
+  (``error=True``), the same shape Haystack itself uses for a failed tool
+  execution and the same shape the ``before_tool`` boundary uses for a refused
+  call. Only the step's freshly produced results are scanned: the Agent
+  appends each step's tool messages last, and the only call between the tool
+  run and this hook (``_record_tool_calls``) touches counts, not messages.
 
 TWO COSTS OF THE INPUT BOUNDARY, STATED HERE RATHER THAN DISCOVERED.
 Exhausting the step budget is the only way to stop the loop from a ``before_run``
@@ -97,8 +106,8 @@ _STOP_SENTINEL = 2 ** 62
 
 #: Hook points this integration registers under, in run-loop order.
 _POINTS = ("before_run", "before_tool", "after_tool", "after_run")
-#: The points a build must offer; ``after_tool`` (value origin's result record)
-#: is registered where the build offers it.
+#: The points a build must offer; ``after_tool`` (value origin's result record
+#: plus the tool-result scan) is registered where the build offers it.
 _REQUIRED = ("before_run", "before_tool", "after_run")
 
 
@@ -311,28 +320,111 @@ class _DelphiHook:
             )
         state.set("messages", rebuilt, handler_override=replace_values)
 
-    # ── TOOL RESULT (value origin) ───────────────────────────────────────
+    # ── TOOL RESULT (scan + value origin) ────────────────────────────────
 
     def _after_tool(self, state: Any) -> None:
-        """Record each result the tools just produced for value origin: the text
-        Haystack hands the model (its ``ToolCallResult.result``: the return value
-        through ``_result_to_string``, JSON or ``str()``), under the call's tool
-        name and arguments. Not scanned, so the read is untrusted (Q10), as
-        ``protect_tools`` records one; nothing in State changes (2026-11-01)."""
-        record = getattr(self.sensor, "_vo_record_result", None)
-        if record is None:
-            return
+        """Scan each result the tools just produced, and record it for value origin.
+
+        The scan runs through the sensor's result seam, which records the RAW
+        result with the scan's pre-mode verdict (A2 M7): a clean result from a
+        designated source can be trusted at the next turn, a blocked one is
+        recorded blocked, and a result with no scannable text is recorded
+        unscanned (untrusted, Q10). Recording the raw result BEFORE the scan
+        would pin every destination in it at untrusted: the ledger's first
+        write wins, so an unscanned record landing first can never be raised
+        by the verdict that follows (C-18). A refusal this module itself
+        already wrote is neither scanned nor recorded: no tool ran, so no
+        result was read. A halting verdict replaces that result with a refusal
+        tool message before the model reads it; other results in the same step
+        still pass through, and the Agent loops on and can recover.
+        """
+        from haystack.components.agents.state.state_utils import replace_values
+        from haystack.dataclasses import ChatMessage, ToolCallResult
+
         messages = state.data.get("messages") or []
-        fresh = []
-        for m in reversed(messages):            # the step's results: the trailing tool messages
-            if not m.is_from("tool"):
+        # The step's freshly produced results are the trailing run of tool
+        # messages: the Agent appends each step's tool messages last, and the
+        # only call between the tool run and this hook (_record_tool_calls)
+        # touches counts, not messages. An earlier step's results are followed
+        # by the next step's assistant reply, so they are never in the trailing
+        # run. The one exception is a step where before_tool refused every
+        # call: no tool ran, so the trailing tool messages are before_tool's
+        # own refusals, which _is_own_refusal skips rather than rescanning.
+        fresh: list[Any] = []
+        for message in reversed(messages):
+            if not message.is_from("tool"):
                 break
-            fresh.append(m)
-        for m in reversed(fresh):
-            for r in m.tool_call_results:
-                call = getattr(r, "origin", None)
-                record(getattr(call, "tool_name", "") or "", getattr(call, "arguments", None),
-                       r.result, None)
+            fresh.append(message)
+        fresh.reverse()
+        if not fresh:
+            return
+
+        record = getattr(self.sensor, "_vo_record_result", None)
+        blocked: dict[int, dict[int, str]] = {}
+        for message in fresh:
+            for result in message.tool_call_results:
+                call = getattr(result, "origin", None)
+                tool = getattr(call, "tool_name", "") or ""
+                arguments = getattr(call, "arguments", None)
+                text = _tool_result_text(result.result)
+                if text is not None and _is_own_refusal(text):
+                    continue  # our own refusal: no tool ran, no result read
+                if text is None:
+                    if record is not None:
+                        record(tool, arguments, result.result, None)
+                    continue
+                # direction="tool_result", not "input": a server's answer must
+                # never be recorded as something a principal asked for.
+                verdict = _scan_tool_result(
+                    self.sensor, text, tool, arguments, result.result
+                )
+                if getattr(verdict, "must_halt", False):
+                    blocked.setdefault(id(message), {})[id(result)] = _refusal_text(
+                        verdict
+                    )
+        if not blocked:
+            return
+
+        # Replace each blocked result in place, keeping its origin and meta, so
+        # the model still sees a tool message for the call it made, with a
+        # refusal in it instead of the poison. The error=True flag is the shape
+        # Haystack itself uses for a failed tool execution, and the shape the
+        # before_tool boundary uses for a refused call. A message carrying
+        # several results keeps the clean ones: only the blocked result is
+        # swapped.
+        rebuilt = []
+        for message in messages:
+            per = blocked.get(id(message))
+            if not per:
+                rebuilt.append(message)
+                continue
+            results = message.tool_call_results
+            if len(results) == 1:
+                rebuilt.append(
+                    ChatMessage.from_tool(
+                        tool_result=per[id(results[0])],
+                        origin=results[0].origin,
+                        error=True,
+                        meta=dict(message.meta) if message.meta else None,
+                    )
+                )
+            else:
+                rebuilt.append(
+                    ChatMessage(
+                        message.role,
+                        [
+                            ToolCallResult(
+                                result=per.get(id(r), r.result),
+                                origin=r.origin,
+                                error=True if id(r) in per else r.error,
+                            )
+                            for r in results
+                        ],
+                        _name=message.name,
+                        _meta=dict(message.meta) if message.meta else {},
+                    )
+                )
+        state.set("messages", rebuilt, handler_override=replace_values)
 
     # ── OUTPUT ───────────────────────────────────────────────────────────
 
@@ -355,8 +447,9 @@ class _DelphiHook:
             return
         last = messages[-1]
         # Only a freshly generated assistant TEXT reply. A tool-result final
-        # message (a tool exit condition) is a tool RESULT, which no boundary
-        # here scans — see `delphi_hooks` for that gap, said out loud.
+        # message (a tool exit condition) was already scanned at the
+        # after_tool boundary of this same step, so there is nothing left for
+        # the output boundary here.
         if not last.is_from("assistant") or not last.text:
             return
 
@@ -446,6 +539,55 @@ def run_variables(fn):
     return wrapped
 
 
+def _tool_result_text(result: Any) -> str | None:
+    """The scannable text of a Haystack tool result, or None if there is none.
+
+    A result is a string in the common case, or a sequence of content blocks
+    when the tool asked for raw output. Only text blocks are scanned: an image
+    or file block has no text the model reads, and scanning a repr would be
+    scanning something nobody reads.
+    """
+    if isinstance(result, str):
+        return result
+    if isinstance(result, (list, tuple)):
+        parts = [
+            part.text for part in result
+            if isinstance(getattr(part, "text", None), str)
+        ]
+        return "\n".join(parts) if parts else None
+    return None
+
+
+def _is_own_refusal(text: str) -> bool:
+    """True when this text is a refusal this module itself already wrote.
+
+    The after_tool boundary skips those rather than rescanning them: a step
+    where before_tool refused every call leaves no fresh tool message, so the
+    trailing tool messages are before_tool's refusals, and re-scanning our own
+    refusal text is noise at best and a second verdict at worst. The match is
+    on the full refusal prefix including the ``(xaidr:`` marker, so a genuine
+    tool result would have to impersonate our refusal vocabulary to be skipped.
+    """
+    return text.startswith((
+        "I can't help with that request. (xaidr:",
+        "This action requires human approval and was not executed. (xaidr:",
+    ))
+
+
+def _scan_tool_result(
+    sensor: Any, text: str, tool: str, arguments: Any, raw: Any
+) -> Any:
+    """Scan a tool result through the sensor's result seam, which records the
+    RAW result with the scan's pre-mode verdict (A2 M7, the same seam the
+    LangChain result wrapper uses). A sensor without it falls back to the
+    public seam, which records the read nameless and untrusted.
+    """
+    fn = getattr(sensor, "_scan_tool_result", None)
+    if fn is None:
+        return sensor.scan(text, direction="tool_result")
+    return fn(text, tool=tool, arguments=arguments, raw_result=raw)
+
+
 def _refusal_text(result: Any) -> str:
     """The refusal an input/output boundary puts in the transcript.
 
@@ -494,8 +636,14 @@ def delphi_hooks(
       via ``scan_tool_call`` BEFORE it executes. A halting verdict removes that
       call and returns a refusal tool-result in its place; other calls in the
       same step still run, and the Agent loops on and can recover.
-    * ``after_tool`` — TOOL RESULT, for value origin only: records each result
-      the step's tools produced, unscanned, and changes nothing.
+    * ``after_tool``: TOOL RESULT. Scans each step's freshly produced tool
+      results via the sensor's result seam (``direction="tool_result"``) and
+      records each one for value origin: the RAW result with the scan's
+      pre-mode verdict, so a clean result from a designated source can be
+      trusted at the next turn and a blocked one is recorded blocked. A
+      halting verdict replaces that result with a refusal tool message before
+      the model reads it; other results in the same step still pass through,
+      and the Agent loops on and can recover.
     * ``after_run`` — OUTPUT. Scans the final assistant text via ``scan_output``
       and replaces it on a halting verdict.
 
@@ -504,7 +652,7 @@ def delphi_hooks(
         hooks = delphi_hooks(agent_id="a")
         hooks.setdefault("before_llm", []).append(my_compaction_hook)
 
-    **THREE THINGS THIS IS NOT**, all of which matter before you rely on it.
+    **TWO THINGS THIS IS NOT**, both of which matter before you rely on it.
 
     1. **It is per-Agent, not global.** Haystack's hooks are constructor
        arguments; there is no process-wide registry like CrewAI's. An ``Agent``
@@ -518,15 +666,6 @@ def delphi_hooks(
        arbitrary per-component input dict, which is not a place a message-shaped
        scan can be made honestly. Scan at your own entry point with
        ``sensor.scan()`` instead.
-    3. **Tool RESULTS are not scanned.** Only tool ARGUMENTS are, so a tool that
-       returns an injected payload is not caught. The ``after_tool`` hook point
-       (it runs once the result messages are in ``State``) is registered for
-       value origin only: it RECORDS each result, as the model is handed it, so a
-       later call to a destination the result named is traced to it (untrusted,
-       since the result was not scanned), and it changes nothing in ``State``
-       (2026-11-01). Pinned by a negative test so a change here fails loudly
-       rather than silently widening the claim.
-
     Args:
         agent_id: identifier for this agent (appears in telemetry).
         enforcement_mode: "monitor" (default, never blocks) or "block".
