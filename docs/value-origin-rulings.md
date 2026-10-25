@@ -215,31 +215,52 @@ more than one reading names every one of them. This applies to every rule below.
   `]`, so an unbracketed IPv6 address loses its last group to the port and a host
   can keep a colon (`https://sink.example:8443:` resolves `sink.example:8443`) or a
   bracket, which no numeric parser reads; and a numeric host with a trailing dot
-  (`10.9.8.7.`) is a DNS name to the resolver and to every Python client. No
+  (`10.9.8.7.`) is a DNS name to the resolver and to every Python client.
+  http.client's port is whatever `int()` takes, and `int()` takes the decimal
+  digits of every script its interpreter's Unicode knows, so a port written in
+  any script's digits (Unicode 16.0's, the newest a supported interpreter
+  carries) splits the host as a port in ASCII digits does. urllib.request's
+  default opener resolves more than http and https (measured on every
+  interpreter, `tests/test_value_origin_client_gate.py`): its FTP handler
+  resolves the host after the last `@`, percent-decoded a second time, and its
+  file handler looks a non-local `file:` host up (`Request.host` less its port up
+  to 3.13, the netloc as written from 3.14). requests, on macOS, looks up
+  `urlparse(url).hostname` of a URL of any scheme to decide whether the system
+  proxy settings exempt it, before it refuses a scheme it does not send. Each of
+  those names is read. No
   public DNS zone holds a label with `@`, `:` or `[`, or a numeric top label, but a
   hosts file, a search domain or a private resolver can answer one, so each is
   read as the key the resolver reaches. A non-ASCII host is read as the socket
-  layer encodes it, IDNA 2003 (`straße` is `strasse`): written out from RFC 3454's
-  tables and Unicode 3.2 (`_idna.idna2003`, data in `_nameprep_data.py`), so the
-  name is the same on every interpreter, and read also as every interpreter whose
-  `stringprep` predates CPython's fix encodes it. A fixed one (3.10.22, 3.12.15,
-  3.14.9) encodes by RFC 3454's table B.3; an unfixed one (3.10.20, 3.11.15,
-  3.12.2, 3.12.13 and 3.14.5, measured 2026-10-24) lowercases a code point B.3
-  does not map by its own Unicode, so 3.12.2 lowercases `Ⴜ` and 3.12.15 keeps it,
-  and only an unfixed 3.14 lowercases a code point Unicode 16.0 assigned. The core
-  writes out each of those encodings from vendored data (RFC 3454, and Unicode
-  16.0's lowercase with each code point's age, in `tests/published_vectors/`),
-  the same list on every interpreter. *Corrected 2026-10-24:* until then this
+  layer encodes it, IDNA 2003 (`straße` is `strasse`), as every supported
+  interpreter encodes it (`_idna.idna2003`), the same list on every interpreter.
+  The codec depends on the interpreter twice. Its `stringprep` table B.3: a fixed
+  interpreter (3.10.22, 3.11.17, 3.12.15, 3.14.8, 3.14.9) encodes by RFC 3454's
+  table B.3; an unfixed one (3.10.20, 3.10.21, 3.11.15, 3.12.2, 3.12.13, 3.12.14,
+  3.14.5, 3.14.7, measured 2026-10-25) lowercases a code point B.3 does not map by
+  its own Unicode, so 3.12.2 lowercases `Ⴜ` and 3.12.15 keeps it. And its NFKC,
+  which takes decompositions from Unicode 3.2 but combining classes and
+  compositions from the interpreter's own Unicode, so a pair of code points
+  Unicode 3.2 left unassigned composes on 3.14 and not on 3.10. The core writes
+  out each of those encodings from vendored data (RFC 3454's tables, and Unicode
+  16.0 by age, in `tests/published_vectors/`). *Corrected 2026-10-25:* until then
+  this paragraph said the encoding was written out from RFC 3454's tables and
+  Unicode 3.2, "so the name is the same on every interpreter"; the NFKC it called
+  Unicode 3.2 came from the running interpreter's database for code points 3.2
+  left unassigned, so the list differed between 3.10 and 3.14 for such pairs. *Corrected 2026-10-24:* until then this
   paragraph said the older lowercase was taken only for the code points Unicode
   13.0 assigns and that one it leaves unassigned is kept, and a report of the same
   round said the encoder matched every interpreter's codec on every code point.
   Both described a fixed interpreter and an unfixed 3.10 only: the encoder missed
   the reading of an unfixed 3.11 or 3.12 for 40 code points and of an unfixed 3.14
-  for 67. It now misses none on any of the eight interpreters named above, over
-  every code point (`tests/test_value_origin_idna2003.py`).
+  for 67. It now misses none on any of the interpreters named above, over every
+  code point and every composition pair (`tests/test_value_origin_idna2003.py`,
+  `tests/test_value_origin_ucd.py`).
   *Pinned by:* the published-suite differential, whose urllib.request and
-  http.client clients no other ruling excuses, and
-  `tests/test_value_origin_idna2003.py`.
+  http.client clients no other ruling excuses, `tests/test_value_origin_idna2003.py`,
+  `tests/test_value_origin_ucd.py`, and the client gate,
+  `tests/test_value_origin_client_gate.py`: every generated value any client sends
+  to, a port in every script's digits and every scheme the clients take, reads as
+  a destination, never `no_destination`.
 - **A value no client accepts is read conservatively** (decided by the owner,
   2026-10-24). urllib.request refuses a URL its `urlparse` refuses (a bracket that
   does not pair, a bracketed host that is no address), and the other clients refuse
@@ -255,7 +276,12 @@ more than one reading names every one of them. This applies to every rule below.
   `http:evil.test`, `http:/evil.test`, `http:\\evil.test` and
   `http:///evil.test` all name `evil.test`. The special schemes are `http`,
   `https`, `ws`, `wss` and `ftp`. A non-special scheme without `//` has no host.
-  `file:` and `data:` are never destinations; `mailto:<addr>` is a mailbox.
+  `file:` and `data:` name no destination by their scheme; the host of a `file:`
+  URL is read as the name urllib.request looks it up as, and the host of any URL
+  with an authority as the name requests looks up on macOS (above). *Corrected
+  2026-10-25:* until then this said `file:` and `data:` are never destinations;
+  urlopen resolves a `file:` URL's host before it opens a local file.
+  `mailto:<addr>` is a mailbox.
 - **Tabs and newlines are removed from a URL**, as WHATWG and `urlsplit` remove
   them. Other whitespace counts where it lands: in a host it is no host for that
   reading; in a path, query or fragment it is percent-encoded by WHATWG, and the
@@ -268,7 +294,8 @@ more than one reading names every one of them. This applies to every rule below.
   (`R36-percent-host`). A character httpx or requests percent-encodes in a host
   is read encoded too (`http://a^b.example/` names `a^b.example` and
   `a%5eb.example`), urllib3's and requests' spellings for http and https only, the
-  schemes they send. Each spelling keys by its registrable domain, so an escape
+  schemes they connect to (measured; requests' macOS proxy lookup of the plain
+  hostname, for any scheme, is read as well, above). Each spelling keys by its registrable domain, so an escape
   inside the principal's zone (`files%2Eportal.northbank.example`) stays the
   principal's. *Pinned by:* `tests/test_value_origin_client_spellings.py`.
 - **UTS-46: nontransitional, Unicode 13.0** (S-4). ß stays ß (`xn--zca`), as
@@ -294,16 +321,29 @@ more than one reading names every one of them. This applies to every rule below.
 - **The reading is the same on every interpreter: the findings and the wire, not
   only what blocks.** The core never calls the interpreter's `urlsplit` (its own
   copy of CPython 3.12.2's rules decides a split and whether it is a parse
-  failure), and it decides every character class (a pattern's `\w` and `\d`,
-  `isalpha`, `casefold`) as Unicode 13.0 does: a code point 13.0 leaves
-  unassigned, which a newer interpreter calls a letter or a digit, is none to the
-  reader (the assigned code points are vendored in `_idna_data.py`; over every
-  code point 13.0 assigns, those classes agree on 3.10.22 and 3.14.9). Every
-  published vector, and values over such code points, give the same findings and
-  the same wire after an empty ledger, the principal's text, a whole tool result
-  and a tool result's sentence on 3.10, 3.12.2, the newest 3.12 and 3.14, Linux
-  and macOS (`scripts/published_agreement.py`). *Pinned by:*
-  `tests/test_value_origin_interpreter_independence.py`.
+  failure), and no reading consults the running interpreter's Unicode database:
+  every character class (a pattern's `\w`, `\s` and `\d`, `isalpha`,
+  `isspace`), case mapping (`lower`, `casefold`), normalization (NFC, and the
+  IDNA 2003 codec's NFKC) and digit (`int()`) is asked of Unicode 16.0's files,
+  vendored in `tests/published_vectors/upstream/` and generated into
+  `_ucd_data.py`, as a given version has it (`_ucd`). The core decides as Unicode
+  13.0 does, so a code point 13.0 leaves unassigned, which a newer interpreter
+  calls a letter or a digit, is none to the reader; a reading that models a client
+  asks that client's interpreter's version. Asked at an interpreter's own version,
+  the vendored data is that interpreter's data, over every code point (measured on
+  3.10.20 to 3.14.9). Every published vector, and values over the code points
+  Unicode 14.0 to 16.0 added, give the same findings and the same wire after an
+  empty ledger, the principal's text, a whole tool result and a tool result's
+  sentence on 3.10, 3.12.2, the newest 3.12 and 3.14, Linux and macOS
+  (`scripts/published_agreement.py`, which probes those code points as well), and
+  the same readings on every patch release run (3.10.20 to 3.14.9). *Corrected
+  2026-10-25:* this said the classes were decided by `_idna_data.py`'s assigned
+  code points; they were decided by the interpreter's own data over those code
+  points, and the IDNA 2003 NFKC by the interpreter's own data outright. *Pinned
+  by:* `tests/test_value_origin_interpreter_independence.py` and
+  `tests/test_value_origin_ucd.py`, which also refuses any reading module that
+  calls a `str` method, `re` class or `unicodedata` function deciding by the
+  interpreter's data.
 - **A scheme token is anything before `://` made of letters, digits, `+`, `.` and
   `-`, of any length**, as urllib.parse on 3.10 and WHATWG split it. When urllib3
   refuses it as a scheme (one that is not a letter, then letters, digits, `+` and
@@ -483,7 +523,9 @@ DNS name as well; a name with an empty label, whitespace or a control character 
 none a resolver looks up. A client that reads no vector at all is a refusal, never
 a clean run. An under-read of urllib.request or http.client is excused only where
 the platform resolver refuses an empty hex part (below); no scheme-less, mailbox or
-encoding ruling applies to them, since both send only an http or https URL. The rulings it accepts an under-read under, each above: a bare
+encoding ruling applies to them. *Corrected 2026-10-25:* this said both send only an
+http or https URL; urllib.request also sends `ftp:` and looks up a `file:` URL's
+host, and the differential reads both. The rulings it accepts an under-read under, each above: a bare
 hostname or number and a single-label host before a path (V-19); `file:` and
 `data:`; a URL before the mailbox rule (S-3); a mailbox is not its domain as a URL
 host (3.2); an ASCII local part (3.6); an `@` that is not an address; `mailto:` is
@@ -563,7 +605,14 @@ the package calls `authority_of`, and a call naming such a value reads
   and turns it into a tuple only for a finding, charged by its length, so a value
   nested 16,000 deep costs memory in proportion to the work, never to the square
   of the depth (`test_memory_stays_bounded_at_every_nesting_depth`, 1,000 to
-  16,000 deep, under 8 MiB).
+  16,000 deep, under 8 MiB; a `model_dump()` chain 16,000 deep peaks at 6.0 to 6.4
+  MiB, `test_a_model_dump_chain_16000_deep_stays_under_the_stated_8_mib`). Strings
+  a result's `model_dump()` temporaries alone hold are kept for the atom pass only
+  while the budget could still scan them, and no temporary is kept for its id.
+  Past the bound a value too long to read whole is stripped once per object and
+  charged for the whitespace the strip scanned; the atom pass is handed what is
+  left, so no character is charged twice and the time a call takes follows the
+  work units (`tests/test_value_origin_cut_results.py`).
 - **Observed atoms** (record only): an argument value the walk examines
   whole that is not wholly one destination is scanned for destination atoms
   (prose, a command line, a mailbox part that does not parse). Each atom is on
@@ -592,6 +641,9 @@ is `NOT_EVALUATED`, matching `row_text`'s unrecognised row.
 | `write_dropped` | not evaluated | **yes** (as `result_unread`) |
 | `no_destination`, `no_flow`, `ledger_absent`, `ledger_saturated`, `input_truncated`, `result_truncated`, `extraction_incomplete` | not evaluated | no |
 
+`result_truncated` stays in the vocabulary for consumers; a call reads it no more,
+since a cut result cannot vouch (below).
+
 - **`result_unread`**: a tool result from httpx, requests, urllib3 or aiohttp is
   passed on unread, so as not to consume a stream; a destination that then traces
   to nothing reads `result_unread` (Q18).
@@ -601,11 +653,19 @@ is `NOT_EVALUATED`, matching `row_text`'s unrecognised row.
   not a `Span`, a non-string input (ruling 5). Past the examined bound, a raising
   node is confined to its node and reads `result_unread`. *Pinned by:*
   `tests/test_value_origin_drop.py`.
+- **A cut result cannot vouch** (decided by the owner, 2026-10-25). A tool result
+  past a bound is not read whole, so what it holds is not all known, and a value
+  there can name a destination no reading finds. Once the flow carries a cut
+  result, a destination neither the principal nor a trusted source authorized
+  reads `untrusted_source`, and blocks under ENFORCE. What the principal or a
+  trusted source named keeps its authority. Until 2026-10-25 such a call read
+  `result_truncated`, which did not block. *Pinned by:*
+  `tests/test_value_origin_cut_results.py`.
 - **The order** when the weakest finding is not `untrusted_source`: a state that
   blocks outranks every state that does not (`result_unread`, then
   `write_dropped`), then `extraction_incomplete`, `argument_bound`,
-  `ledger_saturated`, `result_truncated`, `input_truncated`. An untrusted finding
-  outranks all of them.
+  `ledger_saturated`, `input_truncated`. An untrusted finding outranks all of
+  them, a miss after a cut result included.
 - `ORIGIN_UNTRUSTED_DESTINATION_KEYED` (the keyed variant) is reserved; nothing
   emits it.
 
@@ -692,10 +752,14 @@ Each is current behaviour and can still be overruled.
 19. In a sentence or on a line, a value that itself holds whitespace or a control
     character is not recorded whole; it is, as a whole result value or a leaf (§5).
 20. urllib3's and requests' host spellings are read for http and https, the only
-    schemes they send; urllib3's parser output for another scheme is not a send.
+    schemes they connect to; urllib3's parser output for another scheme is not a
+    send. requests' macOS proxy lookup of the plain hostname is read for every
+    scheme (§2).
 21. A code point Unicode 13.0 leaves unassigned is no letter and no digit to the
     reader on any interpreter, so a scheme-less `host/path` whose host carries one
-    is no destination, as on 3.10 (§2).
+    is no destination, as on 3.10 (§2). Every such class is asked of vendored
+    Unicode 16.0 data as Unicode 13.0 has it (`_ucd`); a port's digits are asked as
+    Unicode 16.0 has them, since some interpreter's `int()` takes each one.
 22. A `URL_PREFIX` designation never trusts a value with a backslash, a control,
     a zoned or misplaced bracket, or a port above 65535 (§4).
 
