@@ -1,5 +1,5 @@
 {
-  "about": "Files in this folder copied byte for byte from an upstream project: each one's upstream URL, version (a tag, a commit or a release) and sha256. scripts/published_vectors.py verifies them, and extracts the test vectors from them when a test or the differential runs; the release disclosure scan (scripts/disclosure_scan.py) skips a file here only while its bytes match its entry. A source of kind data (RFC 3454, Unicode 16.0's UnicodeData, DerivedAge and SpecialCasing) yields no vectors: it is the input scripts/gen_value_origin_data.py --nameprep generates the core's IDNA 2003 tables from.",
+  "about": "Files in this folder copied byte for byte from an upstream project: each one's upstream URL, version (a tag, a commit or a release) and sha256. scripts/published_vectors.py verifies them, and extracts the test vectors from them when a test or the differential runs; the release disclosure scan (scripts/disclosure_scan.py) skips a file here only while its bytes match its entry. A source of kind data (RFC 3454, Unicode 16.0's UnicodeData, DerivedAge, SpecialCasing, CaseFolding, CompositionExclusions, NormalizationCorrections and DerivedCoreProperties) yields no vectors: it is the input scripts/gen_value_origin_data.py --nameprep generates the core's IDNA 2003 and Unicode tables from.",
   "files": [
     {
       "path": "upstream/cpy3.10.22-test_urlparse.py",
@@ -192,6 +192,30 @@
       "url": "https://www.unicode.org/Public/16.0.0/ucd/SpecialCasing.txt",
       "version": "Unicode 16.0.0",
       "sha256": "8d5de354eef79f2395a54c9c7dcebbaf3d30fc962d0f85611ea97aa973a0c451"
+    },
+    {
+      "path": "upstream/CaseFolding-16.0.0.txt",
+      "url": "https://www.unicode.org/Public/16.0.0/ucd/CaseFolding.txt",
+      "version": "Unicode 16.0.0",
+      "sha256": "6f1f9c588eb4a5c718d9e8f93b782685e5c7fec872cf05e8e6878053599e09bb"
+    },
+    {
+      "path": "upstream/CompositionExclusions-16.0.0.txt",
+      "url": "https://www.unicode.org/Public/16.0.0/ucd/CompositionExclusions.txt",
+      "version": "Unicode 16.0.0",
+      "sha256": "89e83cf9cc8bef6c1f8bf77e42cf6f0341dfa42e66261f4dbe9b492e7a23c8ee"
+    },
+    {
+      "path": "upstream/NormalizationCorrections-16.0.0.txt",
+      "url": "https://www.unicode.org/Public/16.0.0/ucd/NormalizationCorrections.txt",
+      "version": "Unicode 16.0.0",
+      "sha256": "ca91bb16261a97432b42bd6082a95d8f2bd6a084f5d4e4f7f1c76d7e084a621a"
+    },
+    {
+      "path": "upstream/DerivedCoreProperties-16.0.0.txt",
+      "url": "https://www.unicode.org/Public/16.0.0/ucd/DerivedCoreProperties.txt",
+      "version": "Unicode 16.0.0",
+      "sha256": "39d35161f2954497f69e08bdb9e701493f476a3d30222de20028feda36c1dabd"
     }
   ],
   "sources": [
@@ -382,6 +406,38 @@
       "licence": "Unicode-3.0",
       "licence_file": "LICENSES/Unicode-license.txt",
       "file": "upstream/SpecialCasing-16.0.0.txt",
+      "version": "16.0.0"
+    },
+    {
+      "id": "unicode-16.0.0:CaseFolding.txt",
+      "kind": "data",
+      "licence": "Unicode-3.0",
+      "licence_file": "LICENSES/Unicode-license.txt",
+      "file": "upstream/CaseFolding-16.0.0.txt",
+      "version": "16.0.0"
+    },
+    {
+      "id": "unicode-16.0.0:CompositionExclusions.txt",
+      "kind": "data",
+      "licence": "Unicode-3.0",
+      "licence_file": "LICENSES/Unicode-license.txt",
+      "file": "upstream/CompositionExclusions-16.0.0.txt",
+      "version": "16.0.0"
+    },
+    {
+      "id": "unicode-16.0.0:NormalizationCorrections.txt",
+      "kind": "data",
+      "licence": "Unicode-3.0",
+      "licence_file": "LICENSES/Unicode-license.txt",
+      "file": "upstream/NormalizationCorrections-16.0.0.txt",
+      "version": "16.0.0"
+    },
+    {
+      "id": "unicode-16.0.0:DerivedCoreProperties.txt",
+      "kind": "data",
+      "licence": "Unicode-3.0",
+      "licence_file": "LICENSES/Unicode-license.txt",
+      "file": "upstream/DerivedCoreProperties-16.0.0.txt",
       "version": "16.0.0"
     }
   ]
