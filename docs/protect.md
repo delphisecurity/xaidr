@@ -206,7 +206,7 @@ here rather than left to be discovered:
 | `autogen-core` `BaseTool.run_json` | yes | no |
 | `autogen` `ConversableAgent.execute_function` / `a_execute_function` | yes | no |
 | `llama-index` `FunctionTool.call` / `.acall` | yes | no |
-| `haystack` `Agent` hooks | yes | no — reported as `found_unpatchable`; close it with your own `after_tool` hook |
+| `haystack` `Agent` hooks | yes | **yes** |
 | `openai-agents` | n/a (no patchable tool seam) | n/a |
 
 A result with no strings in it (bytes, a file handle, an opaque object) is passed
@@ -400,10 +400,11 @@ agent = Agent(
 |---|---|---|---|
 | Input | `before_run` | `scan` | refusal assistant message; **the chat generator is never called** |
 | Tool call | `before_tool` | `scan_tool_call` — name + args, **before execution** | the call is removed and a refusal tool-result takes its place; the tool is **not** invoked |
+| Tool result | `after_tool` | `scan` with `direction="tool_result"`, each step's fresh results, **before the next LLM call** | the blocked result is replaced with a refusal tool message (`error=True`); other results in the same step pass through |
 | Output | `after_run` | `scan_output` | the final assistant message is replaced |
 
 Merge it with hooks of your own rather than replacing either —
-`hooks.setdefault("before_llm", []).append(my_hook)`. All three fail open, and
+`hooks.setdefault("before_llm", []).append(my_hook)`. All four fail open, and
 `reporter=` and any `Sensor` keyword pass through. `Agent.run_async` is covered
 by the same hooks; it is a separate loop in Haystack and is tested separately here.
 
@@ -433,16 +434,8 @@ router = ConditionalRouter(routes=[
 ])
 ```
 
-**Two things this does not cover, said here rather than left to be discovered.**
+**One thing this does not cover, said here rather than left to be discovered.**
 
-* **Tool RESULTS are not scanned** — only tool ARGUMENTS are. Haystack *does*
-  offer the seam (`after_tool` runs once the result messages are in `State`);
-  this build deliberately does not register there, so a tool that returns an
-  injected payload reaches the model verbatim. It is reported as
-  `found_unpatchable` and pinned by a negative test. Close it yourself with an
-  `after_tool` hook calling `sensor.scan(result, direction="tool_result")` —
-  `"tool_result"`, not `"input"`, so the audit record does not attribute a
-  server's answer to the principal who made the request.
 * **A `Pipeline` with no `Agent` in it gets nothing.** These are the *Agent's*
   hooks. `Pipeline._run_component` calls `instance.run(**inputs)` on an
   arbitrary per-component dict with no notion of a user message, so there is no

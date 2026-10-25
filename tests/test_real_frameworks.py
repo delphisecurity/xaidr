@@ -1603,9 +1603,9 @@ class TestRealHaystack:
     blocks by rewriting `State`, and each of those rewrites is asserted against
     the real run loop.
 
-    Three facts below are NEGATIVE — an Agent built before `protect()`, tool
-    RESULTS, and a Pipeline with no Agent in it. They are tests rather than
-    prose so that a change which quietly widens the claim fails here first.
+    Two facts below are NEGATIVE: an Agent built before `protect()` and a
+    Pipeline with no Agent in it. They are tests rather than prose so that a
+    change which quietly widens the claim fails here first.
     """
 
     @pytest.fixture
@@ -1698,7 +1698,7 @@ class TestRealHaystack:
             messages=[self._user(INJECTION)])
         assert len(generators[-1].calls) == 1
 
-    # ── the three boundaries ─────────────────────────────────────────────
+    # ── the four boundaries ──────────────────────────────────────────────
 
     def test_injection_is_stopped_before_the_chat_generator(self, agent_bits):
         """HARD GATE. `before_run` must stop the LOOP, not merely annotate it.
@@ -1925,7 +1925,8 @@ class TestRealHaystack:
             assert [r.already_patched for r in second.patched] == [True]
             agent = build([self._text("hi")], hooks=None)
             assert {point: len(hooks) for point, hooks in agent.hooks.items()} == {
-                "before_run": 1, "before_tool": 1, "after_run": 1
+                "before_run": 1, "before_tool": 1, "after_tool": 1,
+                "after_run": 1
             }, agent.hooks
         finally:
             second.unprotect()
@@ -1943,7 +1944,8 @@ class TestRealHaystack:
                           hooks=delphi_hooks(agent_id="by-hand",
                                              enforcement_mode="block"))
             assert {point: len(h) for point, h in agent.hooks.items()} == {
-                "before_run": 1, "before_tool": 1, "after_run": 1
+                "before_run": 1, "before_tool": 1, "after_tool": 1,
+                "after_run": 1
             }, agent.hooks
             agent.run(messages=[self._user("clean the disk")])
         finally:
@@ -1977,36 +1979,16 @@ class TestRealHaystack:
             manifest.unprotect()
         assert seen, "the caller's own hooks did not run under protect()"
 
-    # ── NEGATIVE: what protect() and the hooks do NOT cover ──────────────
+    # ── TOOL RESULT ──────────────────────────────────────────────────────
 
-    def test_an_agent_built_BEFORE_protect_is_NOT_instrumented(self, agent_bits):
-        """The cost of a CONSTRUCTOR seam, pinned rather than left to be found.
+    def test_tool_RESULTS_are_scanned(self, agent_bits):
+        """The after_tool boundary replaces a blocked result before the model reads it.
 
-        `langchain_core.tools.BaseTool.run` is a method seam: patching it covers
-        objects that already exist. `Agent.__init__` cannot, because by the time
-        it is patched the Agent's `hooks` dict is already built. Every other
-        seam in this package would catch this Agent; this one does not.
-        """
-        build, _, executed, _ = agent_bits
-        agent = build([self._tool_call("run_shell", {"command": DESTRUCTIVE}),
-                       self._text("done")], hooks=None)
-        manifest = self._protect()
-        try:
-            agent.run(messages=[self._user("clean the disk")])
-        finally:
-            manifest.unprotect()
-        assert executed == [DESTRUCTIVE], (
-            "an Agent built before protect() was instrumented — the seam has "
-            "grown retroactive coverage; update this test, the manifest note "
-            "and the README"
-        )
-
-    def test_tool_RESULTS_are_not_scanned(self, agent_bits):
-        """Only tool ARGUMENTS are. The `after_tool` hook point is left unused.
-
-        An injected payload coming BACK from a tool reaches the model verbatim.
-        Haystack offers the seam, so this is a decision rather than a limit, and
-        it is a test so that registering there later cannot happen quietly.
+        This is the gap the old negative test pinned: an injected payload
+        coming BACK from a tool used to reach the model verbatim. The
+        after_tool hook runs once the result messages are in State and before
+        the next LLM call, so the model reads the refusal instead of the
+        injection, and the run continues.
         """
         from haystack import component
         from haystack.components.agents import Agent
@@ -2032,6 +2014,59 @@ class TestRealHaystack:
                 return {"replies": [self.script[min(len(self.calls) - 1,
                                                     len(self.script) - 1)]]}
 
+        generator = Scripted(script=[
+            self._tool_call("fetch_page", {"url": "https://example.com/a"}),
+            self._text("done"),
+        ])
+        agent = Agent(
+            chat_generator=generator,
+            tools=[fetch_page],
+            hooks=delphi_hooks(agent_id="real-haystack", enforcement_mode="block"),
+        )
+        agent.warm_up()
+        result = agent.run(messages=[self._user("read that page")])
+        tool_msgs = [m for m in result["messages"] if m.is_from("tool")]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0].tool_call_result.result.startswith(
+            "I can't help with that request. (xaidr:"
+        ), tool_msgs[0].tool_call_result.result
+        assert tool_msgs[0].tool_call_result.error is True, (
+            "a blocked result must read as a failed tool execution, not a "
+            "successful one"
+        )
+        # And the model never saw the injection: the second generator call's
+        # messages carry the refusal, not the payload.
+        for call in generator.calls:
+            for message in call:
+                if message.is_from("tool"):
+                    assert INJECTION not in message.tool_call_result.result
+
+    def test_a_clean_tool_result_passes_through_unmodified(self, agent_bits):
+        """The after_tool boundary must not rewrite what it does not block."""
+        from haystack import component
+        from haystack.components.agents import Agent
+        from haystack.dataclasses import ChatMessage
+        from haystack.tools import tool
+
+        from xaidr.integrations.haystack import delphi_hooks
+
+        @tool
+        def fetch_page(url: str) -> str:
+            """Fetch a web page."""
+            return "sunny, 21C"
+
+        @component
+        class Scripted:
+            def __init__(self, script=None):
+                self.script = script or []
+                self.calls: list = []
+
+            @component.output_types(replies=list[ChatMessage])
+            def run(self, messages, tools=None, **kwargs):
+                self.calls.append(messages)
+                return {"replies": [self.script[min(len(self.calls) - 1,
+                                                    len(self.script) - 1)]]}
+
         agent = Agent(
             chat_generator=Scripted(script=[
                 self._tool_call("fetch_page", {"url": "https://example.com/a"}),
@@ -2044,10 +2079,30 @@ class TestRealHaystack:
         result = agent.run(messages=[self._user("read that page")])
         results = [m.tool_call_result.result for m in result["messages"]
                    if m.is_from("tool")]
-        assert results == [INJECTION], (
-            "a tool RESULT was scanned or rewritten — this integration has "
-            "grown an after_tool boundary; update this test, the manifest's "
-            "found_unpatchable entry and the README"
+        assert results == ["sunny, 21C"], results
+
+    # ── NEGATIVE: what protect() and the hooks do NOT cover ──────────────
+
+    def test_an_agent_built_BEFORE_protect_is_NOT_instrumented(self, agent_bits):
+        """The cost of a CONSTRUCTOR seam, pinned rather than left to be found.
+
+        `langchain_core.tools.BaseTool.run` is a method seam: patching it covers
+        objects that already exist. `Agent.__init__` cannot, because by the time
+        it is patched the Agent's `hooks` dict is already built. Every other
+        seam in this package would catch this Agent; this one does not.
+        """
+        build, _, executed, _ = agent_bits
+        agent = build([self._tool_call("run_shell", {"command": DESTRUCTIVE}),
+                       self._text("done")], hooks=None)
+        manifest = self._protect()
+        try:
+            agent.run(messages=[self._user("clean the disk")])
+        finally:
+            manifest.unprotect()
+        assert executed == [DESTRUCTIVE], (
+            "an Agent built before protect() was instrumented — the seam has "
+            "grown retroactive coverage; update this test, the manifest note "
+            "and the README"
         )
 
     def test_a_pipeline_without_an_agent_gets_nothing(self, agent_bits):
@@ -2077,8 +2132,9 @@ class TestRealHaystack:
             "pipeline boundary; update this test and the manifest notes"
         )
 
-    def test_the_manifest_names_the_tool_result_gap_and_the_two_costs(self):
-        """The manifest must not be readable as "Haystack is covered".
+    def test_the_manifest_names_no_tool_result_gap_but_the_two_costs(self):
+        """The manifest must not be readable as "Haystack is covered", and
+        must not still claim the tool-result gap this change closed.
 
         The import is of ``Agent`` ITSELF, not of ``haystack.components.agents``.
         That package is a ``LazyImporter``, so importing it leaves
@@ -2092,16 +2148,16 @@ class TestRealHaystack:
 
         manifest = self._protect()
         try:
-            gap = next(r for r in manifest.found_unpatchable
-                       if r.framework == "haystack")
+            assert not [r for r in manifest.found_unpatchable
+                        if r.framework == "haystack"], (
+                "haystack still reports an unpatchable boundary"
+            )
             seam = next(r for r in manifest.patched if r.framework == "haystack")
             notes = " ".join(manifest.notes)
         finally:
             manifest.unprotect()
-        assert gap.boundary == "tool result"
-        assert "after_tool" in gap.detail
-        assert seam.boundary == "input+output+tool"
-        # The three things a reader would otherwise have to discover at runtime.
+        assert seam.boundary == "input+output+tool+tool-result"
+        # The two things a reader would otherwise have to discover at runtime.
         assert "CONSTRUCTED BEFORE protect()" in notes
         assert "Pipeline with no Agent" in notes
         assert "maximum agent steps" in notes and "xaidr_blocked" in notes
@@ -2130,7 +2186,8 @@ class TestRealHaystack:
         from xaidr.integrations.haystack import _DelphiHook
 
         hooks = {point: [_DelphiHook(point, sensor=Exploding())]
-                 for point in ("before_run", "before_tool", "after_run")}
+                 for point in ("before_run", "before_tool", "after_tool",
+                               "after_run")}
         with caplog.at_level(logging.WARNING, logger="xaidr.haystack"):
             result = build([self._tool_call("run_shell", {"command": "df -h"}),
                             self._text("done")], hooks=hooks).run(
@@ -2219,12 +2276,12 @@ emit(missing=[n for n in needed if n not in sys.modules],
         assert result["patched"] == [
             "haystack.components.agents.agent.Agent.__init__"
         ], result["patched"]
-        assert result["boundaries"] == ["input+output+tool"], result["boundaries"]
+        assert result["boundaries"] == ["input+output+tool+tool-result"], result["boundaries"]
 
     # ── API-drift canaries ───────────────────────────────────────────────
 
     def test_the_hook_points_this_integration_binds_to_still_exist(self):
-        """Everything here rests on three names in haystack.hooks.protocol."""
+        """Everything here rests on four names in haystack.hooks.protocol."""
         from haystack.hooks.protocol import VALID_HOOK_POINTS
 
         from xaidr.integrations.haystack import _POINTS
@@ -2313,7 +2370,8 @@ emit(missing=[n for n in needed if n not in sys.modules],
         serialized = _serialize_hooks_dictionary(
             delphi_hooks(agent_id="round-trip", enforcement_mode="block")
         )
-        assert set(serialized) == {"before_run", "before_tool", "after_run"}
+        assert set(serialized) == {"before_run", "before_tool", "after_tool",
+                                   "after_run"}
         assert serialized["before_tool"][0]["type"] == (
             "xaidr.integrations.haystack._DelphiHook"
         )
@@ -2322,4 +2380,5 @@ emit(missing=[n for n in needed if n not in sys.modules],
         restored = _deserialize_hooks_dictionary(serialized)
         assert isinstance(restored["before_tool"][0], _DelphiHook)
         assert restored["before_tool"][0].point == "before_tool"
+        assert restored["after_tool"][0].point == "after_tool"
         assert restored["before_tool"][0].sensor.enforcement_mode == "block"

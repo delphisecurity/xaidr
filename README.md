@@ -112,7 +112,7 @@ Optional extras are installed only when you use the matching feature:
 |---|---|---|
 | `xaidr[langchain]` | LangChain middleware (all three boundaries) | `langchain`, `langchain-core` |
 | `xaidr[crewai]` | CrewAI `before_tool_call` hook + `Task(guardrail=…)` | `crewai` |
-| `xaidr[haystack]` | Haystack `Agent(hooks=…)` (all three boundaries) | `haystack-ai` |
+| `xaidr[haystack]` | Haystack `Agent(hooks=…)` (all four boundaries) | `haystack-ai` |
 | `xaidr[policy]` | loading a YAML policy **file** (`set_policy(dict)` needs nothing) | `PyYAML` |
 | `xaidr[http]` | `protect_http` / `ProtectedHttpClient`, `WebhookReporter` | `httpx` |
 | `xaidr[otel]` | `OTelReporter` (emit events as OTel log records) | `opentelemetry-api` |
