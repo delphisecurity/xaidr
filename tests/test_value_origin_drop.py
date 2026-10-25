@@ -190,4 +190,6 @@ def test_a_raising_model_dump_past_the_bound_blocks_as_an_unread_result():
     of the result is recorded, and the node reads as unread, which blocks too."""
     result = [f"leaf {i}" for i in range(80)] + [_RaisesPastTheBound()]
     v = _flow(("input", NEUTRAL), ("result", result), call={"url": EVIL})
-    assert v.wire.value == "result_unread" and should_block(v, mode=Mode.ENFORCE), v.wire.value
+    # The result is cut, so it cannot vouch (2026-10-25, rulings §6): the miss reads
+    # untrusted, which outranks result_unread. Either way the call blocks.
+    assert v.wire.value == "untrusted_source" and should_block(v, mode=Mode.ENFORCE), v.wire.value

@@ -26,6 +26,7 @@ import re
 from typing import Any, Iterator, List, Mapping, Tuple
 
 from ._authority import ParseFailure, classify_value
+from . import _ucd
 from ._idna import pinned_casefold
 from ._types import (
     ATOM_COST,
@@ -198,41 +199,61 @@ def _all_strings(items, normalise=None, budget: "AtomBudget | None" = None
     budget = budget if budget is not None else AtomBudget()
     out: List[Tuple[Path, str]] = []
     unread = False
-    # id -> the object itself: holding it keeps the id from being reused by the
-    # next temporary a normaliser returns (a model_dump() dict, an asdict()), so
-    # every node is examined exactly once and no node is taken for another.
-    seen: dict = {}
-    stack = list(reversed(items))
+    # The ids of objects that live for the whole walk: those reached without
+    # passing through a normaliser's temporary (a model_dump() dict, an asdict()).
+    # Only those ids are recorded, so no id is ever reused by another object and
+    # nothing is kept alive for it: a temporary and what it alone holds are freed
+    # as the walk moves on (memory follows the stack, not the result). Everything
+    # else is looked up, never recorded: a node met again under a temporary costs
+    # a node of the WORK budget, which ends any cycle through temporaries.
+    seen: set = set()
+    held = 0      # chars of strings only a temporary held, kept here for the atom pass
+    stack = [(path, node, isinstance(node, _Rest)) for path, node in reversed(items)]
+
+    def take(path, text, owned) -> bool:
+        """Keep ``text`` for the atom pass. One a temporary alone held is kept only
+        while the budget could still scan it: past that it could never be read, and
+        holding it would let a result's model_dump() strings fill memory."""
+        nonlocal held
+        if owned:
+            if held > budget.left:
+                budget.hit = True
+                return False
+            held += len(text)
+        out.append((path, text))     # its chars are charged when the atom pass scans them
+        return True
+
     while stack:
         if budget.left <= 0:
             budget.hit = True
             return out, unread, True
-        path, node = stack.pop()
+        path, node, owned = stack.pop()
         budget.left -= 1
         if isinstance(node, str):
-            out.append((path, node))     # its chars are charged when the atom pass scans them
+            if not take(path, node, owned):
+                return out, unread, True
             continue
         try:
             if isinstance(node, _Rest):
-                kids, base = node.it, node.path
+                kids, base, owned = node.it, node.path, True
             else:
                 if id(node) in seen:
                     continue                 # this very object, met again (a cycle, a share)
-                seen[id(node)] = node
+                if not owned:
+                    seen.add(id(node))
                 if normalise is not None:
-                    node = normalise(node)
+                    raw, node = node, normalise(node)
                     if node is _UNREAD:
                         unread = True
                         continue
+                    owned = owned or node is not raw
                     if isinstance(node, str):
-                        out.append((path, node))
+                        if not take(path, node, owned):
+                            return out, unread, True
                         continue
                 is_container, kids = _children(node)
                 if not is_container:
                     continue
-                if id(node) in seen and seen[id(node)] is not node:
-                    continue
-                seen[id(node)] = node        # a normaliser's temporary: kept, so examined once
                 base = path
             batch = []
             for step, child, _ in kids:      # one at a time, each one charged
@@ -240,7 +261,7 @@ def _all_strings(items, normalise=None, budget: "AtomBudget | None" = None
                 if budget.left <= 0:
                     budget.hit = True
                     return out, unread, True
-                batch.append((_Path(base, step), child))
+                batch.append((_Path(base, step), child, owned))
         except Exception:
             unread = True
             continue
@@ -340,12 +361,27 @@ def extract_with_observed(arguments: Mapping[str, object] | None
             # and a value there short enough to read whole is read whole, so it
             # names what it names as a leaf of its own.
             strings, faulted, exhausted = _all_strings(skipped, budget=budget)
+            stripped: dict = {}      # id -> the value stripped: a repeat is not stripped again
             for path, s in strings:
-                # Read whole only what fits once stripped; only that read is charged
-                # here (the atom pass charges every string it scans itself), and a
-                # path a finding carries is charged by its length.
-                n = (len(s) if len(s) <= MAX_LEAF_CHARS else len(s.strip())
-                     ) if budget.left > 0 else MAX_LEAF_CHARS + 1
+                # Read whole only what fits once stripped. Measuring that strips the
+                # value once per object, charged for the whitespace the strip scanned;
+                # the atom pass is handed what is left, so no character is charged
+                # twice, and a value repeated past the bound costs its strip once.
+                # The read, when there is one, is charged in full, and a path a
+                # finding carries is charged by its length.
+                if budget.left <= 0:
+                    n = MAX_LEAF_CHARS + 1
+                elif len(s) <= MAX_LEAF_CHARS:
+                    n = len(s)
+                else:
+                    t = stripped.get(id(s))
+                    if t is None:
+                        t = stripped[id(s)] = s.strip(_ucd.WHITESPACE)
+                        budget.left -= len(s) - len(t) + 2
+                    n = len(t)
+                    if n > MAX_LEAF_CHARS:
+                        atoms.append((path, t))
+                        continue
                 if n <= MAX_LEAF_CHARS and budget.left > 0:
                     budget.left -= len(s) + ATOM_COST     # the read strips all of it
                     res = classify_value(s, arg_mode=True)
@@ -470,7 +506,7 @@ def argument_value(arguments: Mapping[str, object] | None, name: str):
 # ── key tokens ───────────────────────────────────────────────────────────────
 # A trailing full stop is not part of a token.
 # The specified token pattern, exactly. Unambiguous (every repetition opens with "."), so linear.
-_TOKEN_RE = re.compile(r"[\w@+-]+(?:\.[\w@+-]+)*")
+_TOKEN_RE = _ucd.compile(r"[\w@+-]+(?:\.[\w@+-]+)*")
 
 
 def tokens(text: str) -> List[str]:
@@ -503,7 +539,7 @@ def key_ngram(value: Any):
     if not toks or len(toks) > MAX_KEY_TOKENS:
         return None
     joined = " ".join(toks)
-    if joined != " ".join(pinned_casefold(value)[0].split()):
+    if joined != " ".join(_ucd.split(pinned_casefold(value)[0])):
         return None                        # O'Brien, Bob* — refused
     return joined
 

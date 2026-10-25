@@ -49,7 +49,7 @@ class WireValue(str, enum.Enum):
     LEDGER_SATURATED = "ledger_saturated"  # ledger dropped an emission AND lookup missed
     INPUT_TRUNCATED = "input_truncated"    # principal input was capped AND lookup missed
     ARGUMENT_BOUND = "argument_bound"      # this call's argument walk hit a bound (C-8, V-11)
-    RESULT_TRUNCATED = "result_truncated"  # a recorded tool result was cut AND lookup missed
+    RESULT_TRUNCATED = "result_truncated"  # vocabulary only: since 2026-10-25 a miss after a cut result reads UNTRUSTED_SOURCE
     RESULT_UNREAD = "result_unread"        # an I/O-backed result was skipped unread (Q18) AND lookup missed
     EXTRACTION_INCOMPLETE = "extraction_incomplete"  # the atom pass hit its WORK budget (owner, 2026-10-06)
     WRITE_DROPPED = "write_dropped"        # a DESTINATION write the full ledger could not accept, AND lookup missed

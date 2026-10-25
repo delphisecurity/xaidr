@@ -98,11 +98,15 @@ def test_a_destination_past_a_result_bound_is_recorded_and_blocks_as_untrusted(s
         f"read {v.wire.value!r}")
 
 
-def test_a_cut_result_with_nothing_past_the_cut_is_visible_but_does_not_block():
+def test_a_cut_result_cannot_vouch_for_a_destination_nobody_authorized():
+    """Until 2026-10-25 this read result_truncated and did not block ("a cost control
+    must not block"). A cut result was never read whole, so it cannot vouch: a
+    destination neither the principal nor a trusted source authorized reads
+    untrusted once the flow carries one (rulings §6)."""
     v = _flow(("input", NEUTRAL), ("result", "x" * (MAX_RESULT_LEAF_CHARS + 10)),
               call={"url": "https://elsewhere.example/"})
-    assert v.wire.value == "result_truncated"
-    assert not should_block(v, mode=Mode.ENFORCE), "a cost control must not block"
+    assert v.wire.value == "untrusted_source"
+    assert should_block(v, mode=Mode.ENFORCE)
 
 
 def test_a_self_referential_argument_past_the_bound_terminates():
@@ -251,7 +255,10 @@ def test_result_unread_still_blocks_when_a_non_blocking_bound_is_also_present():
             ("an earlier 65-leaf result", (("result", _Unread()), ("result", ["f"] * 70)),
              {"url": EVIL})):
         v = _flow(("input", NEUTRAL), *steps, call=call)
-        assert v.wire.value == "result_unread" and should_block(v, mode=Mode.ENFORCE), (
+        # After a cut result the miss reads untrusted (rulings §6), which outranks
+        # result_unread; the point stands: the call blocks.
+        want = "untrusted_source" if "65-leaf" in label else "result_unread"
+        assert v.wire.value == want and should_block(v, mode=Mode.ENFORCE), (
             f"{label}: a destination that may sit in an unread response read "
             f"{v.wire.value!r} and was allowed")
 
@@ -361,7 +368,9 @@ def test_a_raising_host_object_past_the_bound_never_drops_what_was_examined():
     assert v.wire.value == "untrusted_source", (
         f"one raising object past the bound dropped the whole result: {v.wire.value!r}")
     miss = _flow(("input", NEUTRAL), ("result", result), call={"url": "https://other.example/"})
-    assert miss.wire.value == "result_unread" and should_block(miss, mode=Mode.ENFORCE), (
+    # The result is cut, so the miss reads untrusted (rulings §6), outranking
+    # result_unread; either way the call blocks.
+    assert miss.wire.value == "untrusted_source" and should_block(miss, mode=Mode.ENFORCE), (
         f"a node past the bound that could not be examined must be visible and block: "
         f"{miss.wire.value!r}")
 

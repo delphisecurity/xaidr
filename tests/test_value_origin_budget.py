@@ -61,6 +61,12 @@ def test_the_atom_pass_is_bounded_by_work_and_says_so(path, scanned):
     assert total < CEILING, (
         f"{path}: the atom pass scanned {total:,} chars of a 5 MB address-dense value -- "
         "unbounded, so an attacker chooses how long the scan takes")
+    if path == "result":
+        # A cut result cannot vouch (2026-10-25, rulings §6): a destination neither
+        # the principal nor a trusted source authorized reads untrusted, and blocks.
+        assert v.wire.value == "untrusted_source", (path, v.wire.value)
+        assert should_block(v, mode=Mode.ENFORCE), "a call past a cut result went through"
+        return
     assert v.wire.value == "extraction_incomplete", (
         f"{path}: the budget was hit but the call reads {v.wire.value!r}: incomplete "
         "extraction is not visible")
@@ -131,7 +137,10 @@ def test_a_wide_container_cannot_escape_the_work_budget(path, children_seen):
         f"{path}: the walks enumerated {children_seen[0]:,} children of a {WIDE:,}-wide "
         "dict -- a container's whole width was taken in one uncounted step, so width "
         "alone chooses how long the scan takes")
-    assert v.wire.value == "extraction_incomplete", (path, v.wire.value)
+    # A cut result cannot vouch (2026-10-25, rulings §6), so past one the call reads
+    # untrusted; an argument past its own bound stays visible and does not block.
+    want = "untrusted_source" if path == "result" else "extraction_incomplete"
+    assert v.wire.value == want, (path, v.wire.value)
 
 
 

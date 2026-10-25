@@ -199,9 +199,10 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
       1. no ledger bound, not flow_active  -> NO_FLOW
       2. no ledger bound, flow_active      -> LEDGER_ABSENT
       3. no finding and walk not truncated -> NO_DESTINATION
-      4. each finding's origin is the ledger's entry; a miss is UNRESOLVED
-         (LEDGER_SATURATED if the ledger has dropped an emission); a finding
-         with no destination (walk bound / parse failure) is UNRESOLVED
+      4. each finding's origin is the ledger's entry; a miss is UNRESOLVED, or
+         UNTRUSTED_SOURCE once the ledger holds a cut tool result (a cut result
+         cannot vouch, 2026-10-25); a finding with no destination (walk bound /
+         parse failure) is UNRESOLVED
       5. wire = the weakest per-finding wire by WIRE_STRENGTH; unless it is
          UNTRUSTED_SOURCE (a positive finding outranks a blind spot), a bound
          names itself, first match wins: a miss on a ledger holding an unread
@@ -209,8 +210,8 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
          a miss on a ledger that DROPPED a destination write -> WRITE_DROPPED (blocks);
          an atom pass that hit its WORK budget -> EXTRACTION_INCOMPLETE;
          a walk bound on this call's arguments -> ARGUMENT_BOUND; a miss on a
-         saturated ledger -> LEDGER_SATURATED; a miss on a ledger holding a cut
-         tool result -> RESULT_TRUNCATED; a cut principal input -> INPUT_TRUNCATED
+         saturated ledger -> LEDGER_SATURATED; a cut principal input ->
+         INPUT_TRUNCATED
     """
     try:
         lg = _ledger._current()
@@ -231,7 +232,6 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
         out: List[DestinationFinding] = []
         saturated_miss = False
         truncated_miss = False
-        result_miss = False
         unread_miss = False
         incomplete_miss = False
         dropped_miss = False
@@ -246,12 +246,16 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
             if e is None:
                 saturated_miss = saturated_miss or saturated
                 truncated_miss = truncated_miss or input_truncated
-                result_miss = result_miss or result_truncated
                 unread_miss = unread_miss or result_unread
                 incomplete_miss = incomplete_miss or atoms_incomplete
                 dropped_miss = dropped_miss or dests_dropped
+                # Past the result bound, what a cut result holds was never read whole,
+                # so it cannot vouch: a destination neither the principal nor a
+                # trusted source authorized reads untrusted (2026-10-25, §6).
                 out.append(DestinationFinding(path=f.path, destination=f.destination,
-                                              reason=None, origin=Origin.UNRESOLVED,
+                                              reason=None,
+                                              origin=(Origin.UNTRUSTED_SOURCE if result_truncated
+                                                      else Origin.UNRESOLVED),
                                               span_declared=None, source_label=None))
                 continue
             origin, declared, label = e
@@ -278,8 +282,6 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
                 wire = WireValue.ARGUMENT_BOUND
             elif saturated_miss:
                 wire = WireValue.LEDGER_SATURATED
-            elif result_miss:
-                wire = WireValue.RESULT_TRUNCATED
             elif truncated_miss:
                 wire = WireValue.INPUT_TRUNCATED
         return _verdict(wire, findings, truncated, observed)
