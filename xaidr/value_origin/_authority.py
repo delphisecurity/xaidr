@@ -24,7 +24,11 @@ import re
 from typing import List, Optional, Tuple
 from urllib.parse import unquote, unquote_to_bytes
 
-from ._idna import _status, assigned, fold, idna2003, lower_by_unicode, pinned, to_ascii
+from ._idna import _status, fold, idna2003, lower_by_unicode, pinned, to_ascii
+from . import _ucd
+
+_WS = _ucd.WHITESPACE
+_RUN_RE = _ucd.compile(r"\S+")
 from ._psl_data import ICANN_RULES, PRIVATE_RULES
 from ._shared_tenant_data import SHARED_TENANT_APEXES
 from ._types import MAX_LEAF_CHARS, Authority
@@ -110,7 +114,7 @@ def coerce_ip(host: str):
     """
     if not host:
         return None
-    h = host.strip().strip("[]")
+    h = host.strip(_WS).strip("[]")
     try:
         return ipaddress.ip_address(h)
     except ValueError:
@@ -121,7 +125,7 @@ def coerce_ip(host: str):
     try:
         vals = []
         for p in parts:
-            lp = p.lower()
+            lp = _ucd.lower(p)
             if lp.startswith("0x"):
                 # An empty hex part is 0, as WHATWG's IPv4 number parser reads it
                 # (the macOS resolver only before a later part). Digits are
@@ -135,7 +139,7 @@ def coerce_ip(host: str):
                 if not set(p) <= _OCT_DIGITS:
                     return None
                 vals.append(int(p, 8))
-            elif p.isdigit() and p.isascii():
+            elif p.isascii() and p and all("0" <= c <= "9" for c in p):
                 vals.append(int(p, 10))
             else:
                 return None
@@ -239,8 +243,8 @@ def _host_authority(raw_host: str, *, arg_fallback: bool) -> Optional[Authority]
     ARGUMENT host still yields S-4's fallback key, which matches only itself and
     is never ``no_destination``; a prose candidate is dropped.
     """
-    host = raw_host.strip()
-    if any(c.isspace() for c in host):
+    host = raw_host.strip(_WS)
+    if any(_ucd.isspace(c) for c in host):
         return None                            # no resolver reads a name with a space
     if host.startswith("[") and host.endswith("]"):
         ip = _strict_ip(host) or _zoned_ip(host[1:-1])
@@ -259,7 +263,7 @@ def _host_authority(raw_host: str, *, arg_fallback: bool) -> Optional[Authority]
         except (UnicodeDecodeError, ValueError):
             return _fallback(raw_host) if arg_fallback else None
         host = host.rstrip(".")
-        if not host or any(c.isspace() for c in host):
+        if not host or any(_ucd.isspace(c) for c in host):
             return None
     ascii_host = to_ascii(host)
     if not ascii_host or not ascii_host.rstrip("."):
@@ -279,8 +283,8 @@ def _case_readings(raw_host: str) -> List[Authority]:
     ``str.lower`` is taken as every supported interpreter computes it
     (``lower_by_unicode``), not as this one does, so the readings are the same on
     every interpreter."""
-    host = raw_host.strip().rstrip(".")
-    if host.isascii() or "%" in host or ":" in host or any(c.isspace() for c in host):
+    host = raw_host.strip(_WS).rstrip(".")
+    if host.isascii() or "%" in host or ":" in host or any(_ucd.isspace(c) for c in host):
         return []
     out: List[Authority] = []
     labels = [lower_by_unicode(x) for x in host.split(".")]
@@ -304,7 +308,7 @@ def _case_readings(raw_host: str) -> List[Authority]:
 _UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 _HTTPX_KEEPS = _UNRESERVED | frozenset("!$&'()*+,;=\"`{}%|\\")
 _REQUESTS_KEEPS = _UNRESERVED | frozenset("!#$%&'()*+,/:;=?@[]~")
-_PCT_RE = re.compile(r"%([0-9A-Fa-f]{2})")
+_PCT_RE = _ucd.compile(r"%([0-9A-Fa-f]{2})")
 
 
 def _quote(host: str, keep) -> str:
@@ -337,7 +341,7 @@ def _client_spellings(raw_host: Optional[str], clients) -> List[Authority]:
     if "literal" in clients:
         spellings.append(host)
     if "httpx" in clients:
-        spellings.append(_quote(host.lower(), _HTTPX_KEEPS))
+        spellings.append(_quote(_ucd.lower(host), _HTTPX_KEEPS))
     u3 = _urllib3_host(host) if ("urllib3" in clients or "requests" in clients) else None
     if u3 is not None:
         if "urllib3" in clients:
@@ -346,7 +350,7 @@ def _client_spellings(raw_host: Optional[str], clients) -> List[Authority]:
             spellings.append(_quote(u3, _REQUESTS_KEEPS))
     out: List[Authority] = []
     for name in spellings:
-        if any(c.isspace() for c in name):
+        if any(_ucd.isspace(c) for c in name):
             continue
         ascii_host = to_ascii(name)
         a = _name_authority(ascii_host) if ascii_host else _fallback(name)
@@ -375,44 +379,44 @@ def _httpx_host(url: str) -> Optional[str]:
 # Any scheme token before `://`: urllib.parse on 3.10 splits a scheme that
 # opens with a digit, `.`, `+` or `-`, and WHATWG and urllib.parse read the host
 # after a scheme of any length.
-_SCHEME_RE = re.compile(r"^([A-Za-z0-9+.\-]{1,256})://")
+_SCHEME_RE = _ucd.compile(r"^([A-Za-z0-9+.\-]{1,256})://")
 # A WHATWG special scheme other than file: takes its
 # authority after ANY run of '/' and '\', so `http:evil.test`, `http:/evil.test`,
 # `http:\\evil.test` and `http:///evil.test` all name evil.test. Such a value is
 # rewritten to `scheme://` and parsed as one. A non-special scheme with no `//`
 # has no host (`gopher:evil.test`), as WHATWG and urllib.parse agree.
-_SPECIAL_RE = re.compile(r"^(https?|wss?|ftp):[/\\]*(?=[^\s/\\])", re.IGNORECASE)
+_SPECIAL_RE = _ucd.compile(r"^(https?|wss?|ftp):[/\\]*(?=[^\s/\\])", re.IGNORECASE)
 # `host/path` with no scheme — ≥2 labels, alphabetic final label, an optional
 # port, and a path. Labels are \w so a Unicode host is accepted here too (ruling
 # 3.6), and may carry escapes, which urllib3 sends as they are written. A client
 # that guesses `http://` (curl) sends `evil.test:8080/x` to evil.test (ruling 2).
-_IMPLIED_RE = re.compile(r"^((?:[\w\-%]{1,63}\.){1,126}[^\W\d_]{1,63})(?::[0-9]{0,5})?[/?#]")
+_IMPLIED_RE = _ucd.compile(r"^((?:[\w\-%]{1,63}\.){1,126}[^\W\d_]{1,63})(?::[0-9]{0,5})?[/?#]")
 # No scheme, a host in any inet_aton spelling (integer, hex, octal, short or
 # mixed dotted forms), then a port, path, query or fragment. A client that
 # guesses `http://` sends it to the address that host denotes (ruling 2). Read for
 # ARGUMENTS only: recorded from a result it would make a numeric path in a file
 # listing an address that a later call to that path matches.
-_IMPLIED_INT_RE = re.compile(r"^([0-9][0-9A-Za-z.]{0,63})(?::[0-9]{0,5}(?![^/?#])|(?=[/?#]))")
+_IMPLIED_INT_RE = _ucd.compile(r"^([0-9][0-9A-Za-z.]{0,63})(?::[0-9]{0,5}(?![^/?#])|(?=[/?#]))")
 # No scheme, a STRICT address literal (a dotted quad, or IPv6 in brackets, with
 # or without a zone), then a port (an empty one too: urllib3 connects to the
 # default), path, query or fragment.
 # Read in results too; the integer spellings above are read in arguments only.
-_IMPLIED_IP_RE = re.compile(r"^(\[[0-9A-Fa-f:.]{2,45}(?:%[^\]\s/?#@]{1,64})?\]"
+_IMPLIED_IP_RE = _ucd.compile(r"^(\[[0-9A-Fa-f:.]{2,45}(?:%[^\]\s/?#@]{1,64})?\]"
                             r"|[0-9]{1,3}(?:\.[0-9]{1,3}){3})"
                             r"(?::[0-9]{0,5}(?![^/?#])|(?=[/?#]))")
 _NON_DESTINATION_SCHEMES = frozenset({"file", "data"})
 # urllib3 takes a scheme only when it is a letter then letters, digits, + and -
 # (``parse_url``); before any other `X://` it puts `//`, so X is the HOST it
 # connects to (`hej.hej://example.net` goes to hej.hej, `0://x` to 0.0.0.0).
-_URLLIB3_SCHEME_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+\-]*")
-_SCHEME_AS_HOST_RE = re.compile(r"^([^\s:/?#\[\]@\\]{1,253})://")
+_URLLIB3_SCHEME_RE = _ucd.compile(r"[a-zA-Z][a-zA-Z0-9+\-]*")
+_SCHEME_AS_HOST_RE = _ucd.compile(r"^([^\s:/?#\[\]@\\]{1,253})://")
 _TAB_NEWLINE = str.maketrans("", "", "\t\n\r")
 _C0_OR_SPACE = "".join(map(chr, range(0x21)))
 # Q1: where an RFC 3986 authority ends (urlsplit's netloc delimiters).
-_AUTHORITY_END_RE = re.compile(r"[/?#]")
+_AUTHORITY_END_RE = _ucd.compile(r"[/?#]")
 # urlsplit's IPvFuture literal (`_check_bracketed_host`), its `v` either case:
 # RFC 3986's ABNF is case-insensitive, and urllib.parse on 3.14.9 reads `[V6a.ip]`.
-_IPVFUTURE_RE = re.compile(r"[vV][a-fA-F0-9]{1,32}\..{1,64}")
+_IPVFUTURE_RE = _ucd.compile(r"[vV][a-fA-F0-9]{1,32}\..{1,64}")
 
 # Sentinels for the argument walk's three-way answer.
 NOT_A_DESTINATION = None
@@ -549,29 +553,47 @@ def _authority_host(url: str, *, whatwg: bool) -> Optional[str]:
 # Written out from CPython's urllib.request.Request (unwrap, _splittag, _splittype,
 # _splithost, unquote) and http.client.HTTPConnection (_get_hostport,
 # _validate_host), the same on every supported interpreter.
-_STDLIB_TYPE_RE = re.compile(r"([^/:]+):(.*)", re.DOTALL)
-_STDLIB_HOST_RE = re.compile(r"//([^/#?]*)(.*)", re.DOTALL)
-_STDLIB_CTRL_RE = re.compile(r"[\x00-\x20\x7f]")
-_STDLIB_SCHEMES = ("http", "https")
+_STDLIB_TYPE_RE = _ucd.compile(r"([^/:]+):(.*)", re.DOTALL)
+_STDLIB_HOST_RE = _ucd.compile(r"//([^/#?]*)(.*)", re.DOTALL)
+_STDLIB_CTRL_RE = _ucd.compile(r"[\x00-\x20\x7f]")
+# urllib.request's default opener resolves a host for these schemes (measured on
+# 3.10.20 to 3.14.9, tests/test_value_origin_client_gate.py): HTTPHandler and
+# HTTPSHandler, FTPHandler, and FileHandler, which looks a non-local host up.
+_STDLIB_SCHEMES = ("http", "https", "ftp", "file")
+_SPLITPORT_RE = re.compile(r"(.*):([0-9]*)", re.DOTALL)
 
 
 def _unwrap(url: str) -> str:
     """urllib.parse.unwrap: ``<URL:scheme://host/path>`` -> ``scheme://host/path``."""
-    url = url.strip()
+    url = url.strip(_WS)
     if url[:1] == "<" and url[-1:] == ">":
-        url = url[1:-1].strip()
+        url = url[1:-1].strip(_WS)
     if url[:4] == "URL:":
-        url = url[4:].strip()
+        url = url[4:].strip(_WS)
     return url
 
 
 def _int_port(text: str) -> bool:
-    """What ``int()`` accepts as a port: an optional sign, decimal digits (Unicode
-    13.0's, so no interpreter decides otherwise) with single underscores between."""
-    t = text.strip()
+    """What ``int()`` accepts as a port on ANY supported interpreter: an optional
+    sign, decimal digits with single underscores between. ``int()`` takes every
+    decimal digit its interpreter's Unicode knows (3.14 the digits Unicode 16.0
+    added), so the digits are Unicode 16.0's: a port one interpreter reads is a
+    port here."""
+    t = text.strip(_WS)
     t = t[1:] if t[:1] in "+-" else t
     parts = t.split("_")
-    return bool(t) and all(p and all(c.isdecimal() and assigned(c) for c in p) for p in parts)
+    return bool(t) and all(p and all(_ucd.isdecimal(c, _ucd.V16) for c in p) for p in parts)
+
+
+def _splitport(host: str):
+    """urllib.parse._splitport: a port of ASCII digits after the last ``:``; an
+    empty port drops the ``:`` too (``C:`` is ``C``), as CPython's does."""
+    m = _SPLITPORT_RE.fullmatch(host)
+    if m:
+        host, port = m.groups()
+        if port:
+            return host, port
+    return host, None
 
 
 def _http_client_host(hostport: str) -> Optional[str]:
@@ -593,29 +615,53 @@ def _http_client_host(hostport: str) -> Optional[str]:
 
 
 def stdlib_hosts(value: str) -> List[str]:
-    """The hosts the standard library's clients hand the resolver for ``value``:
-    ``urllib.request.urlopen`` (the value unwrapped, the netloc percent-decoded,
-    userinfo included) and ``http.client.HTTPConnection`` given the netloc as
-    written."""
+    """The hosts the standard library's clients hand the resolver for ``value``.
+
+    ``urllib.request.urlopen`` (the value unwrapped, the netloc percent-decoded
+    with its userinfo), by the handler its scheme selects: http and https through
+    http.client's port split; ftp, the host after the last ``@`` decoded a second
+    time; file, the host a non-local ``file:`` URL is looked up as (to 3.13 that
+    netloc less its port, from 3.14 the netloc as written). ``http.client``'s
+    ``HTTPConnection`` and ``HTTPSConnection`` given the netloc of an http or https
+    URL as written. And requests on macOS, which looks up ``urlparse(url).hostname`` of
+    a URL of any scheme to decide whether the system proxy settings exempt it,
+    before it refuses a scheme it does not send (measured on Homebrew's 3.12.2,
+    whose ``_scproxy`` reads the system settings)."""
     out: List[str] = []
+
+    def add(host):
+        if host and not _STDLIB_CTRL_RE.search(host) and host not in out:
+            out.append(host)
+
     url = _unwrap(value)
     url = url.rpartition("#")[0] if "#" in url else url
     m = _STDLIB_TYPE_RE.match(url)
-    if m and m.group(1).lower() in _STDLIB_SCHEMES:
+    scheme = _ucd.lower(m.group(1)) if m else None
+    if scheme in _STDLIB_SCHEMES:
         h = _STDLIB_HOST_RE.match(m.group(2))
         if h and h.group(1):
-            host = _http_client_host(unquote(h.group(1)))
-            if host:
-                out.append(host)
-    written = value.strip(_C0_OR_SPACE).strip().translate(_TAB_NEWLINE)
+            req_host = unquote(h.group(1))
+            if scheme in ("http", "https"):
+                add(_http_client_host(req_host))
+            elif scheme == "ftp":
+                add(unquote(_splitport(req_host)[0].rpartition("@")[2]))
+            elif req_host != "localhost":
+                add(_splitport(req_host)[0])
+    written = value.strip(_C0_OR_SPACE).strip(_WS).translate(_TAB_NEWLINE)
     m = _SCHEME_RE.match(written)
-    if m and m.group(1).lower() in _STDLIB_SCHEMES:
+    if m:
         rest = written[m.end():]
         end = _AUTHORITY_END_RE.search(rest)
         netloc = rest[:end.start()] if end else rest
-        host = _http_client_host(netloc) if netloc else None
-        if host and host not in out:
-            out.append(host)
+        given = _ucd.lower(m.group(1))
+        if netloc:
+            if given in ("http", "https"):
+                add(_http_client_host(netloc))
+            if given == "file" and netloc != "localhost":
+                add(netloc)
+        host = _authority_host(written, whatwg=False)
+        if host:
+            add(_ucd.lower(host))
     return out
 
 
@@ -631,7 +677,7 @@ def resolver_keys(host: str) -> List[Authority]:
         return [Authority(scheme="ip", value=ip_key(ip))]
     out: List[Authority] = []
     for name in ([host] if host.isascii() else idna2003(host)):
-        name = name.lower()
+        name = _ucd.lower(name)
         a = _name_authority(name)
         if a is not None and a not in out:
             out.append(a)
@@ -651,17 +697,17 @@ def resolver_keys(host: str) -> List[Authority]:
 def _trailing_dot_name(host: str) -> Optional[Authority]:
     """A numeric host written with a trailing dot (``127.0.0.1.``) is a DNS NAME to
     the resolver and to every Python client, though WHATWG reads the address."""
-    h = host.strip()
+    h = host.strip(_WS)
     if not h.endswith(".") or ":" in h:
         return None
     bare = h.rstrip(".")
     if not bare or coerce_ip(bare) is None:
         return None
-    return Authority(scheme="dns", value=dns_key(bare.lower()))
+    return Authority(scheme="dns", value=dns_key(_ucd.lower(bare)))
 
 
 # ── the macOS resolver (Q22, RE-RULED 2026-10-04) ───────────────────────────
-_DEC_QUAD_RE = re.compile(r"[0-9]+(?:\.[0-9]+){3}")
+_DEC_QUAD_RE = _ucd.compile(r"[0-9]+(?:\.[0-9]+){3}")
 
 
 def _leading_zero_decimal(parts: List[str]):
@@ -698,13 +744,13 @@ def _macos_resolver_ip(host: str):
         quad = _leading_zero_decimal(host.split("."))
         return ipaddress.ip_address(quad) if quad is not None else None
     if "." not in host and 0 < len(host) <= 64:
-        lp = host.lower()
+        lp = _ucd.lower(host)
         if lp.startswith("0x"):
             n = int(lp[2:], 16) if lp[2:] and set(lp[2:]) <= _HEX_DIGITS else None
         elif len(lp) > 1 and lp[0] == "0":
             n = int(lp, 8) if set(lp) <= _OCT_DIGITS else None
         else:
-            n = int(lp, 10) if lp.isascii() and lp.isdigit() else None
+            n = int(lp, 10) if lp.isascii() and lp and all("0" <= c <= "9" for c in lp) else None
         if n is not None and n > 0xFFFFFFFF:
             return ipaddress.ip_address(n % (1 << 32))
     return None
@@ -731,7 +777,7 @@ def _macos_readings(raw_host: Optional[str]) -> List[Authority]:
     destination named by untrusted content is a finding wherever it points."""
     if not raw_host:
         return []
-    h = raw_host.strip().rstrip(".")
+    h = raw_host.strip(_WS).rstrip(".")
     if "%" in h:
         try:
             h = unquote_to_bytes(h).decode("utf-8")
@@ -773,7 +819,7 @@ def url_authority(value: str, *, arg_mode: bool, written: Optional[str] = None):
     m = _SCHEME_RE.match(value)
     if not m:
         return NOT_A_DESTINATION
-    if m.group(1).lower() in _NON_DESTINATION_SCHEMES:
+    if _ucd.lower(m.group(1)) in _NON_DESTINATION_SCHEMES:
         return NOT_A_DESTINATION
     whatwg = _whatwg(value)
     host, ok = _split_host(whatwg)
@@ -804,7 +850,7 @@ def url_authority(value: str, *, arg_mode: bool, written: Optional[str] = None):
     # The spellings each client sends a host in, by the split it makes: urllib3 and
     # requests split as WHATWG does and send http and https only; urllib.parse and
     # httpx keep a backslash.
-    web = m.group(1).lower() in ("http", "https")
+    web = _ucd.lower(m.group(1)) in ("http", "https")
     spelled = (_client_spellings(host, ("urllib3", "requests") if web else ())
                + _client_spellings(rfc, ("literal",))
                + _client_spellings(_httpx_host(as_written), ("httpx",)))
@@ -852,13 +898,13 @@ def _implied_ip_authority(value: str, *, arg_mode: bool):
 
 
 # ── mailboxes (rulings 3.2 / 3.6) ───────────────────────────────────────────
-_LOCAL_RE = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~\-]{1,64}")
-_ASCII_DOMAIN_RE = re.compile(r"[A-Za-z0-9\-_]{1,63}(?:\.[A-Za-z0-9\-_]{1,63}){0,126}")
-_DISPLAY_RE = re.compile(r"^(?P<display>[^<>]{0,256})<(?P<addr>[^<>]{1,320})>$")
+_LOCAL_RE = _ucd.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~\-]{1,64}")
+_ASCII_DOMAIN_RE = _ucd.compile(r"[A-Za-z0-9\-_]{1,63}(?:\.[A-Za-z0-9\-_]{1,63}){0,126}")
+_DISPLAY_RE = _ucd.compile(r"^(?P<display>[^<>]{0,256})<(?P<addr>[^<>]{1,320})>$")
 
 
-_QUOTED_LOCAL_RE = re.compile(r'"(?:[\x20\x21\x23-\x5b\x5d-\x7e]|\\[\x20-\x7e]){0,62}"')
-_DOMAIN_LITERAL_RE = re.compile(r"\[(?:[0-9.]{7,15}|IPv6:[0-9A-Fa-f:.]{2,45})\]", re.I)
+_QUOTED_LOCAL_RE = _ucd.compile(r'"(?:[\x20\x21\x23-\x5b\x5d-\x7e]|\\[\x20-\x7e]){0,62}"')
+_DOMAIN_LITERAL_RE = _ucd.compile(r"\[(?:[0-9.]{7,15}|IPv6:[0-9A-Fa-f:.]{2,45})\]", re.I)
 
 
 def mailbox_authority(addr: str) -> Optional[Authority]:
@@ -876,14 +922,14 @@ def mailbox_authority(addr: str) -> Optional[Authority]:
         return None
     if _DOMAIN_LITERAL_RE.fullmatch(domain):
         inner = domain[1:-1]
-        ip = _strict_ip(inner[5:] if inner.lower().startswith("ipv6:") else inner)
+        ip = _strict_ip(inner[5:] if _ucd.lower(inner).startswith("ipv6:") else inner)
         if ip is None:
             return None
-        return Authority(scheme="mailto", value=f"{local.lower()}@[{inner.lower()}]")
+        return Authority(scheme="mailto", value=f"{_ucd.lower(local)}@[{_ucd.lower(inner)}]")
     ascii_domain = _mail_domain(domain)
     if ascii_domain is None:
         return None
-    return Authority(scheme="mailto", value=f"{local.lower()}@{ascii_domain}")
+    return Authority(scheme="mailto", value=f"{_ucd.lower(local)}@{ascii_domain}")
 
 
 def _mail_domain(domain: str) -> Optional[str]:
@@ -895,7 +941,7 @@ def _mail_domain(domain: str) -> Optional[str]:
     if ascii_domain is not None:
         ascii_domain = ascii_domain.rstrip(".")
     elif d.isascii():
-        ascii_domain = d.lower()
+        ascii_domain = _ucd.lower(d)
     if ascii_domain is None or not _ASCII_DOMAIN_RE.fullmatch(ascii_domain) or len(ascii_domain) > 253:
         return None
     return ascii_domain
@@ -929,14 +975,14 @@ def _split_mailbox_list(value: str) -> Optional[List[str]]:
 
 
 def _mailbox_part(part: str) -> Optional[Authority]:
-    p = part.strip()
+    p = part.strip(_WS)
     m = _DISPLAY_RE.match(p)
     if m:
-        return mailbox_authority(m.group("addr").strip())
+        return mailbox_authority(m.group("addr").strip(_WS))
     return mailbox_authority(p)
 
 
-_DISPLAY_OPEN_RE = re.compile(r'^\s*(?:"[^"]{0,256}"|[^<>"@,;]{0,256}?)\s*<\s*$')
+_DISPLAY_OPEN_RE = _ucd.compile(r'^\s*(?:"[^"]{0,256}"|[^<>"@,;]{0,256}?)\s*<\s*$')
 
 
 def _known(ch: str) -> bool:
@@ -947,7 +993,7 @@ def _known(ch: str) -> bool:
 
 
 def _alnum(ch: str) -> bool:
-    return ch.isalnum() and _known(ch)
+    return _ucd.isalnum(ch) and _known(ch)
 
 
 def _drop_comments(s: str) -> str:
@@ -996,15 +1042,15 @@ def _mailbox_in_junk(part: str) -> Optional[Authority]:
 # One address-like token (text, `@`, text, no space), or a display name and an
 # angle address, alone in a part: an address the grammar may still refuse
 # (`jürgen@x.example`), which stays an unparseable address list (3.6).
-_ADDRESS_SHAPED_RE = re.compile(r"\s*(?:[^\s<>@,;]+@[^\s<>@,;]+|[^<>@]*<[^<>]*@[^<>]*>?)\s*")
+_ADDRESS_SHAPED_RE = _ucd.compile(r"\s*(?:[^\s<>@,;]+@[^\s<>@,;]+|[^<>@]*<[^<>]*@[^<>]*>?)\s*")
 
 
 def _address_shaped(value: str) -> bool:
-    v = value.strip()
+    v = value.strip(_WS)
     if v[:1] == "<" and v[-1:] == ">" and "@" in v:
         return True                  # one angle address, whatever the grammar makes of it
     parts = _split_mailbox_list(value) or re.split(r"[,;]", value)
-    if any(_ADDRESS_SHAPED_RE.fullmatch(p) for p in parts if p.strip()):
+    if any(_ADDRESS_SHAPED_RE.fullmatch(p) for p in parts if p.strip(_WS)):
         return True
     return _shaped_5322(value) or bool(_rfc5322_addresses(value)[0])
 
@@ -1024,10 +1070,10 @@ def _tokens5322(s: str, *, tolerant: bool = False):
     glue = -1                                    # where an atom glues onto the one before
     while i < n:
         c = s[i]
-        if c.isspace():
+        if _ucd.isspace(c):
             i += 1
         elif c == "(":
-            if out and out[-1][0] == "atom" and i > 0 and not s[i - 1].isspace():
+            if out and out[-1][0] == "atom" and i > 0 and not _ucd.isspace(s[i - 1]):
                 start = i
             else:
                 start = -1
@@ -1068,7 +1114,7 @@ def _tokens5322(s: str, *, tolerant: bool = False):
             i += 1
         else:
             j = i
-            while j < n and not s[j].isspace() and s[j] not in _SPECIALS:
+            while j < n and not _ucd.isspace(s[j]) and s[j] not in _SPECIALS:
                 j += 1
             if j == i:
                 out.append(("junk", c))          # a stray `)` or `]`: no address runs across it
@@ -1169,8 +1215,8 @@ def _parse_address_list(toks):
     return out
 
 
-_HEADER_LINE_RE = re.compile(r"^[!-9;-~]{1,76}:[ \t]*(.*)$", re.M)
-_ANGLE_RE = re.compile(r"<[^<>]{0,512}@[^<>]{0,512}>")
+_HEADER_LINE_RE = _ucd.compile(r"^[!-9;-~]{1,76}:[ \t]*(.*)$", re.M)
+_ANGLE_RE = _ucd.compile(r"<[^<>]{0,512}@[^<>]{0,512}>")
 
 
 def _part_is_a_mailbox(toks) -> bool:
@@ -1207,7 +1253,7 @@ def _rfc5322_addresses(value: str) -> Tuple[List[str], bool]:
             return whole, True
     found: List[str] = []
     loose = _tokens5322(value, tolerant=True) or []
-    if _shaped_5322(value) or not any(c.isspace() for c in value.strip()):
+    if _shaped_5322(value) or not any(_ucd.isspace(c) for c in value.strip(_WS)):
         for k, tok in enumerate(loose):
             if tok[0] == "@":
                 spec = _addr_spec_at(loose, k)
@@ -1244,7 +1290,7 @@ def _rfc5322_authorities(value: str) -> Tuple[List[Authority], bool]:
     return out, whole and ok == len(addrs)
 
 
-_DOT_ATOM_RE = re.compile(r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~\-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~\-]+)*")
+_DOT_ATOM_RE = _ucd.compile(r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~\-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~\-]+)*")
 
 
 def _addr_forms(addr: str) -> List[str]:
@@ -1272,7 +1318,7 @@ def mailbox_list(value: str):
         parts = re.split(r"[,;]", value)
     out = []
     for part in parts:
-        if not part.strip():
+        if not part.strip(_WS):
             continue
         a = _mailbox_part(part)
         if a is None:
@@ -1302,7 +1348,7 @@ def mailbox_list(value: str):
 # `+`, then digits with single separators (space . -) and parenthesised groups
 # between them. Bounded repetition; the digit count is checked afterwards.
 _PHONE_BODY = r"\+(?:\([0-9]{1,4}\)|[0-9])(?:[ .\-]?(?:\([0-9]{1,4}\)|[0-9])){0,40}"
-_PHONE_RE = re.compile(_PHONE_BODY)
+_PHONE_RE = _ucd.compile(_PHONE_BODY)
 
 
 def phone_authority(text: str) -> Optional[Authority]:
@@ -1323,13 +1369,13 @@ def classify_value(value: str, *, arg_mode: bool, stdlib: bool = True):
     make of a principal's URL (``straße`` as ``strasse``, userinfo kept in the host) is
     one the principal never gave, and the call to it is not authorized (3.6)."""
     res = _classify(value, arg_mode=arg_mode)
-    m = _SCHEME_AS_HOST_RE.match(value.strip(_C0_OR_SPACE).strip().translate(_TAB_NEWLINE))
+    m = _SCHEME_AS_HOST_RE.match(value.strip(_C0_OR_SPACE).strip(_WS).translate(_TAB_NEWLINE))
     if m and not _URLLIB3_SCHEME_RE.fullmatch(m.group(1)):
         a = _host_authority(m.group(1), arg_fallback=arg_mode)
         if a is not None:
             res = _with_reading(res, a)
     if stdlib and ":" in value and (len(value) <= MAX_LEAF_CHARS
-                                    or len(value.strip()) <= MAX_LEAF_CHARS):
+                                    or len(value.strip(_WS)) <= MAX_LEAF_CHARS):
         # urllib.request and http.client: an unwrapped <URL:...>, userinfo kept in
         # the host, an unbracketed IPv6 address split at its last colon.
         for host in stdlib_hosts(value):
@@ -1365,10 +1411,10 @@ def _classify(value: str, *, arg_mode: bool):
     destinations here.
     """
     c0 = value.strip(_C0_OR_SPACE)        # what WHATWG and urlsplit strip from a URL
-    v = c0.strip()
+    v = c0.strip(_WS)
     if not v or len(v) > MAX_LEAF_CHARS:
         return NOT_A_DESTINATION
-    if v[:7].lower() == "mailto:":
+    if _ucd.lower(v[:7]) == "mailto:":
         addr = v[7:].split("?", 1)[0]
         if not addr:
             return NOT_A_DESTINATION           # mailto: with no address
@@ -1387,7 +1433,7 @@ def _classify(value: str, *, arg_mode: bool):
         # reading fails); in a path, query or fragment WHATWG percent-encodes it
         # and the host stays readable (ruling 3).
         return url_authority(url, arg_mode=arg_mode, written=written.translate(_TAB_NEWLINE))
-    if not any(c.isspace() for c in v):
+    if not any(_ucd.isspace(c) for c in v):
         if _IMPLIED_RE.match(pinned(v)):
             return implied_url_authority(v, arg_mode=arg_mode)
         m = _IMPLIED_IP_RE.match(v)
@@ -1461,19 +1507,19 @@ def authority_of(value: str) -> Authority | None:
 
 
 # ── prose candidates (ruling 3.4) ────────────────────────────────────────────
-_P_URL_RE = re.compile(r"(?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]{0,31}://[^\s\"'<>]{1,3968}")
-_P_EMAIL_RE = re.compile(
+_P_URL_RE = _ucd.compile(r"(?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]{0,31}://[^\s\"'<>]{1,3968}")
+_P_EMAIL_RE = _ucd.compile(
     r"(?<![A-Za-z0-9.!#$%&'*+/=?^_`{|}~\-@])"
     r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~\-]{1,64}@[\w\-]{1,63}(?:\.[\w\-]{1,63}){1,126}")
 # The same, its domain allowed a single label (``user@host``, ruling 3.2): read only
 # in a part that does not parse, where junk alone surrounds the one address.
-_J_EMAIL_RE = re.compile(
+_J_EMAIL_RE = _ucd.compile(
     r"(?<![A-Za-z0-9.!#$%&'*+/=?^_`{|}~\-@])"
     r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~\-]{1,64}@[\w\-]{1,63}(?:\.[\w\-]{1,63}){0,126}")
-_P_HOST_RE = re.compile(r"(?<![\w.@/\-])((?:[\w\-]{1,63}\.){1,126}[\w\-]{1,63})(?![\w@\-])(/[^\s\"'<>]{0,2048})?")
-_P_PHONE_RE = re.compile(r"(?<![\w+])" + _PHONE_BODY + r"(?!\d)")
-_P_IPV4_RE = re.compile(r"(?<![\w.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?!\w)(?!\.\w)")
-_P_IPV6_RE = re.compile(r"(?<![\w:])\[?[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}\]?(?![\w:])")
+_P_HOST_RE = _ucd.compile(r"(?<![\w.@/\-])((?:[\w\-]{1,63}\.){1,126}[\w\-]{1,63})(?![\w@\-])(/[^\s\"'<>]{0,2048})?")
+_P_PHONE_RE = _ucd.compile(r"(?<![\w+])" + _PHONE_BODY + r"(?!\d)")
+_P_IPV4_RE = _ucd.compile(r"(?<![\w.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?!\w)(?!\.\w)")
+_P_IPV6_RE = _ucd.compile(r"(?<![\w:])\[?[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}\]?(?![\w:])")
 _TRAILING = ")]}.,;:!?'\""
 
 
@@ -1495,7 +1541,7 @@ def _mid_word(text: str, i: int) -> bool:
     if i == 0:
         return False
     ch = text[i - 1]
-    return ch.isalpha() and ord(ch) < 0x0E00 and _known(ch)
+    return _ucd.isalpha(ch) and ord(ch) < 0x0E00 and _known(ch)
 
 
 def prose_candidates(text: str, counter: Optional[List[int]] = None, *,
@@ -1544,7 +1590,7 @@ def prose_candidates(text: str, counter: Optional[List[int]] = None, *,
             counter[0] += 1
         host = text[m.start(1):m.end(1)]
         last = host.rsplit(".", 1)[-1]
-        if last.isdigit():
+        if last and all(_ucd.isdecimal(c) or _ucd.isdigit(c) for c in last):
             continue                           # dotted numbers are the IP scan's
         ascii_host = to_ascii(host)
         if ascii_host is None or not bare_host_tld_ok(ascii_host):
@@ -1583,7 +1629,7 @@ def prose_candidates(text: str, counter: Optional[List[int]] = None, *,
 # address, a phone): a scheme, a path, a port, an address literal, a mailbox, an
 # escape, a backslash.
 _VALUE_SIGNS = frozenset("@:/?#[]%\\")
-_LINE_RE = re.compile(r"[^\r\n]+")
+_LINE_RE = _ucd.compile(r"[^\r\n]+")
 
 
 def result_candidates(text: str, counter: Optional[List[int]] = None
@@ -1604,12 +1650,12 @@ def result_candidates(text: str, counter: Optional[List[int]] = None
             continue
         if "@" in line:
             out.extend((m.start(), a) for a in _addr_specs_in(line, counter))
-        stripped = line.strip()
-        if any(c.isspace() for c in stripped):
+        stripped = line.strip(_WS)
+        if any(_ucd.isspace(c) for c in stripped):
             if counter is not None:
                 counter[0] += 1
             out.extend((m.start(), a) for a in _whole(classify_value(stripped, arg_mode=True)))
-        for t in re.finditer(r"\S+", line):
+        for t in _RUN_RE.finditer(line):
             tok = t.group(0)
             u = _P_URL_RE.match(tok)
             if u and u.end() == len(tok) and tok.rstrip(_TRAILING) == tok:

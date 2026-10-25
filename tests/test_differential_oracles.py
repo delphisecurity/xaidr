@@ -222,14 +222,20 @@ def _urllib_request_decodes(url):
 
 
 def _stdlib_client_keys(url):
-    """The keys of the hosts the standard library's clients resolve for ``url``:
-    urlopen's ``HTTPConnection(Request(url).host).host``, and http.client given the
-    netloc as written. Each host comes from the real client; only the keying is the
-    core's (``resolver_keys``). An over-read among them is a reading of those two
-    clients, which ``scripts/published_differential.py`` measures over the
-    published suites (docs/value-origin-rulings.md §2, a name a client resolves);
-    these hand-written spellings do not judge it, so the class can only excuse."""
+    """The keys of the hosts the standard library's clients resolve for ``url``,
+    each host computed by the stdlib's own code: urlopen's handler for the scheme
+    (http and https: ``HTTPConnection(Request(url).host).host``; ftp:
+    ``FTPHandler.ftp_open``'s ``_splitport``, ``_splituser`` and second
+    ``unquote``; file: ``Request(url).host`` less its port, and from 3.14 the netloc
+    as written), http.client given an http or https netloc as written, and
+    ``urlsplit(url).hostname``, which requests looks up on macOS before it refuses
+    a scheme. Only the keying is the core's (``resolver_keys``). An over-read
+    among them is a reading of those clients, which
+    ``scripts/published_differential.py`` and tests/test_value_origin_client_gate.py
+    measure; these hand-written spellings do not judge it, so the class can only
+    excuse."""
     import http.client
+    import urllib.parse as up
     import urllib.request
     from xaidr.value_origin._authority import resolver_keys
     hosts = []
@@ -237,6 +243,10 @@ def _stdlib_client_keys(url):
         req = urllib.request.Request(url)
         if req.type in ("http", "https") and req.host:
             hosts.append(http.client.HTTPConnection(req.host).host)
+        elif req.type == "ftp" and req.host:
+            hosts.append(up.unquote(up._splituser(up._splitport(req.host)[0])[1]))
+        elif req.type == "file" and req.host:
+            hosts.append(up._splitport(req.host)[0])
     except Exception:
         pass
     written = re.sub(r"[\t\n\r]", "", url).strip("\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0b"
@@ -249,7 +259,26 @@ def _stdlib_client_keys(url):
             hosts.append(http.client.HTTPConnection(m.group(2)).host)
         except Exception:
             pass
+    m = re.match(r"(?i)file://([^/?#]*)", written)
+    if m and m.group(1):
+        hosts.append(m.group(1))
+    try:
+        hosts.append(up.urlsplit(written).hostname)
+    except ValueError:
+        pass
     return {a.key() for h in hosts if h for a in resolver_keys(h)}
+
+
+def _urllib_request_refuses(url):
+    """``urllib.request.Request(url)`` raises (its ``urlparse`` refuses the netloc),
+    so urlopen resolves nothing; the core still reads the name urlopen's handler
+    would resolve had the split gone through (tests/test_value_origin_stdlib_refusals.py)."""
+    import urllib.request
+    try:
+        urllib.request.Request(url)
+    except ValueError:
+        return True
+    return False
 
 
 _OVER_READ_CLASSES = {
@@ -273,6 +302,11 @@ _OVER_READ_CLASSES = {
         "non-ASCII and keeps a backslash, httpx refuses the URL (its IDNA step), so "
         "no oracle here reads the core's RFC 3986 key; httpx reads the same key "
         "for the ASCII host. An extra finding can only make the wire unresolved."),
+    "urllib-request-refuses": (
+        _urllib_request_refuses,
+        "urllib.request refuses the URL before it resolves anything, and the core "
+        "reads the name its handler would have resolved anyway: a value no client "
+        "accepts is read conservatively, as an extra unresolved finding."),
 }
 
 

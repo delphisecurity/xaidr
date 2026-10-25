@@ -80,7 +80,7 @@ def _require():
 
 # ── clients ──────────────────────────────────────────────────────────────────
 _HTTP = ("http", "https", "ws", "wss")
-_STDLIB_CLIENTS = ("urllib.request", "http.client")
+_STDLIB_CLIENTS = ("urllib.request", "http.client", "requests.lookup")
 #: Every client whose readings are compared; each must read at least one vector.
 CLIENTS = ("httpx", "urllib3", "requests", "urllib.parse", "whatwg") + _STDLIB_CLIENTS + (
     "getaddresses.strict", "parseaddr.strict", "headerregistry", "suite")
@@ -149,27 +149,40 @@ class Clients:
 
     @staticmethod
     def stdlib_hosts(v):
-        """[(client, host)]: the standard library's own send paths, http and https
-        (the schemes urlopen's HTTP handlers open). urllib.request: what urlopen
-        hands the socket layer, ``HTTPConnection(Request(v).host).host`` (the value
-        unwrapped, the netloc percent-decoded with its userinfo, then http.client's
-        port split). http.client: ``HTTPConnection(urlsplit(v).netloc).host``, the
-        netloc as written. Each host is encoded as the socket layer encodes a str
-        host (the stdlib ``idna`` codec, IDNA 2003); one it cannot encode is never
-        sent."""
+        """[(client, host)]: the standard library's own send paths. urllib.request:
+        what urlopen's default opener resolves, by the stdlib's own code, for each
+        scheme it handles (measured, tests/test_value_origin_client_gate.py): http
+        and https, ``HTTPConnection(Request(v).host).host``; ftp, ``ftp_open``'s
+        ``_splitport``, ``_splituser`` and second ``unquote``; file, ``Request(v).host``
+        less its port and, from 3.14, the netloc as written. http.client:
+        ``HTTPConnection(urlsplit(v).netloc).host`` for an http or https URL, the
+        netloc as written. requests.lookup: ``urlsplit(v).hostname`` of a URL of any
+        scheme, which requests looks up on macOS before it refuses one it does not
+        send. Each host is encoded as the socket layer encodes a str host (the stdlib
+        ``idna`` codec, IDNA 2003); one it cannot encode is never sent."""
         import http.client
+        import urllib.parse as up
         import urllib.request
         out = []
         try:
             req = urllib.request.Request(v)
             if req.type in ("http", "https") and req.host:
                 out.append(("urllib.request", http.client.HTTPConnection(req.host).host))
+            elif req.type == "ftp" and req.host:
+                out.append(("urllib.request",
+                            up.unquote(up._splituser(up._splitport(req.host)[0])[1])))
+            elif req.type == "file" and req.host and req.host != "localhost":
+                out.append(("urllib.request", up._splitport(req.host)[0]))
         except Exception:
             pass
         try:
             u = urlsplit(v)
             if u.scheme in ("http", "https") and u.netloc:
                 out.append(("http.client", http.client.HTTPConnection(u.netloc).host))
+            if u.scheme == "file" and u.netloc and u.netloc != "localhost":
+                out.append(("urllib.request", u.netloc))
+            if u.netloc and u.hostname:
+                out.append(("requests.lookup", u.hostname))
         except Exception:
             pass
         sent = []
@@ -649,6 +662,17 @@ def case_probes():
     return [f"http://a{chr(cp)}.example/" for cp in sorted(_nameprep_data.LOWER)]
 
 
+def composition_probes():
+    """``http://x<a><b>.example/`` for every canonical pair whose composite Unicode
+    assigned after 13.0: the IDNA 2003 codec composes it on an interpreter whose
+    Unicode has the composite and keeps it apart on an older one (its NFKC takes
+    compositions from the interpreter's own data). The pairs are the vendored
+    Unicode 16.0 data's (``_ucd_data``); what each client reads is measured here."""
+    from xaidr.value_origin import _ucd, _ucd_data
+    return [f"http://x{k}.example/" for k, c in sorted(_ucd_data.COMP.items())
+            if _ucd.age(c) > _ucd.V13]
+
+
 def run(limit=None):
     _require()
     clients = Clients()
@@ -658,6 +682,8 @@ def run(limit=None):
     else:
         rows = rows + [{"src": "probe:stringprep-lowercase", "v": v, "expect": []}
                        for v in case_probes()]
+        rows = rows + [{"src": "probe:composition", "v": v, "expect": []}
+                       for v in composition_probes()]
     under = collections.Counter()
     by_client = collections.Counter()
     read_by = collections.Counter()
@@ -703,7 +729,7 @@ def main(argv=None) -> int:
     res = run(a.limit)
     if a.core_out:
         values = sorted({r["v"] for r in published_vectors.load()} | set(interpreter_probes())
-                        | set(case_probes()))
+                        | set(case_probes()) | set(composition_probes()))
         Path(a.core_out).write_text(json.dumps(
             {v: core_reading(v) for v in values}, sort_keys=True))
     print(f"python {sys.version.split()[0]} {sys.platform}: {res['vectors']} vectors")

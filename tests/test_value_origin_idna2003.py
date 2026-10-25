@@ -27,7 +27,10 @@ from xaidr.value_origin._idna import idna2003
 ROOT = Path(__file__).resolve().parent.parent
 SOURCES = ROOT / "tests" / "published_vectors"
 INPUTS = ("upstream/rfc3454.txt", "upstream/UnicodeData-16.0.0.txt",
-          "upstream/DerivedAge-16.0.0.txt", "upstream/SpecialCasing-16.0.0.txt")
+          "upstream/DerivedAge-16.0.0.txt", "upstream/SpecialCasing-16.0.0.txt",
+          "upstream/CaseFolding-16.0.0.txt", "upstream/CompositionExclusions-16.0.0.txt",
+          "upstream/NormalizationCorrections-16.0.0.txt",
+          "upstream/DerivedCoreProperties-16.0.0.txt")
 
 
 def test_the_vendored_sources_are_their_recorded_bytes():
@@ -44,7 +47,7 @@ def test_the_vendored_sources_are_their_recorded_bytes():
         assert got == entry["sha256"], (
             f"{rel} is not the file MANIFEST.json records ({entry['url']}, "
             f"{entry['version']}): sha256 {got}, recorded {entry['sha256']}. The core's "
-            "IDNA 2003 tables would no longer be the published ones.")
+            "IDNA 2003 and Unicode tables would no longer be the published ones.")
         lic = sources[rel]
         assert lic["licence"] and (SOURCES / lic["licence_file"]).is_file(), lic
         assert lic["licence_file"] in files, f"{lic['licence_file']} has no manifest entry"

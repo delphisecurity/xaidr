@@ -8,6 +8,7 @@ import re
 from typing import Iterable, Mapping, Optional, Tuple
 from urllib.parse import unquote
 
+from . import _ucd
 from ._types import Authority, MatchKind, Mode, SourceDesignation
 
 
@@ -108,7 +109,7 @@ def _prefix_parts(url: str) -> Optional[Tuple[str, str, Optional[int], str]]:
         host, _, port = netloc.partition(":")
     if not host or (port and not (_PORT_RE.fullmatch(port) and int(port) <= 65535)):
         return None
-    return scheme.lower(), fold(host), int(port) if port else None, path
+    return _ucd.lower(scheme), fold(host), int(port) if port else None, path
 
 
 def _url_prefix_match(value: str, pattern: str) -> bool:
@@ -159,9 +160,9 @@ def source_matches(d: SourceDesignation, tool_name: str,
     if not isinstance(value, str):
         return False
     if d.match is MatchKind.EXACT:
-        return value.strip() == d.pattern.strip()
+        return value.strip(_ucd.WHITESPACE) == d.pattern.strip(_ucd.WHITESPACE)
     if d.match is MatchKind.URL_PREFIX:
-        return _url_prefix_match(value.strip(), d.pattern)
+        return _url_prefix_match(value.strip(_ucd.WHITESPACE), d.pattern)
     if d.match is MatchKind.PATH_GLOB:
         if not value.startswith("/"):
             return False                   # a relative value never matches
