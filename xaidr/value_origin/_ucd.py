@@ -217,13 +217,8 @@ def space_class(v: int = V13) -> str:
     return _class(_in_version(_D.SPACE, v))
 
 
-def compile(pattern: str, flags: int = 0, v: int = V13):
-    """``re.compile`` with ``\\w``, ``\\s`` and ``\\d`` (and ``\\W``, ``\\S``,
-    ``\\D``, and ``[^\\W\\d_]``) written out from the vendored classes, and
-    ``re.ASCII``, so the pattern decides nothing by the running interpreter's
-    Unicode (``IGNORECASE`` then folds ASCII only)."""
-    p = pattern.replace("[^\\W\\d_]", "[" + word_not_digit_class(v) + "]")
-    body = {"w": word_class(v), "s": space_class(v), "d": decimal_class(v)}
+def _written_out(pattern: str, body: dict) -> str:
+    p = pattern.replace("[^\\W\\d_]", "[" + body["L"] + "]")
     out, i, in_class = [], 0, False
     while i < len(p):
         c = p[i]
@@ -258,7 +253,66 @@ def compile(pattern: str, flags: int = 0, v: int = V13):
             in_class = False
         out.append(c)
         i += 1
-    return _re.compile("".join(out), flags | _re.ASCII)
+    return "".join(out)
+
+
+def _ascii_part(ranges) -> str:
+    return _class([(a, min(b, 0x7F)) for a, b in ranges if a <= 0x7F])
+
+
+class _Pattern:
+    """A pattern with ``\\w``, ``\\s`` and ``\\d`` written out twice: from the
+    vendored classes, and from their ASCII members alone. On ASCII text the two
+    match exactly the same characters, and the second is far cheaper for ``re``
+    to step through (a class of hundreds of ranges is checked range by range), so
+    ASCII text, the common case, is matched by the second."""
+    __slots__ = ("full", "ascii", "pattern")
+
+    def __init__(self, full, ascii_, pattern):
+        self.full, self.ascii, self.pattern = full, ascii_, pattern
+
+    def _pick(self, text):
+        return self.ascii if isinstance(text, str) and text.isascii() else self.full
+
+    def search(self, string, *a):
+        return self._pick(string).search(string, *a)
+
+    def match(self, string, *a):
+        return self._pick(string).match(string, *a)
+
+    def fullmatch(self, string, *a):
+        return self._pick(string).fullmatch(string, *a)
+
+    def finditer(self, string, *a):
+        return self._pick(string).finditer(string, *a)
+
+    def findall(self, string, *a):
+        return self._pick(string).findall(string, *a)
+
+    def split(self, string, *a, **k):
+        return self._pick(string).split(string, *a, **k)
+
+    def sub(self, repl, string, *a, **k):
+        return self._pick(string).sub(repl, string, *a, **k)
+
+    def subn(self, repl, string, *a, **k):
+        return self._pick(string).subn(repl, string, *a, **k)
+
+
+def compile(pattern: str, flags: int = 0, v: int = V13):
+    """``re.compile`` with ``\\w``, ``\\s`` and ``\\d`` (and ``\\W``, ``\\S``,
+    ``\\D``, and ``[^\\W\\d_]``) written out from the vendored classes, and
+    ``re.ASCII``, so the pattern decides nothing by the running interpreter's
+    Unicode (``IGNORECASE`` then folds ASCII only)."""
+    word = _in_version(_WORD, v)
+    letters = _in_version(_minus(_WORD, _union(_D.DECIMAL, [(0x5F, 0x5F)])), v)
+    digits = _in_version(_D.DECIMAL, v)
+    spaces = _in_version(_D.SPACE, v)
+    full = {"w": _class(word), "s": _class(spaces), "d": _class(digits), "L": _class(letters)}
+    ascii_ = {"w": _ascii_part(word), "s": _ascii_part(spaces),
+              "d": _ascii_part(digits), "L": _ascii_part(letters)}
+    return _Pattern(_re.compile(_written_out(pattern, full), flags | _re.ASCII),
+                    _re.compile(_written_out(pattern, ascii_), flags | _re.ASCII), pattern)
 
 
 # ── case ─────────────────────────────────────────────────────────────────────
