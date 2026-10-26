@@ -659,7 +659,8 @@ since a cut result cannot vouch (below).
   result, a destination neither the principal nor a trusted source authorized
   reads `untrusted_source`, and blocks under ENFORCE. What the principal or a
   trusted source named keeps its authority. Until 2026-10-25 such a call read
-  `result_truncated`, which did not block. *Pinned by:*
+  `result_truncated`, which did not block. Where holds exist, a destination in a
+  flow with a cut result is held rather than blocked. *Pinned by:*
   `tests/test_value_origin_cut_results.py`.
 - **The order** when the weakest finding is not `untrusted_source`: a state that
   blocks outranks every state that does not (`result_unread`, then
