@@ -74,6 +74,12 @@ WHICH_GUARDED = "which-guarded"
 ALWAYS_PRESENT = "always-present"
 
 _ALLOWED_EXTERNAL_BINARIES = {
+    ("test_disclosure_scan.py", "_git"): (ALWAYS_PRESENT, (
+        "git. The scan under test reads git history, and the test builds its own "
+        "repository in a temporary directory, so it needs the binary and nothing "
+        "else; every runner has it (actions/checkout@v4 is a git clone). A skip "
+        "would turn the pre-push disclosure gate's exemption check into a no-op."
+    )),
     ("test_enforcement_policy_seam.py", "_git_grep"): (ALWAYS_PRESENT, (
         "git. Guaranteed on ubuntu-latest AND guaranteed to have a repo to "
         "read: actions/checkout@v4 IS a git clone, so a runner that got as far "

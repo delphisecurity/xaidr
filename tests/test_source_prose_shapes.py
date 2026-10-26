@@ -11,9 +11,10 @@ misbehave.
 
 The other gates do not see this. ``tests/test_rule_asset_annotations.py``
 refuses annotation keys in the rule JSONs and reads nothing else. The release
-runbook's step 3a scans the built wheel with ``--exclude='*.py'``, and its
+runbook's step 3a (``scripts/release_shipped_text.py``) reads the docstrings and
+comments of every shipped ``.py`` for the maintainer's phrase list, but its
 advisory shape wants the timing directly beside the size, so it would miss a
-pairing split across a sentence even with ``.py`` included.
+pairing split across a sentence; this gate reads shapes, not phrases.
 
 WHY SHAPES AND NOT STRINGS. A test that searched for a trigger would have to
 contain it, and this file ships in the sdist. So it looks for the two shapes

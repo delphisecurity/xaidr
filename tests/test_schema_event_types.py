@@ -280,7 +280,7 @@ def test_schema_version_moved_for_a_breaking_change():
     worth nothing if it does not move when the shape does. 0.1.0 emitted
     second-precision map-time stamps and no event type; both changed."""
     assert SCHEMA_VERSION != "0.1.0"
-    assert SCHEMA_VERSION == "0.2.0"
+    assert SCHEMA_VERSION == "0.3.0"   # M9 (Q14) moved it: valueOrigin's absence means "not reported"
 
 
 def test_every_mapped_event_states_its_schema_version():
@@ -315,6 +315,11 @@ def test_content_still_never_leaks_on_the_breaker_path():
         for _ in range(3):
             sensor.scan(f"{ATTACK} {marker}")
     sensor._telemetry.flush_sync()
+    # Sweep, 2026-10-06: the loop below checked nothing when no breaker event
+    # existed. The invariant is about the BREAKER path, so one must be present.
+    assert any(e.get("type") == "circuit_breaker" for e in cap.events), (
+        f"no circuit_breaker event was captured, so the privacy check never ran on "
+        f"the breaker path: {[e.get('type') for e in cap.events]}")
     for e in cap.events:
         mapped = to_openA2A(e)
         leaked = [v for v in mapped.values() if isinstance(v, str) and marker in v]

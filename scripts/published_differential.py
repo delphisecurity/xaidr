@@ -1,0 +1,758 @@
+"""The published-suite differential: every destination a real client reads in a
+published test vector, the core reads (docs/value-origin-rulings.md §2, the
+reading principle).
+
+    python scripts/published_differential.py [--json OUT] [--limit N]
+
+For each vector of the published suites vendored in ``tests/published_vectors/``
+(extracted by ``scripts/published_vectors.py``) it collects what
+each client would send to, with that client's own send path and no network:
+
+    httpx            Client.build_request(...).url.raw_host (http/https/ws/wss only)
+    urllib3          PoolManager().connection_from_url(v).host
+    requests         HTTPAdapter.get_connection_with_tls_context(prepared).host
+    urllib.parse     urlsplit(v).hostname, encoded as the socket layer encodes it
+                     (the stdlib ``idna`` codec, IDNA 2003)
+    whatwg           ada-url (the WHATWG parser Node.js uses), special schemes
+    urllib.request   HTTPConnection(Request(v).host).host, what urlopen hands the
+                     socket layer (http/https), encoded as the socket layer does
+    http.client      HTTPConnection(urlsplit(v).netloc).host, the netloc as
+                     written (http/https), encoded the same way
+    email            email.utils.getaddresses and parseaddr, strict and lenient,
+                     and email.headerregistry's To header
+    suite            the vector's own table: the host or address its project
+                     expects (curl, Go, WPT, IdnaTestV2)
+
+Each reading is reduced to the core's key space without the core's reader: an
+address through ``ipaddress`` and the platform resolver (``inet_aton`` and
+``getaddrinfo(AI_NUMERICHOST)``, each reading its own requirement, so a host the
+two read as different addresses requires both), a name lowercased with its
+trailing dot removed and keyed by the core's PSL function (keying only), exactly
+as the client sends it: a ``%``, a ``\\`` or any other byte stays, because httpx,
+urllib.parse and urllib.request hand such a name to the resolver. A reading no
+resolver or mail server can use (a name with an empty label, whitespace or a
+control character, an all-digit last label, a local part outside RFC 5321) is not
+sendable and not compared.
+
+An UNDER-READ is a client key the core's argument walk does not read
+(``extract_destinations``, the findings that decide). Each under-read must belong
+to a class the rulings document (``CLASSES`` below, each naming its ruling). One
+that belongs to none is printed with its vector, client and key, and the run
+exits 1. Over-reads (a key the core reads that no client and no suite reads) are
+counted by class and never fail the run: each is an overrulable reading.
+"""
+from __future__ import annotations
+
+import argparse
+import collections
+import ipaddress
+import json
+import re
+import socket
+import sys
+import warnings
+from pathlib import Path
+from urllib.parse import urlsplit
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
+# Which xaidr answers is announced before anything else (scripts/_provenance.py):
+# the working tree by default, the installed wheel under XAIDR_FROM_INSTALL=1.
+from _provenance import bind  # noqa: E402
+import published_vectors  # noqa: E402
+
+PROV = bind(__file__)
+
+warnings.simplefilter("ignore")
+
+
+def _require():
+    absent = []
+    for mod in ("httpx", "urllib3", "requests", "ada_url", "idna"):
+        try:
+            __import__(mod)
+        except ImportError:
+            absent.append(mod)
+    if absent:
+        raise SystemExit(f"REFUSING: the oracles {absent} are not installed; an absent "
+                         "client is a silent pass, never a skip (Q3).")
+
+
+# ── clients ──────────────────────────────────────────────────────────────────
+_HTTP = ("http", "https", "ws", "wss")
+_STDLIB_CLIENTS = ("urllib.request", "http.client", "requests.lookup")
+#: Every client whose readings are compared; each must read at least one vector.
+CLIENTS = ("httpx", "urllib3", "requests", "urllib.parse", "whatwg") + _STDLIB_CLIENTS + (
+    "getaddresses.strict", "parseaddr.strict", "headerregistry", "suite")
+
+
+def _scheme(v):
+    m = re.match(r"\s*([A-Za-z][A-Za-z0-9+.\-]*):", v)
+    return m.group(1).lower() if m else None
+
+
+class Clients:
+    def __init__(self):
+        import ada_url
+        import httpx
+        import requests
+        import urllib3
+        from requests.adapters import HTTPAdapter
+        self.httpx = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200)))
+        self.ada = ada_url
+        self.urllib3 = urllib3
+        self.pool = urllib3.PoolManager(num_pools=4)
+        self.requests = requests
+        self.adapter = HTTPAdapter()
+
+    def hosts(self, v):
+        """[(client, host)]: the host each URL client sends ``v`` to."""
+        out = []
+        try:
+            req = self.httpx.build_request("GET", v)
+            if req.url.scheme in _HTTP and req.url.raw_host:
+                out.append(("httpx", req.url.raw_host.decode("ascii", "replace")))
+        except Exception:
+            pass
+        try:
+            pool = self.pool.connection_from_url(v)
+            if pool.host:
+                out.append(("urllib3", pool.host))
+        except Exception:
+            pass
+        finally:
+            self.pool.clear()
+        try:
+            p = self.requests.Request("GET", v).prepare()
+            conn = self.adapter.get_connection_with_tls_context(p, verify=True)
+            if conn.host:
+                out.append(("requests", conn.host))
+        except Exception:
+            pass
+        try:
+            h = urlsplit(v).hostname               # a covered consumer, any scheme
+            if h:
+                try:
+                    out.append(("urllib.parse", h.encode("idna").decode("ascii")))
+                except UnicodeError:
+                    pass
+        except ValueError:
+            pass
+        try:
+            u = self.ada.URL(v)
+            if u.protocol[:-1] in _HTTP and u.hostname:
+                out.append(("whatwg", u.hostname))
+        except Exception:
+            pass
+        out += self.stdlib_hosts(v)
+        return out
+
+    @staticmethod
+    def stdlib_hosts(v):
+        """[(client, host)]: the standard library's own send paths. urllib.request:
+        what urlopen's default opener resolves, by the stdlib's own code, for each
+        scheme it handles (measured, tests/test_value_origin_client_gate.py): http
+        and https, ``HTTPConnection(Request(v).host).host``; ftp, ``ftp_open``'s
+        ``_splitport``, ``_splituser`` and second ``unquote``; file, ``Request(v).host``
+        less its port and, from 3.14, the netloc as written. http.client:
+        ``HTTPConnection(urlsplit(v).netloc).host`` for an http or https URL, the
+        netloc as written. requests.lookup: ``urlsplit(v).hostname`` of a URL of any
+        scheme, which requests looks up on macOS before it refuses one it does not
+        send. Each host is encoded as the socket layer encodes a str host (the stdlib
+        ``idna`` codec, IDNA 2003); one it cannot encode is never sent."""
+        import http.client
+        import urllib.parse as up
+        import urllib.request
+        out = []
+        try:
+            req = urllib.request.Request(v)
+            if req.type in ("http", "https") and req.host:
+                out.append(("urllib.request", http.client.HTTPConnection(req.host).host))
+            elif req.type == "ftp" and req.host:
+                out.append(("urllib.request",
+                            up.unquote(up._splituser(up._splitport(req.host)[0])[1])))
+            elif req.type == "file" and req.host and req.host != "localhost":
+                out.append(("urllib.request", up._splitport(req.host)[0]))
+        except Exception:
+            pass
+        try:
+            u = urlsplit(v)
+            if u.scheme in ("http", "https") and u.netloc:
+                out.append(("http.client", http.client.HTTPConnection(u.netloc).host))
+            if u.scheme == "file" and u.netloc and u.netloc != "localhost":
+                out.append(("urllib.request", u.netloc))
+            if u.netloc and u.hostname:
+                out.append(("requests.lookup", u.hostname))
+        except Exception:
+            pass
+        sent = []
+        for client, h in out:
+            try:
+                sent.append((client, h.encode("idna").decode("ascii") if h else h))
+            except UnicodeError:
+                pass
+        return [(c, h) for c, h in sent if h]
+
+    @staticmethod
+    def mailboxes(v):
+        """[(client, addr)]: each mailbox an email parser returns for ``v``. A
+        whole message (a header line after a newline) is not a header value, so
+        the parsers are not run on it."""
+        import email.utils as eu
+        from email import policy
+        out = []
+        if re.search(r"\n\s*[!-9;-~]+:", v) or re.match(r"[!-9;-~]+:.*\n\s*\n", v, re.S):
+            return out
+        for strict in (True, False):
+            name = "strict" if strict else "lenient"
+            try:
+                pairs = (eu.getaddresses([v], strict=strict) if _has_strict()
+                         else eu.getaddresses([v]))
+                out += [(f"getaddresses.{name}", a) for _, a in pairs if a]
+            except Exception:
+                pass
+            try:
+                a = (eu.parseaddr(v, strict=strict) if _has_strict() else eu.parseaddr(v))[1]
+                if a:
+                    out.append((f"parseaddr.{name}", a))
+            except Exception:
+                pass
+            if not _has_strict():
+                break
+        try:
+            h = policy.default.header_factory("To", v)
+            out += [("headerregistry", a.addr_spec) for a in h.addresses if a.addr_spec]
+        except Exception:
+            pass
+        return out
+
+
+def _has_strict():
+    import email.utils as eu
+    import inspect
+    return "strict" in inspect.signature(eu.getaddresses).parameters
+
+
+# ── keying (never the core's reader) ─────────────────────────────────────────
+_LDH = re.compile(r"[a-z0-9_\-]{1,63}(?:\.[a-z0-9_\-]{1,63})*")
+_ATEXT = r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~\-]+"
+_DOT_STRING = re.compile(_ATEXT + r"(?:\." + _ATEXT + r")*")
+_QUOTED = re.compile(r'"(?:[\x20\x21\x23-\x5b\x5d-\x7e]|\\[\x20-\x7e])*"')
+#: RFC 5321 address literals: an IPv4 dotted quad, or IPv6: and an IPv6 address.
+_ADDRESS_LITERAL = re.compile(r"\[(?:\d{1,3}(?:\.\d{1,3}){3}|ipv6:[0-9a-f:.]+)\]")
+
+
+def _ip_key(ip):
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return f"ip:{ip.compressed}"
+
+
+def _numeric(h):
+    """Every address the platform resolver reads ``h`` as: ``inet_aton`` and
+    ``getaddrinfo(AI_NUMERICHOST)`` each (the macOS resolver reads a leading-zero
+    quad as decimal where inet_aton reads octal)."""
+    out = []
+    for fn in (lambda: socket.inet_aton(h),
+               lambda: socket.inet_pton(socket.AF_INET, socket.getaddrinfo(
+                   h, None, socket.AF_INET, 0, 0, socket.AI_NUMERICHOST)[0][4][0])):
+        try:
+            ip = ipaddress.IPv4Address(fn())
+        except (OSError, ValueError, IndexError, UnicodeError):
+            continue
+        if ip not in out:
+            out.append(ip)
+    return out
+
+
+def host_keys(h):
+    """Every key a client's host reading reduces to; empty if no resolver can use it."""
+    from xaidr.value_origin._authority import dns_key
+    if not h:
+        return []
+    if h.startswith("[") and h.endswith("]"):
+        h = h[1:-1]
+    unzoned = re.split(r"%(?:25)?", h, 1)[0] if ":" in h else h  # an IPv6 zone is not compared
+    try:
+        return [_ip_key(ipaddress.ip_address(unzoned))]
+    except ValueError:
+        pass                       # not an address: a name, its `%` included, is sent whole
+    dotted = h.endswith(".") and ":" not in h
+    h = h.lower().rstrip(".")
+    if not h or any(c.isspace() or c < " " or c == "\x7f" for c in h):
+        return []                  # http.client refuses a host with a space or a control
+    ips = _numeric(h)
+    if ips:
+        # A numeric host written with a trailing dot is a DNS name to the resolver
+        # (no numeric parser takes the dot): the name a client resolves is read too.
+        return [_ip_key(ip) for ip in ips] + (["dns:" + dns_key(h)] if dotted else [])
+    if "" in h.split(".") or len(h) > 253 or h.rsplit(".", 1)[-1].isdigit():
+        return []                  # no resolver looks up an empty label
+    return ["dns:" + dns_key(h)]
+
+
+def host_key(h):
+    """The first of ``host_keys`` (the suite tables name one host each)."""
+    keys = host_keys(h)
+    return keys[0] if keys else None
+
+
+def _encode_domain(d):
+    import idna
+    if d.startswith("[") and d.endswith("]"):
+        lit = d.lower()
+        if not _ADDRESS_LITERAL.fullmatch(lit):
+            return None
+        inner = lit[1:-1]
+        try:
+            ipaddress.ip_address(inner[5:] if inner.startswith("ipv6:") else inner)
+        except ValueError:
+            return None
+        return lit
+    if d.isascii():
+        return d.lower()                       # a mail client sends an ASCII domain as it is
+    try:
+        return idna.encode(d, uts46=True, transitional=False).decode("ascii").lower()
+    except Exception:
+        return None
+
+
+def mail_key(addr):
+    if addr.count("@") < 1:
+        return None
+    local, _, domain = addr.rpartition("@")
+    if not (_DOT_STRING.fullmatch(local) or _QUOTED.fullmatch(local)
+            or (not local.isascii() and "@" not in local and " " not in local)):
+        return None
+    d = _encode_domain(domain.rstrip("."))
+    if d is None or not ((_LDH.fullmatch(d) and len(d) <= 253)
+                         or (d.startswith("[") and d.endswith("]"))):
+        return None
+    return f"mailto:{local.lower()}@{d}"
+
+
+def suite_key(e):
+    kind, _, val = e.partition(":")
+    if kind == "host":
+        if re.fullmatch(r".+:\d+", val) and not val.endswith("]"):
+            val = val.rsplit(":", 1)[0]
+        try:
+            val = val.encode("idna").decode("ascii") if not val.isascii() else val
+        except UnicodeError:
+            return None
+        key = host_key(val)
+        # A suite's table is a parser's output, not a name a client sends: one
+        # outside LDH (an IdnaTestV2 error row's `?`, Go's trailing `:`) is not one.
+        return key if key and (not key.startswith("dns:") or _LDH.fullmatch(key[4:])) else None
+    return mail_key(val)
+
+
+# ── the core's reading ───────────────────────────────────────────────────────
+def core_keys(v):
+    from xaidr.value_origin import extract_destinations
+    return {f.destination.key() for f in extract_destinations({"v": v})[0]
+            if f.destination is not None}
+
+
+#: Letters and digits Unicode added after 13.0, the version the core pins: each is
+#: nothing on 3.10 and a letter or a digit on a newer interpreter, so the agreement
+#: comparison runs every value shape over them as well as over the published suites.
+_NEWER_CODE_POINTS = ("\U0001E290", "\U00011F04", "\U0001E4D0", "\U0001E4F0", "\uA7C0",
+                      "\U00016FF0", "\U0001E030", "\U00011B00", "\u0C5D", "\U0001E5D0")
+
+
+def interpreter_probes():
+    """Value shapes, over the code points above, whose reading a newer Unicode
+    database would change if the core decided a character class from it."""
+    out = []
+    for c in _NEWER_CODE_POINTS:
+        out += [f"a{c}.example/x", f"x.a{c}/x", f"https://a{c}.example/", f"bob@a{c}.example",
+                f"{c}bob@x.example", f"see a{c}.example and bob@a{c}.example now",
+                f"ops {c}@x.example", f"Ref {c}-7 ok", f"http://[::1]{c}/"]
+    return out
+
+
+def core_reading(v):
+    """Everything the core decides about ``v`` that the agreement comparison holds
+    equal across interpreters: the findings in order, parse failures included, and
+    the wire and the ENFORCE decision of a call carrying it with an empty ledger
+    (E), after the principal wrote it (P), after a tool result was it (U) and after
+    a tool result named it in a sentence (S)."""
+    from xaidr.value_origin import (Mode, bind_fresh_ledger, evaluate_call,
+                                    extract_destinations, record_principal_input,
+                                    record_tool_result, should_block, unbind_ledger)
+    found = [f.destination.key() if f.destination is not None else f.reason.value
+             for f in extract_destinations({"v": v})[0]]
+    out = {"findings": found}
+    for name in ("E", "P", "U", "S"):
+        bind_fresh_ledger()
+        try:
+            if name == "P":
+                record_principal_input(v, None, input_clean=True)
+            elif name == "U":
+                record_tool_result("web_fetch", {}, v, designations=(), result_blocked=False)
+            elif name == "S":
+                record_tool_result("web_fetch", {}, f"Moved: {v} , use that.", designations=(),
+                                   result_blocked=False)
+            cv = evaluate_call("http_post", {"v": v}, flow_active=True)
+            out[name] = [cv.wire.value, should_block(cv, mode=Mode.ENFORCE)]
+        finally:
+            unbind_ledger()
+    return out
+
+
+# ── the documented classes ───────────────────────────────────────────────────
+def _raw_hosts(v):
+    """Hosts as written: after `scheme:` and any run of / and \\, after the last @,
+    before the port; raw, not lowercased or encoded."""
+    out = []
+    m = re.match(r"\s*(?:[A-Za-z][A-Za-z0-9+.\-]*:)?[/\\]*([^/?#\\]*)", v)
+    if m:
+        auth = m.group(1)
+        for hostinfo in {auth.rpartition("@")[2], auth.partition("@")[2] or auth}:
+            if hostinfo.startswith("["):
+                out.append(hostinfo.partition("]")[0] + "]")
+            else:
+                out.append(hostinfo.rsplit(":", 1)[0] if re.search(r":\d*$", hostinfo)
+                           else hostinfo)
+    return [h for h in out if h]
+
+
+def _alternatives(raw):
+    """Names (A-label form) from the encodings the rulings document as not the
+    core's (S-4): IDNA 2003, IDNA 2008 without the UTS-46 mapping, UTS-46
+    transitional, and UTS-46 of a newer Unicode where it allows or maps a code
+    point of the host otherwise than Unicode 13.0."""
+    import idna
+    from urllib.parse import unquote
+    from xaidr.value_origin._idna import _status
+    raw = unquote(raw) if "%" in raw else raw
+    out = set()
+    try:                                       # IDNA 2008 without the UTS-46 mapping (libidn2)
+        out.add(idna.encode(raw).decode("ascii"))
+    except Exception:
+        pass
+    for form in (raw, raw.lower()):            # urllib.parse lowercases, then the socket encodes
+        try:
+            out.add(form.encode("idna").decode("ascii"))
+        except (UnicodeError, ValueError):
+            pass
+    try:
+        out.add(idna.encode(raw, uts46=True, transitional=True).decode("ascii"))
+    except Exception:
+        pass
+    try:
+        newer = idna.uts46_remap(raw, std3_rules=False, transitional=False)
+    except Exception:
+        newer = None
+    from xaidr.value_origin._idna import _map
+    if any(_status(c) == "D" for c in raw) or (newer is not None and newer != _map(raw)):
+        try:                                   # the newer Unicode reads (or maps) otherwise
+            out.add(idna.encode(raw, uts46=True).decode("ascii"))
+        except Exception:
+            pass
+    out.discard(None)
+    return out
+
+
+def _core_refuses(raw):
+    from urllib.parse import unquote_to_bytes
+    from xaidr.value_origin._idna import to_ascii
+    h = raw.strip("[]").rstrip(".")
+    if not h or ":" in h:
+        return False
+    try:
+        h = unquote_to_bytes(h).decode("utf-8") if "%" in h else h
+    except UnicodeDecodeError:
+        return True
+    return not h.isascii() and to_ascii(h) is None
+
+
+_HAS_SCHEME = re.compile(r"\s*[A-Za-z][A-Za-z0-9+.\-]*:")
+
+
+def _cls_mailbox_not_url(v, client, key, core):
+    """§2 Mailboxes (3.2): a value with `@` that is not a URL is a mailbox list.
+    urllib3 and requests (and curl, which guesses a scheme) read a scheme-less
+    `user@host` or `user:pass@host/path` as userinfo and a host; the core reads the
+    mailbox, not its domain as a URL host. Scheme-less as each decides it: to
+    urllib3 a scheme is a letter, then letters, digits, `+` and `-` (`ftp.user:` is
+    none); curl guesses one for any value without `scheme://`."""
+    s = v.strip()
+    schemed = (re.match(r"[A-Za-z][A-Za-z0-9+.\-]*://", s) if client == "suite"     # curl
+               else re.match(r"[a-zA-Z][a-zA-Z0-9+\-]*:", s))                         # urllib3
+    return (client in ("urllib3", "requests", "suite") and key.startswith(("dns:", "ip:"))
+            and not schemed and "@" in re.split(r"[/?#]", s, 1)[0])
+
+
+def _cls_schemeless(v, client, key, core):
+    """§2 Scheme-less values, 'Not destinations': a bare hostname or address with
+    no locator (V-19, §9 item 13), a bare number, a single-label host or a name
+    whose last label is not alphabetic before a path."""
+    s = v.strip()
+    if key.startswith("mailto:"):
+        return False
+    if _HAS_SCHEME.match(s) and not re.match(r"\s*[^:/?#@\s]+:(?:\d+(?:[/?#]|$)|$)", s):
+        return False
+    head = re.split(r"[/?#]", s, 1)[0]
+    host = head.rpartition("@")[2]
+    port = re.search(r":\d*$", host) is not None
+    host = host.rsplit(":", 1)[0] if port else host
+    rest = s[len(head):]
+    if host.startswith("[") or ((rest or port) and (_numeric(host) or _strict(host))):
+        return False               # an address literal with a port or a locator is read
+    labels = host.rstrip(".").split(".")
+    return (not rest or len(labels) < 2 or not labels[-1].isalpha()
+            or re.fullmatch(r"[0-9.]+|0x[0-9a-fA-F]+", host) is not None)
+
+
+def _strict(h):
+    try:
+        ipaddress.ip_address(h.strip("[]"))
+        return True
+    except ValueError:
+        return False
+
+
+def _cls_uts46(v, client, key, core):
+    """§2 URLs, UTS-46 (S-4): nontransitional, Unicode 13.0, CheckBidi on, joiners
+    strict; a host it refuses is keyed whole and matches only itself. A client that
+    encodes with IDNA 2003, transitionally, or with a newer Unicode reads another
+    name. A name a client sends with an escape or a backslash in it is that
+    client's spelling, never another encoding of the host. urllib.request's and
+    http.client's IDNA 2003 name is read (the socket layer's encoding), so it is
+    never excused here (``_STDLIB_CLASSES``)."""
+    if re.search(r"%[0-9a-f]{2}", key) or "\\" in key:
+        return False
+    from urllib.parse import unquote
+    for raw in _raw_hosts(v) + [m.group(1) for m in re.finditer(r"@([^\s<>,;@\"]+)", v)]:
+        plain = unquote(raw)
+        if plain.isascii() and "xn--" not in plain.lower():
+            continue               # an ASCII host with no A-label has no other encoding
+        if _core_refuses(raw):
+            return True
+        alts = {a.lower().rstrip(".") for a in _alternatives(raw)}
+        if key.startswith("mailto:") and key.rpartition("@")[2] in alts:
+            return True
+        if key in {host_key(a) for a in alts}:
+            return True
+    return False
+
+
+def _cls_number(v, client, key, core):
+    """§2 Addresses, an empty hex part (E): where the platform resolver refuses an
+    empty hex part, Python's clients send the value as a DNS name, and the core
+    reads WHATWG's address."""
+    return key.startswith("dns:") and any(k.startswith("ip:") for k in core) and \
+        bool(re.search(r"(?:^|\.)0x(?:\.|$)", key[4:], re.I))
+
+
+def _cls_url_first(v, client, key, core):
+    """§2 URLs (S-3): a value that opens with scheme:// or is a scheme-less
+    host/path is a URL even when it carries @; an email parser's mailbox reading of
+    it is not read."""
+    return key.startswith("mailto:") and client != "suite" and (
+        bool(re.match(r"\s*[A-Za-z0-9+.\-]*://", v)) or v.lstrip().startswith("//") or
+        bool(re.match(r"\s*(?:https?|wss?|ftp):", v, re.I)) or
+        bool(re.match(r"\s*[\w.\-]+\.[A-Za-z]+(?::\d+)?[/?#]", v)))
+
+
+def _cls_spaced_at(v, client, key, core):
+    """§2 Mailboxes: an `@` with whitespace on both sides is not an
+    address; an email parser that joins the words around it reads one."""
+    return key.startswith("mailto:") and bool(re.search(r"\s@\s|\s@$|^@\s", v)) and \
+        not re.search(r"[^\s<>@,;]@[^\s<>@,;]", v)
+
+
+def _cls_local_not_written(v, client, key, core):
+    """§2 Mailboxes: a local part is read as the value writes it. One that a
+    parser's error recovery writes and the value does not contain (the words
+    before an `@` quoted into it, quotes inside it dropped) is not read: the value
+    is prose or a malformed address."""
+    if not key.startswith("mailto:"):
+        return False
+    local = key[7:].rpartition("@")[0]
+    flat = re.sub(r"\s+", " ", v.lower())
+    if local in flat:
+        return False
+    # A quoted local part is written only as itself, or, unquoted, as the one
+    # dot-atom email.headerregistry unquotes (`"dinsdale"@` -> `dinsdale@`).
+    bare = local.strip('"')
+    return not (local.startswith('"') and _DOT_STRING.fullmatch(bare) and bare in flat)
+
+
+def _cls_junk_around(v, client, key, core):
+    """§2 Mailboxes: an address with other text run into it, and no separator (a
+    second address after a space, a stray `)` or `>`), is prose and not a recipient
+    list (`bob@corp.example is the owner`)."""
+    if not key.startswith("mailto:"):
+        return False
+    addr = key[7:]
+    low = v.lower()
+    i = low.find(addr)
+    if i < 0:
+        return False
+    before = low[:i].rstrip()
+    after = low[i + len(addr):].lstrip()
+    return bool((after and after[0] not in ",;>") or (before and before[-1] not in "<,;:\""))
+
+
+def _cls_mailto(v, client, key, core):
+    """§2 URLs: `mailto:<addr>` is a mailbox, so the host urllib.parse splits
+    out of `mailto://...` is not read."""
+    return v.strip().lower().startswith("mailto:") and client == "urllib.parse"
+
+
+def _cls_utf8_local(v, client, key, core):
+    """§2 Mailboxes (3.6): the local part is ASCII by grammar; a non-ASCII one is
+    unresolved."""
+    return key.startswith("mailto:") and not key[7:].rpartition("@")[0].isascii()
+
+
+def _cls_file(v, client, key, core):
+    """§2 URLs: file: and data: are never destinations."""
+    return _scheme(v) in ("file", "data")
+
+
+#: (class, ruling, predicate), tried in order.
+CLASSES = (
+    ("mailbox-not-a-url-host", "§2 Mailboxes: a value with @ is a mailbox list (3.2)", _cls_mailbox_not_url),
+    ("schemeless-not-a-destination", "§2 Scheme-less values: Not destinations (V-19)", _cls_schemeless),
+    ("file-or-data-scheme", "§2 URLs: file: and data:", _cls_file),
+    ("url-before-mailbox", "§2 URLs: a URL is tried before the mailbox rule (S-3)", _cls_url_first),
+    ("utf8-local-part", "§2 Mailboxes: the local part is ASCII (3.6)", _cls_utf8_local),
+    ("spaced-at-sign", "§2 Mailboxes: an @ that is not an address", _cls_spaced_at),
+    ("mailto-is-a-mailbox", "§2 URLs: mailto: is a mailbox", _cls_mailto),
+    ("local-part-not-written", "§2 Mailboxes: a local part is read as written", _cls_local_not_written),
+    ("text-run-into-an-address", "§2 Mailboxes: prose is not a recipient list", _cls_junk_around),
+    ("name-read-as-number", "§2 Addresses: an empty hex part is 0", _cls_number),
+    ("uts46-encoding", "§2 URLs: UTS-46 nontransitional, Unicode 13.0 (S-4)", _cls_uts46),
+)
+
+
+#: The classes an under-read of urllib.request or http.client can fall in. Both
+#: send only an http or https URL, with the host the socket layer resolves (an
+#: unwrapped ``<URL:...>`` included), so no scheme-less, mailbox or encoding
+#: ruling excuses one.
+_STDLIB_CLASSES = ("name-read-as-number",)
+
+
+def classify(v, client, key, core):
+    for name, _, fn in CLASSES:
+        if client in _STDLIB_CLIENTS and name not in _STDLIB_CLASSES:
+            continue
+        try:
+            if fn(v, client, key, core):
+                return name
+        except Exception:
+            continue
+    return None
+
+
+# ── the run ──────────────────────────────────────────────────────────────────
+def case_probes():
+    """``http://a<c>.example/`` for every code point Unicode lowercases and RFC
+    3454's table B.3 does not map. A fixed ``stringprep`` keeps it; an unfixed one
+    lowercases it by its interpreter's own Unicode, so urllib.request and
+    http.client resolve a different name per interpreter (3.12.2 and 3.14.5 differ
+    from 3.12.15). No published suite holds most of them. The code points are the
+    generated table's (``_nameprep_data.LOWER``, from the vendored UnicodeData);
+    what each client reads is measured here, never taken from the core."""
+    from xaidr.value_origin import _nameprep_data
+    return [f"http://a{chr(cp)}.example/" for cp in sorted(_nameprep_data.LOWER)]
+
+
+def composition_probes():
+    """``http://x<a><b>.example/`` for every canonical pair whose composite Unicode
+    assigned after 13.0: the IDNA 2003 codec composes it on an interpreter whose
+    Unicode has the composite and keeps it apart on an older one (its NFKC takes
+    compositions from the interpreter's own data). The pairs are the vendored
+    Unicode 16.0 data's (``_ucd_data``); what each client reads is measured here."""
+    from xaidr.value_origin import _ucd, _ucd_data
+    return [f"http://x{k}.example/" for k, c in sorted(_ucd_data.COMP.items())
+            if _ucd.age(c) > _ucd.V13]
+
+
+def run(limit=None):
+    _require()
+    clients = Clients()
+    rows = published_vectors.load()
+    if limit:
+        rows = rows[:limit]
+    else:
+        rows = rows + [{"src": "probe:stringprep-lowercase", "v": v, "expect": []}
+                       for v in case_probes()]
+        rows = rows + [{"src": "probe:composition", "v": v, "expect": []}
+                       for v in composition_probes()]
+    under = collections.Counter()
+    by_client = collections.Counter()
+    read_by = collections.Counter()
+    undocumented = []
+    vectors_read = set()
+    for r in rows:
+        v = r["v"]
+        if v in vectors_read:
+            pass
+        vectors_read.add(v)
+        readings = [(c, k) for c, h in clients.hosts(v) for k in host_keys(h)]
+        readings += [(c, mail_key(a)) for c, a in clients.mailboxes(v)]
+        readings += [("suite", suite_key(e)) for e in r["expect"]]
+        keys = {(c, k) for c, k in readings if k}
+        read_by.update({c for c, _ in keys})
+        if not keys:
+            continue
+        core = core_keys(v)
+        for c, k in sorted(keys):
+            if k in core:
+                continue
+            cls = classify(v, c, k, core)
+            if cls is None:
+                undocumented.append({"src": r["src"], "v": v, "client": c, "key": k,
+                                     "core": sorted(core)})
+                cls = "UNDOCUMENTED"
+            under[cls] += 1
+            by_client[(cls, c)] += 1
+    return {"vectors": len(rows), "distinct": len(vectors_read), "under": dict(under),
+            "read_by": dict(read_by),
+            "by_client": {f"{a}|{b}": n for (a, b), n in sorted(by_client.items())},
+            "undocumented": undocumented}
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--json")
+    ap.add_argument("--limit", type=int)
+    ap.add_argument("--show", type=int, default=60)
+    ap.add_argument("--core-out", help="write every vector's core reading, for the "
+                                       "cross-interpreter comparison")
+    a = ap.parse_args(argv)
+    res = run(a.limit)
+    if a.core_out:
+        values = sorted({r["v"] for r in published_vectors.load()} | set(interpreter_probes())
+                        | set(case_probes()) | set(composition_probes()))
+        Path(a.core_out).write_text(json.dumps(
+            {v: core_reading(v) for v in values}, sort_keys=True))
+    print(f"python {sys.version.split()[0]} {sys.platform}: {res['vectors']} vectors")
+    print("  vectors each client read: " + ", ".join(
+        f"{c} {res['read_by'].get(c, 0)}" for c in CLIENTS))
+    for cls, n in sorted(res["under"].items(), key=lambda x: -x[1]):
+        doc = next((d for c, d, _ in CLASSES if c == cls), "no ruling")
+        print(f"  under-read {cls:32} {n:6}  ({doc})")
+    for u in res["undocumented"][:a.show]:
+        print(f"  UNDOCUMENTED {u['src']}: {u['v']!r} -> {u['client']} {u['key']}; core {u['core']}")
+    if a.json:
+        Path(a.json).write_text(json.dumps(res, indent=1))
+    silent = [c for c in CLIENTS if not res["read_by"].get(c)]
+    if silent and not a.limit:
+        print(f"REFUSING: {silent} read no vector; a client that reads nothing is a "
+              "silent pass, never a clean run")
+        return 2
+    if res["undocumented"]:
+        print(f"PUBLISHED DIFFERENTIAL: RED ({len(res['undocumented'])} under-reads no ruling documents)")
+        return 1
+    print("PUBLISHED DIFFERENTIAL: clean")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
