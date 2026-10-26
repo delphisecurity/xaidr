@@ -161,8 +161,11 @@ haystack = ["haystack-ai>=3.0"]
 # disagree with each other about `https://corp.example\@evil.test/`, and an
 # urllib.parse-only differential is how finding 1 went unseen. Tests that need
 # these REFUSE without them (Q3, 2026-10-03); the `base` CI config deselects
-# them by marker instead of letting them skip.
-dev = ["pytest", "hatchling>=1.18", "httpx>=0.24", "urllib3>=2", "ada-url>=1.15"]
+# them by marker instead of letting them skip. requests is a client the client
+# gate runs for real (tests/test_value_origin_client_gate.py), and a test oracle
+# only, like the others.
+dev = ["pytest", "hatchling>=1.18", "httpx>=0.24", "urllib3>=2", "ada-url>=1.15",
+       "requests>=2"]
 
 [project.urls]
 Homepage = "https://github.com/delphisecurity/xaidr"
