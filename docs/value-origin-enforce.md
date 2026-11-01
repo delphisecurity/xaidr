@@ -12,7 +12,7 @@ The rules behind every value below are in
 
 | wire value | category | rule ids |
 |---|---|---|
-| `untrusted_source`: the destination traces to an untrusted source | `untrusted_destination` | `ORIGIN_UNTRUSTED_DESTINATION`, `intent.value_origin_untrusted` |
+| `untrusted_source`: the destination traces to an untrusted source, or to nothing recorded in a flow that holds a cut tool result (one the reader stopped before reading all of) | `untrusted_destination` | `ORIGIN_UNTRUSTED_DESTINATION`, `intent.value_origin_untrusted` |
 | `result_unread`: a tool result in the flow was an unread network response, and the destination traces to nothing recorded | `unexaminable_source` | `ORIGIN_UNEXAMINABLE_SOURCE`, `intent.value_origin_untrusted` |
 | `write_dropped`: a destination write to the flow's ledger was lost (the ledger was full, or recording faulted), and the destination traces to nothing recorded | `unexaminable_source` | `ORIGIN_UNEXAMINABLE_SOURCE`, `intent.value_origin_untrusted` |
 
@@ -29,9 +29,12 @@ The rules behind every value below are in
   one warning at construction, saying what will be blocked (or flagged, in
   monitor mode).
 - **Everything else is visible and does not block:** `argument_bound`,
-  `result_truncated`, `input_truncated`, `ledger_saturated` (with a loud warning)
-  and `extraction_incomplete`. A positive `untrusted_source` finding outranks
-  every one of them.
+  `input_truncated`, `ledger_saturated` (with a loud warning) and
+  `extraction_incomplete`. A positive `untrusted_source` finding outranks every
+  one of them. `result_truncated` stays in the vocabulary and no call reads it:
+  since 2026-10-25 a destination that traces to nothing, in a flow with a cut
+  result, reads `untrusted_source`. *Corrected 2026-11-01:* this list named
+  `result_truncated` as a state a call reads and that does not block.
 
 ## What it costs on benign traffic
 
@@ -86,9 +89,11 @@ rate on the user's own destinations.
 | bound | wire on a destination that traces to nothing | past the bound |
 |---|---|---|
 | an argument leaf over 4,000 chars, more than 64 argument leaves, nesting deeper than 6 | `argument_bound` | a skipped value short enough is read whole; the skipped parts are searched for destination atoms; each is evaluated |
-| a tool-result leaf over 65,536 chars, more than 64 result leaves, nesting deeper than 6 | `result_truncated` | the skipped parts are searched for atoms, and each is recorded with the result's origin |
+| a tool-result leaf over 65,536 chars, more than 64 result leaves, nesting deeper than 6, the examined walk's node budget, the examined pass's work budget | `untrusted_source` (blocks): the result is cut and cannot vouch | the skipped parts are searched for atoms, and each is recorded with the result's origin |
+| a tool result's time bound (2.0 s per result) | `untrusted_source` (blocks): the result is cut | nothing more is read |
+| a result node that cannot be read without consuming it (an iterator, a generator), or whose host code raised | `untrusted_source` (blocks): the result is cut | the node is not read; the rest of the result is |
 | a principal input over 65,536 chars | `input_truncated` | atoms are recorded from all of it; key n-grams from the first 64 KiB |
-| the atom pass's work budget | `extraction_incomplete` | the rest is not scanned |
+| the atom pass's work budget (an argument, or a principal input past 64 KiB) | `extraction_incomplete` | the rest is not scanned |
 | the ledger's destination budget (10,000) | `write_dropped` (blocks) | the write is dropped whole |
 | the ledger's key n-gram budget (65,536) | `ledger_saturated` | the n-gram write is dropped |
 | an unread network response | `result_unread` (blocks) | it is passed on unread, so its stream is never consumed |
@@ -108,9 +113,30 @@ rate on the user's own destinations.
     x.zz (rejected candidates)               input    109 ms | result     57 ms | argument     24 ms
     e-acute.e-acute (non-ASCII, rejected)    input    178 ms | result    112 ms | argument     38 ms
     6M-wide dict argument                    argument    434 ms
-  examined pass, worst shape found:
-    128 x 64 KiB distinct IDN URLs (examined + past the bound)         826 ms
   ```
+
+  *Corrected 2026-11-01:* this block ended "examined pass, worst shape found:
+  128 x 64 KiB distinct IDN URLs (examined + past the bound) 826 ms". The work
+  units do not track the time long non-ASCII host names take, and a result of
+  them took far longer. A result's reading is now bounded by time as well, 2.0
+  seconds of wall-clock time per result (`RESULT_TIME_BOUND_SECONDS`), and the
+  result is cut there. The measured worst case of one `record_tool_result`, the
+  worst of 3 runs per shape (`scripts/value_origin_measurements/result_time_bound.py`,
+  2026-11-01, macOS arm64), is **2.007 s**, on all 14 interpreters run (3.10.11,
+  3.10.20, 3.10.22, 3.11.3, 3.11.15, 3.11.17, 3.12.0, 3.12.2, 3.12.13, 3.12.15,
+  3.14.0, 3.14.5, 3.14.8 and 3.14.9):
+
+  ```
+  shape (heavy non-ASCII host names)       worst, every interpreter
+  64 x 64 KiB, 16 URLs each                2.000 - 2.002 s
+  64 URLs, one a leaf                      2.001 - 2.007 s
+  128 x 64 KiB (past the bound)            2.000 - 2.003 s
+  one 4 MiB leaf                           2.000 - 2.002 s
+  64 x 64 KiB bare hosts                   2.000 - 2.007 s
+  ```
+
+  A seam that records a framework's text beside the raw value (the Agents SDK,
+  CrewAI) reads two results, each bounded so.
 
   End to end, a 5 MB input costs about 0.1 s more with value origin on.
 - **The two ledger budgets.** Destinations and key n-grams have separate budgets,

@@ -157,8 +157,9 @@ class Clients:
         less its port and, from 3.14, the netloc as written. http.client:
         ``HTTPConnection(urlsplit(v).netloc).host`` for an http or https URL, the
         netloc as written. requests.lookup: ``urlsplit(v).hostname`` of a URL of any
-        scheme, which requests looks up on macOS before it refuses one it does not
-        send. Each host is encoded as the socket layer encodes a str host (the stdlib
+        scheme, which requests asks macOS's proxy check about before it refuses one
+        it does not send; that check looks it up on the older patch releases only
+        (docs/value-origin-rulings.md §2). Each host is encoded as the socket layer encodes a str host (the stdlib
         ``idna`` codec, IDNA 2003); one it cannot encode is never sent."""
         import http.client
         import urllib.parse as up

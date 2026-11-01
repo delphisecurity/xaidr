@@ -228,8 +228,8 @@ def _stdlib_client_keys(url):
     ``FTPHandler.ftp_open``'s ``_splitport``, ``_splituser`` and second
     ``unquote``; file: ``Request(url).host`` less its port, and from 3.14 the netloc
     as written), http.client given an http or https netloc as written, and
-    ``urlsplit(url).hostname``, which requests looks up on macOS before it refuses
-    a scheme. Only the keying is the core's (``resolver_keys``). An over-read
+    ``urlsplit(url).hostname``, which requests asks macOS's proxy check about
+    before it refuses a scheme (a lookup on the older patch releases only). Only the keying is the core's (``resolver_keys``). An over-read
     among them is a reading of those clients, which
     ``scripts/published_differential.py`` and tests/test_value_origin_client_gate.py
     measure; these hand-written spellings do not judge it, so the class can only

@@ -224,10 +224,19 @@ more than one reading names every one of them. This applies to every rule below.
   interpreter, `tests/test_value_origin_client_gate.py`): its FTP handler
   resolves the host after the last `@`, percent-decoded a second time, and its
   file handler looks a non-local `file:` host up (`Request.host` less its port up
-  to 3.13, the netloc as written from 3.14). requests, on macOS, looks up
-  `urlparse(url).hostname` of a URL of any scheme to decide whether the system
-  proxy settings exempt it, before it refuses a scheme it does not send. Each of
-  those names is read. No
+  to 3.13, the netloc as written from 3.14). requests, on macOS, asks
+  urllib.request whether the system proxy settings exempt `urlparse(url).hostname`
+  of a URL of any scheme, before it refuses a scheme it does not send; on the older
+  patch releases that check looks a name up. Measured on 3.10.11, 3.11.3, 3.12.0
+  and 3.12.2 it looks up the hostname less a trailing `:digits` (`_splitport`), and
+  on 3.10.20, 3.10.22, 3.11.15, 3.11.17, 3.12.13, 3.12.15, 3.14.0, 3.14.5, 3.14.8
+  and 3.14.9 it looks nothing up. The core reads the hostname on every interpreter.
+  Where the two differ, a bracketed IPv6 host ending in `:digits`
+  (`http://[fd00:ec2::254:80]/`), the older releases look the shorter name up
+  with `gethostbyname`, an IPv4 lookup that connects nowhere, and the core reads
+  the whole address. *Corrected 2026-11-01:* this said requests on macOS looks up
+  the hostname of a URL of any scheme, on every interpreter; only those older
+  releases look anything up. Each of those names is read. No
   public DNS zone holds a label with `@`, `:` or `[`, or a numeric top label, but a
   hosts file, a search domain or a private resolver can answer one, so each is
   read as the key the resolver reaches. A non-ASCII host is read as the socket
@@ -278,7 +287,8 @@ more than one reading names every one of them. This applies to every rule below.
   `https`, `ws`, `wss` and `ftp`. A non-special scheme without `//` has no host.
   `file:` and `data:` name no destination by their scheme; the host of a `file:`
   URL is read as the name urllib.request looks it up as, and the host of any URL
-  with an authority as the name requests looks up on macOS (above). *Corrected
+  with an authority as the name requests asks macOS's proxy check about (above;
+  only the older patch releases look it up). *Corrected
   2026-10-25:* until then this said `file:` and `data:` are never destinations;
   urlopen resolves a `file:` URL's host before it opens a local file.
   `mailto:<addr>` is a mailbox.
@@ -600,7 +610,12 @@ the package calls `authority_of`, and a call naming such a value reads
   destination atoms come from all of it. The atom pass past a bound is bounded by
   WORK: each scanned character costs 1 and each candidate examined costs 64,
   500,000 units per seam call (`ATOM_WORK_BUDGET`); a result's examined pass is
-  bounded the same way at 1,000,000 units (`EXAMINED_WORK_BUDGET`). The same budget
+  bounded the same way at 1,000,000 units (`EXAMINED_WORK_BUDGET`). Reading one
+  result, both passes together, is bounded by time as well: 2.0 seconds of
+  wall-clock time (`RESULT_TIME_BOUND_SECONDS`), checked in every loop of the
+  reader down to one host label, since the work units do not track the time some
+  text takes (a long non-ASCII host is encoded label by label, for every encoder
+  and case reading). The same budget
   bounds memory: the pass past a bound builds a node's path one link at a time
   and turns it into a tuple only for a finding, charged by its length, so a value
   nested 16,000 deep costs memory in proportion to the work, never to the square
@@ -611,8 +626,59 @@ the package calls `authority_of`, and a call naming such a value reads
   while the budget could still scan them, and no temporary is kept for its id.
   Past the bound a value too long to read whole is stripped once per object and
   charged for the whitespace the strip scanned; the atom pass is handed what is
-  left, so no character is charged twice and the time a call takes follows the
-  work units (`tests/test_value_origin_cut_results.py`).
+  left, so no character is charged twice (`tests/test_value_origin_cut_results.py`).
+  *Corrected 2026-11-01:* this ended "and the time a call takes follows the work
+  units", which a result of long non-ASCII hosts showed false; the time bound
+  above is what bounds a result's time.
+- **One rule for every way the reader stops early** (owner, 2026-11-01). Wherever
+  the reading of a tool result stops before reading all of it, the result is
+  marked cut, and a cut result cannot vouch (§6). The reader stops early in these
+  places, each listed with what is then done with the rest:
+  1. more than 64 string leaves (`MAX_ARG_LEAVES`): the leaves after the 64th are
+     searched for destination atoms;
+  2. a leaf over 65,536 characters (`MAX_RESULT_LEAF_CHARS`): its first 64 KiB are
+     read, the rest searched for atoms;
+  3. nesting deeper than 6 (`MAX_ARG_DEPTH`): what is deeper is searched for atoms;
+  4. the examined walk's 65,536-node budget (`MAX_WALK_NODES`): the nodes not
+     taken are searched for atoms;
+  5. the examined pass's work budget (`EXAMINED_WORK_BUDGET`): the leaves it did
+     not read are searched for atoms;
+  6. the time bound (`RESULT_TIME_BOUND_SECONDS`): nothing more is read, atoms
+     included;
+  7. a node that cannot be read without consuming it, an iterator, a generator or
+     an awaitable: it is not read, and never consumed;
+  8. host code that raises while a node is read (`model_dump()`, `str()`, a
+     mapping's `items()`): that node is not read, and the rest of the result is;
+  9. a node from an I/O-backed module (httpx, requests, urllib3, aiohttp): it is
+     passed on unread (Q18). This is the cut that names itself: a destination that
+     then traces to nothing reads `result_unread`.
+
+  Past the cut the walk that collects what was not read and the atom pass share
+  the call's `ATOM_WORK_BUDGET`; when it runs out, the result is already cut. What
+  was found before the stop is recorded. So every leaf's text is read, or the
+  result is cut: there is no third outcome. *Pinned by:*
+  `tests/test_value_origin_cut_gate.py`, generated results across shapes, types,
+  sizes and nesting, each destination checked at the reader and at the verdict.
+- **No node is read as empty** (owner, 2026-11-01). A result node is read as the
+  text the model is handed for it, within the same bounds: a str, and a mapping,
+  list, tuple, set or frozenset, as before; bytes, bytearray and memoryview as
+  their text (decoded by a byte-order mark, else as UTF-8 with bad bytes
+  replaced), and a text `array`; an object with a str `.content`, a
+  `model_dump()`, a dataclass's fields (as they are, not copied); any other
+  sequence, set or mapping view, member by member, and a key of any type; and any
+  other object as its `str()`, the text Python and the frameworks print it as.
+  A number or `None` names no destination. Where a framework hands the model a
+  text it builds itself, the seam records that text: the Agents SDK's `str()` of
+  a return value beside the value; CrewAI's `tool_result` and its raw value;
+  Haystack's tool-result message (its `_result_to_string`: JSON, else `str()`);
+  LangChain's `ToolMessage` content (`json.dumps`, else `str()`). A generator
+  LangChain or Haystack turns into its own text reaches no seam: the model is
+  handed `<generator object …>`, which names nothing, and that text is read.
+  Until 2026-11-01 an object of any other type, and bytes inside a result, were
+  read as having no text, and CrewAI and Haystack recorded no tool result under
+  `protect()`. *Pinned by:* `tests/test_value_origin_cut_gate.py`,
+  `tests/test_value_origin_opaque_results.py` (the real LangChain, Agents SDK,
+  CrewAI and Haystack runs).
 - **Observed atoms** (record only): an argument value the walk examines
   whole that is not wholly one destination is scanned for destination atoms
   (prose, a command line, a mailbox part that does not parse). Each atom is on
@@ -648,11 +714,13 @@ since a cut result cannot vouch (below).
   passed on unread, so as not to consume a stream; a destination that then traces
   to nothing reads `result_unread` (Q18).
 - **`write_dropped`**: a destination write the ledger did not accept. That is a
-  full ledger, or a write lost to a fault: a raising `model_dump` in the examined
-  pass, a span list that does not concatenate to the text, a span item that is
-  not a `Span`, a non-string input (ruling 5). Past the examined bound, a raising
-  node is confined to its node and reads `result_unread`. *Pinned by:*
-  `tests/test_value_origin_drop.py`.
+  full ledger, or a write lost to a fault: a span list that does not concatenate
+  to the text, a span item that is not a `Span`, a non-string input (ruling 5).
+  *Corrected 2026-11-01:* this also listed "a raising `model_dump` in the examined
+  pass", and said that past the examined bound a raising node reads
+  `result_unread`. A node whose host code raises now cuts the result (§5, the one
+  rule), anywhere in it: the rest is recorded, and a destination that traces to
+  nothing reads `untrusted_source`. *Pinned by:* `tests/test_value_origin_drop.py`.
 - **A cut result cannot vouch** (decided by the owner, 2026-10-25). A tool result
   past a bound is not read whole, so what it holds is not all known, and a value
   there can name a destination no reading finds. Once the flow carries a cut
@@ -660,8 +728,18 @@ since a cut result cannot vouch (below).
   reads `untrusted_source`, and blocks under ENFORCE. What the principal or a
   trusted source named keeps its authority. Until 2026-10-25 such a call read
   `result_truncated`, which did not block. Where holds exist, a destination in a
-  flow with a cut result is held rather than blocked. *Pinned by:*
-  `tests/test_value_origin_cut_results.py`.
+  flow with a cut result is held rather than blocked. Since 2026-11-01 a result is
+  cut wherever the reader stops before reading all of it (§5, the one rule).
+  *Pinned by:* `tests/test_value_origin_cut_results.py`,
+  `tests/test_value_origin_cut_gate.py`.
+- **Content past a cut cannot authorize, whoever wrote it** (owner, 2026-11-01).
+  Past the cut a value is searched for destination atoms and not read whole, so
+  a destination only its whole reading names is not recorded (a host a line
+  break splits, which a client reads as one name once it removes the break), and
+  a call to it reads
+  `untrusted_source` after the cut result, a trusted source's value included.
+  Where holds exist, it is held. An atom found past the cut is recorded with the
+  result's origin.
 - **The order** when the weakest finding is not `untrusted_source`: a state that
   blocks outranks every state that does not (`result_unread`, then
   `write_dropped`), then `extraction_incomplete`, `argument_bound`,
@@ -672,10 +750,16 @@ since a cut result cannot vouch (below).
 
 ## 7. The wire field
 
-`valueOrigin` is on every tool-call event, behind `value_origin_wire`. The
-default `"v1"` emits exactly the nine values the consumer accepts and withholds
-the other six, naming each in a warning once; `"v2"` emits all fifteen; `"off"`
-emits nothing. `SCHEMA_VERSION` is 0.3.0 (Q14). The Splunk TA's metadata names
+`valueOrigin` is on every tool-call event, behind `value_origin_wire`. Under the
+default, `"v2"`, every state that decided a verdict reaches the wire: all fifteen
+values are emitted, and nothing that changes a verdict is withheld (owner,
+2026-11-01). `"v1"`, for a consumer that accepts only nine, emits exactly those
+nine and withholds the other six, naming each in a warning once; `"off"` emits
+nothing. *Corrected 2026-11-01:* the default was `"v1"`, so a call blocked by
+`result_unread` or `write_dropped`, and a call `extraction_incomplete`,
+`argument_bound` or `input_truncated` decided, reached a consumer with no
+`valueOrigin`. *Pinned by:*
+`test_under_the_default_a_state_that_decided_the_verdict_reaches_the_wire`. `SCHEMA_VERSION` is 0.3.0 (Q14). The Splunk TA's metadata names
 schema 0.2.0, and `KV_MODE = json` extracts `gen_ai.security.value_origin` from
 0.3.0 events.
 

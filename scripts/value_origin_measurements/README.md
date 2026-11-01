@@ -24,3 +24,8 @@ Run from the repository root with `PYTHONPATH=.` and the dev extra installed.
   covers the 456-row shell corpus by bucket, the adversarial corpora via
   `tests/outside/drivers/c11_oracle.py`, and the conformance flows'
   `expected.jsonl`.
+- `result_time_bound.py` gives the worst case of one tool result's reading on text
+  whose cost the work units do not track (long non-ASCII host names), the worst of
+  3 runs per shape at the largest documented result size and past it. Each reading
+  stops at `RESULT_TIME_BOUND_SECONDS`; run it on every interpreter
+  (`docs/value-origin-enforce.md`, "Bounds").

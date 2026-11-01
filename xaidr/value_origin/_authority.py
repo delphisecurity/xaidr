@@ -627,10 +627,11 @@ def stdlib_hosts(value: str) -> List[str]:
     time; file, the host a non-local ``file:`` URL is looked up as (to 3.13 that
     netloc less its port, from 3.14 the netloc as written). ``http.client``'s
     ``HTTPConnection`` and ``HTTPSConnection`` given the netloc of an http or https
-    URL as written. And requests on macOS, which looks up ``urlparse(url).hostname`` of
-    a URL of any scheme to decide whether the system proxy settings exempt it,
-    before it refuses a scheme it does not send (measured on Homebrew's 3.12.2,
-    whose ``_scproxy`` reads the system settings)."""
+    URL as written. And requests on macOS, which asks urllib.request whether the
+    system proxy settings exempt ``urlparse(url).hostname`` of a URL of any scheme,
+    before it refuses a scheme it does not send: on the older patch releases that
+    check looks the hostname up, less a trailing ``:digits``, and on the newer ones
+    it looks nothing up. The hostname is read on every interpreter."""
     out: List[str] = []
 
     def add(host):

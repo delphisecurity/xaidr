@@ -11,10 +11,14 @@ machine-readable copy.
 
 ## The consumer
 
-The consumer of the wire field is **Delphi Core** (`delphisecurity/delphi`). Core
-must accept all fifteen values before anything depends on the `"v2"` set: before
-a sensor is configured with `value_origin_wire="v2"`, and before any view, query
-or policy reads one of the six values `"v1"` withholds.
+The consumer of the wire field is **Delphi Core** (`delphisecurity/delphi`).
+Since 2026-11-01 the sensor's default is `"v2"`, all fifteen values (owner: under
+the default, any state that decided a verdict reaches the wire; nothing that
+changes a verdict is withheld), so Core receives the six values `"v1"` withholds
+from every sensor left at its default. A deployment whose consumer accepts only
+the nine sets `value_origin_wire="v1"`. *Corrected 2026-11-01:* this said Core
+must accept all fifteen before a sensor is configured with `"v2"`; the default
+is now `"v2"`.
 
 ## The fifteen values
 
@@ -31,7 +35,7 @@ or policy reads one of the six values `"v1"` withholds.
 | `ledger_saturated` | not_evaluated | not_recorded | yes | no | Intent: not evaluated — this flow's ledger was full; an unmatched destination cannot be called novel. |
 | `input_truncated` | not_evaluated | not_recorded | no | no | Intent: not evaluated — this destination traces to no recorded source; the principal's input was longer than value origin examines whole (64 KiB), and the part past that point was scanned only for destination addresses. |
 | `argument_bound` | unresolved | ran_evidence | no | no | Intent: destination not fully examined — this call's arguments exceed what value origin examines whole (a value over 4,000 characters, more than 64 values, or nesting deeper than 6); past that point they were scanned only for destination addresses. |
-| `result_truncated` | not_evaluated | not_recorded | no | no | Intent: not evaluated — this destination traces to no recorded source; a tool result in this flow exceeded what value origin examines whole (a value over 65,536 characters, more than 64 values, or nesting deeper than 6), and the part past that point was scanned only for destination addresses. |
+| `result_truncated` (no call reads it since 2026-10-25) | not_evaluated | not_recorded | no | no | Intent: not evaluated — this destination traces to no recorded source; a tool result in this flow exceeded what value origin examines whole (a value over 65,536 characters, more than 64 values, or nesting deeper than 6), and the part past that point was scanned only for destination addresses. |
 | `result_unread` | not_evaluated | not_recorded | no | yes: `ORIGIN_UNEXAMINABLE_SOURCE` | Intent: not evaluated — a tool result in this flow was an unread network response (httpx, requests, urllib3 or aiohttp), which value origin does not read so as not to consume it; a destination in it cannot be traced. |
 | `extraction_incomplete` | not_evaluated | not_recorded | no | no | Intent: not evaluated — value origin's scan for destination addresses in a long value reached its work budget; the rest was not scanned, so a destination there may be missed. |
 | `write_dropped` | not_evaluated | not_recorded | no | yes: `ORIGIN_UNEXAMINABLE_SOURCE` | Intent: not evaluated — a write to this flow's ledger was lost (the ledger was full, or recording it faulted), so value origin does not know what that input or result named; a destination it does not know is treated as unexaminable. |
@@ -42,8 +46,9 @@ an action.
 
 ## What the sensor emits: `Sensor(value_origin_wire=...)`
 
-- `"v1"`, the default: the nine values marked in `v1` above.
-- `"v2"`: all fifteen.
+- `"v2"`, the default (since 2026-11-01): all fifteen.
+- `"v1"`: the nine values marked in `v1` above, for a consumer that accepts only
+  those. It was the default.
 - `"off"`: none.
 
 A value outside the active set is withheld from every reporter (SIEM and file

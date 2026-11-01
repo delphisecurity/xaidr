@@ -20,10 +20,29 @@ still reconcile against the whole range (docs/releasing.md, step 1).
   neither the principal nor a trusted source named reads `untrusted_source` and
   blocks under ENFORCE. It read `result_truncated`, which did not block. The
   principal's and trusted sources' destinations keep their authority.
+- A tool result is cut wherever reading it stops before reading all of it, and
+  then cannot vouch: past the leaf, size, depth and node bounds as before, and
+  now past the examined pass's work budget (a call there read
+  `extraction_incomplete`, which did not block), past a time bound of 2.0 seconds
+  per result, at an iterator or a generator (never consumed), and at a node whose
+  `model_dump()` or `str()` raises (the whole result read `write_dropped`; the
+  rest of it is now read).
+- No tool-result node is read as empty. bytes inside a result are read as their
+  text, an object of a type value origin does not recognise as its `str()`, a
+  `deque`, a mapping view and any other sequence member by member, and a key of
+  any type. They read as having no text before.
+- Under `xaidr.protect()`, CrewAI and Haystack tool results are recorded (as the
+  model is handed them, unscanned and untrusted); they were not recorded at all.
+  The Agents SDK seam also records the `str()` of a return value it hands the
+  model.
+- `Sensor(value_origin_wire=...)` defaults to `"v2"`, all fifteen wire values, so
+  every state that decided a call's verdict reaches telemetry. It was `"v1"`,
+  which withheld six; pass `"v1"` for a consumer that accepts only nine.
 - A `file:` URL's host, an `ftp:` URL's host as urllib.request's FTP handler
   resolves it, and the plain hostname of a URL of any scheme are read as
-  destinations: urlopen resolves the first two, and requests on macOS looks up
-  the third. A `file:` URL with a host read no destination before.
+  destinations: urlopen resolves the first two, and requests on macOS asks the
+  system proxy check about the third, which looks it up on the older patch
+  releases. A `file:` URL with a host read no destination before.
 - A port written in any script's decimal digits splits a host as an ASCII port
   does, the digits Unicode 14.0 to 16.0 added included, since `int()` takes them
   on an interpreter whose Unicode has them: an unbracketed IPv6 address followed
