@@ -209,7 +209,10 @@ ATOM_WORK_BUDGET: int = 500_000
 EXAMINED_WORK_BUDGET: int = 1_000_000
 # And by time: reading one result, its examined pass and the pass past the bound
 # together, stops at this much wall-clock time, and the result is then cut (2026-11-01).
-RESULT_TIME_BOUND_SECONDS: float = 2.0
+# About five times the longest a result of ordinary text took to read where it was
+# measured, so a slower host does not cut one: 2.0 cut results of ten thousand URLs
+# on the CI runners.
+RESULT_TIME_BOUND_SECONDS: float = 4.0
 MAX_WALK_NODES: int = 65_536    # the EXAMINED walk's node budget: width cannot escape it (review)
 ATOM_COST: int = 64
 ATOM_CHUNK_CHARS: int = 16_384

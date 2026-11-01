@@ -611,7 +611,7 @@ the package calls `authority_of`, and a call naming such a value reads
   WORK: each scanned character costs 1 and each candidate examined costs 64,
   500,000 units per seam call (`ATOM_WORK_BUDGET`); a result's examined pass is
   bounded the same way at 1,000,000 units (`EXAMINED_WORK_BUDGET`). Reading one
-  result, both passes together, is bounded by time as well: 2.0 seconds of
+  result, both passes together, is bounded by time as well: 4.0 seconds of
   wall-clock time (`RESULT_TIME_BOUND_SECONDS`), checked in every loop of the
   reader down to one host label, since the work units do not track the time some
   text takes (a long non-ASCII host is encoded label by label, for every encoder

@@ -90,7 +90,7 @@ rate on the user's own destinations.
 |---|---|---|
 | an argument leaf over 4,000 chars, more than 64 argument leaves, nesting deeper than 6 | `argument_bound` | a skipped value short enough is read whole; the skipped parts are searched for destination atoms; each is evaluated |
 | a tool-result leaf over 65,536 chars, more than 64 result leaves, nesting deeper than 6, the examined walk's node budget, the examined pass's work budget | `untrusted_source` (blocks): the result is cut and cannot vouch | the skipped parts are searched for atoms, and each is recorded with the result's origin |
-| a tool result's time bound (2.0 s per result) | `untrusted_source` (blocks): the result is cut | nothing more is read |
+| a tool result's time bound (4.0 s per result) | `untrusted_source` (blocks): the result is cut | nothing more is read |
 | a result node that cannot be read without consuming it (an iterator, a generator), or whose host code raised | `untrusted_source` (blocks): the result is cut | the node is not read; the rest of the result is |
 | a principal input over 65,536 chars | `input_truncated` | atoms are recorded from all of it; key n-grams from the first 64 KiB |
 | the atom pass's work budget (an argument, or a principal input past 64 KiB) | `extraction_incomplete` | the rest is not scanned |
@@ -118,21 +118,24 @@ rate on the user's own destinations.
   *Corrected 2026-11-01:* this block ended "examined pass, worst shape found:
   128 x 64 KiB distinct IDN URLs (examined + past the bound) 826 ms". The work
   units do not track the time long non-ASCII host names take, and a result of
-  them took far longer. A result's reading is now bounded by time as well, 2.0
+  them took far longer. A result's reading is now bounded by time as well, 4.0
   seconds of wall-clock time per result (`RESULT_TIME_BOUND_SECONDS`), and the
-  result is cut there. The measured worst case of one `record_tool_result`, the
-  worst of 3 runs per shape (`scripts/value_origin_measurements/result_time_bound.py`,
-  2026-11-01, macOS arm64), is **2.007 s**, on all 14 interpreters run (3.10.11,
-  3.10.20, 3.10.22, 3.11.3, 3.11.15, 3.11.17, 3.12.0, 3.12.2, 3.12.13, 3.12.15,
-  3.14.0, 3.14.5, 3.14.8 and 3.14.9):
+  result is cut there. 4.0 is about five times the longest a result of ordinary
+  text took to read here, 0.81 s (12,000 URLs in 30 leaves); a bound of 2.0 cut
+  results of ten thousand URLs on the CI runners. The measured worst case of one
+  `record_tool_result`, the worst of 3 runs per shape
+  (`scripts/value_origin_measurements/result_time_bound.py`, 2026-11-01, macOS
+  arm64), is **4.005 s**, on all 14 interpreters run (3.10.11, 3.10.20, 3.10.22,
+  3.11.3, 3.11.15, 3.11.17, 3.12.0, 3.12.2, 3.12.13, 3.12.15, 3.14.0, 3.14.5,
+  3.14.8 and 3.14.9):
 
   ```
   shape (heavy non-ASCII host names)       worst, every interpreter
-  64 x 64 KiB, 16 URLs each                2.000 - 2.002 s
-  64 URLs, one a leaf                      2.001 - 2.007 s
-  128 x 64 KiB (past the bound)            2.000 - 2.003 s
-  one 4 MiB leaf                           2.000 - 2.002 s
-  64 x 64 KiB bare hosts                   2.000 - 2.007 s
+  64 x 64 KiB, 16 URLs each                4.000 - 4.005 s
+  64 URLs, one a leaf                      4.000 - 4.004 s
+  128 x 64 KiB (past the bound)            4.000 - 4.002 s
+  one 4 MiB leaf                           4.000 - 4.005 s
+  64 x 64 KiB bare hosts                   2.377 - 3.977 s
   ```
 
   A seam that records a framework's text beside the raw value (the Agents SDK,

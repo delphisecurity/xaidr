@@ -23,7 +23,7 @@ still reconcile against the whole range (docs/releasing.md, step 1).
 - A tool result is cut wherever reading it stops before reading all of it, and
   then cannot vouch: past the leaf, size, depth and node bounds as before, and
   now past the examined pass's work budget (a call there read
-  `extraction_incomplete`, which did not block), past a time bound of 2.0 seconds
+  `extraction_incomplete`, which did not block), past a time bound of 4.0 seconds
   per result, at an iterator or a generator (never consumed), and at a node whose
   `model_dump()` or `str()` raises (the whole result read `write_dropped`; the
   rest of it is now read).
