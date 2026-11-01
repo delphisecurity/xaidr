@@ -1194,10 +1194,11 @@ def _patch_haystack(ctx: PatchContext) -> None:
         )
     ctx.unpatchable(
         f"{module_name}.Agent.hooks['after_tool']", "tool result",
-        "tool RESULTS are not scanned — only tool ARGUMENTS are. Haystack does "
-        "offer the seam (the after_tool hook point runs once the result messages "
-        "are in State); this build deliberately does not register there, so a "
-        "tool returning an injected payload is not caught. Scan it yourself with "
+        "tool RESULTS are not scanned — only tool ARGUMENTS are. The after_tool "
+        "hook point (it runs once the result messages are in State) is registered "
+        "for value origin only: it records each result as the model is handed it, "
+        "unscanned and untrusted, and changes nothing, so a tool returning an "
+        "injected payload is not caught. Scan it yourself with "
         "sensor.scan(result, direction='tool_result') in an after_tool hook of "
         "your own — 'tool_result', not 'input', so your audit trail does not "
         "record a server's answer as something a principal asked for.",

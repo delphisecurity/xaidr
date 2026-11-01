@@ -375,11 +375,14 @@ jobs:
           .venv-runs/bin/python -c "import sys; print(sys.version)"
       - name: Run tests/test_value_origin_real_runs.py against the installed package
         # From a directory outside the checkout, so `xaidr` is the installed copy.
+        # The opaque-result checks of the two frameworks installed here run too; the
+        # CrewAI and Haystack ones run in the framework-results job.
         run: |
           mkdir -p "$RUNNER_TEMP/runs" && cp -R tests "$RUNNER_TEMP/runs/tests"
           cd "$RUNNER_TEMP/runs"
           "$GITHUB_WORKSPACE/.venv-runs/bin/python" -c "import xaidr, sys; assert 'site-packages' in xaidr.__file__, xaidr.__file__; print(xaidr.__file__)"
           "$GITHUB_WORKSPACE/.venv-runs/bin/python" -m pytest tests/test_value_origin_real_runs.py \
+            tests/test_value_origin_opaque_results.py -k "not crewai and not haystack" \
             -q -rs -p no:cacheprovider --junitxml="$GITHUB_WORKSPACE/real-runs.xml"
       # THE GUARD: pytest exits 0 on an all-skipped run, so read what it did.
       - name: Guard — every real-run check ran, none skipped
@@ -387,7 +390,7 @@ jobs:
           .venv-runs/bin/python - <<'PY'
           import sys
           import xml.etree.ElementTree as ET
-          MINIMUM = 39
+          MINIMUM = 39 + 27
           cases = list(ET.parse("real-runs.xml").iter("testcase"))
           skipped = [c.get("name") for c in cases if c.find("skipped") is not None]
           broken = [c.get("name") for c in cases
@@ -402,6 +405,47 @@ jobs:
               problems.append(f"failed/errored: {broken}")
           if problems:
               sys.exit("GUARD RED: " + "; ".join(problems))
+          print("GUARD GREEN")
+          PY
+
+  # ── A tool result value origin does not recognise, through CrewAI and Haystack ─
+  # The real-runs job installs LangChain and the Agents SDK; these two frameworks
+  # record a tool result through their own after-tool hooks (2026-11-01), so their
+  # checks run here, against the installed package, and none may skip.
+  framework-results:
+    name: value origin on opaque results (py3.12, crewai, haystack)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install the interpreter, the package and the pinned frameworks
+        env:
+          UV_PYTHON_PREFERENCE: only-managed
+        run: |
+          uv python install 3.12
+          uv venv -p 3.12 .venv-fw
+          uv pip install --python .venv-fw . pytest "crewai==1.15.33" "haystack-ai==3.4.1"
+          .venv-fw/bin/python -c "import sys; print(sys.version)"
+      - name: Run the CrewAI and Haystack checks against the installed package
+        run: |
+          mkdir -p "$RUNNER_TEMP/fw" && cp -R tests "$RUNNER_TEMP/fw/tests"
+          cd "$RUNNER_TEMP/fw"
+          "$GITHUB_WORKSPACE/.venv-fw/bin/python" -c "import xaidr, sys; assert 'site-packages' in xaidr.__file__, xaidr.__file__; print(xaidr.__file__)"
+          "$GITHUB_WORKSPACE/.venv-fw/bin/python" -m pytest tests/test_value_origin_opaque_results.py \
+            -k "crewai or haystack" -q -rs -p no:cacheprovider \
+            --junitxml="$GITHUB_WORKSPACE/framework-results.xml"
+      - name: Guard — every CrewAI and Haystack check ran, none skipped
+        run: |
+          .venv-fw/bin/python - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse("framework-results.xml").iter("testcase"))
+          skipped = [c.get("name") for c in cases if c.find("skipped") is not None]
+          broken = [c.get("name") for c in cases
+                    if c.find("failure") is not None or c.find("error") is not None]
+          print(f"collected={len(cases)} skipped={len(skipped)} failed/errored={len(broken)}")
+          if len(cases) < 13 or skipped or broken:
+              sys.exit(f"GUARD RED: collected {len(cases)}, skipped {skipped}, broken {broken}")
           print("GUARD GREEN")
           PY
 

@@ -3523,6 +3523,17 @@ class DelphiSensor:
                 out = await out
             if not _vo_seams.RESULT_SEAM.get():
                 self._vo_record_result(tool_name, arguments, out, None)
+                if not isinstance(out, str):
+                    # The SDK hands the model str() of a return value it does not
+                    # convert itself, and str() of a container shows its members'
+                    # repr(): that text is recorded too, so a destination the model
+                    # reads is recorded however the value is shaped (2026-11-01).
+                    try:
+                        text = str(out)
+                    except Exception:
+                        text = None
+                    if isinstance(text, str):
+                        self._vo_record_result(tool_name, arguments, text, None)
             return out
         return on_invoke_tool
 
