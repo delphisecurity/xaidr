@@ -1949,8 +1949,9 @@ class TestRealHaystack:
         try:
             assert [r.already_patched for r in second.patched] == [True, True, True]
             agent = build([self._text("hi")], hooks=None)
+            # after_tool: value origin's result record (2026-11-01).
             assert {point: len(hooks) for point, hooks in agent.hooks.items()} == {
-                "before_run": 1, "before_tool": 1, "after_run": 1
+                "before_run": 1, "before_tool": 1, "after_tool": 1, "after_run": 1
             }, agent.hooks
         finally:
             second.unprotect()
@@ -1967,8 +1968,9 @@ class TestRealHaystack:
                            self._text("stopped")],
                           hooks=delphi_hooks(agent_id="by-hand",
                                              enforcement_mode="block"))
+            # after_tool: value origin's result record (2026-11-01).
             assert {point: len(h) for point, h in agent.hooks.items()} == {
-                "before_run": 1, "before_tool": 1, "after_run": 1
+                "before_run": 1, "before_tool": 1, "after_tool": 1, "after_run": 1
             }, agent.hooks
             agent.run(messages=[self._user("clean the disk")])
         finally:
@@ -2340,7 +2342,8 @@ emit(missing=[n for n in needed if n not in sys.modules],
         serialized = _serialize_hooks_dictionary(
             delphi_hooks(agent_id="round-trip", enforcement_mode="block")
         )
-        assert set(serialized) == {"before_run", "before_tool", "after_run"}
+        # after_tool: value origin's result record (2026-11-01).
+        assert set(serialized) == {"before_run", "before_tool", "after_tool", "after_run"}
         assert serialized["before_tool"][0]["type"] == (
             "xaidr.integrations.haystack._DelphiHook"
         )

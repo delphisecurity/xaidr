@@ -292,7 +292,7 @@ def test_the_time_bound_cuts():
     # Two readings run in _check (the reader, then record_tool_result); each stops
     # at the bound, so the work past it is the slack, not the text.
     assert took < 2 * (bound + 1.0), (
-        f"reading one result of 64 long international names twice took {took:.1f} s: "
+        f"reading one result of 60 long international names twice took {took:.1f} s: "
         f"the reading does not stop at its {bound} s time bound")
 
 
