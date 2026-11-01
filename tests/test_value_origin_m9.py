@@ -9,7 +9,9 @@ THE GATE (owner: "Do not emit a value no consumer accepts"). The consumer accept
 nine values (the `v1` column of docs/value-origin-wire-consumers.md) and stores
 anything else as NULL while counting it rejected.
 `Sensor(value_origin_wire=...)` names the vocabulary the consumer accepts:
-"v1" (the default) is those nine, "v2" is all fourteen, and "off" emits nothing.
+"v1" is those nine, "v2" is all fifteen, and "off" emits nothing. The DEFAULT is
+"v2" since 2026-11-01 (owner: under the default, any state that decided a verdict
+reaches the wire; nothing that changes a verdict is withheld); it was "v1".
 A value outside the active vocabulary is WITHHELD (the key is absent) and named
 in a once-per-value warning; it stays on `ScanResult.value_origin`.
 """
@@ -139,7 +141,8 @@ def test_absent_in_off_on_an_evaluate_fault_and_on_non_tool_call_events(monkeypa
 def _unread_block(wire_vocab, caplog):
     from concurrent.futures import ThreadPoolExecutor
     from xaidr import provenance_chain as pc
-    s, ev = _sensor(value_origin="enforce", value_origin_wire=wire_vocab)
+    kw = {} if wire_vocab is None else {"value_origin_wire": wire_vocab}
+    s, ev = _sensor(value_origin="enforce", **kw)
     stand_in = type("Response", (), {"__module__": "httpx"})()
 
     def run():
@@ -167,6 +170,62 @@ def test_v1_withholds_a_value_the_brain_does_not_accept_and_says_so(caplog):
         f"{[d.get('valueOrigin') for d in tool]}")
     hits = [m.getMessage() for m in caplog.records if "withheld" in m.getMessage()]
     assert len(hits) == 1 and "result_unread" in hits[0], f"the withholding must be named once: {hits}"
+
+
+def _decided_by(state, caplog):
+    """(the call's wire, its action, the emitted tool-call events) for a call whose
+    verdict ``state`` decides, under the DEFAULT value_origin_wire."""
+    from concurrent.futures import ThreadPoolExecutor
+    from xaidr import provenance_chain as pc
+    from xaidr.value_origin import _types
+    s, ev = _sensor(value_origin="enforce")
+
+    def run():
+        pc.begin_flow(principal="alice")
+        try:
+            prompt = "Summarise the report."
+            if state == "input_truncated":
+                prompt = prompt + " filler" * (_types.MAX_INPUT_NGRAM_CHARS // 6)
+            s.scan(prompt, direction="input")
+            call = {"url": "https://r5-sink.example/collect"}
+            if state == "result_unread":
+                stand_in = type("Response", (), {"__module__": "httpx"})()
+                s._scan_tool_result("fetched", tool="web_fetch", arguments={},
+                                    raw_result=stand_in)
+            elif state == "argument_bound":
+                call = dict({f"k{i}": "v" for i in range(70)}, **call)
+            elif state == "extraction_incomplete":
+                call = {"body": "word " * 60_000 + "https://r5-sink.example/collect " * 9_000}
+            ev.clear()
+            with caplog.at_level(logging.WARNING, logger="xaidr"):
+                r = s.scan_tool_call("http_post", call)
+            return r
+        finally:
+            pc.clear_flow()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        r = pool.submit(run).result()
+    return r.value_origin.wire.value, r.action, _tool_events(ev)
+
+
+@pytest.mark.parametrize("state", ["result_unread", "argument_bound", "input_truncated",
+                                   "extraction_incomplete"])
+def test_under_the_default_a_state_that_decided_the_verdict_reaches_the_wire(state, caplog):
+    """Owner, 2026-11-01: under the default value_origin_wire, any state that
+    decided a verdict reaches the wire; nothing that changes a verdict is withheld.
+    Each state here decided its call's verdict (result_unread blocked it), and the
+    emitted tool-call event says so. Until 2026-11-01 the default "v1" withheld all
+    four: the event carried no valueOrigin, and a consumer saw a blocked call with
+    no reason for it, or an allowed call with no reason it was not examined."""
+    wire, action, tool = _decided_by(state, caplog)
+    assert wire == state, f"precondition: the call reads {state}, not {wire}"
+    assert tool, "precondition: the call emitted a tool-call event"
+    assert all(d.get("valueOrigin") == state for d in tool), (
+        f"the state that decided this call's verdict ({state}, action {action}) was "
+        f"withheld from the emitted event under the default: "
+        f"{[d.get('valueOrigin') for d in tool]}")
+    assert not [m for m in caplog.records if "withheld" in m.getMessage()]
+    if state == "result_unread":
+        assert action == "blocked", action
 
 
 def test_v2_emits_every_value_and_off_emits_none(caplog):

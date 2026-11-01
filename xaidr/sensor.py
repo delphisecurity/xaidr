@@ -504,17 +504,19 @@ def _coerce_scannable(value) -> Optional[str]:
 
 
 # ── M9: the valueOrigin wire field, and its consumer gate (owner, 2026-10-06) ──
-# "Do not emit a value no consumer accepts." The consumer is Delphi Core, which
-# must accept all fifteen values before anything depends on "v2"
-# (docs/value-origin-wire-consumers.md). Withholding applies to EVERY reporter.
+# The consumer is Delphi Core (docs/value-origin-wire-consumers.md). Withholding,
+# under "v1" only, applies to EVERY reporter.
 # The sensor names the consumer's vocabulary (Sensor(value_origin_wire=...)):
-#   "v1"  the nine below -- the DEFAULT;
-#   "v2"  all fifteen, for once the consumer accepts them;
+#   "v1"  the nine below, for a consumer that accepts only those;
+#   "v2"  all fifteen -- the DEFAULT (2026-11-01);
 #   "off" emit nothing.
 # A value outside the active vocabulary is WITHHELD -- the key is absent, as for
 # a sensor that does not report -- and named in a once-per-value warning; it is
-# always on ScanResult.value_origin. Literals, not WireValue, so this module
-# reaches into the core only inside guarded calls (the fault-isolation sweep);
+# always on ScanResult.value_origin. The DEFAULT is "v2" since 2026-11-01 (owner:
+# under the default, any state that decided a verdict reaches the wire; nothing
+# that changes a verdict is withheld); "v1" is for a consumer that takes nine.
+# Literals, not WireValue, so this module reaches into the core only inside
+# guarded calls (the fault-isolation sweep);
 # tests/test_value_origin_m9.py pins v2 == every WireValue.
 _VO_WIRE_V1 = frozenset({
     "principal", "principal_undeclared_span", "trusted_source", "untrusted_source",
@@ -593,7 +595,7 @@ class DelphiSensor:
         fail_closed=(),
         value_origin="record",
         value_origin_sources: Sequence = (),
-        value_origin_wire: str = "v1",
+        value_origin_wire: str = "v2",
     ):
         if not agent_id:
             raise ValueError("agent_id is required")
