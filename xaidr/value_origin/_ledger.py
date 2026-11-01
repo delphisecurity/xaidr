@@ -92,6 +92,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ._authority import (ParseFailure, classify_value, key_chain, prose_candidates,
                          result_candidates)
+from . import _clock
 from ._designations import source_matches
 from ._extract import (AtomBudget, argument_value, budgeted_atoms, key_authority, key_ngram,
                        result_leaves_bounded, span_ngrams)
@@ -101,6 +102,7 @@ from ._types import (
     ATOM_COST,
     EXAMINED_WORK_BUDGET,
     MAX_INPUT_NGRAM_CHARS,
+    RESULT_TIME_BOUND_SECONDS,
     Authority,
     Origin,
     RecordOutcome,
@@ -663,35 +665,58 @@ def result_authorities(result: Any) -> List[Authority]:
     return out + late
 
 
-def _result_authorities(result: Any) -> Tuple[List[Authority], bool]:
-    """(examined candidates, whether the result walk hit a bound, whether it
-    skipped an I/O-backed node unread, atoms from past the bound). The last are
-    kept apart so the recorder writes them separately (milestone review)."""
+def _result_authorities(result: Any) -> Tuple[List[Authority], bool, bool, List[Authority], bool]:
+    """(examined candidates, whether the reading stopped before reading all of
+    the result -- the result is CUT --, whether it skipped an I/O-backed node
+    unread, atoms from past the cut, whether the atom pass past it ran out of
+    work). The atoms are kept apart so the recorder writes them separately
+    (milestone review).
+
+    One rule for every way the reading stops early (2026-11-01): a bound of the
+    walk (leaves, size, depth, nodes), a node it must not consume, host code that
+    raised, the examined pass's work budget, and the time bound
+    (``RESULT_TIME_BOUND_SECONDS``) each cut the result, and a cut result cannot
+    vouch (2026-10-25). What was found before the stop is kept."""
     out: List[Authority] = []
     seen = set()
-    leaves, truncated, unread, extra, budget = result_leaves_bounded(result)
-    examined = AtomBudget(EXAMINED_WORK_BUDGET)   # the EXAMINED pass, by work (2026-10-06)
-    for leaf in leaves:
-        if examined.left <= 0:
-            examined.hit = True                    # visible (extraction_incomplete); no block
-            break
-        # The whole leaf is read as an argument value is: every key the
-        # argument reader reads from this text, the S-4 fallback key and the
-        # scheme-less address forms included, is recorded from it.
-        found: List[Authority] = _whole_readings(classify_value(leaf, arg_mode=True))
-        counted = [0]
-        found.extend(a for _, a in result_candidates(leaf, counted))
-        examined.left -= len(leaf) + ATOM_COST * counted[0]
-        for a in found:
+    late: List[Authority] = []
+    cut = unread = incomplete = False
+    token = _clock.start(RESULT_TIME_BOUND_SECONDS)
+    try:
+        leaves, cut, unread, extra, budget = result_leaves_bounded(result)
+        examined = AtomBudget(EXAMINED_WORK_BUDGET)   # the EXAMINED pass, by work (2026-10-06)
+        rest: List[str] = []
+        for k, leaf in enumerate(leaves):
+            _clock.tick()
+            if examined.left <= 0:
+                # The examined budget is a bound on the result too: the leaves left
+                # are not read whole, so the result is cut, and they go to the atom
+                # pass past the cut with what the walk kept from examination.
+                examined.hit = cut = True
+                rest = leaves[k:]
+                break
+            # The whole leaf is read as an argument value is: every key the
+            # argument reader reads from this text, the S-4 fallback key and the
+            # scheme-less address forms included, is recorded from it.
+            found: List[Authority] = _whole_readings(classify_value(leaf, arg_mode=True))
+            counted = [0]
+            found.extend(a for _, a in result_candidates(leaf, counted))
+            examined.left -= len(leaf) + ATOM_COST * counted[0]
+            for a in found:
+                if a not in seen:
+                    seen.add(a)
+                    out.append(a)
+        for _, a in budgeted_atoms([((), leaf) for leaf in rest + extra], budget,
+                                   result_candidates):
             if a not in seen:
                 seen.add(a)
-                out.append(a)
-    late: List[Authority] = []               # past the bound: WORK-bounded, one budget
-    for _, a in budgeted_atoms([((), leaf) for leaf in extra], budget, result_candidates):
-        if a not in seen:
-            seen.add(a)
-            late.append(a)
-    return out, truncated, unread, late, budget.hit or examined.hit
+                late.append(a)
+        incomplete = budget.hit
+    except _clock.TimeBound:
+        cut = True             # past the time bound nothing more is read: cut
+    finally:
+        _clock.restore(token)
+    return out, cut, unread, late, incomplete
 
 
 def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
@@ -718,7 +743,7 @@ def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
             return RecordOutcome.NO_LEDGER
         with lg.lock:
             if cut:
-                lg.result_truncated = True   # RULING 1+2: a miss here is result_truncated
+                lg.result_truncated = True   # a cut result: it cannot vouch (2026-10-25, 2026-11-01)
             if unread:
                 lg.result_unread = True      # Q18 under the bounds ruling: never silent
             if incomplete:

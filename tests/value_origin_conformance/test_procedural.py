@@ -258,8 +258,11 @@ class Opaque:
     (PydanticLike(), "pyd@x.example", True),
     (Contact(name="c", email="dc@x.example"), "dc@x.example", True),
     ([Contact(name="c", email="nested@x.example")], "nested@x.example", True),
-    (Opaque(), "opaque@x.example", False),          # anything else: no leaves
-    (b"bytes@x.example", "bytes@x.example", False),
+    # 2026-11-01 (owner): nothing is read as empty. Anything else is read as its
+    # str() text, and bytes as their text; both read nothing until then.
+    (Opaque(), "opaque@x.example", True),
+    (b"bytes@x.example", "bytes@x.example", True),
+    ({"body": b"see nb@x.example"}, "nb@x.example", True),
 ])
 def test_v15_result_shapes(result, dest, recorded):
     bind_fresh_ledger()
@@ -291,8 +294,11 @@ class Exploding:
 
 def test_runtime_functions_never_raise():
     bind_fresh_ledger()
+    # 2026-11-01: a node whose host code raises CUTS the result and is not a fault
+    # of the recording; nothing raises into the host either way.
     assert record_tool_result("t", {}, Exploding(), designations=(),
-                              result_blocked=False) is RecordOutcome.FAULT
+                              result_blocked=False) is RecordOutcome.RECORDED
+    assert vo._ledger._current().result_truncated
     assert record_principal_input(None, input_clean=True) is RecordOutcome.FAULT
     assert record_principal_input("x", ["not a span"], input_clean=True) is RecordOutcome.FAULT
     assert vo.authority_of(None) is None

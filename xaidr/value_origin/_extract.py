@@ -21,12 +21,18 @@ leaves in different processes.
 """
 from __future__ import annotations
 
+import array
+import collections
 import dataclasses
+import numbers
 import re
+from collections.abc import (AsyncIterator, Awaitable, MappingView, Sequence,
+                             Set as _AbcSet)
+from collections.abc import Iterator as _AbcIterator
 from typing import Any, Iterator, List, Mapping, Tuple
 
 from ._authority import ParseFailure, classify_value
-from . import _ucd
+from . import _clock, _ucd
 from ._idna import pinned_casefold
 from ._types import (
     ATOM_COST,
@@ -43,26 +49,46 @@ from ._types import (
 Path = Tuple[Any, ...]
 
 
-def _children(node: Any):
-    """(is_container, iterator of (path_step, child)) for one node."""
+def _children(node: Any, *, result: bool = False):
+    """(is_container, iterator of (path_step, child)) for one node. In a result
+    (``result``) a key of any type is walked, as a str key is, and so is every
+    other container Python's ABCs name a sequence, a set or a mapping view,
+    child by child without copying it."""
     if isinstance(node, Mapping):
         def it():
             for k, v in list(node.items()):
-                if isinstance(k, str):
+                if isinstance(k, str) or result:
                     yield k, k, True       # the key itself, as a leaf
                 yield k, v, False
         return True, it()
     if isinstance(node, (list, tuple)):
         return True, ((i, v, False) for i, v in enumerate(list(node)))
-    if isinstance(node, (set, frozenset)):
+    if isinstance(node, (set, frozenset)) or (result and isinstance(node, _AbcSet)):
         items = sorted(node, key=lambda x: (type(x).__name__, repr(x)))
         return True, ((i, v, False) for i, v in enumerate(items))
+    if result and isinstance(node, (Sequence, MappingView)):
+        return True, ((i, v, False) for i, v in enumerate(node))
     return False, iter(())
 
 
 # A result node value origin must NOT read (Q18), returned by the normaliser so the
 # walk can say a read was skipped instead of dropping it silently (bounds ruling).
 _UNREAD = object()
+# A result node that cannot be read without consuming it (an iterator, a generator,
+# an awaitable): never consumed, and the result is cut (2026-11-01).
+_CUT = object()
+
+
+def _host(normalise, node):
+    """``normalise(node)``, host code, with the time bound suspended (it is never
+    interrupted), then the bound checked."""
+    token = _clock.suspend()
+    try:
+        out = normalise(node)
+    finally:
+        _clock.restore(token)
+    _clock.check()
+    return out
 
 
 def _prepend(first, rest):
@@ -83,23 +109,27 @@ class _Rest:
 
 def _walk(root: Any, *, leaf_cap: int, char_cap: int, truncate_long: bool,
           normalise=None, skipped: list | None = None
-          ) -> Tuple[List[Tuple[Path, str]], bool, bool]:
-    """Bounded DFS. Returns (leaves, truncated, unread). ``normalise`` maps a
+          ) -> Tuple[List[Tuple[Path, str]], bool, bool, bool]:
+    """Bounded DFS. Returns (leaves, truncated, unread, cut). ``normalise`` maps a
     non-container, non-str node to something walkable (V-15, results only); a
     node it returns as ``_UNREAD`` sets ``unread`` and is not walked. Given a
     ``skipped`` list, every node a bound kept from examination is appended to it
     as (path, node) -- an over-length leaf WHOLE, so a destination straddling the
     cut is still whole -- for ``_all_strings`` and atom extraction (owner,
-    2026-10-05; since 2026-10-06 extraction is bounded by WORK, not position)."""
+    2026-10-05; since 2026-10-06 extraction is bounded by WORK, not position).
+    In a result (``normalise``) a node returned as ``_CUT``, and a node whose host
+    code raised, is not read and sets ``cut``: the walk goes on with the rest."""
     from ._types import MAX_WALK_NODES
     leaves: List[Tuple[Path, str]] = []
     truncated = False
     unread = False
+    cut = False
     count = 0
     visited = 1
     # Explicit stack: (path, node, depth_of_node_if_container)
     stack: List[Tuple[Path, Any, int]] = [((), root, 1)]
     while stack:
+        _clock.tick()
         path, node, depth = stack.pop()
         if isinstance(node, str):
             count += 1
@@ -118,8 +148,8 @@ def _walk(root: Any, *, leaf_cap: int, char_cap: int, truncate_long: bool,
                         # atom is whole (milestone review: re-scanning the prefix
                         # spent the budget before the cut).
                         lo = max(0, char_cap - 2048)
-                        cut = max(node.rfind(c, lo, char_cap) for c in " \n\t")
-                        skipped.append((path, node[cut + 1 if cut >= 0 else lo:]))
+                        at = max(node.rfind(c, lo, char_cap) for c in " \n\t")
+                        skipped.append((path, node[at + 1 if at >= 0 else lo:]))
                     else:
                         skipped.append((path, node))   # arguments: unexamined, whole
                 if truncate_long:          # results: the first 64 KiB are still recorded
@@ -128,29 +158,41 @@ def _walk(root: Any, *, leaf_cap: int, char_cap: int, truncate_long: bool,
             leaves.append((path, node))
             continue
         if normalise is not None:
-            node = normalise(node)
+            try:
+                node = _host(normalise, node)
+            except Exception:
+                cut = True                    # host code raised: this node is not read
+                continue
             if node is _UNREAD:
                 unread = True
+                continue
+            if node is _CUT:
+                cut = True
                 continue
             if isinstance(node, str):
                 stack.append((path, node, depth))
                 continue
-        is_container, kids = _children(node)
-        if not is_container:
-            continue
-        if depth > MAX_ARG_DEPTH:
-            truncated = True
-            if skipped is not None:
-                skipped.append((path, node))
-            continue
         batch = []
         rest = None
-        for step, child, flag in kids:        # one at a time, each one counted
-            visited += 1
-            if visited > MAX_WALK_NODES:
-                rest = _prepend((step, child, flag), kids)
-                break
-            batch.append((path + (step,), child, depth + 1))
+        try:
+            is_container, kids = _children(node, result=normalise is not None)
+            if not is_container:
+                continue
+            if depth > MAX_ARG_DEPTH:
+                truncated = True
+                if skipped is not None:
+                    skipped.append((path, node))
+                continue
+            for step, child, flag in kids:    # one at a time, each one counted
+                visited += 1
+                if visited > MAX_WALK_NODES:
+                    rest = _prepend((step, child, flag), kids)
+                    break
+                batch.append((path + (step,), child, depth + 1))
+        except Exception:
+            if normalise is None:
+                raise                         # an argument: a PARSE_FAILURE, as before
+            cut = True                        # a result: what it gave so far is still read
         stack.extend(reversed(batch))
         if rest is not None:                  # the node budget is spent: visible
             truncated = True
@@ -158,7 +200,7 @@ def _walk(root: Any, *, leaf_cap: int, char_cap: int, truncate_long: bool,
                 skipped.extend((p, n) for p, n, _ in reversed(stack))
                 skipped.append((path, _Rest(path, rest)))
             break
-    return leaves, truncated, unread
+    return leaves, truncated, unread, cut
 
 
 class _Path:
@@ -188,17 +230,19 @@ def path_tuple(p) -> Path:
 
 
 def _all_strings(items, normalise=None, budget: "AtomBudget | None" = None
-                 ) -> Tuple[List[Tuple[Path, str]], bool, bool]:
+                 ) -> Tuple[List[Tuple[Path, str]], bool, bool, bool]:
     """Every string under ``items`` ((path, node) pairs) with no leaf, length or
     depth bound, but bounded by WORK: each node and child it takes is charged to
     ``budget``, the SAME budget the atom pass then spends (milestone review: the
     walk had its own), and it stops when that runs out (owner, 2026-10-06).
-    (strings, whether a node could not be examined -- an unread I/O node, or host
-    code that RAISED, confined to its node: silent-failure review --, whether it
-    stopped at the budget with nodes left)."""
+    (strings, whether a node could not be examined -- an unread I/O node, or, in
+    an argument, host code that RAISED, confined to its node: silent-failure
+    review --, whether it stopped at the budget with nodes left, whether a result
+    node was cut: one returned as ``_CUT``, or one whose host code raised)."""
     budget = budget if budget is not None else AtomBudget()
     out: List[Tuple[Path, str]] = []
     unread = False
+    cut = False
     # The ids of objects that live for the whole walk: those reached without
     # passing through a normaliser's temporary (a model_dump() dict, an asdict()).
     # Only those ids are recorded, so no id is ever reused by another object and
@@ -224,14 +268,15 @@ def _all_strings(items, normalise=None, budget: "AtomBudget | None" = None
         return True
 
     while stack:
+        _clock.tick()
         if budget.left <= 0:
             budget.hit = True
-            return out, unread, True
+            return out, unread, True, cut
         path, node, owned = stack.pop()
         budget.left -= 1
         if isinstance(node, str):
             if not take(path, node, owned):
-                return out, unread, True
+                return out, unread, True, cut
             continue
         try:
             if isinstance(node, _Rest):
@@ -242,16 +287,19 @@ def _all_strings(items, normalise=None, budget: "AtomBudget | None" = None
                 if not owned:
                     seen.add(id(node))
                 if normalise is not None:
-                    raw, node = node, normalise(node)
+                    raw, node = node, _host(normalise, node)
                     if node is _UNREAD:
                         unread = True
+                        continue
+                    if node is _CUT:
+                        cut = True
                         continue
                     owned = owned or node is not raw
                     if isinstance(node, str):
                         if not take(path, node, owned):
-                            return out, unread, True
+                            return out, unread, True, cut
                         continue
-                is_container, kids = _children(node)
+                is_container, kids = _children(node, result=normalise is not None)
                 if not is_container:
                     continue
                 base = path
@@ -260,13 +308,16 @@ def _all_strings(items, normalise=None, budget: "AtomBudget | None" = None
                 budget.left -= 1
                 if budget.left <= 0:
                     budget.hit = True
-                    return out, unread, True
+                    return out, unread, True, cut
                 batch.append((_Path(base, step), child, owned))
         except Exception:
-            unread = True
+            if normalise is None:
+                unread = True                # an argument: a node that could not be examined
+            else:
+                cut = True                   # a result: the node is cut
             continue
         stack.extend(reversed(batch))
-    return out, unread, False
+    return out, unread, False, cut
 
 
 class AtomBudget:
@@ -305,6 +356,7 @@ def budgeted_atoms(strings, budget: AtomBudget, reader=None):
     reader = reader or prose_candidates
     for path, s in strings:
         for chunk in _chunks(s):
+            _clock.tick()
             if budget.left <= 0:
                 budget.hit = True
                 return
@@ -345,8 +397,9 @@ def extract_with_observed(arguments: Mapping[str, object] | None
         if arguments is None:
             return (), False, ()
         skipped: list = []
-        leaves, truncated, _ = _walk(arguments, leaf_cap=MAX_ARG_LEAVES,
-                                  char_cap=MAX_LEAF_CHARS, truncate_long=False, skipped=skipped)
+        leaves, truncated, _, _ = _walk(arguments, leaf_cap=MAX_ARG_LEAVES,
+                                     char_cap=MAX_LEAF_CHARS, truncate_long=False,
+                                     skipped=skipped)
         out: List[Finding] = []
         seen: set = set()
         budget = AtomBudget()        # ONE budget: the atoms, the walk past a bound, the reads there
@@ -360,7 +413,7 @@ def extract_with_observed(arguments: Mapping[str, object] | None
             # searched for destination ATOMS, so a padded destination is found;
             # and a value there short enough to read whole is read whole, so it
             # names what it names as a leaf of its own.
-            strings, faulted, exhausted = _all_strings(skipped, budget=budget)
+            strings, faulted, exhausted, _ = _all_strings(skipped, budget=budget)
             stripped: dict = {}      # id -> the value stripped: a repeat is not stripped again
             for path, s in strings:
                 # Read whole only what fits once stripped. Measuring that strips the
@@ -446,17 +499,45 @@ def _read_whole(out: List[Finding], seen: set, path: Path, res) -> bool:
 _IO_BACKED_MODULES = frozenset({"httpx", "requests", "urllib3", "aiohttp"})
 
 
+# The byte-order marks a bytes value is decoded by; without one it is UTF-8.
+_BOMS = ((b"\xef\xbb\xbf", "utf-8-sig"), (b"\xff\xfe\x00\x00", "utf-32"),
+         (b"\x00\x00\xfe\xff", "utf-32"), (b"\xff\xfe", "utf-16"), (b"\xfe\xff", "utf-16"))
+
+
+def _bytes_text(node) -> str:
+    """A bytes-like value as text: decoded by its byte-order mark, else as UTF-8,
+    a bad byte replaced, as the sensor reads a bytes result."""
+    data = bytes(node)
+    for bom, codec in _BOMS:
+        if data.startswith(bom):
+            return data.decode(codec, "replace")
+    return data.decode("utf-8", "replace")
+
+
 def _normalise_result_node(node: Any) -> Any:
-    """str → leaf; Mapping/Sequence → walk; an object with a str
-    ``.content`` → that content; ``model_dump()`` → its dict; a dataclass
-    instance → ``asdict``; anything else → no leaves. May run host code, so it
-    is only ever called OUTSIDE the ledger lock."""
+    """What a result node is read as (2026-11-01: nothing is read as empty).
+
+    str, a Mapping, list, tuple, set or frozenset: walked. A number or None: it
+    names no destination. bytes, bytearray, memoryview, a text ``array``: its
+    text. A node from an I/O-backed module: ``_UNREAD`` (Q18). An iterator, a
+    generator or an awaitable: ``_CUT``, never consumed. An object with a str
+    ``.content``: that content (V-15). ``model_dump()``: its dict. A dataclass
+    instance: its fields, as they are. Another sequence, set or mapping view:
+    walked. Anything else: ``str(node)``, the text Python and the frameworks
+    print it as, read as a leaf within the same bounds. May run host code, so it
+    is only ever called OUTSIDE the ledger lock; a fault in it cuts the node."""
     if isinstance(node, (str, Mapping, list, tuple, set, frozenset)):
         return node
-    if isinstance(node, (bytes, bytearray, int, float, bool)) or node is None:
+    if node is None or isinstance(node, numbers.Number):
         return None
+    if isinstance(node, (bytes, bytearray, memoryview)):
+        return _bytes_text(node)
+    if isinstance(node, array.array) and node.typecode in ("u", "w"):
+        return node.tounicode()
     if type(node).__module__.split(".")[0] in _IO_BACKED_MODULES:
         return _UNREAD   # Q18: never read (it would consume a stream), never silent either
+    if isinstance(node, (_AbcIterator, AsyncIterator, Awaitable)):
+        return _CUT      # reading it would consume it
     content = getattr(node, "content", None)
     if isinstance(content, str):
         return content
@@ -464,33 +545,44 @@ def _normalise_result_node(node: Any) -> Any:
     if callable(dump):
         return dump()
     if dataclasses.is_dataclass(node) and not isinstance(node, type):
-        return dataclasses.asdict(node)
-    return None
+        return {f.name: getattr(node, f.name) for f in dataclasses.fields(node)}
+    if isinstance(node, collections.UserString):
+        return str(node)
+    if isinstance(node, (Sequence, _AbcSet, MappingView)):
+        return node
+    text = str(node)
+    if not isinstance(text, str):
+        raise TypeError("str() gave no text")
+    return text
 
 
 def result_leaves(result: Any) -> List[str]:
     """The string leaves of a raw tool result, each capped at 65,536 chars,
-    walked with the argument walk's leaf and depth bounds. Raises only on a host fault
-    (e.g. a ``model_dump`` that raises); the caller reports FAULT."""
+    walked with the argument walk's leaf and depth bounds. Host code that raises
+    is confined to its node, which is cut (2026-11-01: it raised here, and the
+    caller reported FAULT)."""
     return result_leaves_bounded(result)[0]
 
 
 def result_leaves_bounded(result: Any) -> Tuple[List[str], bool, bool, List[str], "AtomBudget"]:
-    """``result_leaves`` plus whether any bound was hit (a leaf cut at 65,536
-    chars, more than 64 leaves, nesting deeper than 6). The recorder marks the
-    ledger, so a later miss reads result_truncated, never a silent unresolved
-    (owner, RULING 1+2 after M8). The third value: an I/O-backed node was
-    skipped unread (Q18), so a later miss reads result_unread."""
+    """``result_leaves`` plus whether the walk stopped before reading all of the
+    result: a leaf cut at 65,536 chars, more than 64 leaves, nesting deeper than
+    6, the walk's node budget, a node it must not consume (an iterator), or host
+    code that raised (2026-11-01: every way the walk stops early cuts). The
+    recorder marks the ledger, so the result cannot vouch (owner, RULING 1+2 after
+    M8; 2026-10-25). The third value: an I/O-backed node was skipped unread (Q18),
+    so a later miss reads result_unread."""
     skipped: list = []
-    leaves, truncated, unread = _walk(result, leaf_cap=MAX_ARG_LEAVES,
-                                      char_cap=MAX_RESULT_LEAF_CHARS, truncate_long=True,
-                                      normalise=_normalise_result_node, skipped=skipped)
+    leaves, truncated, unread, cut = _walk(result, leaf_cap=MAX_ARG_LEAVES,
+                                           char_cap=MAX_RESULT_LEAF_CHARS, truncate_long=True,
+                                           normalise=_normalise_result_node, skipped=skipped)
     budget = AtomBudget()                   # ONE budget: this walk, then the caller's atoms
-    extra, unread_extra, _ = _all_strings(skipped, normalise=_normalise_result_node, budget=budget)
+    extra, unread_extra, _, cut_extra = _all_strings(skipped, normalise=_normalise_result_node,
+                                                     budget=budget)
     # Fourth value (owner, 2026-10-05): the WHOLE strings the bound kept from
     # examination, for atom extraction only; fifth: the call's WORK budget, already
     # charged for this walk (2026-10-06), for the caller's atom pass to spend.
-    return ([s for _, s in leaves], truncated, unread or unread_extra,
+    return ([s for _, s in leaves], truncated or cut or cut_extra, unread or unread_extra,
             [s for _, s in extra], budget)
 
 

@@ -34,7 +34,7 @@ import re
 
 from . import _idna_data as _D
 from . import _nameprep_data as _N
-from . import _ucd
+from . import _clock, _ucd
 
 _RTL = frozenset({"R", "AL"})
 _RTL_ALLOWED = frozenset({"R", "AL", "AN", "EN", "ES", "CS", "ET", "ON", "BN", "NSM"})
@@ -219,6 +219,7 @@ def to_unicode_labels(host: str, *, strict: bool = False):
     mapped = _ucd.normalize("NFC", mapped)
     labels = []
     for lab in mapped.split("."):
+        _clock.tick()
         if lab.startswith("xn--"):
             try:
                 dec = lab[4:].encode("ascii").decode("punycode")
@@ -248,6 +249,7 @@ def to_ascii(host: str, *, strict: bool = False):
             return None
         out = []
         for lab in labels:
+            _clock.tick()
             if lab.isascii():
                 out.append(lab)
             else:
@@ -368,7 +370,11 @@ def idna2003(host: str) -> list:
         del labels[-1]
     for b3, v in _ENCODERS:
         try:
-            name = ".".join(_to_ascii_2003(lab, b3, v) for lab in labels) + trailing
+            parts = []
+            for lab in labels:
+                _clock.tick()
+                parts.append(_to_ascii_2003(lab, b3, v))
+            name = ".".join(parts) + trailing
         except (UnicodeError, ValueError):
             continue
         if name and name not in out:

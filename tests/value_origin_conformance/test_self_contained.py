@@ -17,9 +17,10 @@ PKG = Path(vo.__file__).resolve().parent
 # The stdlib modules the core may use. Named rather than derived from
 # sys.stdlib_module_names, which does not exist on 3.10 (the floor).
 STDLIB_ALLOWED = {
-    "__future__", "bisect", "contextlib", "contextvars", "dataclasses", "enum",
-    "fnmatch", "hashlib", "hmac", "ipaddress", "logging", "os", "posixpath", "re",
-    "secrets", "threading", "types", "typing", "unicodedata", "urllib",
+    "__future__", "array", "bisect", "collections", "contextlib", "contextvars",
+    "dataclasses", "enum", "fnmatch", "hashlib", "hmac", "ipaddress", "logging",
+    "numbers", "os", "posixpath", "re", "secrets", "threading", "time", "types",
+    "typing", "unicodedata", "urllib",
 }
 
 

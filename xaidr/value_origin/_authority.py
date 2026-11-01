@@ -25,7 +25,7 @@ from typing import List, Optional, Tuple
 from urllib.parse import unquote, unquote_to_bytes
 
 from ._idna import _status, fold, idna2003, lower_by_unicode, pinned, to_ascii
-from . import _ucd
+from . import _clock, _ucd
 
 _WS = _ucd.WHITESPACE
 _RUN_RE = _ucd.compile(r"\S+")
@@ -47,6 +47,7 @@ def _public_suffix_len(labels: List[str]) -> int:
     n = len(labels)
     best = 1                                   # the default "*" rule
     for i in range(n):
+        _clock.tick()
         cand = labels[i:]
         name = ".".join(cand)
         if name in _EXCEPTIONS:
@@ -287,7 +288,10 @@ def _case_readings(raw_host: str) -> List[Authority]:
     if host.isascii() or "%" in host or ":" in host or any(_ucd.isspace(c) for c in host):
         return []
     out: List[Authority] = []
-    labels = [lower_by_unicode(x) for x in host.split(".")]
+    labels = []
+    for x in host.split("."):
+        _clock.tick()
+        labels.append(lower_by_unicode(x))
     candidates = []
     for i, whole in enumerate(lower_by_unicode(host)):
         for lowered in (whole, ".".join(v[i] for v in labels)):
@@ -1559,6 +1563,7 @@ def prose_candidates(text: str, counter: Optional[List[int]] = None, *,
     taken: List[Tuple[int, int]] = []
     scan = pinned(text)                # classes decided here; values taken from ``text``
     for m in _P_URL_RE.finditer(scan):
+        _clock.tick()
         if counter is not None:
             counter[0] += 1
         cand = text[m.start():m.end()].rstrip(_TRAILING)
@@ -1575,6 +1580,7 @@ def prose_candidates(text: str, counter: Optional[List[int]] = None, *,
     text, scan = _blank(text, taken), _blank(scan, taken)
     taken = []
     for m in _P_EMAIL_RE.finditer(scan):
+        _clock.tick()
         if counter is not None:
             counter[0] += 1
         cand = text[m.start():m.end()].rstrip(".-")
@@ -1586,6 +1592,7 @@ def prose_candidates(text: str, counter: Optional[List[int]] = None, *,
             out.append((m.start(), a))
     text, scan = _blank(text, taken), _blank(scan, taken)
     for m in _P_HOST_RE.finditer(scan):
+        _clock.tick()
         if counter is not None:
             counter[0] += 1
         host = text[m.start(1):m.end(1)]
@@ -1600,18 +1607,21 @@ def prose_candidates(text: str, counter: Optional[List[int]] = None, *,
             out.append((m.start(), a))
             out.extend((m.start(), b) for b in _case_readings(host) if b != a)
     for m in _P_PHONE_RE.finditer(scan):
+        _clock.tick()
         if counter is not None:
             counter[0] += 1
         a = phone_authority(m.group(0))
         if a is not None:
             out.append((m.start(), a))
     for m in _P_IPV4_RE.finditer(scan):
+        _clock.tick()
         if counter is not None:
             counter[0] += 1
         ip = _strict_ip(m.group(0))
         if ip is not None:
             out.append((m.start(), Authority(scheme="ip", value=ip_key(ip))))
     for m in _P_IPV6_RE.finditer(scan):
+        _clock.tick()
         if counter is not None:
             counter[0] += 1
         if m.group(0).count(":") < 2:
@@ -1645,6 +1655,7 @@ def result_candidates(text: str, counter: Optional[List[int]] = None
     ``prose_candidates`` charges a candidate."""
     out = prose_candidates(text, counter)
     for m in _LINE_RE.finditer(text):
+        _clock.tick()
         line = m.group(0)
         if not any(c in _VALUE_SIGNS for c in line):
             continue
@@ -1656,6 +1667,7 @@ def result_candidates(text: str, counter: Optional[List[int]] = None
                 counter[0] += 1
             out.extend((m.start(), a) for a in _whole(classify_value(stripped, arg_mode=True)))
         for t in _RUN_RE.finditer(line):
+            _clock.tick()
             tok = t.group(0)
             u = _P_URL_RE.match(tok)
             if u and u.end() == len(tok) and tok.rstrip(_TRAILING) == tok:
@@ -1680,6 +1692,7 @@ def _addr_specs_in(line: str, counter: Optional[List[int]] = None) -> List[Autho
     out: List[Authority] = []
     n = len(toks)
     for k, tok in enumerate(toks):
+        _clock.tick()
         if tok[0] != "@" or k == 0 or k + 1 >= n or toks[k - 1][0] not in ("atom", "quoted"):
             continue
         if counter is not None:

@@ -341,7 +341,15 @@ def test_a_really_saturated_ledger_reports_a_dropped_write_and_blocks():
     def run():
         vo.bind_fresh_ledger()
         # Through DESTINATIONS (was a 6,000-word input): see the separate n-gram budget.
-        out = vo.record_tool_result("web_fetch", {}, [" ".join(f"https://h{i}.example/" for i in range(j, j + 400)) for j in range(0, 12_000, 400)], designations=(), result_blocked=False)
+        # In results of 1,600 URLs each (2026-11-01): one result of 12,000 now runs
+        # out of the examined work budget, which cuts it, and a miss after a cut
+        # result reads untrusted_source before a dropped write can name itself.
+        out = None
+        for k in range(0, 12_000, 1_600):
+            out = vo.record_tool_result("web_fetch", {}, [" ".join(f"https://h{i}.example/" for i in range(j, j + 400)) for j in range(k, k + 1_600, 400)], designations=(), result_blocked=False)
+            if out is vo.RecordOutcome.SATURATED:
+                break
+        assert not vo._ledger._current().result_truncated, "precondition: no result was cut"
         return out, vo.evaluate_call("http_post", {"url": "https://never.example/"}, flow_active=True)
     out, v = contextvars.Context().run(run)
     assert out is vo.RecordOutcome.SATURATED, out

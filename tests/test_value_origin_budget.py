@@ -110,8 +110,8 @@ def children_seen(monkeypatch):
     seen = [0]
     real = _extract._children
 
-    def counting(node):
-        is_container, kids = real(node)
+    def counting(node, **kw):
+        is_container, kids = real(node, **kw)
 
         def it():
             for k in kids:
