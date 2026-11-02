@@ -16,8 +16,10 @@ number to design against; the measured column is what one machine actually did,
 not a promise about yours. The three repeats agree to within 0.01 ms at the
 median and 0.03 ms at p95, and [BENCHMARKS.md](https://github.com/delphisecurity/xaidr/blob/main/BENCHMARKS.md) carries all three, the machine
 they ran on, and the per-shape breakdown. Latency scales with input size and is
-bounded by a hard input ceiling and a wall-clock budget, so a pathologically
-large input cannot hang your agent. Measure on your own traffic before enabling
+bounded by a hard input ceiling and a fixed window count (a long input is read in
+at most two windows), with wall-clock backstops behind them, so a pathologically
+large input cannot hang your agent, and what is read never depends on how busy
+the machine is. Measure on your own traffic before enabling
 hard blocking on a latency-sensitive path.
 
 **Know the magnitude before you put this on an untrusted path.** Those

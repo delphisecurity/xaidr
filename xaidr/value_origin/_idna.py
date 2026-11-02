@@ -213,13 +213,14 @@ def _bidi_ok(labels) -> bool:
 
 def to_unicode_labels(host: str, *, strict: bool = False):
     """UTS-46 steps 1-4: the validated U-labels of ``host``, or None."""
+    _clock.charge(2 * len(host) + 1)         # the mapping and the normalization
     mapped = _map(host, std3=strict)
     if mapped is None:
         return None
     mapped = _ucd.normalize("NFC", mapped)
     labels = []
     for lab in mapped.split("."):
-        _clock.tick()
+        _clock.charge(len(lab) + _clock.LABEL_UNITS)
         if lab.startswith("xn--"):
             try:
                 dec = lab[4:].encode("ascii").decode("punycode")
@@ -249,7 +250,7 @@ def to_ascii(host: str, *, strict: bool = False):
             return None
         out = []
         for lab in labels:
-            _clock.tick()
+            _clock.charge(len(lab) + _clock.LABEL_UNITS)
             if lab.isascii():
                 out.append(lab)
             else:
@@ -290,6 +291,7 @@ def lower_by_unicode(text: str) -> tuple:
     it, one per version in that order, the same on every interpreter: httpx,
     urllib3 and requests lowercase a host with ``str.lower``, so 3.14 sends
     ``aꟋ.example`` to ``aɤ.example`` and 3.10 refuses it."""
+    _clock.charge(len(_UNICODE) * len(text) + 1)
     return tuple(_ucd.lower(text, v) for v in _UNICODE)
 
 
@@ -372,7 +374,7 @@ def idna2003(host: str) -> list:
         try:
             parts = []
             for lab in labels:
-                _clock.tick()
+                _clock.charge(len(lab) + _clock.LABEL_UNITS)
                 parts.append(_to_ascii_2003(lab, b3, v))
             name = ".".join(parts) + trailing
         except (UnicodeError, ValueError):

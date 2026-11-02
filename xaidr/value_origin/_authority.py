@@ -47,7 +47,7 @@ def _public_suffix_len(labels: List[str]) -> int:
     n = len(labels)
     best = 1                                   # the default "*" rule
     for i in range(n):
-        _clock.tick()
+        _clock.charge(n - i)                   # the join below takes n - i labels
         cand = labels[i:]
         name = ".".join(cand)
         if name in _EXCEPTIONS:
@@ -290,8 +290,7 @@ def _case_readings(raw_host: str) -> List[Authority]:
     out: List[Authority] = []
     labels = []
     for x in host.split("."):
-        _clock.tick()
-        labels.append(lower_by_unicode(x))
+        labels.append(lower_by_unicode(x))     # charged by lower_by_unicode
     candidates = []
     for i, whole in enumerate(lower_by_unicode(host)):
         for lowered in (whole, ".".join(v[i] for v in labels)):

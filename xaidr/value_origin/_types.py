@@ -8,7 +8,7 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Literal, Mapping
+from typing import Literal, Mapping, Optional
 
 from ._psl_data import PSL_SNAPSHOT_DATE as _PSL_SNAPSHOT_DATE
 
@@ -192,6 +192,10 @@ class CallVerdict:
     # destination (prose, a command line), each with its ledger origin. Recorded
     # only: they never decide the wire, the verdict or an action.
     observed: tuple[DestinationFinding, ...] = ()
+    # Set when a destination that traces to nothing reads past a tool result that
+    # the wall-clock BACKSTOP cut (``_clock``): its own reason, distinct from the
+    # work limit, so a verdict the backstop decided always says so (2026-11-01).
+    backstop: Optional[str] = None
 
 
 # (No per-feature generation constant — ruling 2026-09-24; see C-21.)
@@ -207,12 +211,15 @@ ATOM_WORK_BUDGET: int = 500_000
 # raise it without re-measuring. Spending it is visible (extraction_incomplete),
 # never a block.
 EXAMINED_WORK_BUDGET: int = 1_000_000
-# And by time: reading one result, its examined pass and the pass past the bound
-# together, stops at this much wall-clock time, and the result is then cut (2026-11-01).
-# About five times the longest a result of ordinary text took to read where it was
-# measured, so a slower host does not cut one: 2.0 cut results of ten thousand URLs
-# on the CI runners.
-RESULT_TIME_BOUND_SECONDS: float = 4.0
+# And by the work the reader does that those units do not count (``_clock``): one
+# result's reading, both passes, stops when this meter is spent, and the result is
+# cut. Calibrated so the documented worst case reads within 2.0 s on the slowest
+# interpreter measured (docs/value-origin-enforce.md); work, not time, so the same
+# result is cut at the same place idle or loaded (owner, 2026-11-01).
+RESULT_READ_UNITS: int = 80_000_000
+# The wall-clock backstop, far above the meter's documented worst case under CI
+# load; it fires only for work no unit counts, and says so (CallVerdict.backstop).
+RESULT_TIME_BACKSTOP_SECONDS: float = 30.0
 MAX_WALK_NODES: int = 65_536    # the EXAMINED walk's node budget: width cannot escape it (review)
 ATOM_COST: int = 64
 ATOM_CHUNK_CHARS: int = 16_384

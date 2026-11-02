@@ -75,14 +75,16 @@ generator rather than the bound.
 | Size | Question |
 |---|---|
 | 90k | **control.** Under the cap; must behave identically with the group open or closed |
-| 150k | Over the cap, two windows out of eight — **covered completely** |
-| 400k | Over the cap, still inside the eight-window coverage — **covered completely** |
-| 900k | Past `7 × (100000 − 512) + 100000 = 796 416`, so the **window cap** stops the scan on any machine |
+| 150k | Over the cap, inside the two-window coverage — **covered completely** |
+| 400k | Past `(100000 − 512) + 100000 = 199 488`, so the **window cap** stops the scan on any machine |
+| 900k | The same, further past it |
 
-The 400k row is defined by the window count, not by the wall-clock budget:
-where the clock lands is a property of the box it runs on, not of the text; see
-[the caveat](#the-caveat-that-must-ship-with-the-number) for how the measurement
-handles it.
+Every row is defined by the window count (`MAX_SCAN_WINDOWS = 2`), on any
+machine: since 2026-11-01 the wall clock is a backstop that records its own rule
+when it fires, and decides nothing else (see
+[the boundary](#the-boundary-is-the-window-count)). Until then the cap was eight
+windows under a 1.0 s budget, the 400k row read "still inside the eight-window
+coverage", and where the clock landed decided the band between.
 
 ---
 
@@ -91,19 +93,20 @@ handles it.
 `LLM01_oversized_input` fires on `len(prompt) > L1_MAX_SCAN_CHARS` **and nothing
 else**. It is therefore on every input past the cap, including the ones the
 windowed scan then covers completely. A 150 000-character contract is two
-windows out of an eight-window budget — fully read — and carried the identical
-rule to a 900 000-character one whose tail was never reached.
+windows — fully read — and carries the identical rule to a 900 000-character
+one whose tail is never reached.
 
 The naive design of `bounds` refuses on that rule. Measured on this pool, over
 the 9 items that are clean at the default posture:
 
 ```
-NAIVE   (refuse on LLM01_oversized_input)        refused-and-unread 2   refused-but-FULLY-READ 4   allowed 3
-SHIPPED (refuse on LLM01_input_tail_unscanned)   refused-and-unread 2   refused-but-FULLY-READ 0   allowed 7
+NAIVE   (refuse on LLM01_oversized_input)        refused-and-unread 4   refused-but-FULLY-READ 2   allowed 3
+SHIPPED (refuse on LLM01_input_tail_unscanned)   refused-and-unread 4   refused-but-FULLY-READ 0   allowed 5
 ```
 
-**Four fully-read documents refused under the naive signal; zero under the
-shipped one, with no loss of coverage on the truncated items.** That is why
+**Two fully-read documents refused under the naive signal; zero under the
+shipped one, with no loss of coverage on the truncated items.** (At eight windows,
+until 2026-11-01, the counts were 2 / 4 / 3 and 2 / 0 / 7.) That is why
 `scanner/l1.py` carries a second rule, `LLM01_input_tail_unscanned`, fired
 by `LocalScanner._scan_tail` when the windows run out before the text does, and
 why `_BOUND_SIGNAL_RULES` in `sensor.py` names that one and not the other.
@@ -115,68 +118,51 @@ is the gate; it fails against the naive signal.
 
 ```
   items                                    24
-  wall-clock bounds PINNED; window coverage limit = 796,416 chars
+  window coverage limit = 199,488 chars (two windows)
   over the 100,000-char cap              19
-    ...FULLY covered by the windowed scan  13
-    ...tail never read                     6
+    ...FULLY covered by the windowed scan  6
+    ...tail never read                     13
 
   clean at the DEFAULT posture             9
   scoring on CONTENT at the default        15   (excluded from the bounds cost — see finding 2)
 
   THE BOUNDS COST, over default-clean items only
-    refused, tail genuinely unread          2   (the group working as designed)
+    refused, tail genuinely unread          4   (the group working as designed)
     refused, FULLY READ                     0   <- false positives
-    not refused                             7
+    not refused                             5
 ```
 
-**These numbers are measured with the wall clock pinned.** Measured with the
-clock live, one laptop gave 4 covered / 15 truncated / 12 clean / 7
-refused-and-unread on the same pool — every one of those figures a property of
-the machine that produced it, not of the text, which is why the next section
-treats the clock as the reason to pin the measurement. The one figure that does
-NOT move is the one the group is justified by: **refused-but-fully-read is 0
-either way.**
+**These numbers are the same on any machine.** The report still runs with the
+clocks pinned (`scripts/longform_bounds.py`), and since 2026-11-01 that changes
+nothing: the window count decides every item's bucket at runtime too. The one
+figure the group is justified by, **refused-but-fully-read, is 0.**
 
-### The caveat that must ship with the number
+### The boundary is the window count
 
-**At runtime the boundary is a wall-clock budget, not a length**, and an
-operator enabling `bounds` needs to know it. Three wall-clock bounds sit inside
-an L1 scan — `_L1_SCAN_BUDGET_SEC` (0.5 s, the rule loop), `_L1_RULE_SLOW_SEC`
-(1.0 s, one pattern) and `TOTAL_SCAN_BUDGET_SEC` (1.0 s, the window walk) — and
-any of the three can end a scan early on a busy host. When one does, the verdict
-carries a bound signal and `bounds` refuses. So the same document really can be
-refused on a loaded host and allowed on an idle one, and on a host loaded enough
-it reaches **inputs under the 100 000-character cap**, which the table above
-calls the deterministic control case.
+At runtime an L1 scan reads what its work limits allow and nothing decides by
+the clock: every rule runs over at most 100 000 characters, and a long input is
+read in at most `MAX_SCAN_WINDOWS` (2) windows. The three wall-clock limits,
+`_L1_SCAN_BUDGET_SEC` (the rule loop), `_L1_RULE_SLOW_SEC` (one pattern) and
+`TOTAL_SCAN_BUDGET_SEC` (the window walk), are 30 s backstops, far above the
+worst case of that work on a loaded runner. When one fires the verdict carries
+its own rule (`LLM04_scan_budget_exceeded`, `LLM04_pathological_pattern`), so a
+backstop never changes a verdict silently
+(`tests/test_deterministic_bounds.py`). An item under the cap reads the same on
+an idle host and a busy one, and an item past 199 488 characters has an unread
+tail on every machine.
 
-That is not hypothetical and it is not only an operator's problem. With the
-clocks live it makes the gates on this pool unreliable; on a loaded CI runner it
-turns six CI jobs red:
+Two windows is a calibration: over 14 interpreters (3.10.11 to 3.14.9) a whole
+scan of the worst input measured takes at most 2.08 s of CPU at two windows, the
+engine's ~2 s per-scan bound, and 2.65 s at three on the slowest interpreter.
 
-```
-GitHub ubuntu-latest runner, 2026-09-20, wall clocks live
-  LF-*-90k (UNDER the cap)   LLM04_scan_budget_exceeded  -> bounds refused it
-  every over-cap item        LLM01_input_tail_unscanned  -> nothing was "fully read"
-  => test_oversized_and_tail_unread_are_different_signals failed its OWN vacuity
-     guard, correctly: on that machine the pool could no longer tell the two
-     signals apart.
-```
-
-**Pinning changes the MEASUREMENT, not the behaviour.** The numbers above are
-produced with the three clocks pinned (`scripts/longform_bounds.py`), so an
-item's bucket follows from its length and `MAX_SCAN_WINDOWS` — the two things
-`manifest.json` pins — and the same table comes out of a laptop and a loaded
-runner. `tests/test_benign_longform.py` does the same, which is what makes it a
-regression gate rather than a benchmark of the CI fleet.
-
-The machine-dependence is something to disclose, but left unpinned it is also a
-measurement error: figures measured with the clocks live read as findings about
-the corpus when they are findings about one laptop, and a disclosure next to
-them does the work of an excuse.
-
-**Still true, still the operator's business:** under the cap is deterministic
-*only while the host keeps up*, past 796 416 characters is deterministic on any
-machine, and the band between them depends on how busy the box is.
+*Until 2026-11-01* those limits were 0.5 s, 1.0 s and 1.0 s and decided how much
+was read, so the same document could be refused on a loaded host and allowed on
+an idle one, even under the cap. On a GitHub ubuntu-latest runner, 2026-09-20,
+`LF-*-90k` (under the cap) read `LLM04_scan_budget_exceeded` and every over-cap
+item `LLM01_input_tail_unscanned`, and
+`test_oversized_and_tail_unread_are_different_signals` failed its own vacuity
+guard. This section said so as a caveat for operators; the change makes it no
+longer true.
 
 ## Finding 2 — realistic long operational text scores on content, independent of this work
 
@@ -190,14 +176,10 @@ nothing to do with `bounds`:
 | `LF-log_tail-*` | `INTENT_exfiltrate_data` |
 | `LF-policy_document-150k/400k/900k` | `INTENT_exfiltrate_data`, `INTENT_destroy_resources`, `INTENT_escalate_privileges`, `COMPOSITE_trust_exploit_data_access`, `COMPOSITE_cascading_failure`, `authority_override` |
 
-**The `policy_document` row appears only when the scan is complete.** While a
-live wall clock cuts those scans short after about two windows, the count is 12
-items, not 15; with the full eight windows actually scanned, the rules fire on
-text that is in the document and is otherwise never reached. A
-pasted policy document discussing data handling, privilege and deletion trips
-six rules on its own content — the same finding as the rows below, at a size
-the truncated measurement had hidden. It is excluded from the bounds cost for
-the same reason as the others.
+**The `policy_document` rows fire on text in the first two windows.** A pasted
+policy document discussing data handling, privilege and deletion trips six rules
+on its own content — the same finding as the rows below. It is excluded from
+the bounds cost for the same reason as the others.
 
 Two distinct causes, both length-correlated:
 
@@ -206,7 +188,7 @@ Two distinct causes, both length-correlated:
   and *some* target word co-occur with near certainty (`action=relay
   target=records` in the log tail, `action=export target=Data` in the
   transcript). The longer the honest document, the likelier the pair. This
-  fires on all fifteen scoring items when the scan is complete.
+  fires on all fifteen scoring items.
 * **DLP digit-run patterns span whitespace.** The SSN and phone patterns match
   across a newline, so a log line ending in a bare number followed by a line
   starting with a timestamp matched `DLP_ssn`. The generator now terminates such

@@ -79,6 +79,9 @@ from .scanner.l1 import (
     OVERSIZED_INPUT_CATEGORY as _OVERSIZED_INPUT_CATEGORY,
     OVERSIZED_INPUT_RULE as _OVERSIZED_INPUT_RULE,
     SCAN_INCOMPLETE_RULE as _SCAN_INCOMPLETE_RULE,
+    SCAN_DEGRADED_CATEGORY as _SCAN_DEGRADED_CATEGORY,
+    SCAN_DEGRADED_RULE as _SCAN_DEGRADED_RULE,
+    SCAN_DEGRADED_SCORE as _SCAN_DEGRADED_SCORE,
     iter_scan_windows as _iter_scan_windows,
 )
 from .scanner.directive_context import (
@@ -539,7 +542,7 @@ _VO_CALL_WIRE: "contextvars.ContextVar[list | None]" = contextvars.ContextVar(
 def _vo_call_scope(fn):
     @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
-        token = _VO_CALL_WIRE.set([None])
+        token = _VO_CALL_WIRE.set([None, None])
         try:
             return fn(self, *args, **kwargs)
         finally:
@@ -548,11 +551,14 @@ def _vo_call_scope(fn):
 
 
 def _vo_note_wire(cv) -> None:
-    """Record this call's wire value for its events (absent on OFF or a fault)."""
+    """Record this call's wire value for its events (absent on OFF or a fault), and
+    the backstop that decided it, if one did (``CallVerdict.backstop``)."""
     holder = _VO_CALL_WIRE.get()
     if holder is not None:
         wire = getattr(getattr(cv, "wire", None), "value", None)
         holder[0] = wire if isinstance(wire, str) and wire else None
+        backstop = getattr(cv, "backstop", None)
+        holder[1] = backstop if isinstance(backstop, str) and backstop else None
 
 
 
@@ -2577,6 +2583,11 @@ class DelphiSensor:
             holder = _VO_CALL_WIRE.get()
             wire = holder[0] if holder else None
             data = event.get("data") if isinstance(event, dict) else None
+            if (holder and holder[1] and isinstance(data, dict)
+                    and data.get("direction") == "tool_call" and self._vo_wire_vocab):
+                # A wall-clock backstop cut a tool result this call's verdict read
+                # past: its own reason, beside the wire value (2026-11-01).
+                data["valueOriginBackstop"] = holder[1]
             if wire is not None and isinstance(data, dict) and data.get("direction") == "tool_call":
                 if wire in self._vo_wire_vocab:
                     data["valueOrigin"] = wire
@@ -2934,8 +2945,10 @@ class DelphiSensor:
             # helper, same total budget as scan()), so a payload past the cap is
             # reached; and flag over-length so it is never a silent pass.
             _arg_scan_start = time.perf_counter()
+            _arg_backstop: list = []        # the wall-clock backstop stopped the windows
             danger = []
-            for _idx, _win, _end in _iter_scan_windows(normalized_args, _arg_scan_start):
+            for _idx, _win, _end in _iter_scan_windows(normalized_args, _arg_scan_start,
+                                                       report=_arg_backstop):
                 danger.extend(
                     t for t in _scan_l1(_win).threats
                     if t.category in _TOOL_ARG_KEEP_CATEGORIES
@@ -2949,7 +2962,8 @@ class DelphiSensor:
             # only ADD a finding and never change one that already fired.
             if normalized_args != raw_args:
                 _seen_rules = {t.rule for t in danger}
-                for _idx, _win, _end in _iter_scan_windows(raw_args, _arg_scan_start):
+                for _idx, _win, _end in _iter_scan_windows(raw_args, _arg_scan_start,
+                                                           report=_arg_backstop):
                     for _t in _scan_l1(_win).threats:
                         if (_t.category in _TOOL_ARG_KEEP_CATEGORIES
                                 and _t.rule not in _seen_rules):
@@ -3257,6 +3271,14 @@ class DelphiSensor:
                     category = _OVERSIZED_INPUT_CATEGORY
                 if _OVERSIZED_INPUT_RULE not in rules:
                     rules = rules + [_OVERSIZED_INPUT_RULE]
+            # The wall-clock BACKSTOP stopped the argument windows before the window
+            # count did: its own reason, never a silent change (2026-11-01).
+            if _arg_backstop and _SCAN_DEGRADED_RULE not in rules:
+                if action == "allowed":
+                    action = "flagged"
+                score = max(score, _SCAN_DEGRADED_SCORE)
+                category = category or _SCAN_DEGRADED_CATEGORY
+                rules = rules + [_SCAN_DEGRADED_RULE]
 
         # Compose the local YAML policy as an overlay (STRICTER WINS), BEFORE the
         # enforcement_mode gate so the same gate (_apply_mode) sees the composed

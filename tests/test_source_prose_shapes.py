@@ -104,10 +104,10 @@ _ALLOWED = {
         "loading it. A startup cost of the call being documented; no scanner "
         "input is involved."
     )),
-    ("scanner/l1.py", "<module>", TIMING_NEAR_SIZE): (2, (
-        "the calibration of _L1_RULE_SLOW_SEC: the slowest single CURRENT rule "
-        "on an input at L1_MAX_SCAN_CHARS, and the threshold set above it. It "
-        "states the bound this code enforces and names no input."
+    ("scanner/l1.py", "<module>", TIMING_NEAR_SIZE): (1, (
+        "the calibration of the _L1_RULE_SLOW_SEC backstop: the slowest single "
+        "CURRENT rule on an input at L1_MAX_SCAN_CHARS. It states the bound this "
+        "code enforces and names no input."
     )),
     ("scanner/local.py", "<module>", TIMING_NEAR_SIZE): (2, (
         "the scanner's typical latency and its worst case at the input cap, on "

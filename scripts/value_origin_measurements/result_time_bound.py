@@ -1,9 +1,11 @@
 """What one tool result's reading costs when its text is long non-ASCII host names,
-whose cost the work units do not track (each host is encoded label by label, for
-every encoder and case reading). Wall-clock time of one ``record_tool_result``,
-the worst of 3 runs per shape, at the largest documented result size (64 leaves of
-64 KiB) and past it. Each reading stops at ``RESULT_TIME_BOUND_SECONDS``. Run from
-the repo root of the tree under test, on each interpreter:
+whose cost the examined and atom budgets do not count (each host is encoded label
+by label, for every encoder and case reading). CPU time of one
+``record_tool_result``, the worst of 3 runs per shape, at the largest documented
+result size (64 leaves of 64 KiB) and past it, and the same for ordinary text.
+Each reading stops where its work meter (``RESULT_READ_UNITS``) is spent, so the
+figure is the same idle or loaded. Run from the repo root of the tree under test,
+on each interpreter:
 
     PYTHONPATH=$PWD python scripts/value_origin_measurements/result_time_bound.py
 """
@@ -31,12 +33,19 @@ def hosts(i):
     return " ".join(("ab" + SHARP_S + ".") * 120 + f"example{i}x{j}" for j in range(160))[:65_536]
 
 
+def urls(n):
+    """n ordinary distinct URLs, 400 a leaf."""
+    return [" ".join(f"https://h{i}.example/" for i in range(j, min(j + 400, n)))
+            for j in range(0, n, 400)]
+
+
 SHAPES = {
     "64 x 64 KiB, 16 URLs each": lambda: [prose(i) for i in range(64)],
     "64 URLs, one a leaf": lambda: [url(i) for i in range(64)],
     "128 x 64 KiB (past the bound)": lambda: [prose(i) for i in range(128)],
     "one 4 MiB leaf": lambda: [" ".join(url(0, j) for j in range(1024))],
     "64 x 64 KiB bare hosts": lambda: [hosts(i) for i in range(64)],
+    "12,000 ordinary URLs": lambda: urls(12_000),
 }
 
 
@@ -48,10 +57,10 @@ def main():
         for _ in range(3):
             def run():
                 vo.bind_fresh_ledger()
-                t = time.perf_counter()
+                t = time.process_time()
                 vo.record_tool_result("search", {"q": "x"}, result, designations=(),
                                       result_blocked=False)
-                return time.perf_counter() - t
+                return time.process_time() - t
             worst = max(worst, contextvars.Context().run(run))
         out.append(f"{worst:.3f}")
     print(sys.version.split()[0], " ".join(out), "  (s, in the order:",

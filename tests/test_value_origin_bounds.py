@@ -189,10 +189,7 @@ def test_input_truncated_is_visible_and_does_not_block():
 
 
 # Was a strict xfail (KNOWN GAP) until the owner ruled, 2026-10-06: a dropped write BLOCKS.
-def test_a_saturating_result_does_not_launder_its_poison(monkeypatch):
-    # Lifted, as in tests/test_value_origin_drop.py: the subject is the dropped write.
-    from xaidr.value_origin import _ledger as ledger
-    monkeypatch.setattr(ledger, "RESULT_TIME_BOUND_SECONDS", 3_600.0)
+def test_a_saturating_result_does_not_launder_its_poison():
     def run():
         vo.bind_fresh_ledger()
         vo.record_principal_input(NEUTRAL, None, input_clean=True)

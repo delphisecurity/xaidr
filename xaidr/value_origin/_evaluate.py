@@ -20,6 +20,9 @@ from ._types import (UnresolvedReason,
 
 _log = logging.getLogger("xaidr.value_origin")
 
+#: ``CallVerdict.backstop`` for a miss past a result the wall-clock backstop cut.
+RESULT_TIME_BACKSTOP = "result_time_backstop"
+
 _VERDICT = {
     WireValue.PRINCIPAL: Verdict.AUTHORIZED,
     WireValue.PRINCIPAL_UNDECLARED_SPAN: Verdict.AUTHORIZED,
@@ -158,11 +161,12 @@ def row_text(wire: str | None, scan_mode: str | None) -> tuple[RowState, str]:
 
 
 def _verdict(wire: WireValue, findings: Tuple[DestinationFinding, ...],
-             truncated: bool, observed: Tuple[DestinationFinding, ...] = ()) -> CallVerdict:
+             truncated: bool, observed: Tuple[DestinationFinding, ...] = (),
+             backstop: Optional[str] = None) -> CallVerdict:
     state, detail = row_text(wire.value, "tool_call")
     return CallVerdict(wire=wire, verdict=verdict_of(wire), row_state=state,
                        detail=detail, findings=findings, truncated=truncated,
-                       observed=observed)
+                       observed=observed, backstop=backstop)
 
 
 def _looked_up(f, e) -> DestinationFinding:
@@ -223,7 +227,7 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
             return _verdict(WireValue.NO_DESTINATION, (), truncated)
         auths = [f.destination for f in found if f.destination is not None]
         (entries, saturated, input_truncated, result_truncated, result_unread,
-         atoms_incomplete, dests_dropped) = _ledger.lookup(
+         atoms_incomplete, dests_dropped, time_backstop) = _ledger.lookup(
              lg, auths + [f.destination for f in seen_only])
         observed = tuple(_looked_up(f, e) for f, e in zip(seen_only, entries[len(auths):]))
         if not found:
@@ -235,6 +239,7 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
         unread_miss = False
         incomplete_miss = False
         dropped_miss = False
+        backstop_miss = False
         budget_hit = any(f.reason is UnresolvedReason.ATOM_BUDGET for f in found)
         for f in found:
             if f.destination is None:
@@ -249,6 +254,7 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
                 unread_miss = unread_miss or result_unread
                 incomplete_miss = incomplete_miss or atoms_incomplete
                 dropped_miss = dropped_miss or dests_dropped
+                backstop_miss = backstop_miss or (result_truncated and time_backstop)
                 # Past the result bound, what a cut result holds was never read whole,
                 # so it cannot vouch: a destination neither the principal nor a
                 # trusted source authorized reads untrusted (2026-10-25, §6).
@@ -284,7 +290,8 @@ def evaluate_call(tool_name: str, arguments: Mapping[str, object] | None, *,
                 wire = WireValue.LEDGER_SATURATED
             elif truncated_miss:
                 wire = WireValue.INPUT_TRUNCATED
-        return _verdict(wire, findings, truncated, observed)
+        return _verdict(wire, findings, truncated, observed,
+                        RESULT_TIME_BACKSTOP if backstop_miss else None)
     except Exception:
         _log.exception("value origin: evaluate_call faulted")
         return None

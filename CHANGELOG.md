@@ -23,8 +23,8 @@ still reconcile against the whole range (docs/releasing.md, step 1).
 - A tool result is cut wherever reading it stops before reading all of it, and
   then cannot vouch: past the leaf, size, depth and node bounds as before, and
   now past the examined pass's work budget (a call there read
-  `extraction_incomplete`, which did not block), past a time bound of 4.0 seconds
-  per result, at an iterator or a generator (never consumed), and at a node whose
+  `extraction_incomplete`, which did not block), past a work meter that counts
+  the label-by-label work long non-ASCII hosts take, at an iterator or a generator (never consumed), and at a node whose
   `model_dump()` or `str()` raises (the whole result read `write_dropped`; the
   rest of it is now read).
 - No tool-result node is read as empty. bytes inside a result are read as their
@@ -35,14 +35,27 @@ still reconcile against the whole range (docs/releasing.md, step 1).
   model is handed them, unscanned and untrusted); they were not recorded at all.
   The Agents SDK seam also records the `str()` of a return value it hands the
   model.
+- No verdict depends on machine load. What a scan reads is decided by work: the
+  L1 rule loop always runs every rule, a long input is read in at most two windows
+  (`MAX_SCAN_WINDOWS`; it was eight under a 1.0 s budget, which in practice let
+  the clock decide), and a tool result's reading stops where its work meter is
+  spent. The wall-clock limits are 30 s backstops (they were 0.5 s, 1.0 s, 1.0 s
+  and, for a tool result, 4.0 s); when one fires the verdict carries its own
+  reason: `LLM04_scan_budget_exceeded` or `LLM04_pathological_pattern` on the
+  scan, `valueOriginBackstop` on a tool-call event. A 90 000-character benign
+  document that read `flagged` on a loaded host now reads as it does idle.
+- requests on macOS: the name the older patch releases' proxy check looks up,
+  the hostname less a trailing `:digits` (`http://[fd00:ec2::254:80]/` looks up
+  `fd00:ec2::254`), is read as a destination beside the hostname.
 - `Sensor(value_origin_wire=...)` defaults to `"v2"`, all fifteen wire values, so
   every state that decided a call's verdict reaches telemetry. It was `"v1"`,
   which withheld six; pass `"v1"` for a consumer that accepts only nine.
 - A `file:` URL's host, an `ftp:` URL's host as urllib.request's FTP handler
   resolves it, and the plain hostname of a URL of any scheme are read as
   destinations: urlopen resolves the first two, and requests on macOS asks the
-  system proxy check about the third, which looks it up on the older patch
-  releases. A `file:` URL with a host read no destination before.
+  system proxy check about the third, which on the older patch releases looks
+  up that hostname less a trailing `:digits`; that name is read as well. A
+  `file:` URL with a host read no destination before.
 - A port written in any script's decimal digits splits a host as an ASCII port
   does, the digits Unicode 14.0 to 16.0 added included, since `int()` takes them
   on an interpreter whose Unicode has them: an unbracketed IPv6 address followed

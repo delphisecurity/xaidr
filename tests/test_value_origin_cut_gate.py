@@ -243,15 +243,16 @@ def _edges():
 
 
 def _heavy():
-    """Text whose reading the work units do not track: past the time bound."""
+    """Text whose reading the examined and atom budgets do not count: past the work
+    meter (``RESULT_READ_UNITS``)."""
     urls = [_url(800_000 + i) for i in range(3)]
     names = ["http://" + "\N{LATIN SMALL LETTER SHARP S}." * 1996 + f"e{i}" for i in range(60)]
-    # 63 leaves, under the leaf bound, and no other bound: only the time bound cuts.
-    return "the time bound", names + [_whole_only(u) for u in urls], urls
+    # 63 leaves, under the leaf bound, and no other bound: only the meter cuts.
+    return "the work meter", names + [_whole_only(u) for u in urls], urls
 
 
 def _check(name, result, urls):
-    out, cut, unread, late, _ = _ledger._result_authorities(result)
+    out, cut, unread, late, _, _ = _ledger._result_authorities(result)
     keys = {a.key() for a in out + late}
     missing = [u for u in urls if _key(u) not in keys]
     assert not missing or cut or unread, (
@@ -282,18 +283,22 @@ def test_a_result_is_read_whole_or_cut(name, result, urls):
     _check(name, result, urls)
 
 
-def test_the_time_bound_cuts():
+def test_the_work_meter_cuts_at_the_same_place_every_time():
+    """Long non-ASCII host names: the reading stops where the meter is spent, the
+    same place on every reading and every machine, in bounded CPU. Unmetered, two
+    readings of this result take over 20 s of CPU here."""
     import time
     name, result, urls = _heavy()
-    bound = getattr(vo._types, "RESULT_TIME_BOUND_SECONDS", 2.0)
-    t = time.perf_counter()
+    t = time.process_time()
     _check(name, result, urls)
-    took = time.perf_counter() - t
-    # Two readings run in _check (the reader, then record_tool_result); each stops
-    # at the bound, so the work past it is the slack, not the text.
-    assert took < 2 * (bound + 1.0), (
-        f"reading one result of 60 long international names twice took {took:.1f} s: "
-        f"the reading does not stop at its {bound} s time bound")
+    took = time.process_time() - t
+    assert took < 12.0, (
+        f"reading one result of 60 long international names twice took {took:.1f} s of "
+        "CPU: the reading does not stop at its work meter")
+    first, second = (_ledger._result_authorities(result) for _ in range(2))
+    assert first[1] and not first[5], "precondition: the meter, not the backstop, cut it"
+    assert [a.key() for a in first[0] + first[3]] == [a.key() for a in second[0] + second[3]], (
+        "the meter cut the same result at two different places")
 
 
 def test_the_generator_covers_every_kind():

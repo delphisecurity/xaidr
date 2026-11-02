@@ -73,8 +73,8 @@ The only class where the **attacker chooses** whether the site fires.
 | C1 | `a2a_structural.py:204-212, 332-333` | `_MAX_NEST_DEPTH=8` | `a2a_nested_depth_exceeded` @ **0.35** (flag band); the unwalked remainder is never inspected | block |
 | C2 | `a2a_structural.py:196-198, 219-221, 334-335` | `_MAX_NEST_NODES=64`, `_MAX_LIST_ITEMS=32` | `a2a_nested_breadth_exceeded` @ 0.35 | block |
 | C3 | `a2a_structural.py:542` | `_MAX_METADATA_NODES=512` | folded into the breadth signal | block |
-| C4 | `l1.py:173-203`, `sensor.py` callers | `L1_MAX_SCAN_CHARS=100_000`, `MAX_SCAN_WINDOWS=8`, `TOTAL_SCAN_BUDGET_SEC=1.0` | `LLM01_oversized_input` flag; **the tail past the budget is never scanned** | block |
-| C5 | `l1.py:393-399, 461-468` | `_L1_SCAN_BUDGET_SEC=0.5` | `LLM04_scan_budget_exceeded` @ 0.25; remaining rules skipped | block |
+| C4 | `l1.py:173-203`, `sensor.py` callers | `L1_MAX_SCAN_CHARS=100_000`, `MAX_SCAN_WINDOWS=2` (8 until 2026-11-01), `TOTAL_SCAN_BUDGET_SEC=30.0` backstop (1.0 until 2026-11-01) | `LLM01_oversized_input` flag; **the tail past the window cap is never scanned** | block |
+| C5 | `l1.py:393-399, 461-468` | `_L1_SCAN_BUDGET_SEC=30.0`, a backstop (0.5 until 2026-11-01) | `LLM04_scan_budget_exceeded` @ 0.25; remaining rules skipped | block |
 | C6 | `l1.py:436-442, 453-460` | `_L1_RULE_SLOW_SEC=1.0` | `LLM04_pathological_pattern` @ **0.65** | **already closed** at the default 0.60 threshold |
 | C7 | `sql_parse.py:86-95, 900-910` | `MAX_SQL_CHARS=20_000`, `MAX_STATEMENTS=32`, `_MAX_TOKENS=20_000` | `_unparsed_shape` → `statement="unparsed"`, matched by `sql.unparsed_input` at **critical, `detect: None`** — classified, never blocked | promote to a detection |
 | C8 | `sql_parse.py:713` `_predicate_state_tokens` | predicate not settleable | `predicate="unknown"` → `sql.unbounded_mutation`, critical, `detect: None` | promote to a detection |
@@ -388,38 +388,35 @@ was run against" is.
 
 ```
   items                                    24
-  wall-clock bounds PINNED; window coverage limit = 796,416 chars
+  window coverage limit = 199,488 chars (two windows)
   over the 100,000-char cap              19
-    ...FULLY covered by the windowed scan  13
-    ...tail never read                     6
+    ...FULLY covered by the windowed scan  6
+    ...tail never read                     13
   clean at the DEFAULT posture             9
   THE BOUNDS COST, over default-clean items only
-    refused, tail genuinely unread          2   (the group working as designed)
+    refused, tail genuinely unread          4   (the group working as designed)
     refused, FULLY READ                     0   <- false positives
-    not refused                             7
+    not refused                             5
 ```
 
-**These numbers are measured with the three L1 wall-clock bounds pinned.**
-Measured with the bounds live, the same pool gives figures that describe the
-machine that ran them rather than the corpus (on one laptop: 4 covered / 15
-truncated / 12 clean / 7 refused-and-unread, and `refused-but-FULLY-READ 2`
-under the naive signal); see `benign_longform/README.md`. **The zero does not
-move** — refused-but-fully-read is 0 under either measurement, which is the claim this
-section exists to support.
+**These numbers are the same on any machine**, and so is the zero this section
+exists to support: refused-but-fully-read is 0 (under the naive signal it is 2).
+Since 2026-11-01 the window count, not the clock, decides how much of a long
+input is read at runtime; until then this paragraph said the numbers held only
+with the three wall-clock bounds pinned, and the laptop it named gave 4 covered /
+15 truncated with them live.
 
 **Two caveats that ship with that zero.**
 
-* **At runtime the boundary is a wall-clock budget, not a length.**
-  `_L1_SCAN_BUDGET_SEC` (0.5 s), `_L1_RULE_SLOW_SEC` (1.0 s) and
-  `TOTAL_SCAN_BUDGET_SEC` (1.0 s) can each end a scan early on a busy host, and
-  the resulting bound signal makes `bounds` refuse. The same document can be
-  refused on a loaded host and allowed on an idle one — and on a host loaded
-  enough this reaches inputs **under** the 100 000-character cap. Observed, not
-  predicted: on a GitHub `ubuntu-latest` runner a 90 000-character benign item
-  tripped `LLM04_scan_budget_exceeded` and was refused. Past 796 416 characters
-  the window cap decides on any machine; below it, the host does.
-  `scripts/longform_bounds.py` pins the clocks so the measurement above is a
-  property of the text — the gate must not be a benchmark of the CI fleet.
+* **At runtime the boundary is the window count** (`MAX_SCAN_WINDOWS`, two
+  windows, 199 488 characters). `_L1_SCAN_BUDGET_SEC`, `_L1_RULE_SLOW_SEC` and
+  `TOTAL_SCAN_BUDGET_SEC` are 30 s backstops, far above the worst case of that
+  work under CI load, and when one fires the verdict carries its own rule, so
+  it is never a silent change (`tests/test_deterministic_bounds.py`). *Until
+  2026-11-01* they were 0.5 s, 1.0 s and 1.0 s and the same document could be
+  refused on a loaded host and allowed on an idle one, even under the cap: on a
+  GitHub `ubuntu-latest` runner a 90 000-character benign item tripped
+  `LLM04_scan_budget_exceeded` and was refused.
 * **15 of 24 items score on CONTENT at the default posture**, with no group
   closed and nothing to do with `bounds` — `INTENT_exfiltrate_data` on every log
   tail and transcript (an L2 co-occurrence rule: in 90 KB of honest text, *some*
@@ -460,7 +457,7 @@ zero-movement gate on the DEFAULT, not a cost measurement for those two groups.
 |---|---|---|
 | C7/C8 SQL bounds & predicate | max 134 chars vs `MAX_SQL_CHARS=20 000`; max 3 statements vs 32; **0 / 50** produce `unknown`/`unparsed` | **REAL** — the pool was built for this class |
 | C10 command parse degraded | **1 / 814** (`ASI05-B03`) | **REAL** — G3's entire measured cost on the committed pools |
-| C4 over-length | **0 / 12** default-clean fully-read items refused, 7 / 12 truncated refused | **REAL**, via `benign_longform/`, with the wall-clock caveat above |
+| C4 over-length | **0** default-clean fully-read items refused, 4 truncated refused (two windows; 0 / 12 and 7 / 12 at eight) | **REAL**, via `benign_longform/` |
 | C1/C2/C3 A2A walk | max depth 4 vs bound 8; max nodes 27 vs 64 | **REAL but weak** — proves the bound is clear of honest A2A, cannot price moving it |
 | C9 argument-tree walk | max 10 string values vs bound 64 | **BLIND** — 6× short of the bound |
 | C11 URL cap | 0 faults; nothing near `MAX_URL_CHARS = 4 000` | **BLIND for the cap** |

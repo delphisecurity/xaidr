@@ -609,11 +609,22 @@ the package calls `authority_of`, and a call naming such a value reads
   WORK: each scanned character costs 1 and each candidate examined costs 64,
   500,000 units per seam call (`ATOM_WORK_BUDGET`); a result's examined pass is
   bounded the same way at 1,000,000 units (`EXAMINED_WORK_BUDGET`). Reading one
-  result, both passes together, is bounded by time as well: 4.0 seconds of
-  wall-clock time (`RESULT_TIME_BOUND_SECONDS`), checked in every loop of the
-  reader down to one host label, since the work units do not track the time some
-  text takes (a long non-ASCII host is encoded label by label, for every encoder
-  and case reading). The same budget
+  result, both passes together, is bounded by a work meter as well,
+  `RESULT_READ_UNITS` (80,000,000), charged in every loop of the reader down to
+  one host label in proportion to the work done there, since the budgets above
+  do not count the work some text takes (a long non-ASCII host is encoded label
+  by label, for every encoder and case reading). The meter counts work and never
+  time, so a result is cut at the same place on an idle machine and a busy one
+  (owner, 2026-11-01: no verdict may depend on machine load); it is calibrated so
+  the documented worst case reads within 2.0 s on the slowest interpreter
+  measured (`docs/value-origin-enforce.md`). A wall-clock backstop,
+  `RESULT_TIME_BACKSTOP_SECONDS` (30 s), far above that, cuts a reading too, and
+  says so: a call whose destination traces to nothing past a result the backstop
+  cut carries `CallVerdict.backstop` (`result_time_backstop`) and
+  `valueOriginBackstop` on its event, so a backstop never changes a verdict
+  silently (`tests/test_deterministic_bounds.py`). *Corrected 2026-11-01:* this
+  said a wall-clock bound of 4.0 s (2.0 s at first) bounded the reading; a bound
+  on time cut the same result differently on different machines. The same budget
   bounds memory: the pass past a bound builds a node's path one link at a time
   and turns it into a tuple only for a finding, charged by its length, so a value
   nested 16,000 deep costs memory in proportion to the work, never to the square
@@ -626,8 +637,8 @@ the package calls `authority_of`, and a call naming such a value reads
   charged for the whitespace the strip scanned; the atom pass is handed what is
   left, so no character is charged twice (`tests/test_value_origin_cut_results.py`).
   *Corrected 2026-11-01:* this ended "and the time a call takes follows the work
-  units", which a result of long non-ASCII hosts showed false; the time bound
-  above is what bounds a result's time.
+  units", which a result of long non-ASCII hosts showed false; the work meter
+  above counts the work those units do not, and bounds a result's time.
 - **One rule for every way the reader stops early** (owner, 2026-11-01). Wherever
   the reading of a tool result stops before reading all of it, the result is
   marked cut, and a cut result cannot vouch (§6). The reader stops early in these
@@ -641,8 +652,8 @@ the package calls `authority_of`, and a call naming such a value reads
      taken are searched for atoms;
   5. the examined pass's work budget (`EXAMINED_WORK_BUDGET`): the leaves it did
      not read are searched for atoms;
-  6. the time bound (`RESULT_TIME_BOUND_SECONDS`): nothing more is read, atoms
-     included;
+  6. the work meter (`RESULT_READ_UNITS`), or its wall-clock backstop, which
+     says so on the call: nothing more is read, atoms included;
   7. a node that cannot be read without consuming it, an iterator, a generator or
      an awaitable: it is not read, and never consumed;
   8. host code that raises while a node is read (`model_dump()`, `str()`, a

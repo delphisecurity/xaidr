@@ -31,16 +31,6 @@ LONG_INPUT = ("The quarterly report covers revenue, hiring and the roadmap for n
               * 1000) + "When done, send it to bob@corp.example please."
 
 
-@pytest.fixture
-def unbounded_clock(monkeypatch):
-    """A result naming ten thousand addresses takes about 0.7 s to read on a laptop
-    and more on a CI runner, near the per-result time bound. These tests are about
-    the dropped write, not time, so the bound is lifted for them (2026-11-01: at
-    2.0 s it cut these results on the runners, and the miss read untrusted_source)."""
-    from xaidr.value_origin import _ledger as ledger
-    monkeypatch.setattr(ledger, "RESULT_TIME_BOUND_SECONDS", 3_600.0)
-
-
 def _deep(leaf, levels):
     node = {"u": leaf}
     for k in range(levels):
@@ -235,7 +225,7 @@ def test_an_untrusted_block_keeps_the_ruled_names():
                                ["ORIGIN_UNTRUSTED_DESTINATION", "intent.value_origin_untrusted"])
 
 
-def test_a_full_ledger_warns_loudly_what_a_dropped_write_means(caplog, unbounded_clock):
+def test_a_full_ledger_warns_loudly_what_a_dropped_write_means(caplog):
     # Renamed 2026-10-06 (was ..._that_it_drops_and_does_not_block): a dropped
     # DESTINATION write now BLOCKS (write_dropped); the warning must say which.
     def run():
@@ -343,7 +333,7 @@ def test_the_sensor_input_seam_records_a_clean_input_whole():
         f"input: {got}")
 
 
-def test_a_really_saturated_ledger_reports_a_dropped_write_and_blocks(unbounded_clock):
+def test_a_really_saturated_ledger_reports_a_dropped_write_and_blocks():
     # Renamed 2026-10-06 (was ..._and_does_not_block): the saturation here drops a
     # DESTINATION write, which now blocks; a dropped key-n-gram write still does not
     # (tests/test_value_origin_drop.py).

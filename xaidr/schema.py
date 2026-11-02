@@ -209,6 +209,11 @@ def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
     vo_wire = data.get("valueOrigin") if isinstance(data, dict) else None
     if isinstance(vo_wire, str) and vo_wire:
         out["gen_ai.security.value_origin"] = vo_wire
+    # Beside it, when a wall-clock backstop cut a result that call's verdict read
+    # past (2026-11-01): the backstop's own reason, distinct from the work limit.
+    vo_backstop = data.get("valueOriginBackstop") if isinstance(data, dict) else None
+    if isinstance(vo_backstop, str) and vo_backstop:
+        out["gen_ai.security.value_origin_backstop"] = vo_backstop
 
     # THE DISCRIMINATOR, and why it is emitted rather than inferred.
     #

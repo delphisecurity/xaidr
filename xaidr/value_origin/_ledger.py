@@ -102,7 +102,8 @@ from ._types import (
     ATOM_COST,
     EXAMINED_WORK_BUDGET,
     MAX_INPUT_NGRAM_CHARS,
-    RESULT_TIME_BOUND_SECONDS,
+    RESULT_READ_UNITS,
+    RESULT_TIME_BACKSTOP_SECONDS,
     Authority,
     Origin,
     RecordOutcome,
@@ -141,7 +142,7 @@ def _digest_ngram(g: str) -> bytes:
 class _Ledger:
     __slots__ = ("lock", "pid", "explicit", "entries", "ngrams", "saturated", "sat_logged",
                  "input_truncated", "result_truncated", "result_unread", "atoms_incomplete",
-                 "dests_dropped", "closed", "owner", "last_input", "replayed")
+                 "dests_dropped", "closed", "owner", "last_input", "replayed", "time_backstop")
 
     def __init__(self, *, explicit: bool) -> None:
         self.lock = _new_lock()
@@ -152,6 +153,7 @@ class _Ledger:
         self.saturated = False
         self.input_truncated = False     # a principal input exceeded the 64 KiB key n-gram window
         self.result_truncated = False    # a tool result hit a bound before recording (RULING 1+2)
+        self.time_backstop = False       # a tool result was cut by the wall-clock backstop
         self.result_unread = False       # an I/O-backed result was skipped unread (Q18)
         self.atoms_incomplete = False    # an atom pass hit its WORK budget (2026-10-06)
         self.dests_dropped = False       # a DESTINATION write was dropped: blocks (owner, 2026-10-06)
@@ -661,11 +663,12 @@ def _whole_readings(res) -> List[Authority]:
 def result_authorities(result: Any) -> List[Authority]:
     """Every destination candidate in a raw result: each leaf tried whole, and
     scanned as prose (C-7). May run host code (V-15)."""
-    out, _, _, late, _ = _result_authorities(result)
+    out, _, _, late, _, _ = _result_authorities(result)
     return out + late
 
 
-def _result_authorities(result: Any) -> Tuple[List[Authority], bool, bool, List[Authority], bool]:
+def _result_authorities(result: Any
+                        ) -> Tuple[List[Authority], bool, bool, List[Authority], bool, bool]:
     """(examined candidates, whether the reading stopped before reading all of
     the result -- the result is CUT --, whether it skipped an I/O-backed node
     unread, atoms from past the cut, whether the atom pass past it ran out of
@@ -675,13 +678,15 @@ def _result_authorities(result: Any) -> Tuple[List[Authority], bool, bool, List[
     One rule for every way the reading stops early (2026-11-01): a bound of the
     walk (leaves, size, depth, nodes), a node it must not consume, host code that
     raised, the examined pass's work budget, and the time bound
-    (``RESULT_TIME_BOUND_SECONDS``) each cut the result, and a cut result cannot
-    vouch (2026-10-25). What was found before the stop is kept."""
+    (``RESULT_READ_UNITS``, counted by ``_clock``) each cut the result, and a cut
+    result cannot vouch (2026-10-25). What was found before the stop is kept. The
+    sixth value: the wall-clock backstop cut it (``RESULT_TIME_BACKSTOP_SECONDS``),
+    recorded apart so a call that reads past it says so."""
     out: List[Authority] = []
     seen = set()
     late: List[Authority] = []
-    cut = unread = incomplete = False
-    token = _clock.start(RESULT_TIME_BOUND_SECONDS)
+    cut = unread = incomplete = backstop = False
+    token = _clock.start(RESULT_READ_UNITS, RESULT_TIME_BACKSTOP_SECONDS)
     try:
         leaves, cut, unread, extra, budget = result_leaves_bounded(result)
         examined = AtomBudget(EXAMINED_WORK_BUDGET)   # the EXAMINED pass, by work (2026-10-06)
@@ -712,11 +717,13 @@ def _result_authorities(result: Any) -> Tuple[List[Authority], bool, bool, List[
                 seen.add(a)
                 late.append(a)
         incomplete = budget.hit
-    except _clock.TimeBound:
-        cut = True             # past the time bound nothing more is read: cut
+    except _clock.WorkBound:
+        cut = True             # the work limit is spent: nothing more is read
+    except _clock.TimeBackstop:
+        cut = backstop = True  # the backstop fired: nothing more is read, and it says so
     finally:
         _clock.restore(token)
-    return out, cut, unread, late, incomplete
+    return out, cut, unread, late, incomplete, backstop
 
 
 def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
@@ -731,7 +738,7 @@ def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
         if lg is None:
             return RecordOutcome.NO_LEDGER
         # Everything that can run host code, BEFORE the lock (C-15).
-        auths, cut, unread, late, incomplete = _result_authorities(result)
+        auths, cut, unread, late, incomplete, backstop = _result_authorities(result)
         plans = []
         for d in designations:
             if source_matches(d, tool_name, arguments):
@@ -744,6 +751,8 @@ def record_tool_result(tool_name: str, arguments: Mapping[str, object] | None,
         with lg.lock:
             if cut:
                 lg.result_truncated = True   # a cut result: it cannot vouch (2026-10-25, 2026-11-01)
+            if backstop:
+                lg.time_backstop = True      # ...and the cut was the backstop's: it says so
             if unread:
                 lg.result_unread = True      # Q18 under the bounds ruling: never silent
             if incomplete:
@@ -789,7 +798,7 @@ def record_replayed_result(result: object, *, key: str) -> RecordOutcome:
 
 # ── lookup (for evaluate_call) ───────────────────────────────────────────────
 def lookup(lg: _Ledger, auths: List[Authority]
-           ) -> Tuple[List[Optional[Entry]], bool, bool, bool, bool, bool, bool]:
+           ) -> Tuple[List[Optional[Entry]], bool, bool, bool, bool, bool, bool, bool]:
     """Entries for ``auths`` in one lock acquisition, plus whether the ledger
     is saturated, whether a principal input was cut, and whether a tool result
     was cut, and whether one was skipped unread — a read racing a multi-entry
@@ -797,4 +806,5 @@ def lookup(lg: _Ledger, auths: List[Authority]
     chains = [_chain_digests(a) for a in auths]
     with lg.lock:
         return ([_entry(lg, c) for c in chains], lg.saturated, lg.input_truncated,
-                lg.result_truncated, lg.result_unread, lg.atoms_incomplete, lg.dests_dropped)
+                lg.result_truncated, lg.result_unread, lg.atoms_incomplete, lg.dests_dropped,
+                lg.time_backstop)

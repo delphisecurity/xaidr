@@ -28,16 +28,6 @@ EVIL = "https://evil.example/collect"
 NEUTRAL = "Summarise the quarterly report for me."
 
 
-@pytest.fixture
-def unbounded_clock(monkeypatch):
-    """A result naming ten thousand addresses takes about 0.7 s to read on a laptop
-    and more on a CI runner, near the per-result time bound. These tests are about
-    the dropped write, not time, so the bound is lifted for them (2026-11-01: at
-    2.0 s it cut these results on the runners, and the miss read untrusted_source)."""
-    from xaidr.value_origin import _ledger as ledger
-    monkeypatch.setattr(ledger, "RESULT_TIME_BOUND_SECONDS", 3_600.0)
-
-
 def _flood(n, start=0):
     """A result naming n distinct addresses, 400 per leaf (under the leaf bound)."""
     return [" ".join(f"https://h{i}.example/" for i in range(j, min(j + 400, start + n)))
@@ -56,7 +46,7 @@ def _flow(*steps, call):
     return contextvars.Context().run(run)
 
 
-def test_a_dropped_destination_write_blocks_as_unexaminable(unbounded_clock):
+def test_a_dropped_destination_write_blocks_as_unexaminable():
     """The laundering gap: a result naming more distinct addresses than the
     ledger holds is dropped WHOLE, poison included; the call to it was allowed."""
     flood = _flood(10_400)
@@ -76,7 +66,7 @@ def test_a_dropped_key_ngram_write_stays_ledger_saturated_and_does_not_block():
     assert v.wire.value == "ledger_saturated" and not should_block(v, mode=Mode.ENFORCE), v.wire.value
 
 
-def test_a_dropped_write_block_carries_the_unexaminable_names(unbounded_clock):
+def test_a_dropped_write_block_carries_the_unexaminable_names():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         s = xaidr.Sensor(agent_id="drop", value_origin="enforce", enforcement_mode="block",
