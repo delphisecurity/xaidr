@@ -5,11 +5,11 @@ that produced it.** It is the build plan for `BRIEF.md`, and it stops at §6 for
 the owner's answers.
 
 Base: `feat/value-origin-seams` @ `52bf4d5` (BRIEF commit on top of `25dc9de`,
-the A1 merge). The spec was read read-only with
-`git -C ~/delphi-sentinel show origin/main:docs/value-origin-architecture.md`.
-`origin/main` is `01450c7`, the commit the rulings doc names. The only command
-run against `~/delphi-sentinel` other than `show` was `git fetch origin main`.
-It updates that repo's remote-tracking ref and touches no working file or branch.
+the A1 merge). The spec, `docs/value-origin-architecture.md`, was read read-only
+from the specification repository's `origin/main`, at `01450c7`, the commit the
+rulings doc names. The only other command run against that repository was a
+fetch of `main`, which updates its remote-tracking ref and touches no working
+file or branch.
 **`docs/value-origin-rulings.md` wins wherever it differs from the spec.** The
 two places where this plan applies a ruling over the spec are marked *[ruling]*.
 
@@ -325,7 +325,7 @@ exemption list.
 | `test_ip_spellings_resolve_where_the_resolver_does` | `url_parse` and the core, each fed `http://{h}/` | `getaddrinfo(AI_NUMERICHOST)`, per platform | the hex, octal, decimal, short, mixed, fullwidth and Arabic-Indic forms from `coerce_diff.py`. **Always inside a URL host**: under V-19 the integer forms are not addresses as bare values, and the BRIEF puts the four scheme-less integer spellings out of scope. |
 | `test_bsd_libc_decimal_leading_zero_divergence_is_the_only_platform_class` | the above | asserts the F9 class **exists on darwin** and is the only darwin-only disagreement; on Linux it asserts the class is empty | — |
 
-*[As built at M2/M3: the tests live in `tests/test_differential_oracles.py`, not here, because they need the dev-extra oracles and share M0's refuse-not-skip fixture; the core test was delivered at M0 as `test_core_reads_every_host_any_consumer_reads`; the resolver test is split per subject (`_url_parse`, `_core`). "The only darwin-only disagreement" is NOT asserted: a second darwin class (integer wrap) was found and is pinned as an unruled strict xfail. See PROGRESS.md M2.]*
+*[As built at M2/M3: the tests live in `tests/test_differential_oracles.py`, not here, because they need the dev-extra oracles and share M0's refuse-not-skip fixture; the core test was delivered at M0 as `test_core_reads_every_host_any_consumer_reads`; the resolver test is split per subject (`_url_parse`, `_core`). "The only darwin-only disagreement" is NOT asserted: a second darwin class (integer wrap) was found and is pinned as an unruled strict xfail. See the build log (kept outside the repository), M2.]*
 
 **Found-but-unfixed defects get their tests first** (global CLAUDE.md,
 failing-first item 4). F1 and F3 go in as `xfail(strict=True)`, with the red
@@ -602,7 +602,7 @@ vendors (§4.5, P4). The owner sees the diff before anything builds on it.
   that class stays a genuine xfail with `urllib.parse` alone. The
   classes no `urllib.parse` reading reaches (special scheme without `//`,
   WHATWG only; urlsplit refusal, which httpx, urllib3 and WHATWG reach) also
-  unexpectedly pass; see PROGRESS.md M2.]* That proves the
+  unexpectedly pass; see the build log, M2.]* That proves the
   transport oracles, not the grid, carry the finding. *(Deleting httpx alone,
   the first draft's sabotage, would not do it: ada and urllib3 also read F3.)*
 

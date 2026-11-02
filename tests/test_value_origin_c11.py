@@ -22,7 +22,7 @@ that makes them true lands:
 The cross-commit half (§3.2 item 3: OFF at HEAD == the pre-A2 sensor) runs the
 same module as a driver against wheels built from base and HEAD, outside the
 process. CI checks out with depth 1, so that half is milestone evidence in
-PROGRESS.md, not a CI test.
+the build log (kept outside the repository), not a CI test.
 """
 from __future__ import annotations
 
@@ -151,7 +151,7 @@ def test_record_moves_no_verdict_score_or_rule(runs, p, enforcement):
 
 # ── 4 · non-vacuity: strict xfails until the milestone that makes them true ─
 
-# Strict xfail until M6 (the red is in PROGRESS.md). K_I = 26, measured at M6 on
+# Strict xfail until M6 (the red is in the build log). K_I = 26, measured at M6 on
 # the 456-row corpus: the flagged attack inputs (V-9) whose destinations the
 # calls built from them then name.
 K_I = 26
@@ -165,7 +165,7 @@ def test_4a_I_record_reports_untrusted_source_on_input_derived_calls(runs):
 # One assertion PER PASS (the M1 review): the public scan(direction=
 # "tool_result") records by itself at M7, so a pooled count would flip on
 # P-flow-R alone and prove nothing about the protect_tools seam.
-# Strict xfails until M7 (their unexpected passes are in PROGRESS.md). K_R measured
+# Strict xfails until M7 (their unexpected passes are in the build log). K_R measured
 # at M7 on the 456-row corpus, PER PASS: P-flow-R through the public
 # scan(direction="tool_result") seam (V-26), P-seam through protect_tools' result
 # position, which C-11 could not check from M1 until M7 built it.
@@ -178,7 +178,7 @@ def test_4a_R_record_reports_untrusted_source_on_result_derived_calls(runs, p):
     assert wires.count("untrusted_source") >= K_R[p], collections.Counter(wires)
 
 
-# Strict xfail until M8 (its unexpected pass is in PROGRESS.md): the discriminating
+# Strict xfail until M8 (its unexpected pass is in the build log): the discriminating
 # case, proving the instrument sees the axis RECORD must not move.
 @pytest.mark.parametrize("p", FLOW_PASSES)
 def test_4b_enforce_moves_an_action_that_off_and_record_do_not(runs, p):

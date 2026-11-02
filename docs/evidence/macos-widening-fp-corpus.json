@@ -1,5 +1,5 @@
 {
- "how": "affected-shape tokens from files OUTSIDE this project (system config, Homebrew docs/configs/man pages, Python package manifests); test suites and personal logs excluded; see PROGRESS.md 'item 2'",
+ "how": "affected-shape tokens from files OUTSIDE this project (system config, Homebrew docs/configs/man pages, Python package manifests); test suites and personal logs excluded; see the build log's 'item 2', kept outside the repository",
  "files_read": 24466,
  "url_hosts_total": 80114,
  "url_hosts_distinct": 2978,

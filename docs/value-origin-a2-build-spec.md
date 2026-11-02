@@ -362,7 +362,7 @@ readers of `_inbound_ctx`/`_tiers_ctx`.
 >   scope join A, and B reads A's authority.
 >
 > Everything below describes `93d60a1` as built; it is not the phase's
-> conclusion. See PROGRESS.md, "A2 build ... STOPPED in P1", and §7 Q-G.
+> conclusion. See the build log (kept outside the repository), "A2 build ... STOPPED in P1", and §7 Q-G.
 
 *Corrected twice, after two fresh-context reviews (2026-10-08/09).* This section
 first described the token design, then the second design. §1 records both. As
@@ -674,7 +674,7 @@ All three are measured by the outside drivers.
 
 ### P5. M10's four remaining findings, then the monitor-mode disagreement
 
-M10 named four gaps between its measurement and §4 (PROGRESS.md, "Gaps against
+M10 named four gaps between its measurement and §4 (the build log, "Gaps against
 §4 in this measurement"). Read as the four findings STEP 5 means:
 
 1. **No B-designated-twin case.** It is added to
@@ -804,7 +804,7 @@ refuses unless `xaidr.__file__` is in that venv's site-packages
 - **Q-G (blocking P1, and with it P3 and P4).** What should `xaidr.flow()` do
   when it finds request state already in the context? Three designs each
   failed P1's counter-case, because every available rule trades (1) for (2)
-  (PROGRESS.md). Options:
+  (the build log). Options:
   - **(a) Narrow the guarantee.** An OUTERMOST scope isolates its request.
     Nested scopes join only within the same task/thread and only while the
     enclosing entry is live. Keep-evidence covers untiered hops.

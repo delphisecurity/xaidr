@@ -1,4 +1,4 @@
-# How the "before M8" measurements were made (PROGRESS.md items 2 and 3)
+# How the "before M8" measurements were made (the build log's items 2 and 3, kept outside the repository)
 
 Run from the repository root with `PYTHONPATH=.` and the dev extra installed.
 

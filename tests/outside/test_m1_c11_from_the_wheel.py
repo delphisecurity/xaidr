@@ -9,7 +9,7 @@ compared as default against default.
 
 The cross-commit half, comparing a wheel built from base 25dc9de with HEAD, uses
 the same driver with ``--base``. It needs git history that a depth-1 CI checkout
-lacks, so it is milestone evidence in PROGRESS.md.
+lacks, so it is milestone evidence in the build log, kept outside the repository.
 """
 from __future__ import annotations
 
