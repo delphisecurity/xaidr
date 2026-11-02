@@ -187,11 +187,10 @@ def test_id_content_check_does_not_replace_provenance_detector():
     assert "task_id_smuggling" in out["signals"]
 
 
-def test_id_content_check_is_redos_safe():
-    # Pathological long id strings stay linear-time (bounded, no backtracking).
-    import time
+def test_id_content_check_is_redos_safe(scan_paths):
+    # Pathological long id strings return; their time is the A2A path's figure
+    # (scripts/scan_paths.py, the id-* inputs).
     v = A2AStructuralValidator()
     for payload in ("." * 40000, "/" * 40000 + "..", "..%2f" * 16000):
-        t0 = time.process_time()
         v._id_content_category(payload)
-        assert (time.process_time() - t0) < 0.5
+    scan_paths.assert_timed("a2a", ["id-dots", "id-slashes", "id-encoded-traversal"])

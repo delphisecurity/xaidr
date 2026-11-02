@@ -5,7 +5,11 @@ dangerous, not just messy:
 
   1. ReDoS guards — a security tool that hangs on crafted input becomes a DoS
      hole. Every known backtracking shape (L1 repeat-loop, DLP bulk-email,
-     normalizer) must COMPLETE UNDER A TIME BUDGET and return a valid result.
+     normalizer) must return a valid result having examined a FIXED AMOUNT of
+     text: every rule, at most MAX_SCAN_WINDOWS + 1 passes of at most the scan
+     cap, counted (the ``l1_work`` fixture), never timed. What that work costs in
+     time is a measured figure, held once per path (scripts/scan_paths.py:
+     the input-scan and output-scan paths hold these same inputs).
   2. No fabricated provenance — a security product must never invent an
      on-behalf-of / principal it was not given. A bare scan emits no provenance,
      and cleared flow state does not leak a stale principal into later scans.
@@ -22,38 +26,27 @@ from xaidr.types import ScanResult
 from xaidr.schema import to_openA2A
 
 
-# Generous budget — catastrophic ReDoS backtracking is EXPONENTIAL (many seconds
-# to effectively-never), so this decisively catches it while staying immune to
-# CI load variance. It is deliberately not a micro-perf assertion.
-BUDGET_S = 2.0
+from xaidr.scanner import dlp, l1
+from xaidr.scanner.l1 import L1_MAX_SCAN_CHARS as CAP, MAX_SCAN_WINDOWS
+from xaidr.scanner.local import DLP_MAX_SCAN_CHARS
 
-# The normalizer's killer input runs close enough to BUDGET_S that ambient load
-# alone can breach it: measured 1.17s median and 1.86s worst on an idle machine
-# against a 2.0s budget, i.e. ~1.1x headroom. That is not a security property,
-# it is a race, and it produced intermittent failures that never reproduced in
-# isolation. The bounded-ness claim is asserted structurally below instead; this
-# ceiling remains only as a catastrophic-regression tripwire.
-#
-# Why 30s is defensible in both directions: it is ~16x the worst observed run,
-# so no plausible CI contention reaches it, and it is still well under the ~37s
-# a backtracking DLP bulk-email pattern takes at a 100k cap (see scanner/dlp.py),
-# which is the class of regression this exists to catch. A number that catches an exponential
-# blowup does not need to be tight.
-CATASTROPHIC_CEILING_S = 30.0
+# The passes one scan makes over the text: the normalized and the raw head
+# (scanner/local.py), and the tail windows past the head.
+MAX_PASSES = MAX_SCAN_WINDOWS + 1
 
 
-def _timed(fn, text):
-    """(result, CPU seconds). CPU, not wall clock, and for the reason set out at
-    length in tests/test_redos_pattern_audit.py: the quantity these ceilings are
-    about is BACKTRACKING WORK, and ``time.process_time`` counts exactly that
-    while a busy neighbour cannot move it. Measured there on a 10-core box with
-    three busy loops per core, the worst case in that battery reads 318ms by
-    wall clock and 86ms by CPU. This file's own comment above already documents
-    a ceiling that had to be widened 16x because ambient load broke it; that is
-    the same defect, and this is the fix rather than another wider number."""
-    t0 = time.process_time()
-    r = fn(text)
-    return r, time.process_time() - t0
+def _assert_bounded(work, rules, label, text):
+    per = work.per_rule()
+    assert len(per) == len(rules), f"{label}: {len(rules) - len(per)} rule(s) did not run"
+    shapes = {tuple(v) for v in per.values()}
+    assert len(shapes) == 1, f"{label}: the rules did not all read the same text: {shapes}"
+    (calls,) = shapes
+    assert len(calls) <= MAX_PASSES and max(calls) <= CAP, (
+        f"{label}: a rule examined {calls} for a {len(text):,}-char input, past "
+        f"{MAX_PASSES} passes of {CAP:,}: the work is not bounded")
+    assert sum(calls) >= min(len(text), CAP), f"{label}: the head was not read whole"
+    for rid, n in work.dlp_calls:
+        assert n <= DLP_MAX_SCAN_CHARS, f"{label}: DLP {rid} examined {n:,} chars"
 
 
 # ── 1. ReDoS guards ──────────────────────────────────────────────────────────
@@ -66,11 +59,11 @@ def _timed(fn, text):
         ("long_single_token", "x" * 500000),
     ],
 )
-def test_input_scan_bounded(sensor, label, text):
-    r, elapsed = _timed(sensor.scan, text)
-    assert elapsed < BUDGET_S, f"{label}: {elapsed:.3f}s exceeds {BUDGET_S}s"
+def test_input_scan_bounded(sensor, l1_work, label, text):
+    r = sensor.scan(text)
     assert isinstance(r, ScanResult)
     assert r.action in ("allowed", "flagged", "blocked")
+    _assert_bounded(l1_work, l1.INPUT_RULES, label, text)
 
 
 @pytest.mark.parametrize(
@@ -81,10 +74,12 @@ def test_input_scan_bounded(sensor, label, text):
         ("dlp_mixed_100k", ("user@example.com " * 5000) + ("x" * 20000)),
     ],
 )
-def test_output_dlp_scan_bounded(sensor, label, text):
-    r, elapsed = _timed(sensor.scan_output, text)
-    assert elapsed < BUDGET_S, f"{label}: {elapsed:.3f}s exceeds {BUDGET_S}s"
+def test_output_dlp_scan_bounded(sensor, l1_work, label, text):
+    r = sensor.scan_output(text)
     assert isinstance(r, ScanResult)
+    _assert_bounded(l1_work, l1.OUTPUT_RULES, label, text)
+    assert {rid for rid, _ in l1_work.dlp_calls} == {p["id"] for p in dlp.DLP_PATTERNS}, (
+        f"{label}: a DLP pattern did not run")
 
 
 def test_normalizer_path_work_does_not_scale_with_input(sensor):
@@ -117,25 +112,6 @@ def test_normalizer_path_work_does_not_scale_with_input(sensor):
         f"work scaled with input size: {counts} windows for 1MB/4MB/16MB — the "
         f"input cap is not holding"
     )
-
-
-def test_normalizer_path_has_no_catastrophic_blowup(sensor):
-    """The tripwire the timing assertion is actually for.
-
-    A window-count bound cannot catch exponential backtracking INSIDE one
-    window, so one timing check is still worth having. It is set at a ceiling no
-    ambient load can reach (see CATASTROPHIC_CEILING_S) rather than at a tight
-    budget that races with the machine.
-
-    Now measured in CPU seconds (see ``_timed``), which is what made the wide
-    ceiling necessary in the first place. The width is kept anyway: it costs
-    nothing against an exponential blowup, and two independent reasons not to
-    flake are better than one.
-    """
-    _, e1 = _timed(sensor.scan, "a@b.com " * 125000)
-    _, e2 = _timed(sensor.scan_output, "a@b.com " * 125000)
-    assert e1 < CATASTROPHIC_CEILING_S, f"scan took {e1:.1f}s"
-    assert e2 < CATASTROPHIC_CEILING_S, f"scan_output took {e2:.1f}s"
 
 
 def test_normalizer_still_defeats_leetspeak_evasion(sensor):

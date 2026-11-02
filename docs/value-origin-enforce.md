@@ -90,7 +90,7 @@ rate on the user's own destinations.
 |---|---|---|
 | an argument leaf over 4,000 chars, more than 64 argument leaves, nesting deeper than 6 | `argument_bound` | a skipped value short enough is read whole; the skipped parts are searched for destination atoms; each is evaluated |
 | a tool-result leaf over 65,536 chars, more than 64 result leaves, nesting deeper than 6, the examined walk's node budget, the examined pass's work budget | `untrusted_source` (blocks): the result is cut and cannot vouch | the skipped parts are searched for atoms, and each is recorded with the result's origin |
-| a tool result's work meter (`RESULT_READ_UNITS`), or its 30 s wall-clock backstop | `untrusted_source` (blocks): the result is cut; the backstop says so on the call (`valueOriginBackstop`) | nothing more is read |
+| a tool result's work meter (`RESULT_READ_UNITS`), or its 120 s wall-clock backstop | `untrusted_source` (blocks): the result is cut; the backstop says so on the call (`valueOriginBackstop`) | nothing more is read |
 | a result node that cannot be read without consuming it (an iterator, a generator), or whose host code raised | `untrusted_source` (blocks): the result is cut | the node is not read; the rest of the result is |
 | a principal input over 65,536 chars | `input_truncated` | atoms are recorded from all of it; key n-grams from the first 64 KiB |
 | the atom pass's work budget (an argument, or a principal input past 64 KiB) | `extraction_incomplete` | the rest is not scanned |
@@ -125,8 +125,10 @@ rate on the user's own destinations.
   result is cut at the same place on every machine, idle or loaded. Its measured
   worst case, the CPU time of one `record_tool_result`, the worst of 3 runs per
   shape (`scripts/value_origin_measurements/result_time_bound.py`, 2026-11-01,
-  macOS arm64), is **1.914 s**, within the stated 2.0 s, on all 14 interpreters
-  run (3.10.11, 3.10.20, 3.10.22, 3.11.3, 3.11.15, 3.11.17, 3.12.0, 3.12.2,
+  macOS arm64), is **1.914 s** on this machine, on all 14 interpreters run
+  (*corrected 2026-11-02:* this said "within the stated 2.0 s"; the CI runners
+  take about three times as long for the same work, and their figure, the one
+  the timing check holds, is in `docs/performance.md`) (3.10.11, 3.10.20, 3.10.22, 3.11.3, 3.11.15, 3.11.17, 3.12.0, 3.12.2,
   3.12.13, 3.12.15, 3.14.0, 3.14.5, 3.14.8 and 3.14.9):
 
   ```
@@ -139,7 +141,7 @@ rate on the user's own destinations.
   12,000 ordinary URLs                     0.802 - 1.391 s
   ```
 
-  A wall-clock backstop, `RESULT_TIME_BACKSTOP_SECONDS` (30 s), stands behind
+  A wall-clock backstop, `RESULT_TIME_BACKSTOP_SECONDS` (120 s), stands behind
   the meter for work no unit counts; when it fires, the call says so
   (`CallVerdict.backstop`, `valueOriginBackstop` on its event). *Corrected
   2026-11-01:* this said a wall-clock bound of 4.0 s (2.0 s at first) bounded the

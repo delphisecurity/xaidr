@@ -213,13 +213,12 @@ ATOM_WORK_BUDGET: int = 500_000
 EXAMINED_WORK_BUDGET: int = 1_000_000
 # And by the work the reader does that those units do not count (``_clock``): one
 # result's reading, both passes, stops when this meter is spent, and the result is
-# cut. Calibrated so the documented worst case reads within 2.0 s on the slowest
-# interpreter measured (docs/value-origin-enforce.md); work, not time, so the same
+# cut. Its worst case is a measured figure, on the CI runners and on 14 interpreters
+# here (docs/performance.md); work, not time, so the same
 # result is cut at the same place idle or loaded (owner, 2026-11-01).
 RESULT_READ_UNITS: int = 80_000_000
-# The wall-clock backstop, far above the meter's documented worst case under CI
-# load; it fires only for work no unit counts, and says so (CallVerdict.backstop).
-RESULT_TIME_BACKSTOP_SECONDS: float = 30.0
+# The wall-clock backstop, far above the meter's worst case on the CI runners; it fires only for work no unit counts, and says so (CallVerdict.backstop).
+RESULT_TIME_BACKSTOP_SECONDS: float = 120.0
 MAX_WALK_NODES: int = 65_536    # the EXAMINED walk's node budget: width cannot escape it (review)
 ATOM_COST: int = 64
 ATOM_CHUNK_CHARS: int = 16_384

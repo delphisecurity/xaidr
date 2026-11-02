@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import contextlib
 import io
-import time
 
 import pytest
 
@@ -209,24 +208,21 @@ def test_multiple_heredocs_on_one_line_are_both_captured():
 
 # ── robustness ──────────────────────────────────────────────────────────────
 
-def test_an_unterminated_heredoc_neither_hangs_nor_raises():
+def test_an_unterminated_heredoc_neither_hangs_nor_raises(scan_paths):
     cmd = "python - <<'PY'\nimport os\nprint('never closed')"
-    t0 = time.process_time()
     segs = parse_command(cmd)
-    assert time.process_time() - t0 < 1.0
+    scan_paths.assert_timed("parsers", ["heredoc-unterminated"])
     assert segs, "returned nothing"
     hd = segs[0].heredocs[0]
     assert hd["terminated"] is False
     assert segs[0].parse_degraded is True, "an unseen end must be reported as degraded"
 
 
-def test_a_very_large_unterminated_body_stays_bounded():
+def test_a_very_large_unterminated_body_stays_bounded(scan_paths):
     cmd = "bash <<'EOF'\n" + "echo x\n" * 5000
-    t0 = time.process_time()
     segs = parse_command(cmd)
-    elapsed = time.process_time() - t0
-    assert elapsed < 2.0, f"took {elapsed:.2f}s"
     assert len(segs) <= 64
+    scan_paths.assert_timed("parsers", ["heredoc-large-unterminated"])
 
 
 @pytest.mark.parametrize("cmd", [
@@ -406,23 +402,21 @@ def test_crossing_the_cap_does_not_change_the_impact_class(n):
     ), f"{n} heredocs: data body conferred a class"
 
 
-def test_the_cap_still_bounds_the_work():
-    """The bound must keep holding: no unbounded capture, no hang."""
+def test_the_cap_still_bounds_the_work(scan_paths):
+    """The bound must keep holding: no unbounded capture. Its time is the parser
+    path's figure (scripts/scan_paths.py, heredoc-many)."""
     n = _MAX_HEREDOCS_PER_SEGMENT * 40
-    t0 = time.process_time()
     segs = parse_command(_many_heredocs(n))
-    elapsed = time.process_time() - t0
-    assert elapsed < 2.0, f"took {elapsed:.2f}s on {n} heredocs"
+    scan_paths.assert_timed("parsers", ["heredoc-many"])
     assert len(segs[0].heredocs) <= _MAX_HEREDOCS_PER_SEGMENT
     assert len(segs) <= 64
     assert segs[0].parse_degraded is True
 
 
-def test_an_unterminated_heredoc_past_the_cap_neither_hangs_nor_raises():
+def test_an_unterminated_heredoc_past_the_cap_neither_hangs_nor_raises(scan_paths):
     n = _MAX_HEREDOCS_PER_SEGMENT + 4
     headers = " ".join(f"<<D{i}" for i in range(n))
     cmd = f"cat {headers} > out.txt\nbody with no delimiter ever arriving"
-    t0 = time.process_time()
     segs = parse_command(cmd)
-    assert time.process_time() - t0 < 1.0
+    scan_paths.assert_timed("parsers", ["heredoc-past-cap-unterminated"])
     assert segs and segs[0].parse_degraded is True

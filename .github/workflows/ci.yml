@@ -137,6 +137,13 @@ jobs:
           else
             python -m pytest -q
           fi
+      # Each scanning and reading path's worst case on this runner, CPU seconds, and
+      # the slower-machine margin against the wall-clock backstops: the figures
+      # docs/performance.md states and tests/test_path_timing.py's bounds come from
+      # (scripts/scan_paths.py). It prints; it decides nothing.
+      - name: Measure the scan paths
+        if: always()
+        run: python scripts/scan_paths.py
 
   # ── The suite on CPython 3.12.2, full config ───────────────────────────────
   # setup-python's "3.12" is the newest patch release, and 3.12.2 differs from it
@@ -164,6 +171,13 @@ jobs:
           python -c "import sys; assert sys.version_info[:3] == (3, 12, 2), sys.version; print(sys.version)"
       - name: Run test suite
         run: python -m pytest -q
+      # Each scanning and reading path's worst case on this runner, CPU seconds, and
+      # the slower-machine margin against the wall-clock backstops: the figures
+      # docs/performance.md states and tests/test_path_timing.py's bounds come from
+      # (scripts/scan_paths.py). It prints; it decides nothing.
+      - name: Measure the scan paths
+        if: always()
+        run: python scripts/scan_paths.py
 
   # ── Real frameworks, pinned — the only job where they are installed ────────
   # Neither `test` config installs an agent framework (`dev` is pytest +

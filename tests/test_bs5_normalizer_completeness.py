@@ -98,9 +98,9 @@ def test_normalizer_folds_but_only_to_keywords():
         assert folded not in n._kw_set, f"{benign} folded into a keyword: {folded}"
 
 
-def test_bs5_normalizer_redos_safe():
-    import time
-
+def test_bs5_normalizer_redos_safe(scan_paths):
+    """The normalizer returns text on each pathological input; its time is the
+    normalizer path's figure (scripts/scan_paths.py, the normalize-* inputs)."""
     n = TypoNormalizer()
     payloads = [
         "a " * 200_000,
@@ -110,6 +110,7 @@ def test_bs5_normalizer_redos_safe():
         "x " * 200_000,
     ]
     for p in payloads:
-        t0 = time.process_time()
-        n.normalize(p)
-        assert time.process_time() - t0 < 1.0, "normalizer too slow (possible ReDoS)"
+        assert isinstance(n.normalize(p), str)
+    scan_paths.assert_timed("normalizer", [
+        "normalize-word-run", "normalize-accent-run", "normalize-cyrillic-run",
+        "normalize-dot-run", "normalize-x-run"])

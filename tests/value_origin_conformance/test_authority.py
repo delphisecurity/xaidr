@@ -6,7 +6,6 @@ from __future__ import annotations
 import ipaddress
 import re
 import socket
-import time
 from urllib.parse import _splitport, urlsplit
 
 import pytest
@@ -439,31 +438,22 @@ ADVERSARIAL = {
 }
 
 
-def _time(fn, n=3):
-    best = float("inf")
-    for _ in range(n):
-        t = time.perf_counter()
-        fn()
-        best = min(best, time.perf_counter() - t)
-    return best
 
 
 @pytest.mark.parametrize("name", sorted(ADVERSARIAL))
-def test_prose_and_argument_scans_grow_linearly(name):
-    """Quadrupling the input must not cost more than ~12x (linear is 4x; the
-    slack absorbs timer noise). A nested or ambiguous quantifier fails this."""
-    unit = ADVERSARIAL[name]
+def test_prose_and_argument_scans_grow_linearly(name, scan_paths):
+    """A nested or ambiguous quantifier in the prose or argument readers backtracks
+    inside one regex call, which no work count sees; only time does. Each unit is
+    read here (a principal input, a whole result, an argument), and its 4x form is
+    an input of the result-reading path's timing check (scripts/scan_paths.py,
+    growth-*-x4), held at 1.5 times the CI runners' measured worst case."""
+    text = (ADVERSARIAL[name] * 4)[:3_900 * 4]
+    bind_fresh_ledger()
+    try:
+        record_principal_input(text, input_clean=True)
+        record_tool_result("t", {}, text, designations=(), result_blocked=False)
+        assert isinstance(extract_destinations({"v": text[:3_999]})[0], tuple)
+    finally:
+        unbind_ledger()
+    scan_paths.assert_timed("result_read", [f"growth-{name}-x4"])
 
-    def cost(k):
-        text = (unit * k)[:3_900 * k]
-
-        def run():
-            bind_fresh_ledger()
-            record_principal_input(text, input_clean=True)
-            record_tool_result("t", {}, text, designations=(), result_blocked=False)
-            extract_destinations({"v": text[:3_999]})
-        return _time(run)
-    small, large = cost(1), cost(4)
-    unbind_ledger()
-    assert large < max(small * 12, 0.05), f"{name}: {small:.4f}s -> {large:.4f}s"
-    assert large < 2.0, f"{name}: {large:.2f}s on 4x input"

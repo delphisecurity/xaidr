@@ -100,17 +100,24 @@ def test_existing_out_dlp_rules_unregressed(sensor):
         "sk-abcdefghijklmnopqrstuvwxyz012345").rules
 
 
-def test_social_rules_are_redos_safe(sensor):
-    """CPU seconds, not wall clock: backtracking is CPU burn, and a busy CI box
-    moves one of those clocks and not the other. See the reasoning at
-    tests/test_redos_pattern_audit.py::TRIGGER_CPU_CEILING_SEC; the budget is
-    unchanged, because on an idle machine the two clocks agree."""
-    import time
-    for payload in (
+def test_social_rules_are_redos_safe(sensor, l1_work, scan_paths):
+    """Each payload is examined in a bounded number of passes of at most the scan
+    cap, by every output rule: work, counted. Its time is the output-scan path's
+    figure (scripts/scan_paths.py)."""
+    from xaidr.scanner import l1
+    from xaidr.scanner.l1 import L1_MAX_SCAN_CHARS as CAP, MAX_SCAN_WINDOWS
+
+    RULES = l1.OUTPUT_RULES
+    for p in (
         "I am the admin " + "x " * 40000,
         "verify your account " + "a" * 80000,
         "confirm your identity " + "http:/" * 16000,
     ):
-        t0 = time.process_time()
-        sensor.scan_output(payload)
-        assert (time.process_time() - t0) < 1.0
+        l1_work.clear()
+        sensor.scan_output(p)
+        per = l1_work.per_rule()
+        calls = {tuple(v) for v in per.values()}
+        assert len(per) == len(RULES) and len(calls) == 1, f"{p[:16]!r}...: a rule did not run"
+        assert all(len(c) <= MAX_SCAN_WINDOWS + 1 and max(c) <= CAP for c in calls), (
+            f"{p[:16]!r}...: a rule examined {calls}, past {MAX_SCAN_WINDOWS + 1} passes of {CAP:,}")
+    scan_paths.assert_timed("output_scan", ["social-admin", "social-verify", "social-confirm"])

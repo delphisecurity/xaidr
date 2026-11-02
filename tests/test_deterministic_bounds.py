@@ -183,7 +183,7 @@ def test_the_result_backstop_says_so_on_the_call_and_the_event(monkeypatch):
                      if e.get("data", {}).get("direction") == "tool_call"])
         finally:
             pc.clear_flow()
-    normal = contextvars.Context().run(flow, 30.0)
+    normal = contextvars.Context().run(flow, _ledger.RESULT_TIME_BACKSTOP_SECONDS)
     fired = contextvars.Context().run(flow, 0.0)
     assert normal == ("untrusted_source", None, [None]), f"precondition: {normal}"
     assert fired[1] == "result_time_backstop" and fired[2] == ["result_time_backstop"], (

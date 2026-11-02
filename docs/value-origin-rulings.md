@@ -637,10 +637,13 @@ the package calls `authority_of`, and a call naming such a value reads
   do not count the work some text takes (a long non-ASCII host is encoded label
   by label, for every encoder and case reading). The meter counts work and never
   time, so a result is cut at the same place on an idle machine and a busy one
-  (owner, 2026-11-01: no verdict may depend on machine load); it is calibrated so
-  the documented worst case reads within 2.0 s on the slowest interpreter
-  measured (`docs/value-origin-enforce.md`). A wall-clock backstop,
-  `RESULT_TIME_BACKSTOP_SECONDS` (30 s), far above that, cuts a reading too, and
+  (owner, 2026-11-01: no verdict may depend on machine load); what its worst
+  case costs is a measured figure, on the CI runners (`docs/performance.md`).
+  *Corrected 2026-11-02:* this said the meter is calibrated so the documented
+  worst case reads within 2.0 s on the slowest interpreter; that was measured on
+  one machine, and the CI runners take about three times as long for the same
+  work. A wall-clock backstop, `RESULT_TIME_BACKSTOP_SECONDS` (120 s), far above
+  that, cuts a reading too, and
   says so: a call whose destination traces to nothing past a result the backstop
   cut carries `CallVerdict.backstop` (`result_time_backstop`) and
   `valueOriginBackstop` on its event, so a backstop never changes a verdict

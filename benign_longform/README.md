@@ -143,17 +143,20 @@ At runtime an L1 scan reads what its work limits allow and nothing decides by
 the clock: every rule runs over at most 100 000 characters, and a long input is
 read in at most `MAX_SCAN_WINDOWS` (2) windows. The three wall-clock limits,
 `_L1_SCAN_BUDGET_SEC` (the rule loop), `_L1_RULE_SLOW_SEC` (one pattern) and
-`TOTAL_SCAN_BUDGET_SEC` (the window walk), are 30 s backstops, far above the
-worst case of that work on a loaded runner. When one fires the verdict carries
+`TOTAL_SCAN_BUDGET_SEC` (the window walk), are 120 s backstops, far above the
+worst case of that work on the CI runners (`docs/performance.md`). When one fires the verdict carries
 its own rule (`LLM04_scan_budget_exceeded`, `LLM04_pathological_pattern`), so a
 backstop never changes a verdict silently
 (`tests/test_deterministic_bounds.py`). An item under the cap reads the same on
 an idle host and a busy one, and an item past 199 488 characters has an unread
 tail on every machine.
 
-Two windows is a calibration: over 14 interpreters (3.10.11 to 3.14.9) a whole
-scan of the worst input measured takes at most 2.08 s of CPU at two windows, the
-engine's ~2 s per-scan bound, and 2.65 s at three on the slowest interpreter.
+What a whole scan of the worst input costs at two windows is a measured figure,
+on the CI runners and here (`docs/performance.md`), not a limit. *Corrected
+2026-11-02:* this called two windows a calibration that kept the worst scan within
+the engine's ~2 s per-scan bound, from a measurement on one machine (2.08 s of CPU
+on its slowest interpreter, 2.65 s at three windows). On the CI runners the same
+work took 2.75 to 3.80 s; the bound held only where it was measured.
 
 *Until 2026-11-01* those limits were 0.5 s, 1.0 s and 1.0 s and decided how much
 was read, so the same document could be refused on a loaded host and allowed on

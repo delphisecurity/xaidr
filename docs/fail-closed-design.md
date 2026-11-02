@@ -73,8 +73,8 @@ The only class where the **attacker chooses** whether the site fires.
 | C1 | `a2a_structural.py:204-212, 332-333` | `_MAX_NEST_DEPTH=8` | `a2a_nested_depth_exceeded` @ **0.35** (flag band); the unwalked remainder is never inspected | block |
 | C2 | `a2a_structural.py:196-198, 219-221, 334-335` | `_MAX_NEST_NODES=64`, `_MAX_LIST_ITEMS=32` | `a2a_nested_breadth_exceeded` @ 0.35 | block |
 | C3 | `a2a_structural.py:542` | `_MAX_METADATA_NODES=512` | folded into the breadth signal | block |
-| C4 | `l1.py:173-203`, `sensor.py` callers | `L1_MAX_SCAN_CHARS=100_000`, `MAX_SCAN_WINDOWS=2` (8 until 2026-11-01), `TOTAL_SCAN_BUDGET_SEC=30.0` backstop (1.0 until 2026-11-01) | `LLM01_oversized_input` flag; **the tail past the window cap is never scanned** | block |
-| C5 | `l1.py:393-399, 461-468` | `_L1_SCAN_BUDGET_SEC=30.0`, a backstop (0.5 until 2026-11-01) | `LLM04_scan_budget_exceeded` @ 0.25; remaining rules skipped | block |
+| C4 | `l1.py:173-203`, `sensor.py` callers | `L1_MAX_SCAN_CHARS=100_000`, `MAX_SCAN_WINDOWS=2` (8 until 2026-11-01), `TOTAL_SCAN_BUDGET_SEC=120.0` backstop (1.0 until 2026-11-01, 30.0 until 2026-11-02) | `LLM01_oversized_input` flag; **the tail past the window cap is never scanned** | block |
+| C5 | `l1.py:393-399, 461-468` | `_L1_SCAN_BUDGET_SEC=120.0`, a backstop (0.5 until 2026-11-01, 30.0 until 2026-11-02) | `LLM04_scan_budget_exceeded` @ 0.25; remaining rules skipped | block |
 | C6 | `l1.py:436-442, 453-460` | `_L1_RULE_SLOW_SEC=1.0` | `LLM04_pathological_pattern` @ **0.65** | **already closed** at the default 0.60 threshold |
 | C7 | `sql_parse.py:86-95, 900-910` | `MAX_SQL_CHARS=20_000`, `MAX_STATEMENTS=32`, `_MAX_TOKENS=20_000` | `_unparsed_shape` → `statement="unparsed"`, matched by `sql.unparsed_input` at **critical, `detect: None`** — classified, never blocked | promote to a detection |
 | C8 | `sql_parse.py:713` `_predicate_state_tokens` | predicate not settleable | `predicate="unknown"` → `sql.unbounded_mutation`, critical, `detect: None` | promote to a detection |
@@ -410,8 +410,8 @@ with the three wall-clock bounds pinned, and the laptop it named gave 4 covered 
 
 * **At runtime the boundary is the window count** (`MAX_SCAN_WINDOWS`, two
   windows, 199 488 characters). `_L1_SCAN_BUDGET_SEC`, `_L1_RULE_SLOW_SEC` and
-  `TOTAL_SCAN_BUDGET_SEC` are 30 s backstops, far above the worst case of that
-  work under CI load, and when one fires the verdict carries its own rule, so
+  `TOTAL_SCAN_BUDGET_SEC` are 120 s backstops, far above the worst case of that
+  work on the CI runners (`docs/performance.md`), and when one fires the verdict carries its own rule, so
   it is never a silent change (`tests/test_deterministic_bounds.py`). *Until
   2026-11-01* they were 0.5 s, 1.0 s and 1.0 s and the same document could be
   refused on a loaded host and allowed on an idle one, even under the cap: on a

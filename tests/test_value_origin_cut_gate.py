@@ -285,16 +285,11 @@ def test_a_result_is_read_whole_or_cut(name, result, urls):
 
 def test_the_work_meter_cuts_at_the_same_place_every_time():
     """Long non-ASCII host names: the reading stops where the meter is spent, the
-    same place on every reading and every machine, in bounded CPU. Unmetered, two
-    readings of this result take over 20 s of CPU here."""
-    import time
+    same place on every reading and every machine. Unmetered, two readings of this
+    result take over 20 s of CPU here; what a metered reading costs is the
+    result-reading path's figure (scripts/scan_paths.py)."""
     name, result, urls = _heavy()
-    t = time.process_time()
     _check(name, result, urls)
-    took = time.process_time() - t
-    assert took < 12.0, (
-        f"reading one result of 60 long international names twice took {took:.1f} s of "
-        "CPU: the reading does not stop at its work meter")
     first, second = (_ledger._result_authorities(result) for _ in range(2))
     assert first[1] and not first[5], "precondition: the meter, not the backstop, cut it"
     assert [a.key() for a in first[0] + first[3]] == [a.key() for a in second[0] + second[3]], (

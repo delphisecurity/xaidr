@@ -126,8 +126,9 @@ L1_MAX_SCAN_CHARS = 100_000
 # THE WORK LIMIT AND THE BACKSTOPS (owner, 2026-11-01: no verdict may depend on
 # machine load). What one scan reads is decided by WORK alone: every rule runs over
 # at most L1_MAX_SCAN_CHARS of text, and a long input is read in at most
-# MAX_SCAN_WINDOWS windows. The wall-clock limits below are BACKSTOPS, set far above
-# the worst case of that work under CI load: they fire only when something no work
+# MAX_SCAN_WINDOWS windows. The wall-clock limits below are BACKSTOPS, 120 s, set far
+# above the worst case of that work on the CI runners, the slowest reference
+# (docs/performance.md): they fire only when something no work
 # limit bounds goes wrong (a pattern gone super-linear, a stalled machine), and
 # each records its own rule on the event, so a backstop never changes a verdict
 # silently. Until 2026-11-01 they were 0.5 s, 1.0 s and 1.0 s and decided what was
@@ -140,13 +141,13 @@ L1_MAX_SCAN_CHARS = 100_000
 # interrupt it. A backstop can therefore only ever observe that a pattern WAS
 # pathological — it cannot stop one. That is why the real fix for a backtracker
 # is always a linear pattern (see repetition.py) and never a timeout.
-_L1_SCAN_BUDGET_SEC = 30.0
+_L1_SCAN_BUDGET_SEC = 120.0
 
 # Per-rule wall-clock above which ONE pattern is treated as having behaved
 # pathologically on this input: a backstop. With every pattern linear, the slowest
-# single rule on a full-size 100k adversarial input measures 376ms, so no load
-# reaches this, and it still catches a pattern gone exponential.
-_L1_RULE_SLOW_SEC = 30.0
+# single rule on an adversarial input is far below it (docs/performance.md), so no
+# load reaches this, and it still catches a pattern gone exponential.
+_L1_RULE_SLOW_SEC = 120.0
 
 # WHAT HAPPENS WHEN A BOUND IS BLOWN — AND WHY NEITHER IS A TIMEOUT.
 #
@@ -200,15 +201,14 @@ SCAN_DEGRADED_SCORE = 0.25
 # invariant, ~2s), measured on the slowest interpreter. A tail the windows do not
 # reach is ALWAYS surfaced (SCAN_INCOMPLETE_RULE) — never a silent pass.
 # The WINDOW COUNT is the work limit: a long input is read in at most
-# MAX_SCAN_WINDOWS windows (the head and one tail window), whatever the machine.
-# Calibrated over 14 interpreters (3.10.11 to 3.14.9): a whole scan of the worst
-# input measured at two windows takes at most 2.08 s of CPU, the ~2 s per-scan
-# bound; at three windows the slowest interpreter takes 2.65 s. TOTAL_SCAN_BUDGET_SEC
-# is the backstop (see above). It was 8 windows under a 1.0 s budget, which in
+# MAX_SCAN_WINDOWS windows (the head and one tail window), whatever the machine,
+# every rule over each. What a whole scan of the worst input costs is a measured
+# figure, on the CI runners and on 14 interpreters here (docs/performance.md), not a
+# limit. TOTAL_SCAN_BUDGET_SEC is the backstop (see above). It was 8 windows under a 1.0 s budget, which in
 # practice let the clock decide (2026-11-01).
 SCAN_WINDOW_OVERLAP = 512
 MAX_SCAN_WINDOWS = 2
-TOTAL_SCAN_BUDGET_SEC = 30.0
+TOTAL_SCAN_BUDGET_SEC = 120.0
 
 # Signal attached by callers when the input exceeds L1_MAX_SCAN_CHARS. Flag-band
 # (monitor-surfaced), not a hard block: legitimate inputs are rarely this large,

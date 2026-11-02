@@ -77,14 +77,16 @@ def test_benign_self_identification_allowed(sensor, text):
     assert r.action not in CAUGHT, f"benign self-id false-positived: {text!r} ({r.rules})"
 
 
-def test_window_is_bounded_redos():
-    """The claim→authority window is bounded and non-sentence-crossing — a
-    pathological gap must not blow up scan time."""
-    import time
+def test_window_is_bounded_redos(l1_work, scan_paths):
+    """The claim→authority window is bounded and non-sentence-crossing: a
+    pathological gap is examined once, up to the scan cap, by every rule. Its time
+    is the input-scan path's figure (scripts/scan_paths.py, authority-gap)."""
+    from xaidr.scanner.l1 import L1_MAX_SCAN_CHARS as CAP, scan_l1
 
-    from xaidr.scanner.l1 import scan_l1
-
-    patho = "I am the " + "a" * 200000 + " administrator"
-    t0 = time.time()
-    scan_l1(patho)
-    assert time.time() - t0 < 1.0
+    p = "I am the " + "a" * 200000 + " administrator"
+    scan_l1(p)
+    per = l1_work.per_rule()
+    assert per and all(v == [min(len(p), CAP)] for v in per.values()), (
+        f"{p[:16]!r}...: a rule examined {sorted({tuple(v) for v in per.values()})}, "
+        f"not the payload up to the {CAP:,}-char cap, once")
+    scan_paths.assert_timed("input_scan", ["authority-gap"])

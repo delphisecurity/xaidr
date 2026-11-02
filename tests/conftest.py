@@ -119,6 +119,85 @@ def make_envelope():
     return _make_envelope
 
 
+class L1Work:
+    """What each L1 rule examined: one ``(rule_id, characters)`` per call. Work,
+    counted, never timed: the same input gives the same list on every machine."""
+
+    def __init__(self):
+        self.calls = []
+        self.dlp_calls = []      # the same, for DLP_PATTERNS
+
+    def clear(self):
+        self.calls.clear()
+        self.dlp_calls.clear()
+
+    def per_rule(self):
+        """``{rule_id: [characters examined, one per call]}``."""
+        out = {}
+        for rid, n in self.calls:
+            out.setdefault(rid, []).append(n)
+        return out
+
+
+class _CountingPattern:
+    def __init__(self, rid, pattern, calls):
+        self._rid, self._pattern, self._calls = rid, pattern, calls
+
+    def search(self, text, *a, **k):
+        self._calls.append((self._rid, len(text)))
+        return self._pattern.search(text, *a, **k)
+
+    def findall(self, text, *a, **k):
+        self._calls.append((self._rid, len(text)))
+        return self._pattern.findall(text, *a, **k)
+
+    def finditer(self, text, *a, **k):
+        self._calls.append((self._rid, len(text)))
+        return self._pattern.finditer(text, *a, **k)
+
+    def __getattr__(self, name):
+        return getattr(self._pattern, name)
+
+
+@pytest.fixture
+def l1_work(monkeypatch):
+    """Count the characters every L1 input and output rule, and every DLP pattern,
+    examines (``L1Work``). Each pattern or detector is wrapped for the test; the
+    rules themselves are unchanged."""
+    from xaidr.scanner import dlp, l1
+
+    work = L1Work()
+
+    def wrap(rules):
+        out = []
+        for r in rules:
+            r = dict(r)
+            if r["detector"] is not None:
+                det, rid = r["detector"], r["id"]
+                r["detector"] = (lambda t, det=det, rid=rid:
+                                 (work.calls.append((rid, len(t))), det(t))[1])
+            elif r.get("pattern") is not None:
+                r["pattern"] = _CountingPattern(r["id"], r["pattern"], work.calls)
+            out.append(r)
+        return out
+    monkeypatch.setattr(l1, "INPUT_RULES", wrap(l1.INPUT_RULES))
+    monkeypatch.setattr(l1, "OUTPUT_RULES", wrap(l1.OUTPUT_RULES))
+    monkeypatch.setattr(dlp, "DLP_PATTERNS", [
+        dict(p, pattern=_CountingPattern(p["id"], p["pattern"], work.dlp_calls))
+        for p in dlp.DLP_PATTERNS])
+    return work
+
+
+@pytest.fixture(scope="session")
+def scan_paths():
+    """scripts/scan_paths.py: the paths' timing inputs and ``assert_timed``."""
+    scripts = str(Path(__file__).resolve().parents[1] / "scripts")
+    if scripts not in _sys.path:
+        _sys.path.insert(0, scripts)
+    import scan_paths as sp
+    return sp
+
+
 def pytest_make_parametrize_id(config, val, argname):
     """Keep generated payloads out of test IDs.
 

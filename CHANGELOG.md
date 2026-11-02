@@ -39,11 +39,14 @@ still reconcile against the whole range (docs/releasing.md, step 1).
   L1 rule loop always runs every rule, a long input is read in at most two windows
   (`MAX_SCAN_WINDOWS`; it was eight under a 1.0 s budget, which in practice let
   the clock decide), and a tool result's reading stops where its work meter is
-  spent. The wall-clock limits are 30 s backstops (they were 0.5 s, 1.0 s, 1.0 s
+  spent. The wall-clock limits are 120 s backstops (they were 0.5 s, 1.0 s, 1.0 s
   and, for a tool result, 4.0 s); when one fires the verdict carries its own
   reason: `LLM04_scan_budget_exceeded` or `LLM04_pathological_pattern` on the
   scan, `valueOriginBackstop` on a tool-call event. A 90 000-character benign
-  document that read `flagged` on a loaded host now reads as it does idle.
+  document that read `flagged` on a loaded host now reads as it does idle. What
+  that work costs in time is a measured figure per path, on the CI runners and
+  stated in `docs/performance.md`; the tests assert the work as counts, and one
+  timing check per path holds about 1.5 times the runners' worst case.
 - requests on macOS: the name the older patch releases' proxy check looks up,
   the hostname less a trailing `:digits` (`http://[fd00:ec2::254:80]/` looks up
   `fd00:ec2::254`), is read as a destination beside the hostname. That name
