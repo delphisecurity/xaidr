@@ -226,17 +226,15 @@ more than one reading names every one of them. This applies to every rule below.
   file handler looks a non-local `file:` host up (`Request.host` less its port up
   to 3.13, the netloc as written from 3.14). requests, on macOS, asks
   urllib.request whether the system proxy settings exempt `urlparse(url).hostname`
-  of a URL of any scheme, before it refuses a scheme it does not send; on the older
-  patch releases that check looks a name up. Measured on 3.10.11, 3.11.3, 3.12.0
-  and 3.12.2 it looks up the hostname less a trailing `:digits` (`_splitport`), and
-  on 3.10.20, 3.10.22, 3.11.15, 3.11.17, 3.12.13, 3.12.15, 3.14.0, 3.14.5, 3.14.8
-  and 3.14.9 it looks nothing up. The core reads the hostname on every interpreter.
-  Where the two differ, a bracketed IPv6 host ending in `:digits`
-  (`http://[fd00:ec2::254:80]/`), the older releases look the shorter name up
-  with `gethostbyname`, an IPv4 lookup that connects nowhere, and the core reads
-  the whole address. *Corrected 2026-11-01:* this said requests on macOS looks up
-  the hostname of a URL of any scheme, on every interpreter; only those older
-  releases look anything up. Each of those names is read. No
+  of a URL of any scheme, before it refuses a scheme it does not send, and on the
+  older patch releases (measured: 3.10.11, 3.11.3, 3.12.0 and 3.12.2) that check
+  looks up the hostname less a trailing `:digits` (`_splitport`) with
+  `gethostbyname`. A lookup is a destination even when nothing connects. Both
+  names are read, on every interpreter: for `http://[fd00:ec2::254:80]/` the
+  hostname `fd00:ec2::254:80` and the name looked up, `fd00:ec2::254`
+  (`tests/test_value_origin_proxy_lookup.py`). *Corrected 2026-11-01:* this said
+  requests on macOS looks up the hostname of a URL of any scheme, on every
+  interpreter. Each of those names is read. No
   public DNS zone holds a label with `@`, `:` or `[`, or a numeric top label, but a
   hosts file, a search domain or a private resolver can answer one, so each is
   read as the key the resolver reaches. A non-ASCII host is read as the socket
@@ -287,8 +285,8 @@ more than one reading names every one of them. This applies to every rule below.
   `https`, `ws`, `wss` and `ftp`. A non-special scheme without `//` has no host.
   `file:` and `data:` name no destination by their scheme; the host of a `file:`
   URL is read as the name urllib.request looks it up as, and the host of any URL
-  with an authority as the name requests asks macOS's proxy check about (above;
-  only the older patch releases look it up). *Corrected
+  with an authority as the names requests' macOS proxy check is asked about and
+  looks up (above). *Corrected
   2026-10-25:* until then this said `file:` and `data:` are never destinations;
   urlopen resolves a `file:` URL's host before it opens a local file.
   `mailto:<addr>` is a mailbox.

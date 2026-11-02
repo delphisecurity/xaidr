@@ -158,8 +158,9 @@ class Clients:
         ``HTTPConnection(urlsplit(v).netloc).host`` for an http or https URL, the
         netloc as written. requests.lookup: ``urlsplit(v).hostname`` of a URL of any
         scheme, which requests asks macOS's proxy check about before it refuses one
-        it does not send; that check looks it up on the older patch releases only
-        (docs/value-origin-rulings.md §2). Each host is encoded as the socket layer encodes a str host (the stdlib
+        it does not send, and the name the older patch releases' check looks up,
+        that hostname less a trailing ``:digits`` (docs/value-origin-rulings.md
+        §2). Each host is encoded as the socket layer encodes a str host (the stdlib
         ``idna`` codec, IDNA 2003); one it cannot encode is never sent."""
         import http.client
         import urllib.parse as up
@@ -184,6 +185,7 @@ class Clients:
                 out.append(("urllib.request", u.netloc))
             if u.netloc and u.hostname:
                 out.append(("requests.lookup", u.hostname))
+                out.append(("requests.lookup", up._splitport(u.hostname)[0]))
         except Exception:
             pass
         sent = []

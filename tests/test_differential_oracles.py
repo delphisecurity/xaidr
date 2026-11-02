@@ -229,7 +229,8 @@ def _stdlib_client_keys(url):
     ``unquote``; file: ``Request(url).host`` less its port, and from 3.14 the netloc
     as written), http.client given an http or https netloc as written, and
     ``urlsplit(url).hostname``, which requests asks macOS's proxy check about
-    before it refuses a scheme (a lookup on the older patch releases only). Only the keying is the core's (``resolver_keys``). An over-read
+    before it refuses a scheme, and the name the older patch releases' check looks
+    up, that hostname less a trailing ``:digits``. Only the keying is the core's (``resolver_keys``). An over-read
     among them is a reading of those clients, which
     ``scripts/published_differential.py`` and tests/test_value_origin_client_gate.py
     measure; these hand-written spellings do not judge it, so the class can only
@@ -263,7 +264,10 @@ def _stdlib_client_keys(url):
     if m and m.group(1):
         hosts.append(m.group(1))
     try:
-        hosts.append(up.urlsplit(written).hostname)
+        host = up.urlsplit(written).hostname
+        hosts.append(host)
+        if host:
+            hosts.append(up._splitport(host)[0])
     except ValueError:
         pass
     return {a.key() for h in hosts if h for a in resolver_keys(h)}

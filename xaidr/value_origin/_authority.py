@@ -629,9 +629,9 @@ def stdlib_hosts(value: str) -> List[str]:
     ``HTTPConnection`` and ``HTTPSConnection`` given the netloc of an http or https
     URL as written. And requests on macOS, which asks urllib.request whether the
     system proxy settings exempt ``urlparse(url).hostname`` of a URL of any scheme,
-    before it refuses a scheme it does not send: on the older patch releases that
-    check looks the hostname up, less a trailing ``:digits``, and on the newer ones
-    it looks nothing up. The hostname is read on every interpreter."""
+    before it refuses a scheme it does not send; the older patch releases' check
+    looks up that hostname less a trailing ``:digits``. Both names are read, on
+    every interpreter."""
     out: List[str] = []
 
     def add(host):
@@ -667,6 +667,7 @@ def stdlib_hosts(value: str) -> List[str]:
         host = _authority_host(written, whatwg=False)
         if host:
             add(_ucd.lower(host))
+            add(_splitport(_ucd.lower(host))[0])   # the name the proxy check looks up
     return out
 
 
