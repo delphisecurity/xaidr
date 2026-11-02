@@ -44,30 +44,39 @@ import base64
 import contextlib
 import io
 import json
+import os
 import re
 import sys
 import time
 import warnings
 
-from xaidr.scanner import l1 as L1
-from xaidr.scanner.dlp import DLP_PATTERNS
+# Which xaidr answers, said before anything else (scripts/_provenance.py): the
+# working tree by default, and under XAIDR_FROM_INSTALL=1 the installed wheel,
+# refusing a source tree.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from _provenance import bind  # noqa: E402
 
-# Each path's bound, CPU seconds: about 1.5 times the worst case measured on the CI
-# runners (docs/performance.md, with the run each figure came from). ``None`` until
-# the runners have been measured; the timing check refuses to pass without one.
-BOUNDS = {
-    "input_scan": None,
-    "output_scan": None,
-    "tool_call": None,
-    "l1_rule": None,
-    "normalizer": None,
-    "text_detectors": None,
-    "parsers": None,
-    "a2a": None,
-    "result_read": None,
+PROV = bind(__file__)
+
+from xaidr.scanner import l1 as L1  # noqa: E402
+from xaidr.scanner.dlp import DLP_PATTERNS  # noqa: E402
+
+#: The worst case measured on the CI runners, CPU seconds: the worst of every pytest
+#: cell (``python scripts/scan_paths.py`` in run 41462272430, 2026-11-02, head
+#: a1f0307). Each bound's basis, and the figures docs/performance.md states.
+RUNNER_WORST = {
+    "input_scan":     5.3678,  # pytest (py3.10, base), email-run-1MB
+    "output_scan":    1.7104,  # pytest (py3.10, full), dlp-bulk-email-1MB
+    "tool_call":      0.4212,  # pytest (py3.10, full), trigger-verb-flood
+    "l1_rule":        0.5482,  # pytest (py3.10, base), LLM06_outbound_exfil_suspicious_dest:verb-flood
+    "normalizer":     0.1449,  # pytest (py3.10, full), normalize-dot-run
+    "text_detectors": 0.3278,  # pytest (py3.10, full), url-slash-run
+    "parsers":        0.0332,  # pytest (py3.10, base), command-at-cap
+    "a2a":            0.0019,  # pytest (py3.10, full), id-encoded-traversal
+    "result_read":    5.2559,  # pytest (py3.10, full), results-bare-hosts
 }
-#: The worst case measured on the runners, each bound's basis (docs/performance.md).
-RUNNER_WORST = {k: None for k in BOUNDS}
 
 #: The least bound: below it a shared runner's own noise (a cache, a collection, a
 #: scheduler tick) is the size of the figure, and 1.5 times the figure is no margin.
@@ -77,6 +86,21 @@ FLOOR_S = 0.05
 def bound_for(figure):
     """A path's bound from its runners' worst case: 1.5 times it, or the floor."""
     return max(FLOOR_S, round(1.5 * figure, 3))
+
+
+# Each path's bound, CPU seconds: about 1.5 times the worst case measured on the CI
+# runners (``RUNNER_WORST``), held by tests/test_path_timing.py.
+BOUNDS = {
+    "input_scan":     bound_for(RUNNER_WORST["input_scan"]),
+    "output_scan":    bound_for(RUNNER_WORST["output_scan"]),
+    "tool_call":      bound_for(RUNNER_WORST["tool_call"]),
+    "l1_rule":        bound_for(RUNNER_WORST["l1_rule"]),
+    "normalizer":     bound_for(RUNNER_WORST["normalizer"]),
+    "text_detectors": bound_for(RUNNER_WORST["text_detectors"]),
+    "parsers":        bound_for(RUNNER_WORST["parsers"]),
+    "a2a":            bound_for(RUNNER_WORST["a2a"]),
+    "result_read":    bound_for(RUNNER_WORST["result_read"]),
+}
 
 
 class _Null:
@@ -666,7 +690,6 @@ def slower_machine():
     the clock ten times fast: what the clock reads at the end of each, against the
     wall-clock backstop it must stay under, and whether a backstop fired. Printed
     in every CI pytest cell, so the runners show the margin and not only a pass."""
-    import os
     from xaidr.value_origin import _clock, _ledger
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import build_benign_longform as bl

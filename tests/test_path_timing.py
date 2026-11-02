@@ -30,8 +30,9 @@ def sp(scan_paths):
                                   "result_read"])
 def test_the_path_stays_within_its_measured_bound(sp, path):
     bound = sp.BOUNDS[path]
-    if bound is None:
-        pytest.skip(f"{path}: not yet measured on the CI runners")
+    assert bound is not None, (
+        f"{path} has no bound: measure it on the CI runners (python scripts/scan_paths.py "
+        "prints it in every pytest cell) and set RUNNER_WORST")
     worst, name, _ = sp.measure(path, bound=bound)
     assert worst <= bound, (
         f"{path}: {name} took {worst:.4f} s of CPU against a bound of {bound} s, 1.5 "
@@ -51,7 +52,7 @@ def test_the_rule_check_moves_with_one_costly_rule(sp, monkeypatch):
     """The rule path's figure is ONE rule on ONE input, so a single rule that costs
     far more than its peers moves it, however many rules there are. A rule that
     burns more CPU than the bound must read over it."""
-    bound = sp.BOUNDS["l1_rule"] or 0.2
+    bound = sp.BOUNDS["l1_rule"]
     burn = 2 * bound
 
     def costly(text):
@@ -72,8 +73,6 @@ def test_each_bound_is_its_runner_figure_times_one_and_a_half(sp):
     each is 1.5 times the runners' worst (or the floor, for a figure too small for
     a shared runner to tell apart from its noise)."""
     for path, bound in sp.BOUNDS.items():
-        if bound is None:
-            continue
         figure = sp.RUNNER_WORST[path]
         assert figure is not None, f"{path}: a bound with no runner figure behind it"
         assert bound == sp.bound_for(figure), (
