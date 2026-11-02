@@ -686,7 +686,7 @@ def given_truncation(value: str):
     host = _authority_host(written, whatwg=False)
     if not host or not host.isascii():
         return None, None
-    host = host.lower()
+    host = _ucd.lower(host)
     name, port = _splitport(host)
     if not port or not name or _STDLIB_CTRL_RE.search(host):
         return None, None
