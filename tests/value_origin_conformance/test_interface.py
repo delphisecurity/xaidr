@@ -62,7 +62,8 @@ FIELDS = {
     "DestinationFinding": ["path", "destination", "reason", "origin", "span_declared",
                            "source_label"],
     "CallVerdict": ["wire", "verdict", "row_state", "detail", "findings", "truncated",
-                    "observed"],                       # record only
+                    "observed",                        # record only
+                    "backstop"],                       # a wall-clock backstop's reason
 }
 
 ENUMS = {
