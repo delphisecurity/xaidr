@@ -90,8 +90,8 @@ import threading
 from contextvars import ContextVar
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from ._authority import (ParseFailure, classify_value, key_chain, prose_candidates,
-                         result_candidates)
+from ._authority import (classify_value, key_chain, prose_candidates, result_candidates,
+                         whole_readings)
 from . import _clock
 from ._designations import source_matches
 from ._extract import (AtomBudget, argument_value, budgeted_atoms, key_authority, key_ngram,
@@ -650,16 +650,6 @@ def _read_trust(lg: _Ledger, plans: List[Tuple[SourceDesignation, List[_KeyPlan]
     return (Origin.UNTRUSTED_SOURCE, True, None)
 
 
-def _whole_readings(res) -> List[Authority]:
-    if isinstance(res, Authority):
-        return [res]
-    if isinstance(res, list):
-        return list(res)
-    if isinstance(res, ParseFailure):
-        return list(res.parsed)
-    return []
-
-
 def result_authorities(result: Any) -> List[Authority]:
     """Every destination candidate in a raw result: each leaf tried whole, and
     scanned as prose (C-7). May run host code (V-15)."""
@@ -703,7 +693,7 @@ def _result_authorities(result: Any
             # The whole leaf is read as an argument value is: every key the
             # argument reader reads from this text, the S-4 fallback key and the
             # scheme-less address forms included, is recorded from it.
-            found: List[Authority] = _whole_readings(classify_value(leaf, arg_mode=True))
+            found: List[Authority] = whole_readings(classify_value(leaf, arg_mode=True))
             counted = [0]
             found.extend(a for _, a in result_candidates(leaf, counted))
             examined.left -= len(leaf) + ATOM_COST * counted[0]

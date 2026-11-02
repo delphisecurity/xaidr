@@ -1182,23 +1182,33 @@ def test_a_url_prefix_designation_never_trusts_a_value_with_several_readings():
     """Ruling 2, the trust direction: a URL_PREFIX designation raises a read to a
     trusted source, so it must match only a value every consumer reads the same
     way. Over every spelling here, a value the designation for its own split host
-    matches is one the core reads as exactly one authority."""
+    matches is one the core reads as exactly one authority, or as that authority
+    and the truncation of the host the designation gives (owner, 2026-11-01)."""
     from urllib.parse import urlsplit
-    from xaidr.value_origin._authority import Authority, classify_value
+    from xaidr.value_origin._authority import Authority, classify_value, given_truncation
     from xaidr.value_origin._designations import _url_prefix_match
-    matched, bad = 0, []
-    for url in _spellings():
+    matched, truncated, bad = 0, 0, []
+    # The grid's spellings, and the same spellings of two IPv6 hosts whose last
+    # group is digits (the grid holds none), whose truncation the check looks up.
+    v6 = (f"{s}{sep}{p}{h}{t}" for s, sep, p, h, t in itertools.product(
+        _SCHEMES, _SEPARATORS, _PREFIXES, ("[::1]", "[2001:db8::1]"), _TAILS))
+    for url in itertools.chain(_spellings(), v6):
         try:
             host = urlsplit(url).hostname
         except ValueError:
             continue
         if not host:
             continue
+        host = f"[{host}]" if ":" in host else host
         for scheme in ("http", "https"):
             if _url_prefix_match(url.strip(), f"{scheme}://{host}/"):
                 matched += 1
-                if not isinstance(classify_value(url, arg_mode=True), Authority):
+                r = classify_value(url, arg_mode=True)
+                if isinstance(r, list) and set(r) == set(given_truncation(url)):
+                    truncated += 1
+                elif not isinstance(r, Authority):
                     bad.append(url)
     assert matched >= 500, matched              # not vacuous (837 on this corpus)
+    assert truncated >= 20, f"only {truncated} IPv6 values with a digit last group matched"
     assert not bad, (f"{len(bad)} values with more than one reading match a trusted "
                      f"designation for one of them: {bad[:5]}")

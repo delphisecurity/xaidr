@@ -7,7 +7,7 @@ import ipaddress
 import re
 import socket
 import time
-from urllib.parse import urlsplit
+from urllib.parse import _splitport, urlsplit
 
 import pytest
 
@@ -72,7 +72,10 @@ def A(key):
     ("http://2852039166/", "ip:169.254.169.254"),
     ("http://0251.0376.0251.0376/", "ip:169.254.169.254"),
     ("http://[::ffff:169.254.169.254]/", "ip:169.254.169.254"),
-    ("http://[2001:DB8::1]/", "ip:2001:db8::1"),
+    # `http://[2001:DB8::1]/` -> ip:2001:db8::1 was pinned here until 2026-11-01.
+    # The older releases' proxy check also looks up the host less its trailing
+    # `:digits` (`2001:db8:`), so the value names two authorities; see
+    # test_authority_of_answers_none_for_a_value_a_client_resolves_otherwise.
     ("http://10.1/", "ip:10.0.0.1"),
     ("10.0.0.5", "ip:10.0.0.5"),
     ("::ffff:a9fe:a9fe", "ip:169.254.169.254"),
@@ -140,12 +143,14 @@ def test_q1_authority_of_answers_none_for_a_value_with_two_authorities():
     ("https://corp.example@evil.test/", "dns:evil.test"),
     ("https://straße.example/", "dns:xn--strae-oqa.example"),
     ("https://a\u200db.example/", "dns:a\u200db.example"),
+    ("http://[2001:DB8::1]/", "ip:2001:db8::1"),
 ])
 def test_authority_of_answers_none_for_a_value_a_client_resolves_otherwise(value, was):
     """A client that resolves a second name for the value (urllib.request keeps the
-    userinfo in the host; the socket layer encodes the host as IDNA 2003) makes the
+    userinfo in the host; the socket layer encodes the host as IDNA 2003; the older
+    releases' proxy check looks up the host less a trailing ``:digits``) makes the
     value two destinations: the single-answer normaliser returns None, and the one
-    it answered until 2026-10-24 is still a finding of the walk."""
+    it answered until then is still a finding of the walk."""
     found, _ = extract_destinations({"url": value})
     keys = [f.destination.key() for f in found if f.destination is not None]
     assert authority_of(value) is None
@@ -207,8 +212,22 @@ def _oracle(url):
         host = urlsplit(url).hostname
     except ValueError:
         return None
-    if not host:
+    return _oracle_key(host) if host else None
+
+
+def _oracle_lookup(url):
+    """The name the older releases' proxy check looks up for ``url`` as written:
+    urllib.parse's host less a trailing ``:digits``, split by the stdlib's own
+    ``_splitport``."""
+    try:
+        host = urlsplit(url).hostname
+    except ValueError:
         return None
+    name, port = _splitport(host) if host else (None, None)
+    return _oracle_key(name) if port and name else None
+
+
+def _oracle_key(host):
     host = host.rstrip(".")
     try:
         ip = ipaddress.ip_address(host)
@@ -286,9 +305,14 @@ def _spellings():
 
 def test_v19_every_spelling_resolves_to_the_host_urllib_parse_finds():
     """THE DIFFERENTIAL. No expected-value list: the oracle is urllib.parse."""
-    compared, keys, bad = 0, set(), []
+    compared, keys, bad, looked_up = 0, set(), [], 0
     for spelling, oracle_url in _spellings():
         want = _oracle(oracle_url)
+        # requests asks the proxy check about the URL as written: a special-scheme
+        # spelling with no `//` has no urllib.parse host, so nothing is looked up.
+        lookup = _oracle_lookup(spelling) if want else None
+        wants = [want] + ([lookup] if lookup and lookup != want else []) if want else []
+        looked_up += len(wants) == 2
         whole, walk = _core(spelling)
         compared += 1
         keys.add(want)
@@ -296,7 +320,8 @@ def test_v19_every_spelling_resolves_to_the_host_urllib_parse_finds():
         # (`gopher:` is a group's name to it, D): that reading is the address.
         if want is None and whole and whole.startswith("mailto:") and _mailbox_read(spelling, whole):
             whole, walk = None, [k for k in walk if k != whole]
-        if whole != want or walk != ([want] if want else []):
+        # Two names (the host and the one the proxy check looks up): no single answer.
+        if whole != (want if len(wants) < 2 else None) or walk != wants:
             bad.append(f"{spelling!r}: urllib.parse finds {want}, authority_of gave "
                        f"{whole}, the walk gave {walk}")
     assert not bad, (f"{len(bad)} of {compared} spellings disagree with urllib.parse "
@@ -305,6 +330,7 @@ def test_v19_every_spelling_resolves_to_the_host_urllib_parse_finds():
     # Not vacuous: thousands compared, and both address families, both hostless
     # outcomes and every special scheme's slashless form are among them.
     assert compared >= 4_000, compared
+    assert looked_up >= 50, f"only {looked_up} spellings carry a host the proxy check truncates"
     # The mailbox reading: every mailto: finding is one email.utils reads out of the value.
     over = []
     for spelling, _ in _spellings():

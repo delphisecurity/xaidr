@@ -268,6 +268,25 @@ more than one reading names every one of them. This applies to every rule below.
   `tests/test_value_origin_client_gate.py`: every generated value any client sends
   to, a port in every script's digits and every scheme the clients take, reads as
   a destination, never `no_destination`.
+- **A host's truncation is given wherever the host is given** (decided by the
+  owner, 2026-11-01). Ruling 3.6 reads principal text without the names only a
+  client makes of it, so a call to such a name is not authorized. One derivation
+  is not such a name: dropping a trailing `:digits` group from the host exactly as
+  given, as the older releases' proxy check takes it (above). That truncation is
+  given wherever its host is given: in the principal's own text, where the
+  principal's reading holds the host, and under a `URL_PREFIX` designation on the
+  host (§4). The principal who gives `http://[::1]:8080/health` gives `:` too;
+  `https://[2001:DB8::1]/api` gives `2001:db8:`; `http://[fd00:ec2::254:80]/`
+  gives `fd00:ec2::254`. Exactly this qualifies: the host of the core's own split,
+  ASCII, less a trailing `:` and ASCII digits, keyed as any host is keyed (ASCII
+  lowercase, an IP literal or its DNS key). Nothing else does: no character
+  mapping, no Unicode case mapping, no IDNA conversion, no userinfo kept in a host,
+  no unwrapping, no other client's split. `http://[v1.ä:1]/` reaches its truncation
+  only through IDNA (`v1.xn--4ca`), so the principal who gives it does not give the
+  name, and the call to it reads `unresolved`. An untrusted result that names the
+  host names its truncation as untrusted, as it names the host. *Pinned by:*
+  `tests/test_value_origin_given_truncation.py`, and the `vo-*` rows of
+  `benign_toolcalls/value_origin_flows.jsonl`.
 - **A value no client accepts is read conservatively** (decided by the owner,
   2026-10-24). urllib.request refuses a URL its `urlparse` refuses (a bracket that
   does not pair, a bracketed host that is no address), and the other clients refuse
@@ -552,7 +571,8 @@ value with two authorities, exactly as for a two-mailbox list, and
 `extract_destinations` reports all of them. A value a client resolves under a
 second name (urllib.request's userinfo host, the socket layer's IDNA 2003 name) is
 two authorities too (2026-10-24): `authority_of("https://straße.example/")` is
-`None`. `None` there is no single destination, never no destination: nothing in
+`None`, and so is `authority_of("http://[2001:db8::1]/")`, whose host the older
+releases' proxy check also looks up as `2001:db8:`. `None` there is no single destination, never no destination: nothing in
 the package calls `authority_of`, and a call naming such a value reads
 `unresolved`.
 *Pinned by:* `test_q1_authority_of_answers_none_for_a_value_with_two_authorities`,
@@ -571,9 +591,11 @@ the package calls `authority_of`, and a call naming such a value reads
 - **A value path with a `.` or `..` segment never matches** (percent-decoded
   too): `/public/../private/x` is not trusted as `/public` (R3,
   `S28b-dot-segment`).
-- **A value with more than one reading never matches**: across the 47,124
-  spellings of the differential corpus, every value a designation matches is one
-  the core reads as exactly one authority
+- **A value with more than one reading never matches**, except that the
+  truncation of the host the designation gives is given with it (§2): across the
+  47,124 spellings of the differential corpus and the same spellings of two IPv6
+  hosts whose last group is digits, every value a designation matches is one the
+  core reads as exactly one authority, or as that authority and its truncation
   (`test_a_url_prefix_designation_never_trusts_a_value_with_several_readings`).
 - A trusted read with several authorizing designations takes both the label and
   the declared flag from the first authorizing designation (in the operator's
@@ -842,7 +864,8 @@ Each is current behaviour and can still be overruled.
     a ledger without its lock.
 18. A result's text is read token by token and line by line as argument values
     (§5); principal text is not, so a reading only a client's parser makes of a
-    principal's sentence never authorizes.
+    principal's sentence never authorizes. The truncation of a host the principal
+    gives is not such a reading (§2).
 19. In a sentence or on a line, a value that itself holds whitespace or a control
     character is not recorded whole; it is, as a whole result value or a leaf (§5).
 20. urllib3's and requests' host spellings are read for http and https, the only

@@ -120,13 +120,19 @@ def _url_prefix_match(value: str, pattern: str) -> bool:
     ``/public/../x`` would otherwise be trusted as ``/public`` (the safe direction
     is no match). A value the core reads as more than one destination never
     matches (§4), and neither does one the readers split otherwise
-    (``_prefix_parts``)."""
-    from ._authority import classify_value
+    (``_prefix_parts``); the truncation of the host the pattern gives is given
+    with it (``given_truncation``), so it is not a second destination here."""
+    from ._authority import classify_value, given_truncation
     try:
         v, p = _prefix_parts(value), _prefix_parts(pattern)
         if v is None or p is None or not v[1]:
             return False
-        if not isinstance(classify_value(value, arg_mode=True), Authority):
+        r = classify_value(value, arg_mode=True)
+        host, name = given_truncation(value)
+        if isinstance(r, list) and name is not None and host in r:
+            rest = [a for a in r if a != name]
+            r = rest[0] if len(rest) == 1 else r      # the host's truncation is given with it
+        if not isinstance(r, Authority):
             return False
         if v[0] != p[0] or v[1] != p[1]:
             return False

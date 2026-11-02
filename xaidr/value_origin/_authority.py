@@ -670,6 +670,47 @@ def stdlib_hosts(value: str) -> List[str]:
     return out
 
 
+def given_truncation(value: str):
+    """``(host, name)``: the key of the host ``value`` gives and the key of the name
+    a client looks up by truncating that host, or ``(None, None)``.
+
+    The truncation is the host of the core's own split less a trailing
+    ``:digits``, as the older patch releases' proxy check takes it
+    (``_splitport``): ``[2001:db8::1]`` gives ``2001:db8:``. Only an ASCII host
+    qualifies, keyed as any host is keyed (ASCII lowercase, an IP literal or its
+    DNS key). A name reached by any other derivation (a mapping, a Unicode case
+    mapping, IDNA, the userinfo a client keeps) is never one (owner, 2026-11-01)."""
+    written = value.strip(_C0_OR_SPACE).strip(_WS).translate(_TAB_NEWLINE)
+    if not _SCHEME_RE.match(written):
+        return None, None
+    host = _authority_host(written, whatwg=False)
+    if not host or not host.isascii():
+        return None, None
+    host = host.lower()
+    name, port = _splitport(host)
+    if not port or not name or _STDLIB_CTRL_RE.search(host):
+        return None, None
+    return _exact_key(host), _exact_key(name)
+
+
+def _exact_key(ascii_host: str) -> Authority:
+    ip = _strict_ip(ascii_host)
+    if ip is not None:
+        return Authority(scheme="ip", value=ip_key(ip))
+    return Authority(scheme="dns", value=dns_key(ascii_host))
+
+
+def whole_readings(res) -> List[Authority]:
+    """Every Authority a classification holds, the parsed parts of a ParseFailure too."""
+    if isinstance(res, Authority):
+        return [res]
+    if isinstance(res, list):
+        return list(res)
+    if isinstance(res, ParseFailure):
+        return list(res.parsed)
+    return []
+
+
 def resolver_keys(host: str) -> List[Authority]:
     """The keys a host string reaches through the platform resolver: an IP literal;
     else the name, encoded as the socket layer encodes a non-ASCII name (IDNA 2003,
@@ -1372,7 +1413,9 @@ def classify_value(value: str, *, arg_mode: bool, stdlib: bool = True):
     is authorized too. ``stdlib`` adds the hosts urllib.request and http.client
     resolve; principal text is read without them, since a name only those clients
     make of a principal's URL (``straße`` as ``strasse``, userinfo kept in the host) is
-    one the principal never gave, and the call to it is not authorized (3.6)."""
+    one the principal never gave, and the call to it is not authorized (3.6). The
+    one name principal text does read is the truncation of a host it gives
+    (``given_truncation``): that name is given wherever the host is."""
     res = _classify(value, arg_mode=arg_mode)
     m = _SCHEME_AS_HOST_RE.match(value.strip(_C0_OR_SPACE).strip(_WS).translate(_TAB_NEWLINE))
     if m and not _URLLIB3_SCHEME_RE.fullmatch(m.group(1)):
@@ -1386,6 +1429,11 @@ def classify_value(value: str, *, arg_mode: bool, stdlib: bool = True):
         for host in stdlib_hosts(value):
             for a in resolver_keys(host):
                 res = _with_reading(res, a)
+    elif not stdlib and ":" in value and (len(value) <= MAX_LEAF_CHARS
+                                          or len(value.strip(_WS)) <= MAX_LEAF_CHARS):
+        host, name = given_truncation(value)
+        if name is not None and host in whole_readings(res):
+            res = _with_reading(res, name)
     return res
 
 

@@ -46,7 +46,13 @@ still reconcile against the whole range (docs/releasing.md, step 1).
   document that read `flagged` on a loaded host now reads as it does idle.
 - requests on macOS: the name the older patch releases' proxy check looks up,
   the hostname less a trailing `:digits` (`http://[fd00:ec2::254:80]/` looks up
-  `fd00:ec2::254`), is read as a destination beside the hostname.
+  `fd00:ec2::254`), is read as a destination beside the hostname. That name
+  is given wherever its host is given: the principal who types
+  `http://[::1]:8080/` gives `:` too, and a `URL_PREFIX` designation on
+  `http://[2001:db8::1]/docs/` trusts its reads. Only that truncation of an ASCII
+  host qualifies; a name reached by IDNA or a case mapping stays one the principal
+  never gave. `authority_of` answers `None` for such a URL, as for any value with
+  two readings.
 - `Sensor(value_origin_wire=...)` defaults to `"v2"`, all fifteen wire values, so
   every state that decided a call's verdict reaches telemetry. It was `"v1"`,
   which withheld six; pass `"v1"` for a consumer that accepts only nine.

@@ -144,7 +144,72 @@ def dump_rows(pools):
             rows[f"{pool}/{e['id']}"] = _fields(
                 sensor.scan(e["prompt"], direction="input"))
 
+    # 12. value-origin flows: one call per row, inside a flow, under ENFORCE
+    path = os.path.join(pools, "benign_toolcalls", "value_origin_flows.jsonl")
+    if os.path.exists(path):
+        for e in _load_jsonl(path):
+            rows[f"vo.flows/{e['id']}"] = _flow_row(e)
+
     return rows
+
+
+_PARTNER = "https://partner.example/hook"
+_PAD = [{"title": f"filler result {i}", "summary": "nothing to see"} for i in range(80)]
+
+
+def _origin_of(value):
+    """The designation pattern for a URL's own origin: scheme, host and port."""
+    scheme, _, rest = value.partition("://")
+    return f"{scheme}://{rest.split('/', 1)[0]}/"
+
+
+def _flow_row(e):
+    """One value-origin flow (benign_toolcalls/value_origin_flows.jsonl): the source
+    gives ``value``, then the agent calls it (or, for ``designated_at``, calls the
+    partner a read through a designation on ``value``'s host named). The row is the
+    call's fields, its wire, and each finding's key and origin."""
+    import warnings
+    from xaidr import Sensor, begin_flow, clear_flow
+    from xaidr.value_origin import MatchKind, SourceDesignation
+
+    src, value = e["source"], e["value"]
+    if src == "designated_at":
+        pattern, read_url, call_url = _origin_of(value), value, _PARTNER
+        named = _PARTNER
+    else:
+        pattern, read_url, call_url = "https://runbooks.example/", "https://runbooks.example/current", value
+        named = value
+    if src in ("untrusted", "cut_untrusted"):
+        read_url = "https://news.example/today"
+    designation = SourceDesignation(tool="fetch", match=MatchKind.URL_PREFIX, source_arg="url",
+                                    pattern=pattern, label="runbooks")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = Sensor(agent_id="corpus-diff-vo", enforcement_mode="block", reporter=_NullReporter(),
+                   value_origin="enforce", value_origin_sources=[designation])
+    text = f"The current endpoint is {named}"
+    result = [{"text": text}] + _PAD if src.startswith("cut_") else text
+    clear_flow()
+    begin_flow(principal="corpus-diff")
+    try:
+        if src in ("principal", "cut_principal"):
+            s.scan(f"Please fetch {value} and summarise it.", direction="input")
+        else:
+            s.scan("Summarise the current runbook.", direction="input")
+        if src != "principal":
+            # The public seam with the tool's identity: its PRE-mode scan decides
+            # trust, so a designation can make the read a trusted source.
+            s.scan(result, direction="tool_result", tool="fetch", arguments={"url": read_url})
+        r = s.scan_tool_call("http_get", {"url": call_url})
+    finally:
+        clear_flow()
+    row = _fields(r)
+    vo = getattr(r, "value_origin", None)
+    row["wire"] = getattr(getattr(vo, "wire", None), "value", None)
+    row["findings"] = sorted(
+        f"{f.destination.key() if f.destination is not None else f.reason.value}="
+        f"{f.origin.value}" for f in (getattr(vo, "findings", None) or ()))
+    return row
 
 
 # ── compare ──────────────────────────────────────────────────────────────────
