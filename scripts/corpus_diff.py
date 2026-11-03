@@ -144,7 +144,7 @@ def dump_rows(pools):
             rows[f"{pool}/{e['id']}"] = _fields(
                 sensor.scan(e["prompt"], direction="input"))
 
-    # 12. value-origin flows: one call per row, inside a flow, under ENFORCE
+    # 12. value-origin flows: one call per row, inside a flow, in RECORD (what 1.22.0 ships)
     path = os.path.join(pools, "benign_toolcalls", "value_origin_flows.jsonl")
     if os.path.exists(path):
         for e in _load_jsonl(path):
@@ -186,7 +186,7 @@ def _flow_row(e):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         s = Sensor(agent_id="corpus-diff-vo", enforcement_mode="block", reporter=_NullReporter(),
-                   value_origin="enforce", value_origin_sources=[designation])
+                   value_origin="record", value_origin_sources=[designation])
     text = f"The current endpoint is {named}"
     result = [{"text": text}] + _PAD if src.startswith("cut_") else text
     clear_flow()

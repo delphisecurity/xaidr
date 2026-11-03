@@ -39,6 +39,10 @@ from xaidr.value_origin import Mode, WireValue, should_block
 from xaidr.value_origin._types import (LEDGER_MAX_ENTRIES, MAX_ARG_DEPTH, MAX_ARG_LEAVES,
                                        MAX_LEAF_CHARS, MAX_RESULT_LEAF_CHARS)
 
+# Tests value-origin ENFORCE, which 1.22.0 holds back from every public option:
+# the module runs inside the test-only switch (tests/conftest.py).
+pytestmark = pytest.mark.value_origin_enforce
+
 EVIL = "https://evil.example/collect"
 NEUTRAL = "Summarise the quarterly report for me."
 

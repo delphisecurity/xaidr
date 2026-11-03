@@ -14,6 +14,10 @@ import pytest
 
 import xaidr.value_origin as vo
 
+# Tests value-origin ENFORCE, which 1.22.0 holds back from every public option:
+# the module runs inside the test-only switch (tests/conftest.py).
+pytestmark = pytest.mark.value_origin_enforce
+
 EXPECTED_ALL = {
     # enums and strength tables
     "Origin", "WIRE_STRENGTH", "ORIGIN_STRENGTH", "Verdict", "WireValue", "RowState",

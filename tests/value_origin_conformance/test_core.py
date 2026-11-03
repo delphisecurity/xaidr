@@ -38,6 +38,10 @@ from .harness import (
     run_supplementary,
 )
 
+# Tests value-origin ENFORCE, which 1.22.0 holds back from every public option:
+# the module runs inside the test-only switch (tests/conftest.py).
+pytestmark = pytest.mark.value_origin_enforce
+
 FLOWS = load_jsonl("flows.jsonl")
 EXPECTED = {(r["case_id"], r["config"]): r for r in load_jsonl("expected.jsonl")}
 SUPPLEMENTARY = load_jsonl("supplementary.jsonl")

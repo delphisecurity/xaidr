@@ -109,6 +109,14 @@ def _compare(base_path, head_path):
 if __name__ == "__main__":
     if sys.argv[1:2] == ["--compare"]:
         sys.exit(_compare(sys.argv[2], sys.argv[3]))
+    # The value-origin ENFORCE this measures is held back from every public option
+    # in 1.22.0; the driver runs inside the test-only switch. A wheel from before
+    # the hold has no switch, and needs none.
+    try:
+        from xaidr.value_origin import _hold
+        _hold._enforce_for_tests().__enter__()
+    except ImportError:
+        pass
 
     import sysconfig
     import warnings

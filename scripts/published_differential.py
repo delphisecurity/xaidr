@@ -66,6 +66,15 @@ PROV = bind(__file__)
 warnings.simplefilter("ignore")
 
 
+def _blocks_under_enforce(cv):
+    """What the kept ENFORCE code decides for ``cv``. Value-origin enforcement is
+    held back from every public option in 1.22.0, so the differential asks it
+    inside the test-only switch (xaidr/value_origin/_hold.py)."""
+    from xaidr.value_origin import _hold
+    with _hold._enforce_for_tests():
+        return should_block(cv, mode=Mode.ENFORCE)
+
+
 def _require():
     absent = []
     for mod in ("httpx", "urllib3", "requests", "ada_url", "idna"):
@@ -398,7 +407,7 @@ def core_reading(v):
                 record_tool_result("web_fetch", {}, f"Moved: {v} , use that.", designations=(),
                                    result_blocked=False)
             cv = evaluate_call("http_post", {"v": v}, flow_active=True)
-            out[name] = [cv.wire.value, should_block(cv, mode=Mode.ENFORCE)]
+            out[name] = [cv.wire.value, _blocks_under_enforce(cv)]
         finally:
             unbind_ledger()
     return out

@@ -8,7 +8,7 @@ import re
 from typing import Iterable, Mapping, Optional, Tuple
 from urllib.parse import unquote
 
-from . import _ucd
+from . import _hold, _ucd
 from ._types import Authority, MatchKind, Mode, SourceDesignation
 
 
@@ -60,16 +60,23 @@ def validate_designations(designations: Iterable[SourceDesignation]
 
 
 def validate_mode(mode: Mode | str) -> Mode:
-    """Raises ValueError naming the received value."""
+    """Raises ValueError naming the received value. ENFORCE raises
+    ``ValueOriginEnforcementUnavailable`` (a ValueError): value origin records in
+    this release, and its enforcement is available in a later one (``_hold``)."""
+    parsed = None
     if isinstance(mode, Mode):
-        return mode
-    if isinstance(mode, str):
+        parsed = mode
+    elif isinstance(mode, str):
         try:
-            return Mode(mode)
+            parsed = Mode(mode)
         except ValueError:
             pass
-    raise ValueError(f"value_origin mode: expected one of "
-                     f"{[m.value for m in Mode]}, got {mode!r}")
+    if parsed is None:
+        raise ValueError(f"value_origin mode: expected one of "
+                         f"{[m.value for m in Mode]}, got {mode!r}")
+    if parsed is Mode.ENFORCE:
+        _hold.check_enforce()
+    return parsed
 
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}

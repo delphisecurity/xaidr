@@ -179,8 +179,8 @@ section below states for the blind pool.
 
 ### A fifth pool, for value origin: who gave the destination
 
-`value_origin_flows.jsonl` (96 rows) is the one pool read inside a flow, under
-`value_origin="enforce"`. Each row names a destination `value` and a `source`:
+`value_origin_flows.jsonl` (96 rows) is the one pool read inside a flow, in
+`value_origin="record"`, the mode 1.22.0 ships. Each row names a destination `value` and a `source`:
 the principal typed it (`principal`), a designated trusted source returned it
 (`designated`), a read through a designation on the value's own host returned a
 partner destination (`designated_at`), or an undesignated result named it

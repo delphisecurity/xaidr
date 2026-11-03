@@ -26,6 +26,10 @@ import xaidr
 from xaidr import CircuitBreaker, ScanResult, SensorExtension
 from xaidr import value_origin as vo
 
+# Tests value-origin ENFORCE, which 1.22.0 holds back from every public option:
+# the module runs inside the test-only switch (tests/conftest.py).
+pytestmark = pytest.mark.value_origin_enforce
+
 NINE = {"principal", "principal_undeclared_span", "trusted_source", "untrusted_source",
         "unresolved", "no_destination", "no_flow", "ledger_absent", "ledger_saturated"}
 

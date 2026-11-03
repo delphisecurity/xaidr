@@ -157,6 +157,14 @@ def collect(xaidr):
 
 if __name__ == "__main__":
     import xaidr
+    # The value-origin ENFORCE this measures is held back from every public option
+    # in 1.22.0; the driver runs inside the test-only switch. A wheel from before
+    # the hold has no switch, and needs none.
+    try:
+        from xaidr.value_origin import _hold
+        _hold._enforce_for_tests().__enter__()
+    except ImportError:
+        pass
     site = sysconfig.get_paths()["purelib"]
     if not xaidr.__file__.startswith(site):
         sys.exit(f"REFUSING: xaidr imported from {xaidr.__file__}, not this venv's "

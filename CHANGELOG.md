@@ -5,6 +5,14 @@ still reconcile against the whole range (docs/releasing.md, step 1).
 
 ## Unreleased
 
+- Value origin records: every tool-call event carries `valueOrigin`, where the
+  call's destination came from, and value origin never changes an action.
+  `Sensor(value_origin=...)` takes `"record"` (the default) or `"off"`.
+  Value-origin enforcement is available in a later release: `"enforce"`, passed
+  to `Sensor`, `protect()`, `delphi_middleware()` or `delphi_hooks()`, raises
+  `ValueOriginEnforcementUnavailable` (a `ValueError`), as do
+  `value_origin.validate_mode` and `value_origin.should_block` asked for
+  `Mode.ENFORCE`. L1 and every other enforcement are unchanged.
 - `authority_of` returns `None` for a value that real clients send to more than
   one place. `authority_of("https://corp.example@evil.test/")` is `None`, where it
   was `dns:evil.test`: httpx sends it to `evil.test`, and urllib.request resolves
@@ -17,8 +25,8 @@ still reconcile against the whole range (docs/releasing.md, step 1).
   `extract_destinations` lists every destination it names. Nothing in xaidr calls
   `authority_of`, and a tool call naming such a value reads `unresolved`.
 - After a tool result too long to read whole, a tool call to a destination
-  neither the principal nor a trusted source named reads `untrusted_source` and
-  blocks under ENFORCE. It read `result_truncated`, which did not block. The
+  neither the principal nor a trusted source named reads `untrusted_source`. It
+  read `result_truncated`. The
   principal's and trusted sources' destinations keep their authority.
 - A tool result is cut wherever reading it stops before reading all of it, and
   then cannot vouch: past the leaf, size, depth and node bounds as before, and

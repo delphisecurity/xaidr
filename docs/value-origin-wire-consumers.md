@@ -9,6 +9,10 @@ vocabulary has **fifteen** values (`xaidr.value_origin.WireValue`). Row state an
 row text are `row_text()`'s; `tests/value_origin_conformance/row_text.json` is the
 machine-readable copy.
 
+Value origin records in 1.22.0: the field reports the reading, and value origin
+never changes an action. Value-origin enforcement is available in a later release;
+the "blocks under ENFORCE" column below states what it blocks.
+
 ## The consumer
 
 The consumer of the wire field is **Delphi Core** (`delphisecurity/delphi`).

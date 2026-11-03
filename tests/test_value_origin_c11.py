@@ -37,6 +37,10 @@ import xaidr
 from xaidr import Sensor
 from xaidr.value_origin import MatchKind, SourceDesignation
 
+# Tests value-origin ENFORCE, which 1.22.0 holds back from every public option:
+# the module runs inside the test-only switch (tests/conftest.py).
+pytestmark = pytest.mark.value_origin_enforce
+
 _spec = importlib.util.spec_from_file_location(
     "c11_oracle", os.path.join(os.path.dirname(__file__), "outside", "drivers", "c11_oracle.py"))
 oracle = importlib.util.module_from_spec(_spec)

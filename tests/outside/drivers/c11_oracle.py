@@ -372,6 +372,14 @@ def markers(lines):
 
 
 if __name__ == "__main__":
+    # The value-origin ENFORCE this measures is held back from every public option
+    # in 1.22.0; the driver runs inside the test-only switch. A wheel from before
+    # the hold has no switch, and needs none.
+    try:
+        from xaidr.value_origin import _hold
+        _hold._enforce_for_tests().__enter__()
+    except ImportError:
+        pass
     if "--compare" in sys.argv:
         i = sys.argv.index("--compare")
         sys.exit(1 if compare(sys.argv[i + 1], sys.argv[i + 2]) else 0)

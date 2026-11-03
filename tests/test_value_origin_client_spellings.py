@@ -27,6 +27,10 @@ from xaidr.value_origin import (Mode, bind_fresh_ledger, evaluate_call, extract_
                                 record_principal_input, record_tool_result, should_block,
                                 unbind_ledger)
 
+# Tests value-origin ENFORCE, which 1.22.0 holds back from every public option:
+# the module runs inside the test-only switch (tests/conftest.py).
+pytestmark = pytest.mark.value_origin_enforce
+
 
 def _keys(v):
     return sorted(f.destination.key() for f in extract_destinations({"v": v})[0]

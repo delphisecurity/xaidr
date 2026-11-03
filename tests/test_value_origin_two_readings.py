@@ -29,6 +29,10 @@ from xaidr.value_origin import (MatchKind, SourceDesignation, Verdict, WireValue
                                 record_principal_input, record_tool_result, unbind_ledger,
                                 validate_designations)
 
+# Tests value-origin ENFORCE, which 1.22.0 holds back from every public option:
+# the module runs inside the test-only switch (tests/conftest.py).
+pytestmark = pytest.mark.value_origin_enforce
+
 PKG = Path(xaidr.__file__).resolve().parent
 
 #: Each reads two ways, and each pair is a pair of real clients' hosts.

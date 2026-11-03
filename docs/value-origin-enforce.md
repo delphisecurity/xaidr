@@ -2,11 +2,14 @@
 
 _Part of the [xaidr](https://github.com/delphisecurity/xaidr/blob/main/README.md) documentation._
 
-ENFORCE ships **off**. The default is `value_origin="record"`, which reports and
-never moves an action. Turn on `value_origin="enforce"` once
-`value_origin_sources` designations exist for the tools whose results you trust.
-The rules behind every value below are in
-[value-origin-rulings.md](value-origin-rulings.md).
+Value origin records in 1.22.0: `value_origin="record"`, the default, reads every
+tool call's destination, reports it on the event (`valueOrigin`), and never
+changes an action. Value-origin enforcement is available in a later release, and
+`value_origin="enforce"` raises a configuration error
+(`ValueOriginEnforcementUnavailable`, a `ValueError`) in this one. This document is
+the specification of that enforcement and its measured cost: what it blocks, and
+what it blocks on this repository's corpora with no designations. The rules behind
+every value below are in [value-origin-rulings.md](value-origin-rulings.md).
 
 ## What blocks
 
@@ -80,9 +83,9 @@ input the scanner flags (prose that quotes attack URLs, a security write-up, an
 incident report) therefore makes the user's own destinations block. The six
 input-derived benign_prose rows are this shape, and so are benign_longform's
 seven: three documents flagged `oversized_input` and four flagged `pii_detected`
-or `data_exfiltration`, each containing URLs. This is one reason ENFORCE ships
-off: the scanner's false-positive rate on inputs becomes value origin's block
-rate on the user's own destinations.
+or `data_exfiltration`, each containing URLs. Under ENFORCE, the scanner's
+false-positive rate on inputs is value origin's block rate on the user's own
+destinations.
 
 ## Bounds, and what happens past each
 

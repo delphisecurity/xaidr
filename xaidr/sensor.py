@@ -847,9 +847,12 @@ class DelphiSensor:
                 self._breaker._emit_hook = self._emit_circuit_event
 
         # ── value origin (A2): validated LOUDLY here, inert until wired ───
-        # ``Sensor(value_origin="off"|"record"|"enforce", value_origin_sources=
+        # ``Sensor(value_origin="off"|"record", value_origin_sources=
         # [SourceDesignation, ...])`` (spec V-34). RECORD is the default (C-11):
-        # it evaluates and reports and never changes an action. A bad value
+        # it evaluates and reports and never changes an action. Value origin
+        # records in 1.22.0: "enforce" raises ValueOriginEnforcementUnavailable, and
+        # value-origin enforcement is available in a later release
+        # (value_origin/_hold.py). A bad value
         # raises ValueError naming it (non-negotiable 2), AFTER every existing
         # check, so the raise order for a constructor given several bad
         # arguments is what it has always been.

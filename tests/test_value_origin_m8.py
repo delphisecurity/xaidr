@@ -10,6 +10,10 @@ import pytest
 
 import xaidr
 
+# Tests value-origin ENFORCE, which 1.22.0 holds back from every public option:
+# the module runs inside the test-only switch (tests/conftest.py).
+pytestmark = pytest.mark.value_origin_enforce
+
 _spec = importlib.util.spec_from_file_location(
     "m8_enforce", os.path.join(os.path.dirname(__file__), "outside", "drivers", "m8_enforce.py"))
 m8 = importlib.util.module_from_spec(_spec)

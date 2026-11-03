@@ -44,6 +44,24 @@ def pytest_configure(config):
         "markers",
         "asi_battery: reads asi_battery/, which the sdist does not ship; skipped "
         "in an extracted sdist and run everywhere else")
+    config.addinivalue_line(
+        "markers",
+        "value_origin_enforce: the module tests value-origin ENFORCE, which 1.22.0 "
+        "holds back from every public option; it runs inside the test-only switch "
+        "(xaidr/value_origin/_hold.py)")
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _value_origin_enforce_for_tests(request):
+    """A module marked ``value_origin_enforce`` runs inside the test-only switch, so
+    the kept enforcement code stays tested. Module-scoped and autouse, so it is in
+    force before the module's own fixtures build their sensors."""
+    if request.node.get_closest_marker("value_origin_enforce") is None:
+        yield
+        return
+    from xaidr.value_origin import _hold
+    with _hold._enforce_for_tests():
+        yield
 
 
 class CapturingReporter:

@@ -31,6 +31,10 @@ import pytest
 
 import xaidr
 
+# Tests value-origin ENFORCE, which 1.22.0 holds back from every public option:
+# the module runs inside the test-only switch (tests/conftest.py).
+pytestmark = pytest.mark.value_origin_enforce
+
 # Every framework name this module uses is bound here, at collection, as in
 # tests/test_value_origin_real_runs.py: other test modules install fake framework
 # modules into sys.modules and remove them, and an import made later builds fresh

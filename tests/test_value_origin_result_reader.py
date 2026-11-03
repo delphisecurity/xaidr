@@ -20,6 +20,10 @@ from xaidr.value_origin._ledger import result_authorities
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import published_vectors  # noqa: E402
 
+# Tests value-origin ENFORCE, which 1.22.0 holds back from every public option:
+# the module runs inside the test-only switch (tests/conftest.py).
+pytestmark = pytest.mark.value_origin_enforce
+
 
 def _arg_keys(v):
     found, _, observed = extract_with_observed({"v": v})

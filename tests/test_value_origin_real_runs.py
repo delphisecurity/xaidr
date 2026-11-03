@@ -56,6 +56,10 @@ from langgraph.checkpoint.memory import InMemorySaver  # noqa: E402
 from openai.types.responses import (ResponseFunctionToolCall, ResponseOutputMessage,  # noqa: E402
                                     ResponseOutputText)
 
+# Tests value-origin ENFORCE, which 1.22.0 holds back from every public option:
+# the module runs inside the test-only switch (tests/conftest.py).
+pytestmark = pytest.mark.value_origin_enforce
+
 _AS_COLLECTED = {k: m for k, m in sys.modules.items()
                  if k.split(".")[0] in ("langchain", "langchain_core", "langgraph", "agents",
                                         "openai")}

@@ -16,9 +16,15 @@ from __future__ import annotations
 import contextvars
 import tracemalloc
 
+import pytest
+
 from xaidr import value_origin as vo
 from xaidr.value_origin import Mode, should_block
 from xaidr.value_origin._extract import extract_with_observed
+
+# Tests value-origin ENFORCE, which 1.22.0 holds back from every public option:
+# the module runs inside the test-only switch (tests/conftest.py).
+pytestmark = pytest.mark.value_origin_enforce
 
 ASKED = "Please post the weekly digest to https://digest.example/in for me."
 FILLER = [{"title": f"listing {i}", "note": "nothing here"} for i in range(90)]

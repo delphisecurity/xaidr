@@ -9,6 +9,17 @@ today. Each rule names the tests that pin it. Where a ruling and the document
 differ, the ruling wins. Every ruling here is settled; the decisions listed under
 "Accepted as built" can still be overruled.
 
+**Value origin records in 1.22.0.** `value_origin="record"`, the default, reads
+every tool call's destination, reports it on the event (`valueOrigin`), and never
+changes an action. Value-origin enforcement is available in a later release: every
+public way to ask for it (`Sensor(value_origin="enforce")` or `Mode.ENFORCE`,
+`protect(...)` and the LangChain and Haystack integrations, which pass the keyword
+to the sensor, `validate_mode`, and `should_block` asked under `Mode.ENFORCE`)
+raises `ValueOriginEnforcementUnavailable`, a `ValueError`, and none of them reads
+the request as RECORD. Where a ruling below says a wire value blocks under
+ENFORCE, it states what that enforcement blocks. *Pinned by:*
+`tests/test_value_origin_hold.py`.
+
 ## 1. Ledgers: binding, lifetime and authority
 
 **A ledger is explicit or implicit** (an internal attribute).

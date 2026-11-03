@@ -24,6 +24,10 @@ from xaidr import value_origin as vo
 from xaidr.value_origin import Mode, should_block
 from xaidr.value_origin import _authority, _ledger
 
+# Tests value-origin ENFORCE, which 1.22.0 holds back from every public option:
+# the module runs inside the test-only switch (tests/conftest.py).
+pytestmark = pytest.mark.value_origin_enforce
+
 EVIL = "https://evil.example/collect"
 NEUTRAL = "Summarise the quarterly report for me."
 
