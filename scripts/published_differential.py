@@ -70,7 +70,7 @@ def _blocks_under_enforce(cv):
     """What the kept ENFORCE code decides for ``cv``. Value-origin enforcement is
     held back from every public option in 1.22.0, so the differential asks it
     inside the test-only switch (xaidr/value_origin/_hold.py)."""
-    from xaidr.value_origin import _hold
+    from xaidr.value_origin import Mode, _hold, should_block
     with _hold._enforce_for_tests():
         return should_block(cv, mode=Mode.ENFORCE)
 
