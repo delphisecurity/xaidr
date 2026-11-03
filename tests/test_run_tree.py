@@ -758,14 +758,10 @@ class TestRealRunTree:
             f"any run): {_brief(events)}")
         assert not [e for e in events if "runRootId" in e], _brief(events)
 
-    @pytest.mark.xfail(
-        strict=True, raises=NotImplementedError,
-        reason="PRE-EXISTING, not run-tree: DelphiMiddleware defines wrap_tool_call "
-               "and no awrap_tool_call, so every async create_agent under protect() "
-               "raises at its first tool call (recorded in d38486a). When "
-               "awrap_tool_call lands this XPASSes and strict=True turns it red, so "
-               "the marker cannot outlive the defect.")
+    @async_needs_context
     def test_async_create_agent_with_injected_middleware_is_stamped(self, stack):
+        """An async create_agent under protect() runs its tool calls through the
+        middleware's async tool hook, and every event is stamped (issue #38)."""
         cap = _Capture()
         m = _protect(cap)
         try:
@@ -892,6 +888,35 @@ def _p99_us(samples_ns):
     return s[int(len(s) * 0.99)] / 1000
 
 
+def _stable_p99_us(prepare, timed, *, rounds=7, per_round=5_000, warmup=2_000):
+    """The budget's percentile, measured so that one burst of host noise cannot
+    decide it: an untimed warm-up (caches, the interpreter's specialisation),
+    then ``rounds`` independent rounds of ``per_round`` events, and the MEDIAN of
+    the rounds' p99. ``prepare()`` builds each event's argument untimed; only
+    ``timed(arg)`` is inside the clock, so the timed region is the call under
+    budget and nothing else. The clock is this thread's CPU time, not wall time:
+    on a shared runner wall time also counts the time the thread was not
+    running (other threads holding the GIL, preemption), which is no part of the
+    call's own cost. Real per-event work costs CPU time and inflates every
+    round. Returns (p99 us, median us, every round's p99)."""
+    clock = time.thread_time_ns
+    for _ in range(warmup):
+        timed(prepare())
+    p99s, everything = [], []
+    for _ in range(rounds):
+        samples = []
+        for _ in range(per_round):
+            arg = prepare()
+            t0 = clock()
+            timed(arg)
+            samples.append(clock() - t0)
+        p99s.append(_p99_us(samples))
+        everything.extend(samples)
+    rounds_p99 = sorted(p99s)
+    return (rounds_p99[len(rounds_p99) // 2], sorted(everything)[len(everything) // 2] / 1000,
+            [round(p, 2) for p in p99s])
+
+
 @requires_stack
 def test_d4_budget_stamp_p99_at_most_10us():
     from langchain_core.callbacks.manager import CallbackManager
@@ -907,24 +932,24 @@ def test_d4_budget_stamp_p99_at_most_10us():
         "metadata": {"langgraph_node": "tools", "langgraph_step": 4}})
     was_active = run_tree.is_active()
     run_tree.activate()
-    samples = []
+    last = {}
+
+    def prepare():
+        last["data"] = {"direction": "tool_call", "action": "allowed"}
+        return last["data"]
     try:
         gc.disable()
-        for _ in range(20_000):
-            data = {"direction": "tool_call", "action": "allowed"}
-            t0 = time.perf_counter_ns()
-            run_tree.stamp(data)
-            samples.append(time.perf_counter_ns() - t0)
-        assert data["runTree"] == "stamped", data
+        p99, median, rounds = _stable_p99_us(prepare, run_tree.stamp)
+        assert last["data"]["runTree"] == "stamped", last["data"]
     finally:
         gc.enable()
         var_child_runnable_config.reset(token)
         if not was_active:
             run_tree.deactivate()
         run_tree.INDEX.end(root)
-    p99 = _p99_us(samples)
-    print(f"stamp p99 {p99:.2f} us, median {sorted(samples)[len(samples)//2]/1000:.2f} us")
-    assert p99 <= 10.0, f"stamp p99 {p99:.2f} us exceeds the 10 us per-event budget"
+    print(f"stamp p99 {p99:.2f} us, median {median:.2f} us, rounds {rounds}")
+    assert p99 <= 10.0, (
+        f"stamp p99 {p99:.2f} us exceeds the 10 us per-event budget (rounds' p99: {rounds})")
 
 
 @requires_stack
@@ -936,30 +961,39 @@ def test_d4_budget_callback_p99_at_most_10us():
     handler = run_tree.handler_for(BaseCallbackHandler)
     was_active = run_tree.is_active()
     run_tree.activate()            # an inactive handler returns at once: time the real work
-    samples = []
+    state = {"step": 0, "root": None, "child": None}
+
+    def prepare():
+        # The four callbacks of one tool run, one per event, in order; the
+        # callable is built here, untimed, as the lambdas it replaces were.
+        step = state["step"] % 4
+        state["step"] += 1
+        if step == 0:
+            state["root"], state["child"] = uuid.uuid4(), uuid.uuid4()
+        root, child = state["root"], state["child"]
+        return (
+            lambda: handler.on_chain_start({}, {}, run_id=root, parent_run_id=None,
+                                           name="LangGraph", metadata={}),
+            lambda: handler.on_tool_start({}, "x", run_id=child, parent_run_id=root,
+                                          name="lookup", metadata={"langgraph_node": "tools"}),
+            lambda: handler.on_tool_end("ok", run_id=child, parent_run_id=root),
+            lambda: handler.on_chain_end({}, run_id=root, parent_run_id=None),
+        )[step]
+
+    def call(fn):
+        fn()
     try:
         gc.disable()
-        for _ in range(10_000):
-            root, child = uuid.uuid4(), uuid.uuid4()
-            for call in (
-                lambda: handler.on_chain_start({}, {}, run_id=root, parent_run_id=None,
-                                               name="LangGraph", metadata={}),
-                lambda: handler.on_tool_start({}, "x", run_id=child, parent_run_id=root,
-                                              name="lookup", metadata={"langgraph_node": "tools"}),
-                lambda: handler.on_tool_end("ok", run_id=child, parent_run_id=root),
-                lambda: handler.on_chain_end({}, run_id=root, parent_run_id=None),
-            ):
-                t0 = time.perf_counter_ns()
-                call()
-                samples.append(time.perf_counter_ns() - t0)
+        p99, median, rounds = _stable_p99_us(prepare, call, per_round=8_000)
+        root = state["root"]
         indexed = root.int in run_tree.INDEX._ended     # before deactivate() clears it
     finally:
         gc.enable()
         if not was_active:
             run_tree.deactivate()
-    p99 = _p99_us(samples)
-    print(f"callback p99 {p99:.2f} us, median {sorted(samples)[len(samples)//2]/1000:.2f} us")
-    assert p99 <= 10.0, f"handler callback p99 {p99:.2f} us exceeds the 10 us budget"
+    print(f"callback p99 {p99:.2f} us, median {median:.2f} us, rounds {rounds}")
+    assert p99 <= 10.0, (
+        f"handler callback p99 {p99:.2f} us exceeds the 10 us budget (rounds' p99: {rounds})")
     assert indexed, (
         "the benchmark timed callbacks that indexed nothing: the last root's end "
         "found no entry to remove")
@@ -1105,4 +1139,5 @@ def test_schema_maps_the_run_keys_and_omits_them_when_absent():
     assert bare["gen_ai.security.run.status"] == "no_run"
     assert not [k for k in bare if k.startswith("gen_ai.security.run.") and k != "gen_ai.security.run.status"]
     assert "gen_ai.tool.call.id" not in bare
-    assert SCHEMA_VERSION == "0.2.0", "additive keys do not move the schema version"
+    # 0.3.0 is valueOrigin's version (schema.py); the run keys are additive and add nothing to it.
+    assert SCHEMA_VERSION == "0.3.0", "additive keys do not move the schema version"

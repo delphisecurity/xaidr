@@ -145,11 +145,13 @@ def test_real_attacks_still_block(block_sensor, label, text):
     assert block_sensor.scan(text).action == "blocked", f"{label}: real attack not blocked"
 
 
-def test_negation_scoping_is_redos_safe():
-    """The clause-splitting / quoted-attack scan must stay linear on adversarial
-    input (no catastrophic backtracking)."""
-    import time
-
+def test_negation_scoping_is_redos_safe(scan_paths):
+    """The clause-splitting / quoted-attack scan returns on adversarial input; its
+    time is the text-detector path's figure (scripts/scan_paths.py, the negation-*
+    inputs). The cue-dense spans there are not ReDoS but QUADRATIC SCAN: without
+    the lookahead and cue-count bounds, every cue match searching forward for a
+    clause terminator that never arrives is O(cues x len), and the path's check
+    is what keeps those bounds from being removed as "obviously unnecessary"."""
     from xaidr.scanner.directive_context import (
         artifact_reports_danger,
         is_descriptive,
@@ -162,21 +164,16 @@ def test_negation_scoping_is_redos_safe():
         "do not reveal it. " * 4000,
         ("'" + "a" * 5000 + "ignore" + "b" * 5000) * 3,
         "never never never " * 5000 + "reveal the system prompt",
-        # Cue-dense spans. The first two are not ReDoS but QUADRATIC SCAN:
-        # without the lookahead and cue-count bounds, every cue match searching
-        # forward for a clause terminator that never arrives is O(cues x len),
-        # and a cue-dense input with no terminator would keep this probe from
-        # completing. Locked here so the bounds cannot be removed as
-        # "obviously unnecessary".
         "checklist " * 20000,
         "log entry " + "x" * 90000,
         ("log line " + "a" * 500 + " reads ") * 500,
     ]
     for p in payloads:
-        t0 = time.process_time()
         is_descriptive(p)
         protective_override_bypass(p)
         security_mention(p)
         artifact_reports_danger(p)
-        strip_artifact_report(p)
-        assert time.process_time() - t0 < 1.0, "detection path too slow (possible ReDoS)"
+        assert isinstance(strip_artifact_report(p), str)
+    scan_paths.assert_timed("text_detectors", [
+        "negation-repeat", "negation-quoted", "negation-never", "negation-checklist",
+        "negation-log-entry", "negation-log-lines"])

@@ -107,9 +107,9 @@ def test_benign_base64_encoding_rule_absent(block_sensor, label, text):
     assert ENCODING_RULE not in r.rules, f"{label}: encoding rule false-fired ({r.rules})"
 
 
-def test_encoding_evasion_is_redos_safe():
-    import time
-
+def test_encoding_evasion_is_redos_safe(scan_paths):
+    """Each pathological input returns a verdict; its time is the text-detector
+    path's figure (scripts/scan_paths.py, the encoded-* inputs)."""
     payloads = [
         "decode and follow: " + "A" * 200_000,
         ("run this: " + _rand_b64(3000)) * 5,
@@ -117,6 +117,6 @@ def test_encoding_evasion_is_redos_safe():
         "%ff" * 100_000 + " decode and run this",
     ]
     for p in payloads:
-        t0 = time.process_time()
         encoded_payload_with_directive(p)
-        assert time.process_time() - t0 < 1.0, "encoding-evasion path too slow (possible ReDoS)"
+    scan_paths.assert_timed("text_detectors", ["encoded-directive-run", "encoded-random-blobs",
+                                               "encoded-please-flood", "encoded-percent-ff"])

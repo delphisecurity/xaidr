@@ -12,9 +12,9 @@ literal SCHEME — ``http`` followed by ``:``, and ``:`` is a word boundary — 
 accident one character wide: ``https`` has no word boundary after ``http``, so
 the ``https://`` spelling of the same address would not match at all.
 
-A list of spellings is the wrong design for a destination: every form nobody
-thought to write down is a bypass, and the SAME address has many — hex,
-decimal, octal, no scheme, and every non-http scheme. So URLs get their own
+A list of spellings is the wrong design for a destination: the SAME address has
+many forms (integer, hex, octal, mixed, no scheme, every non-http scheme), and a
+list reads only the ones written into it. So URLs get their own
 reader, sitting ALONGSIDE the shell and SQL ones, exactly as ``sql_parse`` does:
 an agent fetches a URL by calling ``http_get(url=…)``, not by running a shell.
 
@@ -56,9 +56,13 @@ simply not a URL.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import re
 from typing import NamedTuple, Optional
 from urllib.parse import urlsplit
+
+from ..value_origin._authority import (
+    _IMPLIED_RE, _SPECIAL_RE, ParseFailure, _host_authority, _whatwg, classify_value)
 
 # Hard input ceiling. A URL longer than this is not something we can say anything
 # useful about, and the cap keeps the scan cost flat regardless of what a caller
@@ -98,71 +102,35 @@ class UrlShape(NamedTuple):
     raw: str                  # the value, capped
 
 
-def _coerce_ip(host: str):
-    """The IP address ``host`` denotes, across every literal form, or None.
-
-    ``urlsplit`` hands back the authority verbatim, so the same address arrives as
-    ``169.254.169.254``, ``0xA9FEA9FE``, ``2852039166``, ``0251.0376.0251.0376``
-    or ``[::ffff:169.254.169.254]``. Every one of those is the SAME destination
-    and a string list can only ever know the first. Parsing them is what makes the
-    rule about the address instead of about its spelling.
-
-    Never raises: anything that is not an address is a name, and returns None.
-    """
-    if not host:
-        return None
-    h = host.strip().strip("[]")
-    try:
-        return ipaddress.ip_address(h)
-    except ValueError:
-        pass
-    # Integer forms. inet_aton accepts hex (0x…), octal (leading 0) and decimal,
-    # both dotted and packed; Python's ipaddress does not, so they are converted
-    # here rather than left as a gap a bypass lives in. Bounded: at most four
-    # dot-separated parts, each parsed with int(), no regex backtracking.
-    parts = h.split(".")
-    if len(parts) > 4 or not all(parts):
-        return None
-    try:
-        vals = []
-        for p in parts:
-            if p.lower().startswith("0x"):
-                vals.append(int(p, 16))
-            elif p.startswith("0") and len(p) > 1:
-                vals.append(int(p, 8))
-            elif p.isdigit():
-                vals.append(int(p, 10))
-            else:
-                return None
-        if len(vals) == 1:
-            packed = vals[0]
-        else:
-            # a.b.c.d style; the final part absorbs the remaining octets, which is
-            # what inet_aton does for the short forms (10.1 == 10.0.0.1).
-            if any(v > 0xFF for v in vals[:-1]):
-                return None
-            packed = 0
-            for v in vals[:-1]:
-                packed = (packed << 8) | v
-            packed = (packed << (8 * (4 - len(vals) + 1))) | vals[-1]
-        if not 0 <= packed <= 0xFFFFFFFF:
-            return None
-        return ipaddress.ip_address(packed)
-    except (ValueError, TypeError):
-        return None
+_log = logging.getLogger("xaidr.scanner.url_parse")
+_FAULT_LOGGED = False
 
 
-def _address_kind(host: str) -> Optional[str]:
-    """"link_local" | "private" | "loopback" | "public" for an IP literal, else
-    None (the host is a NAME, which no parse can classify — see the module note
-    on why that is not resolved here)."""
-    ip = _coerce_ip(host)
-    if ip is None:
+def _core_fault() -> None:
+    """A fault in the value-origin core's reading. Logged ONCE per process at
+    ERROR (attacker-controlled input must not be able to flood the log), never
+    swallowed silently, and never allowed to erase the other readings."""
+    global _FAULT_LOGGED
+    if not _FAULT_LOGGED:
+        _FAULT_LOGGED = True
+        _log.exception("url_parse: the value-origin core's URL reading faulted; "
+                       "classifying from the urlsplit reading alone")
+
+
+# When a URL's readings disagree, ``address`` is the MOST SEVERE class any of
+# them reaches (A2 Q4). A total order, so an equal rank is an equal class.
+_SEVERITY = (None, "public", "private", "loopback", "link_local")
+
+
+def _address_of(authority) -> Optional[str]:
+    """"link_local" | "private" | "loopback" | "public" for an ``ip:``
+    authority from the value-origin core, else None (a NAME, which no parse
+    can classify; see the module note on why that is not resolved here). The
+    core's ``ip_key`` has already unwrapped an IPv4-mapped IPv6 address
+    (an IPv4-mapped IPv6 address IS the address it wraps)."""
+    if authority is None or authority.scheme != "ip":
         return None
-    # An IPv4-mapped IPv6 address (::ffff:169.254.169.254) IS the IPv4 address it
-    # wraps, so classify the mapped form rather than the container.
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
+    ip = ipaddress.ip_address(authority.value)
     if ip.is_link_local:
         return "link_local"
     if ip.is_loopback:
@@ -170,6 +138,97 @@ def _address_kind(host: str) -> Optional[str]:
     if ip.is_private:
         return "private"
     return "public"
+
+
+def _address_kind(host: str) -> Optional[str]:
+    """The class of the address a URL HOST denotes, or None for a name.
+
+    The host goes through the value-origin core's WHOLE host pipeline
+    (``_host_authority``): percent-decode, then UTS-46, then every inet_aton
+    literal form, then the mapped-v6 unwrap. Not ``coerce_ip`` alone, because
+    an address can also arrive as Unicode digits or dots that IDNA maps to
+    ASCII, or percent-encoded, and the clients read each of those as the
+    address it spells. Digits are ASCII digits only, and a part over 255 is
+    not an address."""
+    if not host:
+        return None
+    try:
+        return _address_of(_host_authority(host, arg_fallback=False))
+    except Exception:
+        _core_fault()
+        return None
+
+
+def _r4_host(value: str) -> str:
+    """W1's R4: a WHATWG special scheme takes its host after ANY run of / and \\,
+    so `http:metadata.google.internal/` names metadata.google.internal (Node
+    fetch, undici MCP servers send it there). urlsplit finds no host. The
+    host-string rules key on ``UrlShape.host``, so it is filled here, through
+    the core's own R4 rewrite."""
+    m = _SPECIAL_RE.match(value)
+    if not m:
+        return ""
+    try:
+        h = urlsplit(_whatwg(m.group(1) + "://" + value[m.end():])).hostname
+    except Exception:                       # a core fault is not "not a URL" either
+        return ""                           # (fault-isolation sweep: never propagate)
+    return (h or "").lower().rstrip(".")
+
+
+def _url_address(value: str, split_host: str) -> Optional[str]:
+    """The most severe address class across EVERY reading of a URL's authority.
+
+    The readings are the core's (``classify_value``): WHATWG (a backslash is a
+    slash; urllib3 and ada agree), RFC 3986 as CPython 3.12.2's ``urlsplit``
+    reads it (httpx and urllib.parse agree), the authority of a value
+    ``urlsplit`` refuses (httpx, urllib3 and WHATWG still send it), and R4's
+    special scheme without ``//``. Plus this interpreter's own ``urlsplit``
+    host, which also covers ``file:``, a scheme the core never treats as a
+    destination. The transports disagree with each other, so every one of
+    their readings is read."""
+    try:
+        res = classify_value(value, arg_mode=True)
+    except Exception:
+        _core_fault()
+        res = None
+    if isinstance(res, ParseFailure):
+        found = list(res.parsed)
+    elif isinstance(res, list):
+        found = res
+    elif res is None:
+        found = []
+    else:
+        found = [res]
+    kinds = [_address_of(a) for a in found]
+    kinds.append(_address_kind(split_host))
+    return max(kinds, key=_SEVERITY.index)
+
+
+_TAB_NEWLINE = str.maketrans("", "", "\t\n\r")
+
+
+def _space_only_after_authority(value: str) -> bool:
+    """True when ``value`` opens with ``scheme://`` and all of its whitespace comes
+    after the authority (the first ``/``, ``?``, ``#`` or backslash after ``//``)."""
+    m = _SCHEME_RE.match(value)
+    if not m or not m.group(2):
+        return False
+    rest = value[m.end():]
+    end = re.search(r"[/?#\\]", rest)
+    return end is not None and not any(c.isspace() for c in rest[:end.start()])
+
+
+def _implied_name_shape(value: str) -> Optional[UrlShape]:
+    """A scheme-less ``host/path`` or ``host:port/path`` whose host is a name, read
+    as value origin reads it (``_IMPLIED_RE``): the host a client that guesses
+    ``http://`` sends to. A bare name, with or without a port, is not a URL."""
+    if any(c.isspace() for c in value):
+        return None
+    m = _IMPLIED_RE.match(value)
+    if not m:
+        return None
+    host = m.group(1).lower().rstrip(".")
+    return UrlShape(scheme="", host=host, address=_address_kind(host), raw=value)
 
 
 def looks_like_url(text: str) -> bool:
@@ -189,46 +248,65 @@ def parse_url(text: str) -> Optional[UrlShape]:
     try:
         if not isinstance(text, str) or not text.strip():
             return None
-        capped = text[:MAX_URL_CHARS].strip()
-        # A URL argument is a single token. Embedded whitespace means this is
-        # prose that CONTAINS a URL, not a URL-valued argument, and prose belongs
-        # to the content path where the L1 rules already read it.
-        if any(c.isspace() for c in capped):
+        capped = text[:MAX_URL_CHARS].strip().translate(_TAB_NEWLINE)
+        # A URL argument is a single token, with one exception (ruling 2): in a
+        # `scheme://` value, whitespace AFTER the authority is a path, query or
+        # fragment character WHATWG percent-encodes, and the host stays readable.
+        # Tabs and newlines are removed first, as WHATWG and urlsplit remove them.
+        # Any other whitespace means prose that CONTAINS a URL, which belongs to
+        # the content path where the L1 rules already read it.
+        if any(c.isspace() for c in capped) and not _space_only_after_authority(capped):
             return None
 
         m = _SCHEME_RE.match(capped)
+        if m and not m.group(2) and _IMPLIED_RE.match(capped):
+            # `name:port/path`: the "scheme" is a host, as value origin reads it.
+            return _implied_name_shape(capped)
         if m:
             scheme = m.group(1).lower()
             # `file:///etc/passwd` has an empty authority and a meaningful path;
             # every other scheme needs a host to be a fetchable destination.
             try:
                 parts = urlsplit(capped)
+                refused = False
             except ValueError:
-                # "Invalid IPv6 URL" — an unterminated bracket. No host.
-                return None
+                # urlsplit REFUSES it (an unbalanced or non-IPv6 bracket, an
+                # NFKC delimiter). That is not "no host": httpx, urllib3 and
+                # WHATWG can still send such a value. The core's readings decide
+                # below.
+                parts, refused = None, True
             # The trailing root dot is stripped for the same reason the sensor's
             # `_extract_host` strips it: `metadata.google.internal.` is the
             # fully-qualified spelling of a name this ruleset enumerates, it
             # resolves to the same endpoint, and leaving the dot on would make
             # the root anchor a one-character bypass of every hostname rule.
-            host = (parts.hostname or "").lower().rstrip(".")
-            if not host and scheme not in NON_HTTP_LOCAL_SCHEMES:
+            host = "" if refused else (parts.hostname or "").lower().rstrip(".")
+            if not host and not refused:
+                host = _r4_host(capped)
+            address = _url_address(capped, host)
+            if not host and address is None and (refused or scheme not in NON_HTTP_LOCAL_SCHEMES):
                 return None
             return UrlShape(
                 scheme=scheme,
                 host=host,
-                address=_address_kind(host),
+                address=address,
                 raw=capped,
             )
 
         # Scheme-less, bare-address form: `169.254.169.254/latest/meta-data/`.
         b = _BARE_AUTHORITY_RE.match(capped)
         if not b:
-            return None
+            return _implied_name_shape(capped)
         host = b.group(1).strip("[]").lower()
+        if host.endswith("."):
+            # No consumer reads `169.254.169.254.` as an address (glibc and the
+            # macOS resolver refuse it, and without a scheme no client sends it
+            # anywhere). The core's pipeline strips a URL host's root dot, so
+            # this branch refuses it explicitly, as it did before A2 M3.
+            return None
         kind = _address_kind(host)
         if kind is None:
-            return None
+            return _implied_name_shape(capped)
         # Without a scheme there is nothing to say "this is a destination", so the
         # value has to say it some other way: either it is a WELL-FORMED address
         # literal, or it carries a path/query/fragment. Otherwise "1.2" — a

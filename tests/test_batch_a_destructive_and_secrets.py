@@ -112,10 +112,11 @@ def test_luhn_gate_is_the_card_discriminator():
     assert not _luhn_valid("42424242")             # too short
 
 
-def test_batch_a_patterns_redos_safe():
-    import time
-    from xaidr.scanner.l1 import scan_l1
+def test_batch_a_patterns_redos_safe(l1_work, scan_paths):
+    """Every rule examines each payload once, up to the scan cap: work, counted.
+    Their time is the input-scan path's figure (scripts/scan_paths.py)."""
     from xaidr.scanner.dlp import scan_dlp
+    from xaidr.scanner.l1 import L1_MAX_SCAN_CHARS as CAP, scan_l1
 
     payloads = [
         "dd " + "x" * 200_000,
@@ -124,12 +125,13 @@ def test_batch_a_patterns_redos_safe():
         "sk-" + "a-" * 100_000,
         "4242 " * 80_000,
     ]
-    # CPU seconds, not wall clock. Same reasoning as every other time bound in
-    # this suite (written out once, at tests/test_redos_pattern_audit.py): a
-    # backtracking pattern burns CPU, and CPU is the clock a busy neighbour
-    # cannot move. Budget unchanged.
     for p in payloads:
-        t0 = time.process_time()
+        l1_work.clear()
         scan_l1(p)
         scan_dlp(p)
-        assert time.process_time() - t0 < 1.5, "Batch-A pattern too slow (possible ReDoS)"
+        per = l1_work.per_rule()
+        assert per and all(v == [min(len(p), CAP)] for v in per.values()), (
+            f"{p[:16]!r}...: a rule examined {sorted({tuple(v) for v in per.values()})}, "
+            f"not the payload up to the {CAP:,}-char cap, once")
+    scan_paths.assert_timed("input_scan", ["batch-a-dd", "batch-a-chmod", "batch-a-digits",
+                                           "batch-a-token", "batch-a-card"])

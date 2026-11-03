@@ -138,6 +138,39 @@ def delphi_after_tool_hook() -> Callable[[Any], Optional[str]]:
     return after_tool_call
 
 
+def delphi_result_hook(sensor: Any) -> Callable[[Any], Optional[str]]:
+    """An ``after_tool_call`` hook that records the tool's RESULT for value origin.
+
+    It records what the model is handed, ``context.tool_result`` (CrewAI's text:
+    ``str()`` of the return value unless the tool formats it), and the raw return
+    value beside it, so a destination the model can read is recorded however the
+    value is shaped. The result is not scanned here, so the read is untrusted
+    (Q10), as ``protect_tools`` records it. Returns None: the result goes to the
+    model unchanged. Fails open, like every hook here.
+    """
+
+    def after_tool_call(context: Any) -> Optional[str]:
+        try:
+            record = getattr(sensor, "_vo_record_result", None)
+            name = getattr(context, "tool_name", None)
+            if record is None or not isinstance(name, str) or not name:
+                return None
+            text = getattr(context, "tool_result", None)
+            if isinstance(text, str) and text.startswith(_CREWAI_BLOCKED_PREFIX):
+                return None                    # a refused call: no result was read
+            arguments = getattr(context, "tool_input", None)
+            raw = getattr(context, "raw_tool_result", None)
+            if raw is not None and raw is not text:
+                record(name, arguments, raw, None)
+            if text is not None:
+                record(name, arguments, text, None)
+        except Exception:
+            pass
+        return None
+
+    return after_tool_call
+
+
 def install_tool_hooks(sensor: Any) -> Callable[[], None]:
     """Register the tool-call hooks globally. Returns an uninstall callable.
 
@@ -165,15 +198,21 @@ def install_tool_hooks(sensor: Any) -> Callable[[], None]:
         hooks.register_before_tool_call_hook(before)
         registered.append((hooks.unregister_before_tool_call_hook, before))
 
-        # The after-hook is presentation only — it restates OUR refusal in this
-        # package's vocabulary. A build without the after-registry still gets
-        # full enforcement, just in CrewAI's own words, so this stays optional.
+        # The after-hooks: one restates OUR refusal in this package's vocabulary,
+        # one records the tool's result for value origin. A build without the
+        # after-registry still gets the tool-call scan, in CrewAI's own words,
+        # but no result is recorded, so this stays optional.
         register_after = getattr(hooks, "register_after_tool_call_hook", None)
         unregister_after = getattr(hooks, "unregister_after_tool_call_hook", None)
         if callable(register_after) and callable(unregister_after):
             after = delphi_after_tool_hook()
             register_after(after)
             registered.append((unregister_after, after))
+            # Value origin's tool-result seam: without it, a result an agent
+            # read was never recorded under protect() (2026-11-01).
+            result_hook = delphi_result_hook(sensor)
+            register_after(result_hook)
+            registered.append((unregister_after, result_hook))
     except Exception:
         uninstall()
         raise

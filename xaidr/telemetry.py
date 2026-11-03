@@ -8,6 +8,7 @@ webhook, OTel, ...) is the Reporter's concern, not the queue's.
 
 from __future__ import annotations
 
+import atexit
 import logging
 import queue
 import threading
@@ -62,6 +63,61 @@ class _WorkerState:
         self.started = False
 
 
+# ── shutdown of a queue the collector frees ─────────────────────────────────
+# A queue's shutdown (drain to the reporter, close it) runs on a fresh stack: the
+# collector may free a queue at any depth, including at the recursion limit, and
+# a deep call chain there cannot run. So the weak reference's callback is the
+# C-level put of a SimpleQueue, which runs no Python frame, and one daemon
+# reaper thread shuts each collected queue down. At interpreter exit every queue
+# still live is shut down, as atexit would.
+_LIVE: "dict[weakref.ref, _WorkerState]" = {}
+_DEAD: "queue.SimpleQueue[weakref.ref]" = queue.SimpleQueue()
+_reaper: Optional[threading.Thread] = None
+_reaper_lock = threading.Lock()
+
+
+def _reap(ref: weakref.ref) -> None:
+    state = _LIVE.pop(ref, None)
+    if state is None:
+        return
+    try:
+        SyncTelemetryQueue._shutdown(state)
+    except Exception:
+        logger.exception("telemetry: shutting down a collected queue faulted")
+
+
+def _reap_forever() -> None:
+    while True:
+        try:
+            _reap(_DEAD.get(timeout=1.0))
+        except queue.Empty:
+            # Before Python 3.11 even a C call at the recursion limit counts
+            # against it, so a callback the collector runs there can be lost.
+            # A reference that is dead and still live here is one of those.
+            for ref in [r for r in list(_LIVE) if r() is None]:
+                _reap(ref)
+
+
+def _ensure_reaper() -> None:
+    global _reaper
+    with _reaper_lock:
+        if _reaper is None or not _reaper.is_alive():      # once, and again after fork
+            _reaper = threading.Thread(target=_reap_forever, name="xaidr-telemetry-reaper",
+                                       daemon=True)
+            _reaper.start()
+
+
+@atexit.register
+def _shutdown_live_queues() -> None:
+    for ref in list(_LIVE):
+        state = _LIVE.pop(ref, None)
+        if state is not None:
+            try:
+                SyncTelemetryQueue._shutdown(state)
+            except Exception:
+                pass
+
+
 class SyncTelemetryQueue:
     """Synchronous telemetry queue using threading.
 
@@ -86,7 +142,7 @@ class SyncTelemetryQueue:
             from .reporters import StdoutReporter
             reporter = StdoutReporter()
         self._state = _WorkerState(reporter, batch_size, flush_interval_sec)
-        self._finalizer: Optional[weakref.finalize] = None
+        self._finalizer: Optional[weakref.ref] = None
         self._atexit_registered = False
 
     # The worker lives on _WorkerState now; these keep the historical read-only
@@ -116,16 +172,16 @@ class SyncTelemetryQueue:
         # Exactly once per queue, even across close/restart cycles — a second
         # registration would make shutdown drain the same queue repeatedly.
         #
-        # weakref.finalize rather than atexit.register(self.close_sync): it
-        # runs at interpreter exit exactly like atexit (so the at-exit flush
-        # guarantee holds) AND when this queue is garbage collected, WITHOUT
-        # holding the queue alive the way an atexit callback bound to it would.
-        # _shutdown is a staticmethod for the same reason: a bound method here
-        # would pin the queue and keep its worker alive forever.
+        # A weak reference rather than atexit.register(self.close_sync): the
+        # queue is shut down at interpreter exit (_shutdown_live_queues, so the
+        # at-exit flush guarantee holds) AND when it is garbage collected,
+        # WITHOUT the registration holding the queue alive. Its callback is
+        # _DEAD.put, so collection runs no Python frame; the reaper thread does
+        # the shutdown (see _reap_forever).
         if not self._atexit_registered:
-            self._finalizer = weakref.finalize(
-                self, SyncTelemetryQueue._shutdown, state
-            )
+            _ensure_reaper()
+            self._finalizer = weakref.ref(self, _DEAD.put)
+            _LIVE[self._finalizer] = state
             self._atexit_registered = True
 
     def enqueue(self, event: dict) -> None:
@@ -266,7 +322,7 @@ class SyncTelemetryQueue:
         # releases the last reference the finalize registry held to the pending
         # queue and the reporter.
         if self._finalizer is not None:
-            self._finalizer.detach()
+            _LIVE.pop(self._finalizer, None)
             self._finalizer = None
             self._atexit_registered = False
 

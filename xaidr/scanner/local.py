@@ -40,6 +40,8 @@ from .l1 import (
     L1_MAX_SCAN_CHARS,
     OVERSIZED_INPUT_CATEGORY,
     OVERSIZED_INPUT_RULE,
+    SCAN_DEGRADED_RULE,
+    SCAN_DEGRADED_SCORE,
     SCAN_INCOMPLETE_RULE,
     SCAN_INCOMPLETE_SCORE,
     iter_scan_windows,
@@ -1078,7 +1080,8 @@ class LocalScanner:
         rules: list = []
         category = None
         covered = 0
-        for idx, window, end in iter_scan_windows(prompt, scan_start):
+        stopped: list = []
+        for idx, window, end in iter_scan_windows(prompt, scan_start, report=stopped):
             covered = max(covered, end)
             if idx == 0:
                 continue  # head already scanned by the main pipeline
@@ -1120,6 +1123,11 @@ class LocalScanner:
         if covered < len(prompt):
             rules.append(SCAN_INCOMPLETE_RULE)
             max_score = max(max_score, SCAN_INCOMPLETE_SCORE)
+        # ...and if the wall-clock BACKSTOP, not the window count, is what stopped
+        # the windows, that is its own reason on the event (2026-11-01).
+        if stopped:
+            rules.append(SCAN_DEGRADED_RULE)
+            max_score = max(max_score, SCAN_DEGRADED_SCORE)
 
         return max_score, rules, category
 

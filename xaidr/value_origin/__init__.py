@@ -11,6 +11,10 @@ Deliberately absent: any accessor that returns ledger contents, any way to write
 an origin directly, any function that takes a correlation id — each is a
 laundering or disclosure primitive.
 
+Value origin records in 1.22.0. Value-origin enforcement is available in a later
+release: ``validate_mode`` refuses ``Mode.ENFORCE`` and ``should_block`` refuses to
+answer under it, each with ``ValueOriginEnforcementUnavailable`` (``_hold``).
+
 The rulings this build follows beyond the doc are in docs/value-origin-rulings.md.
 """
 from __future__ import annotations

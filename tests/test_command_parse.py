@@ -14,7 +14,6 @@ import json
 import os
 import random
 import string
-import time
 
 import pytest
 
@@ -622,32 +621,26 @@ def test_fuzz_corpus_is_actually_adversarial():
 
 # ── (k) bounds ───────────────────────────────────────────────────────────────
 
-def test_input_at_the_cap_is_handled_promptly():
+def test_input_at_the_cap_is_handled_promptly(scan_paths):
     cmd = "cat " + "a" * (_MAX_INPUT_CHARS - 10)
-    t0 = time.process_time()
     segs = parse_command(cmd)
-    elapsed = time.process_time() - t0
     assert segs and segs[0].name == "cat"
-    assert elapsed < 1.0, f"took {elapsed:.3f}s at the input cap"
+    scan_paths.assert_timed("parsers", ["command-at-cap"])
 
 
-def test_input_beyond_the_cap_is_truncated_and_marked_degraded():
+def test_input_beyond_the_cap_is_truncated_and_marked_degraded(scan_paths):
     cmd = "cat " + "b" * (_MAX_INPUT_CHARS * 4)
-    t0 = time.process_time()
     segs = parse_command(cmd)
-    elapsed = time.process_time() - t0
     assert segs, "over-cap input produced nothing"
     assert segs[0].parse_degraded is True, "truncation was not reported"
-    assert elapsed < 1.0, f"took {elapsed:.3f}s past the input cap"
+    scan_paths.assert_timed("parsers", ["command-past-cap"])
 
 
-def test_segment_count_is_bounded():
+def test_segment_count_is_bounded(scan_paths):
     cmd = " | ".join(["whoami"] * (_MAX_SEGMENTS * 4))
-    t0 = time.process_time()
     segs = parse_command(cmd)
-    elapsed = time.process_time() - t0
     assert len(segs) <= _MAX_SEGMENTS, f"{len(segs)} segments exceeds cap {_MAX_SEGMENTS}"
-    assert elapsed < 1.0, f"took {elapsed:.3f}s on a {_MAX_SEGMENTS * 4}-stage pipeline"
+    scan_paths.assert_timed("parsers", ["command-pipeline", "command-tokens"])
 
 
 def test_tokens_per_segment_are_bounded():
@@ -658,11 +651,11 @@ def test_tokens_per_segment_are_bounded():
     assert segs[0].parse_degraded is True
 
 
-def test_pathological_nesting_returns_promptly():
+def test_pathological_nesting_returns_promptly(scan_paths):
     cmd = "$(" * 5000 + "cat /etc/shadow" + ")" * 5000
-    t0 = time.process_time()
-    parse_command(cmd)
-    assert time.process_time() - t0 < 1.0
+    segs = parse_command(cmd)
+    assert all(s.depth <= 2 for s in segs), "nesting past the depth cap was followed"
+    scan_paths.assert_timed("parsers", ["command-nesting"])
 
 
 # EVERY bound, in one table. The heredocs-per-segment cap was the one that did

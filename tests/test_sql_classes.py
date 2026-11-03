@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import contextlib
 import io
-import time
 
 import pytest
 
@@ -342,18 +341,17 @@ def test_the_reader_is_bounded_and_never_raises():
     assert classify_sql("DROP " * 100_000) is None or True  # must not raise
 
 
-def test_a_pathological_value_stays_inside_the_budget():
-    """Bounded, not merely finite. The cap is what keeps cost flat."""
+def test_a_pathological_value_stays_inside_the_budget(scan_paths):
+    """Bounded, not merely finite. The cap is what keeps cost flat; the cost is
+    the parser path's figure (scripts/scan_paths.py, sql-or-chain)."""
     payload = "DELETE FROM t WHERE " + ("a = 1 OR " * 20_000) + "1=1"
-    start = time.process_time()
     shapes = parse_sql(payload)
-    elapsed = time.process_time() - start
-    assert elapsed < 1.0, f"parse took {elapsed:.3f}s"
+    scan_paths.assert_timed("parsers", ["sql-or-chain"])
     assert len(payload) > MAX_SQL_CHARS
     assert shapes  # still readable, just truncated
 
 
-def test_a_semicolon_heavy_blob_does_not_explode():
+def test_a_semicolon_heavy_blob_does_not_explode(scan_paths):
     """Bounded work, AND the bound is reported.
 
     The count assertion is `<= 32 + the markers`, because the caps fail closed.
@@ -366,10 +364,8 @@ def test_a_semicolon_heavy_blob_does_not_explode():
     from xaidr.scanner.sql_parse import UNPARSED_STATEMENT
 
     payload = "; ".join(["SELECT 1"] * 5_000)
-    start = time.process_time()
     shapes = parse_sql("SELECT 1; " + payload)
-    elapsed = time.process_time() - start
-    assert elapsed < 1.0, f"parse took {elapsed:.3f}s"
+    scan_paths.assert_timed("parsers", ["sql-semicolons"])
 
     parsed = [s for s in shapes if s.statement != UNPARSED_STATEMENT]
     markers = [s for s in shapes if s.statement == UNPARSED_STATEMENT]
