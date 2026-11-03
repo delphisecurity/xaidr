@@ -29,7 +29,8 @@ from xaidr.value_origin import _hold  # noqa: E402
 
 # This measures value-origin ENFORCE, which 1.22.0 holds back from every public
 # option: the script runs inside the test-only switch.
-_hold._enforce_for_tests().__enter__()
+_SWITCH = _hold._enforce_for_tests()   # kept: collecting it would close it
+_SWITCH.__enter__()
 
 print("xaidr from:", os.path.dirname(xaidr.__file__))
 spec = importlib.util.spec_from_file_location("c11", "tests/outside/drivers/c11_oracle.py")

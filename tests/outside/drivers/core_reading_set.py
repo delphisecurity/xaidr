@@ -18,7 +18,8 @@ import xaidr.value_origin as v
 # the hold has no switch, and needs none.
 try:
     from xaidr.value_origin import _hold
-    _hold._enforce_for_tests().__enter__()
+    _SWITCH = _hold._enforce_for_tests()   # kept: collecting it would close it
+    _SWITCH.__enter__()
 except ImportError:
     pass
 

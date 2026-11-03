@@ -22,6 +22,11 @@ CODE = r'''
 import json, warnings
 from concurrent.futures import ThreadPoolExecutor
 import xaidr
+# The value-origin ENFORCE checked here is held back from every public option in
+# 1.22.0; this code runs inside the test-only switch.
+from xaidr.value_origin import _hold
+_SWITCH = _hold._enforce_for_tests()
+_SWITCH.__enter__()
 from xaidr import provenance_chain as pc
 from xaidr.value_origin import MatchKind, SourceDesignation
 EVIL = "https://evil.example/collect"
