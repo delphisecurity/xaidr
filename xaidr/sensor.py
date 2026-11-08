@@ -43,7 +43,11 @@ from .circuit_breaker import (
     CircuitBreaker,
     _CircuitRuntime,
 )
-from .enforcement import MONITOR as _MONITOR, resolve as _resolve_enforcement
+from .enforcement import (
+    EnforcementPolicy,
+    MONITOR as _MONITOR,
+    resolve as _resolve_enforcement,
+)
 from .escalation import ESCALATION_SKIPPED, Escalator
 from .failclosed import (
     FAIL_CLOSED_CATEGORY,
@@ -582,20 +586,19 @@ class DelphiSensor:
         # is the gate for that, because the corpus oracle cannot see headers.
         self.emit_provenance_headers = emit_provenance_headers
         self.shadow_mode = shadow_mode
-        # shadow_mode forces observe-only — it IS monitor mode.
-        self.enforcement = _MONITOR if shadow_mode else enforcement
-        # The NAME stays a plain string and stays public: it is emitted as
-        # `enforcementMode` in every telemetry event, handed to _CircuitRuntime,
-        # and round-tripped through ProtectionManifest and the framework
-        # integrations. Those want a JSON-serialisable name, not a policy.
-        self.enforcement_mode = self.enforcement.name
+        # The effective policy is resolved AFTER the extensions are collected
+        # below (S7, #13): an extension may harden it, and the scanner built
+        # next takes the hardened policy. `enforcement` here is only the
+        # CONFIGURED policy. resolve() already raised on a bad name above, so
+        # the raise order for a bad mode string is unchanged.
 
         # ── S1 · attach, part 1 of 2: validate + collect ──────────────────
-        # FIRST of the three things that consume extensions, because both of the
-        # others are built below and need their contributions at CONSTRUCTION:
+        # FIRST of the four things that consume extensions, because all four
+        # are built below and need their contributions at CONSTRUCTION:
         #
         #   S3  the escalation chain, passed into LocalScanner (next block)
         #   S2  policy condition names, needed by parse_action_policy
+        #   S7  the effective enforcement policy (hardened, never weakened)
         #
         # on_attach still runs LAST (see part 2 at the end of __init__), so the
         # split preserves its contract: hooks that CONTRIBUTE run early, the
@@ -630,6 +633,22 @@ class DelphiSensor:
 
         #: S3 · the escalation chain, in extension order. Empty in open.
         self._escalators: tuple = self._collect_escalators()
+
+        # S7 (#13) · the effective enforcement policy. shadow_mode forces
+        # observe-only (it IS monitor mode), and an extension may not harden
+        # past it: shadow is the deployer's explicit "watch this deployment",
+        # and a control the deployer switched off for observation is not one
+        # an extension may switch back on.
+        self.enforcement = (
+            _MONITOR
+            if shadow_mode
+            else self._collect_enforcement_policy(enforcement)
+        )
+        # The NAME stays a plain string and stays public: it is emitted as
+        # `enforcementMode` in every telemetry event, handed to _CircuitRuntime,
+        # and round-tripped through ProtectionManifest and the framework
+        # integrations. Those want a JSON-serialisable name, not a policy.
+        self.enforcement_mode = self.enforcement.name
 
         self._scanner = LocalScanner(
             block_threshold=block_threshold,
@@ -1146,6 +1165,69 @@ class DelphiSensor:
                     )
                 chain.append(link)
         return tuple(chain)
+
+    def _collect_enforcement_policy(self, configured):
+        """S7 (#13) · the effective enforcement policy: the configured one,
+        hardened by the first extension that supplies an enforcing policy.
+
+        HARDEN-ONLY, and that direction is the design decision the issue
+        records. The three options were replace, strengthen, or delete the
+        hook as redundant: replace would let an extension silently downgrade
+        a blocking deployment to monitor, which is the same failure shape as
+        S6 strengthening (a seam moving a verdict the wrong way) with the
+        sign flipped; delete would leave an embedding distribution with no
+        way to harden the policy per deployment without forking the sensor.
+        So the hook declares the FLOOR the extension requires, and the
+        sensor takes the strongest floor on offer: the configured policy,
+        upgraded to the first enforcing policy any extension returns.
+
+        Consequences, each pinned by a test:
+
+        * A non-enforcing answer never weakens an enforcing configured
+          policy. It is ignored, not an error: an extension returning
+          MONITOR declares "I need at least observe-only", which every
+          configured policy already satisfies.
+        * On a tie (configured and extension both enforcing) the configured
+          policy wins. The two answer the only questions a mode is asked
+          identically, so they differ by name alone, and the deployer's
+          spelling is the one the manifest and telemetry should carry.
+        * The answer must be an EnforcementPolicy or None. Anything else
+          raises ValueError naming the extension and the received type: a
+          security control handed a value it does not understand fails at
+          construction, the way the escalator and condition collectors
+          already do, rather than defaulting quietly.
+        * A fault inside the hook is a construction failure, not a runtime
+          degradation, for the same reason as the other collectors: an
+          extension that cannot say what its floor is has failed to
+          install. The exception propagates unchanged.
+
+        shadow_mode is applied by the CALLER, after this returns: it
+        collapses the hardened policy to MONITOR, so an extension may not
+        harden past an explicit observe-only run.
+        """
+        if not self._extensions:
+            return configured
+        effective = configured
+        for extension in self._extensions:
+            name = getattr(extension, "name", type(extension).__name__)
+            policy = extension.enforcement_policy()
+            if policy is None:
+                continue
+            if not isinstance(policy, EnforcementPolicy):
+                raise ValueError(
+                    f"extension {name!r} returned {type(policy).__name__} "
+                    "from enforcement_policy(); expected an "
+                    "EnforcementPolicy instance or None"
+                )
+            if policy.enforces() and not effective.enforces():
+                logger.info(
+                    "xaidr: extension %r hardened the enforcement policy from %r to %r",
+                    name,
+                    effective.name,
+                    policy.name,
+                )
+                effective = policy
+        return effective
 
     def _collect_policy_conditions(self) -> dict:
         """Merge every extension's `policy_conditions()` into one map.

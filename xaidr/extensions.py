@@ -46,10 +46,11 @@ which the scan already has). Destinations are host-only; tool arguments and
 response bodies are hashed. Whether an extension's own reporter captures
 content is that extension's configuration, not a seam here.
 
-Only S1 (attach), S5 (gate chain) and S6 (verdict transform) are wired today.
-The remaining hooks are declared here rather than added one per PR so the public
-contract stops moving: an extension package written against this class does not
-have to re-subclass every time another seam lands.
+Only S1 (attach), S5 (gate chain), S6 (verdict transform) and S7
+(enforcement policy, harden-only) are wired today. The remaining hooks are
+declared here rather than added one per PR so the public contract stops
+moving: an extension package written against this class does not have to
+re-subclass every time another seam lands.
 """
 
 from __future__ import annotations
@@ -205,7 +206,24 @@ class SensorExtension:
         """
         return result
 
-    # ── declared, not yet wired (S2, S3, S4, S7, S8, S9, S10, S11, S12, S13) ──
+    # ── S7 ───────────────────────────────────────────────────────────────────
+    def enforcement_policy(self) -> Optional[Any]:
+        """The enforcement floor this extension requires, or None to decline.
+
+        WIRED (#13): the sensor asks every extension at construction, in
+        order, and takes the strongest floor on offer. An enforcing policy
+        hardens a non-enforcing configured policy; a non-enforcing answer
+        never weakens an enforcing one; on a tie the configured policy wins.
+        The answer must be an EnforcementPolicy or None, and anything else
+        raises at construction. A fault inside this hook fails construction,
+        like the other construction-time collectors.
+
+        shadow_mode still collapses the hardened policy to MONITOR: an
+        extension may not harden past an explicit observe-only run.
+        """
+        return None
+
+    # ── declared, not yet wired (S2, S3, S4, S8, S9, S10, S11, S12, S13) ────
     def policy_conditions(self) -> Mapping[str, Any]:
         return {}
 
@@ -213,9 +231,6 @@ class SensorExtension:
         return ()
 
     def before_scan(self, req: "ScanRequest") -> Optional[Any]:
-        return None
-
-    def enforcement_policy(self) -> Optional[Any]:
         return None
 
     def on_response(self, resp: "ResponseView") -> None:
