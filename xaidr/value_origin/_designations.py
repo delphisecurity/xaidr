@@ -60,20 +60,30 @@ def validate_designations(designations: Iterable[SourceDesignation]
 
 
 def validate_mode(mode: Mode | str) -> Mode:
-    """Raises ValueError naming the received value. ENFORCE raises
-    ``ValueOriginEnforcementUnavailable`` (a ValueError): value origin records in
-    this release, and its enforcement is available in a later one (``_hold``)."""
-    parsed = None
+    """The one validator of a value-origin mode, for every function that takes one.
+
+    A request for enforcement in any spelling or type (``"enforce"``,
+    ``"ENFORCE"``, a str subclass, ``Mode.ENFORCE``) raises
+    ``ValueOriginEnforcementUnavailable``: value origin records in this release,
+    and its enforcement is available in a later one (``_hold``). Anything that is
+    not a mode (an unknown string, ``None``, another type) raises a plain
+    ValueError naming it, so a typo never reads as RECORD."""
     if isinstance(mode, Mode):
         parsed = mode
     elif isinstance(mode, str):
-        try:
-            parsed = Mode(mode)
-        except ValueError:
-            pass
+        text = str.__str__(mode)                 # a subclass's own __str__ is not asked
+        if text.strip().casefold() == Mode.ENFORCE.value:
+            parsed = Mode.ENFORCE
+        else:
+            try:
+                parsed = Mode(text)
+            except ValueError:
+                parsed = None
+    else:
+        parsed = None
     if parsed is None:
         raise ValueError(f"value_origin mode: expected one of "
-                         f"{[m.value for m in Mode]}, got {mode!r}")
+                         f"{[m.value for m in Mode if m is not Mode.ENFORCE]}, got {mode!r}")
     if parsed is Mode.ENFORCE:
         _hold.check_enforce()
     return parsed

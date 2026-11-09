@@ -25,6 +25,9 @@ from .extensions import (
 from .autopatch import (
     protect, unprotect, ProtectionManifest, XaidrProtectionWarning,
 )
+# Value origin records in this release; asking for its enforcement raises this, a
+# ValueError subclass, from every public entry point (value_origin/_hold.py).
+from .value_origin._hold import ValueOriginEnforcementUnavailable
 
 __version__ = "1.21.0"
 
@@ -37,6 +40,7 @@ __all__ = [
     "XaidrProtectionWarning",
     "ScanResult",
     "DelphiBlockedError",
+    "ValueOriginEnforcementUnavailable",
     "FAIL_CLOSED_GROUPS",
     "CircuitBreaker",
     "SensorExtension",

@@ -12,12 +12,23 @@ differ, the ruling wins. Every ruling here is settled; the decisions listed unde
 **Value origin records in 1.22.0.** `value_origin="record"`, the default, reads
 every tool call's destination, reports it on the event (`valueOrigin`), and never
 changes an action. Value-origin enforcement is available in a later release: every
-public way to ask for it (`Sensor(value_origin="enforce")` or `Mode.ENFORCE`,
-`protect(...)` and the LangChain and Haystack integrations, which pass the keyword
-to the sensor, `validate_mode`, and `should_block` asked under `Mode.ENFORCE`)
-raises `ValueOriginEnforcementUnavailable`, a `ValueError`, and none of them reads
-the request as RECORD. Where a ruling below says a wire value blocks under
-ENFORCE, it states what that enforcement blocks. *Pinned by:*
+public way to ask for it raises `ValueOriginEnforcementUnavailable`, a
+`ValueError` exported as `xaidr.ValueOriginEnforcementUnavailable`, and none of
+them reads the request as RECORD. One validator, `validate_mode`, reads every
+value-origin mode in the package: enforcement in any spelling or type
+(`"enforce"`, `"ENFORCE"`, a str subclass, `Mode.ENFORCE`) is refused, and a value
+that is not a mode raises a plain `ValueError`, so a typo never reads as RECORD.
+That covers `Sensor(value_origin=...)`, `protect(...)` and the LangChain and
+Haystack integrations (which pass the keyword to the sensor), `validate_mode`, and
+`should_block(..., mode=...)`. Where one of them is also given an existing
+`sensor=`, `value_origin` is never dropped: enforcement is refused, and any other
+value raises a `ValueError` saying to set it on the Sensor. Where a ruling below
+says a wire value blocks under ENFORCE, it states what that enforcement blocks.
+*Corrected 2026-11-09:* this paragraph said every public way refuses when
+`should_block(cv, mode="enforce")` still answered `False` and `protect`,
+`delphi_middleware` and `delphi_hooks` dropped `value_origin` beside an existing
+`sensor=`. *Pinned by:* `tests/test_value_origin_mode_gate.py`, which walks every
+public callable and every mode-named parameter, and
 `tests/test_value_origin_hold.py`.
 
 ## 1. Ledgers: binding, lifetime and authority

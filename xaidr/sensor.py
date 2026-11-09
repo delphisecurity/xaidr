@@ -911,8 +911,7 @@ class DelphiSensor:
                 " With NO value_origin_sources designations, no tool result can be "
                 "a trusted source, so EVERY tool call whose destination came from a "
                 "tool result gets that verdict; measured block rates on benign "
-                "corpora are in docs/value-origin-enforce.md. Turn ENFORCE on once "
-                "designations exist.")
+                "corpora are in docs/value-origin-enforce.md.")
 
         # ── S1 · attach, part 2 of 2: on_attach ──────────────────────────
         # LAST in the constructor, deliberately: on_attach receives a fully

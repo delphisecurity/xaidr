@@ -5,6 +5,7 @@ _Part of the [xaidr](https://github.com/delphisecurity/xaidr/blob/main/README.md
 ```python
 from xaidr import (
     Sensor, ProtectedHttpClient, ScanResult, DelphiBlockedError, CircuitBreaker,
+    ValueOriginEnforcementUnavailable,
     set_origin, origin_scope, clear_origin,
     flow, begin_flow, inject_context, extract_context, clear_flow, propagate_context,
 )
@@ -55,6 +56,21 @@ Direct scan APIs return `ScanResult`; check `.action` (one of the
 the one to gate execution on — it covers `blocked` and `approval_required`
 without also stopping on `flagged`. The protected HTTP wrapper raises
 `DelphiBlockedError` when it blocks a request before network execution.
+
+Value origin records in 1.22.0, and value-origin enforcement is available in a
+later release. Asking for it, `value_origin="enforce"` in any spelling or
+`Mode.ENFORCE`, from `Sensor`, `protect()`, `delphi_middleware()`,
+`delphi_hooks()`, `xaidr.value_origin.validate_mode` or `should_block`, raises
+`ValueOriginEnforcementUnavailable`, a `ValueError` subclass:
+
+```python
+from xaidr import Sensor, ValueOriginEnforcementUnavailable
+
+try:
+    sensor = Sensor(agent_id="a", value_origin="enforce")
+except ValueOriginEnforcementUnavailable:
+    sensor = Sensor(agent_id="a")               # value_origin="record", the default
+```
 
 ---
 

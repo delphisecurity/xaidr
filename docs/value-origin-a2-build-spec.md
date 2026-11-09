@@ -674,8 +674,8 @@ All three are measured by the outside drivers.
 
 ### P5. M10's four remaining findings, then the monitor-mode disagreement
 
-M10 named four gaps between its measurement and §4 (the build log, "Gaps against
-§4 in this measurement"). Read as the four findings STEP 5 means:
+M10 named four places where its measurement differs from §4 (the build log,
+section "Gaps against §4 in this measurement"). Read as the four findings STEP 5 means:
 
 1. **No B-designated-twin case.** It is added to
    `tests/outside/drivers/langchain_poisoned_read.py`. A designated
@@ -688,7 +688,7 @@ M10 named four gaps between its measurement and §4 (the build log, "Gaps agains
 3. **A-off's "no valueOrigin anywhere" was checked on the send event only.** The
    check covers every captured event. Red first: point the check at all events
    on the current driver and see whether it already holds. If it does, record
-   that the gap was in the check, not the code.
+   that the difference was in the check, not the code.
 4. **The driver records only `send_email` events.** It records every tool event
    (`read_doc` and `send_email`), so (3) has something to check.
 

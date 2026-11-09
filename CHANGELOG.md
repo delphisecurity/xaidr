@@ -8,11 +8,14 @@ still reconcile against the whole range (docs/releasing.md, step 1).
 - Value origin records: every tool-call event carries `valueOrigin`, where the
   call's destination came from, and value origin never changes an action.
   `Sensor(value_origin=...)` takes `"record"` (the default) or `"off"`.
-  Value-origin enforcement is available in a later release: `"enforce"`, passed
-  to `Sensor`, `protect()`, `delphi_middleware()` or `delphi_hooks()`, raises
-  `ValueOriginEnforcementUnavailable` (a `ValueError`), as do
-  `value_origin.validate_mode` and `value_origin.should_block` asked for
-  `Mode.ENFORCE`. L1 and every other enforcement are unchanged.
+  Value-origin enforcement is available in a later release: asking for it in any
+  spelling (`"enforce"`, `"ENFORCE"`, `Mode.ENFORCE`), from `Sensor`, `protect()`,
+  `delphi_middleware()`, `delphi_hooks()`, `value_origin.validate_mode` or
+  `value_origin.should_block`, raises `xaidr.ValueOriginEnforcementUnavailable` (a
+  `ValueError`). A value that is not a mode raises `ValueError`. `value_origin`
+  passed beside an existing `sensor=` is refused rather than ignored, as is an
+  `enforcement_mode` to `protect()` that is no mode. L1 and every other
+  enforcement are unchanged.
 - `authority_of` returns `None` for a value that real clients send to more than
   one place. `authority_of("https://corp.example@evil.test/")` is `None`, where it
   was `dns:evil.test`: httpx sends it to `evil.test`, and urllib.request resolves

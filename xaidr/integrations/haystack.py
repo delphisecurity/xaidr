@@ -547,6 +547,11 @@ def delphi_hooks(
             reporter=reporter,
             **sensor_kwargs,
         )
+    else:
+        # value_origin= beside an existing sensor is refused, never dropped
+        # (value_origin/_hold.py).
+        from ..value_origin._hold import refuse_beside_sensor
+        refuse_beside_sensor(sensor_kwargs)
     return {point: [_DelphiHook(point, sensor=sensor)] for point in _POINTS
             if point in _REQUIRED or point in VALID_HOOK_POINTS}
 

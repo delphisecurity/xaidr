@@ -21,7 +21,8 @@ import xaidr
 from xaidr import value_origin as vo
 from xaidr.value_origin import Mode
 
-ROOT = Path(__file__).resolve().parents[1]
+# The package that was imported (the tree, or the installed wheel in CI).
+ROOT = Path(xaidr.__file__).resolve().parents[1]
 LATER = "available in a later release"
 
 
@@ -153,7 +154,8 @@ def test_the_kept_enforcement_code_runs_inside_the_switch():
 
 def test_no_public_entry_point_reaches_the_switch():
     """Nothing in the package sets the switch: package code names ``_hold`` only to
-    ask it to refuse (``check_enforce``, in ``validate_mode`` and ``should_block``),
+    ask it to refuse (``check_enforce``, in ``validate_mode``, the one validator
+    every mode passes through; ``refuse_beside_sensor`` is imported by name),
     and the switch's module reads no environment, file or option. Tests and
     measurement scripts enter it explicitly."""
     uses = set()
@@ -166,8 +168,7 @@ def test_no_public_entry_point_reaches_the_switch():
                 uses.add(f"{path.relative_to(ROOT)}: _hold.{node.attr}")
             if isinstance(node, ast.Name) and node.id == "_enforce_for_tests":
                 uses.add(f"{path.relative_to(ROOT)}: _enforce_for_tests")
-    assert uses == {"xaidr/value_origin/_designations.py: _hold.check_enforce",
-                    "xaidr/value_origin/_evaluate.py: _hold.check_enforce"}, (
+    assert uses == {"xaidr/value_origin/_designations.py: _hold.check_enforce"}, (
         f"package code reaches the test-only switch: {sorted(uses)}")
     hold = ast.parse((ROOT / "xaidr" / "value_origin" / "_hold.py").read_text(encoding="utf-8"))
     imported = {a.name.split(".")[0] for n in ast.walk(hold) if isinstance(n, ast.Import)
@@ -232,3 +233,25 @@ def _poisoned_call(s):
         finally:
             pc.clear_flow()
     return contextvars.Context().run(run)
+
+
+# ── 1b. value_origin beside an existing sensor is never dropped ──────────────
+
+def test_protect_beside_a_sensor_without_raising_records_an_error_and_installs_nothing():
+    s = _quiet(lambda: xaidr.Sensor(agent_id="hold", reporter=_Capture()))
+    m = _quiet(lambda: xaidr.protect(sensor=s, value_origin="enforce", quiet=True,
+                                     raise_on_config_error=False))
+    try:
+        assert m.error and LATER in m.error, f"error={m.error!r} notes={m.notes!r}"
+        assert not any("value_origin" in n for n in m.notes), "the refusal was filed as a note"
+        assert m.sensor is None and not m.patched, "protect() installed something it refused"
+    finally:
+        _quiet(m.unprotect)
+
+
+@pytest.mark.parametrize("asked", ["record", "off"])
+def test_any_other_value_origin_beside_a_sensor_says_set_it_on_the_sensor(asked):
+    s = _quiet(lambda: xaidr.Sensor(agent_id="hold", reporter=_Capture()))
+    with pytest.raises(ValueError, match="set value_origin on the Sensor") as e:
+        _quiet(lambda: xaidr.protect(sensor=s, value_origin=asked, quiet=True))
+    assert type(e.value) is ValueError

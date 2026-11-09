@@ -158,6 +158,10 @@ def delphi_middleware(
             **sensor_kwargs,
         )
     else:
+        # value_origin= beside an existing sensor is refused, never dropped
+        # (value_origin/_hold.py).
+        from ..value_origin._hold import refuse_beside_sensor
+        refuse_beside_sensor(sensor_kwargs)
         agent_id = sensor.agent_id
 
     # Both "blocked" and "approval_required" HALT the turn, but they are

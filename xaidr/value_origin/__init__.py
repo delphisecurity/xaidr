@@ -12,8 +12,9 @@ an origin directly, any function that takes a correlation id — each is a
 laundering or disclosure primitive.
 
 Value origin records in 1.22.0. Value-origin enforcement is available in a later
-release: ``validate_mode`` refuses ``Mode.ENFORCE`` and ``should_block`` refuses to
-answer under it, each with ``ValueOriginEnforcementUnavailable`` (``_hold``).
+release: ``validate_mode``, which reads every mode (``should_block``'s too), refuses
+enforcement in any spelling with ``ValueOriginEnforcementUnavailable``
+(``xaidr.ValueOriginEnforcementUnavailable``; ``_hold``).
 
 The rulings this build follows beyond the doc are in docs/value-origin-rulings.md.
 """

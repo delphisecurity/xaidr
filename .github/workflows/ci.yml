@@ -422,6 +422,55 @@ jobs:
           print("GUARD GREEN")
           PY
 
+  # ── The value-origin mode gate, with every framework route reachable ──────────
+  # tests/test_value_origin_mode_gate.py walks every public callable and every
+  # mode-named parameter and asks for value-origin enforcement in every spelling.
+  # The pytest cells install no agent framework, so the LangChain and Haystack
+  # routes skip there; here both are installed and XAIDR_GATE_REQUIRE_FRAMEWORKS=1
+  # turns a missing framework into a failure, so the gate never depends on a
+  # local venv.
+  mode-gate:
+    name: value-origin mode gate (py${{ matrix.python }}, langchain, haystack)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install (package + pinned LangChain and Haystack)
+        run: |
+          python -m pip install --upgrade pip
+          pip install . pytest "langchain-core==1.6.1" "langchain==1.4.1" "haystack-ai==3.4.1"
+          pip list 2>/dev/null | grep -iE '^(langchain|haystack)'
+      - name: Run the gate and the hold tests against the installed package
+        env:
+          XAIDR_GATE_REQUIRE_FRAMEWORKS: "1"
+        run: |
+          mkdir -p "$RUNNER_TEMP/gate" && cp -R tests "$RUNNER_TEMP/gate/tests"
+          cd "$RUNNER_TEMP/gate"
+          python -c "import xaidr; assert 'site-packages' in xaidr.__file__, xaidr.__file__; print(xaidr.__file__)"
+          python -m pytest tests/test_value_origin_mode_gate.py tests/test_value_origin_hold.py \
+            -q -rs -p no:cacheprovider --junitxml="$GITHUB_WORKSPACE/mode-gate.xml"
+      - name: Guard — every route ran, none skipped
+        run: |
+          python - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse("mode-gate.xml").iter("testcase"))
+          skipped = [c.get("name") for c in cases if c.find("skipped") is not None]
+          broken = [c.get("name") for c in cases
+                    if c.find("failure") is not None or c.find("error") is not None]
+          print(f"collected={len(cases)} skipped={len(skipped)} failed/errored={len(broken)}")
+          if len(cases) < 140 or skipped or broken:
+              sys.exit(f"GUARD RED: collected {len(cases)}, skipped {skipped[:5]}, broken {broken[:5]}")
+          print("GUARD GREEN")
+          PY
+
   # ── A tool result value origin does not recognise, through CrewAI and Haystack ─
   # The real-runs job installs LangChain and the Agents SDK; these two frameworks
   # record a tool result through their own after-tool hooks (2026-11-01), so their

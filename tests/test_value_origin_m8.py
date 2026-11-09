@@ -263,3 +263,7 @@ def test_the_enforce_startup_warning_names_exactly_the_states_that_block(caplog)
     assert named == blocking, (
         f"the ENFORCE warning names {sorted(named)}; the states that block are "
         f"{sorted(blocking)}")
+    # No shipped text tells a user to turn value-origin ENFORCE on: it is
+    # available in a later release, and every public way to ask for it refuses.
+    assert not re.search(r"(?i)turn (value[- ]origin )?enforce|enable (value[- ]origin )?enforce"
+                         r"|enforce on once", text), f"the warning tells a user to turn it on: {text}"

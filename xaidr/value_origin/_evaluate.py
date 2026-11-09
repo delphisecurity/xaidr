@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 from typing import List, Mapping, Optional, Tuple
 
-from . import _hold, _ledger
+from . import _ledger
+from ._designations import validate_mode
 from ._extract import extract_with_observed
 from ._types import (UnresolvedReason, 
     WIRE_STRENGTH,
@@ -69,12 +70,13 @@ def should_block(verdict: CallVerdict, *, mode: Mode) -> bool:
     write_dropped: a destination write the full ledger could not accept, 2026-10-06).
     The other bound states (argument_bound, result_truncated, input_truncated,
     ledger_saturated) and a plain UNRESOLVED never block (owner, 2026-10-05).
-    The only effect value origin has on an action. ``Mode.ENFORCE`` raises
-    ``ValueOriginEnforcementUnavailable``: this release records value origin, and
-    its enforcement is available in a later one (``_hold``); the refusal is raised
-    before the guard below, so it is never read as "do not block"."""
-    if mode is Mode.ENFORCE:
-        _hold.check_enforce()
+    The only effect value origin has on an action. ``mode`` is validated by
+    ``validate_mode``: enforcement in any spelling raises
+    ``ValueOriginEnforcementUnavailable`` (this release records value origin; its
+    enforcement is available in a later one), and anything that is not a mode
+    raises ValueError, both before the guard below, so neither reads as "do not
+    block"."""
+    mode = validate_mode(mode)          # raises before the guard below, never read as "no"
     try:
         return mode is Mode.ENFORCE and (verdict.verdict is Verdict.UNAUTHORIZED
                                          or verdict.wire in _UNEXAMINABLE_WIRES)

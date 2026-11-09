@@ -89,7 +89,7 @@ functions. Mode `OFF` skips all of it.
 
 | seam | file:line | passes today | core needs | carries it? |
 |---|---|---|---|---|
-| `DelphiSensor.scan` (wrapper) | `sensor.py:1748`. Gate return `1776-1783`, impl `1784`, fault paths `1787-1802`, post-gate `1803` | `prompt`, `direction`, `destination`, `provider`, `origin_context`, `parent_context` | `text`, `spans`, `input_clean` = the **true** verdict was `allowed` | **No, three gaps.** (a) There is **no `spans=`**, so open can only ever report `principal_undeclared_span` and never `principal`, and config A is unreachable through the real API (Q8). (b) `_scan_impl` returns the **post-mode** verdict (`sensor.py:1913`), and `_post_scan_gate` can still replace it, so the true verdict has to be carried out internally. (c) **Every** input-direction call must record, including the gated, fault, fail-closed and not-scannable paths, because S-2 binds before validating. A circuit-open input must still end the previous request's implicit authority. |
+| `DelphiSensor.scan` (wrapper) | `sensor.py:1748`. Gate return `1776-1783`, impl `1784`, fault paths `1787-1802`, post-gate `1803` | `prompt`, `direction`, `destination`, `provider`, `origin_context`, `parent_context` | `text`, `spans`, `input_clean` = the **true** verdict was `allowed` | **No, on three counts.** (a) There is **no `spans=`**, so open can only ever report `principal_undeclared_span` and never `principal`, and config A is unreachable through the real API (Q8). (b) `_scan_impl` returns the **post-mode** verdict (`sensor.py:1913`), and `_post_scan_gate` can still replace it, so the true verdict has to be carried out internally. (c) **Every** input-direction call must record, including the gated, fault, fail-closed and not-scannable paths, because S-2 binds before validating. A circuit-open input must still end the previous request's implicit authority. |
 | `_scan_impl` | `sensor.py:1805`. Provenance `1840`, scanner `1844`, apply-mode `1913` | the above | the pre-mode `result.action` from `1844` | Internally yes: return `(result, true_action)` to its only caller (`scan`). No test calls `_scan_impl`; checked with grep. |
 | LangChain `before_model` | `integrations/langchain.py:185`, routed at `:208` through `route_inbound_scan` (`:35`, `scan` at `:80`) | the last HumanMessage text | as above | Funnels into `scan()`. **Cannot carry a usable binding** (F5). It re-scans the same message every turn (F6). |
 | Entrypoints via `scan_text_boundary` | `autopatch/core.py:491` (`scan` at `:507`). `Crew.kickoff` and the async variants at `frameworks.py:678`, `Runner.run` at `:617`, Haystack at `integrations/haystack.py:221` | up to 32 or 8 strings, one scan each | one record per request | Funnels into `scan()`. **Multi-string inputs rebind once per string** (F6). |
@@ -136,8 +136,8 @@ fail.
 | MCP `ClientSession.call_tool` after-hook | `frameworks.py:1039` (scan at `:1055`) | name, `arguments` dict, raw `CallToolResult` | as above | **Yes** once the pre-mode verdict is surfaced. The raw result normalises through `model_dump()` (V-15). |
 | `protect_tools` wrapper | `sensor.py:3162-3196`. Sync return `3195`, async `3188`; binding `3050` | bound arguments, raw return | a **scanned** result | **No.** There is no result scan at all, so `result_blocked=None` and the read is untrusted: it can never produce `trusted_source`. S23 (V-1) is unreachable through it (Q10). |
 | `delphi_middleware.wrap_tool_call` | `integrations/langchain.py:225`, `handler(request)` at `:266` | the `ToolCall` and the handler's return | a result position | **No position is used.** Under `protect()` the `BaseTool.run` after-hook covers it. Middleware alone records no read (Q11). |
-| CrewAI `after_tool_call` hook | `integrations/crewai.py:122` | `context.tool_result` (str) | a result scan | **No**: no scan exists there today. Named gap. |
-| OpenAI Agents `FunctionTool`; autogen (`frameworks.py:762`, `:782`); llama-index (`:845`); Haystack | — | before-only | — | **No**: unpatchable or before-only. Named gaps, extending C-26's list. |
+| CrewAI `after_tool_call` hook | `integrations/crewai.py:122` | `context.tool_result` (str) | a result scan | **No**: no result scan runs at that hook; the result is recorded unscanned. |
+| OpenAI Agents `FunctionTool`; autogen (`frameworks.py:762`, `:782`); llama-index (`:845`); Haystack | — | before-only | — | **No**: unpatchable or before-only; these frameworks are listed beside C-26's. |
 
 **Planned wiring.**
 1. One internal `DelphiSensor` method used by the scanned seams. It scans the
@@ -495,7 +495,7 @@ turn3: "done"
 | A-enforce-block | `enforce` | block | `send_email` **not** executed. The model receives a ToolMessage starting `[BLOCKED]`. The event has `action=blocked` and the V-31 rule id (Q13). |
 | A-enforce-monitor | `enforce` | monitor | `send_email` executed. Event `action=flagged`, with the V-31 rule id. |
 | B-designated-twin | `enforce` | block | A **designated** `directory_lookup` (EXACT, `key_args=("query",)`) keyed by the principal's "Bob" returns `bob@corp.example`, and `send_email` to it is **executed** with `trusted_source`. Proves ENFORCE is not simply "block every read-derived destination". |
-| C-no-flow | `enforce` | block | Same as A **without** `begin_flow`: `send_email` **executed**, `valueOrigin=no_flow`. The documented gap is asserted, so it cannot pass silently (Q6). |
+| C-no-flow | `enforce` | block | Same as A **without** `begin_flow`: `send_email` **executed**, `valueOrigin=no_flow`. The documented `no_flow` behaviour is asserted, so it cannot pass silently (Q6). |
 | D-async | `enforce` | block | A-enforce-block via `ainvoke`. |
 
 **Pins (Q15).** CI's existing set is langchain-core 1.6.1, langchain 1.4.1,
