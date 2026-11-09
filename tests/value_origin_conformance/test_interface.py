@@ -199,8 +199,12 @@ def test_should_block_only_under_enforce_on_unauthorized_or_a_bound():
 def test_validate_mode():
     assert vo.validate_mode("enforce") is vo.Mode.ENFORCE
     assert vo.validate_mode(vo.Mode.RECORD) is vo.Mode.RECORD
-    with pytest.raises(ValueError, match="'Enforce'"):
-        vo.validate_mode("Enforce")
+    # "Enforce" raised ValueError as no mode until 2026-11-09. It is a spelling of
+    # enforcement, read as one, so outside the test-only switch it is refused as
+    # enforcement rather than as a typo (tests/test_value_origin_mode_gate.py).
+    assert vo.validate_mode("Enforce") is vo.Mode.ENFORCE
+    with pytest.raises(ValueError, match="'Recrod'"):
+        vo.validate_mode("Recrod")
 
 
 D = vo.SourceDesignation

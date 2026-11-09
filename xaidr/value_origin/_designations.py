@@ -72,7 +72,9 @@ def validate_mode(mode: Mode | str) -> Mode:
         parsed = mode
     elif isinstance(mode, str):
         text = str.__str__(mode)                 # a subclass's own __str__ is not asked
-        if text.strip().casefold() == Mode.ENFORCE.value:
+        # The pinned tables, never the interpreter's own (_ucd): the same spelling
+        # is refused on every interpreter.
+        if _ucd.casefold(_ucd.strip(text)) == Mode.ENFORCE.value:
             parsed = Mode.ENFORCE
         else:
             try:
