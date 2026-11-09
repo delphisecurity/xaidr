@@ -157,7 +157,10 @@ jobs:
   # cannot nest (ensurepip exits 127 there).
   test-3-12-2:
     name: pytest (py3.12.2, full)
-    runs-on: ubuntu-latest
+    # setup-python ships no 3.12.2 for ubuntu-latest once that is Ubuntu 26.04
+    # (2026-11-09: "The version '3.12.2' with architecture 'x64' was not found");
+    # 24.04 has it, and this job exists for that patch release.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python 3.12.2
@@ -435,7 +438,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.10", "3.12"]
+        python: ["3.11", "3.12"]       # haystack-ai 3.4.1 requires Python >= 3.11
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
