@@ -359,3 +359,107 @@ def test_no_extensions_means_no_view_is_built():
         sensor_mod.ProtectedHttpClient._extract_host = orig
     assert calls == [], (
         f"_egress_headers parsed hosts with no extensions attached: {calls}")
+
+
+# ── M0 (1.22.0): a fault in outbound_headers() never reaches the host ────────
+#
+# Two shapes raised INTO the host's request on the merge as first written: a
+# truthy non-Mapping return (``.items()`` sat outside the ``try``) and a non-str
+# header name (``name.lower()`` sat outside it too). The S12 rule is that a fault
+# in this hook drops that extension's headers, is logged once, and the request
+# goes out. Under ``fail_closed=("controls",)`` the fault travels the verdict
+# path: monitor records it and proceeds, block refuses with DelphiBlockedError.
+# A raw ``FailClosedError`` is never what the host sees.
+
+import logging                                                      # noqa: E402
+
+from xaidr import DelphiBlockedError                                # noqa: E402
+
+
+class _BadReturn(SensorExtension):
+    """Returns a truthy value that is not a Mapping."""
+
+    name = "acme-bad-return"
+
+    def __init__(self, value):
+        self._value = value
+
+    def outbound_headers(self, dest):
+        return self._value
+
+
+def _post_once(sensor):
+    client = sensor.protect_http(httpx.Client())
+    cap = _Capture()
+    cap.bind(client)
+    client.post("https://h.example/x", json={})
+    return cap.seen["post"]
+
+
+@pytest.mark.parametrize("bad", [
+    "x-acme-tenant: t-1",            # a str: truthy, no .items()
+    (("x-acme-tenant", "t-1"),),     # a tuple of pairs: truthy, no .items()
+    42,                              # an int
+    {1: "t-1"},                      # a Mapping with a non-str key: no .lower()
+    {"x-acme-tenant": 7},            # a Mapping with a non-str value
+], ids=["str", "tuple", "int", "int-key", "int-value"])
+def test_outbound_headers_bad_return_never_reaches_host(bad, caplog):
+    sensor = Sensor(agent_id="egress-test",
+                    extensions=[_BadReturn(bad),
+                                _AddHeaders({"X-Acme-Other": "ok"})])
+    with caplog.at_level(logging.ERROR, logger="xaidr.sensor"):
+        try:
+            seen = _post_once(sensor)
+        except Exception as exc:   # pragma: no cover - the defect under test
+            pytest.fail(
+                "an extension's malformed outbound_headers return raised into "
+                f"the host's request: {type(exc).__name__}")
+    # The request went out, with the sensor's header and the next extension's.
+    assert seen[SOURCE_AGENT] == "egress-test"
+    assert seen["X-Acme-Other"] == "ok"
+    # Nothing from the malformed return landed.
+    assert not any(k.lower() == "x-acme-tenant" for k in seen), seen
+    hits = [r for r in caplog.records
+            if "acme-bad-return" in r.getMessage()
+            and "outbound_headers" in r.getMessage()]
+    assert len(hits) == 1, f"expected one fault line, got {len(hits)}"
+
+
+def test_outbound_headers_bad_return_is_logged_once_per_sensor(caplog):
+    sensor = Sensor(agent_id="egress-test", extensions=[_BadReturn(42)])
+    with caplog.at_level(logging.ERROR, logger="xaidr.sensor"):
+        for _ in range(3):
+            _post_once(sensor)
+    hits = [r for r in caplog.records if "acme-bad-return" in r.getMessage()]
+    assert len(hits) == 1, f"expected one fault line over three requests, got {len(hits)}"
+
+
+def test_outbound_headers_fault_under_fail_closed_monitor_proceeds():
+    """``controls`` closed, monitor: the fault is a verdict, the verdict is
+    softened to flagged, and the request goes out. No raw FailClosedError."""
+    sensor = Sensor(agent_id="egress-test", enforcement_mode="monitor",
+                    fail_closed=("controls",), extensions=[_ThrowingHeaders()])
+    try:
+        seen = _post_once(sensor)
+    except Exception as exc:   # pragma: no cover - the defect under test
+        pytest.fail(
+            "a fail-closed fault in outbound_headers raised a raw "
+            f"{type(exc).__name__} into a MONITOR sensor's host request")
+    assert seen[SOURCE_AGENT] == "egress-test"
+
+
+def test_outbound_headers_fault_under_fail_closed_block_refuses_in_band():
+    """``controls`` closed, block: the request is refused with the one exception
+    type this boundary already raises, never with FailClosedError itself."""
+    from xaidr.failclosed import FailClosedError
+
+    sensor = Sensor(agent_id="egress-test", enforcement_mode="block",
+                    fail_closed=("controls",), extensions=[_ThrowingHeaders()])
+    client = sensor.protect_http(httpx.Client())
+    cap = _Capture()
+    cap.bind(client)
+    with pytest.raises(DelphiBlockedError) as exc:
+        client.post("https://h.example/x", json={})
+    assert not isinstance(exc.value, FailClosedError)
+    assert exc.value.result.action == "blocked"
+    assert "post" not in cap.seen, "a refused request was sent anyway"

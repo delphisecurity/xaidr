@@ -4879,19 +4879,49 @@ class ProtectedHttpClient:
             host = self._extract_host(dest)
             view = DestinationView(host=host, dest_id=host)
             seen = {name.lower() for name in out}
+            # Under ``fail_closed=("controls",)`` a hook fault is a VERDICT, and
+            # it travels the verdict path once the walk is done (below), never
+            # as a raw FailClosedError out of a header merge. It is collected
+            # rather than raised mid-loop so one broken extension does not stop
+            # the next one being consulted.
+            closed: list = []
+
+            def report(extension, exc):
+                try:
+                    self._sensor._extension_failed(extension, "outbound_headers", exc)
+                except _FailClosedError as fc:
+                    closed.append(fc)
+
             for extension in self._sensor._extensions:
                 try:
                     extra = extension.outbound_headers(view)
+                    if not extra:
+                        continue
+                    # EVERY shape check sits inside the ``try``. A truthy
+                    # non-Mapping has no ``.items()`` and a non-str name has no
+                    # ``.lower()``; both raised into the host's request on the
+                    # merge as first written. The whole return is validated
+                    # BEFORE any of it is merged, so a malformed return drops
+                    # all of that extension's headers rather than half of them.
+                    if not isinstance(extra, Mapping):
+                        raise TypeError(
+                            f"outbound_headers() returned {type(extra).__name__}, "
+                            "not a Mapping")
+                    items = []
+                    for name, value in extra.items():
+                        if not isinstance(name, str) or not isinstance(value, str):
+                            raise TypeError(
+                                "outbound_headers() returned a header whose name "
+                                f"or value is not a str ({type(name).__name__}: "
+                                f"{type(value).__name__})")
+                        items.append((name, value))
                 except Exception as exc:
-                    self._sensor._extension_failed(
-                        extension, "outbound_headers", exc)
+                    report(extension, exc)
                     continue
-                if not extra:
-                    continue
-                for name, value in extra.items():
+                for name, value in items:
                     if name.lower() in seen:
-                        self._sensor._extension_failed(
-                            extension, "outbound_headers",
+                        report(
+                            extension,
                             _HeaderCollisionError(
                                 f"outbound_headers() tried to overwrite open "
                                 f"header {name!r}; the extension's value was "
@@ -4900,6 +4930,18 @@ class ProtectedHttpClient:
                         continue
                     out[name] = value
                     seen.add(name.lower())
+            if closed:
+                # The same shape ``_check_destination`` gives a closed fault:
+                # mode applies inside ``_fail_closed_result`` (monitor records
+                # it as ``flagged`` and the request proceeds), and a halting
+                # verdict is raised as the one exception type this boundary
+                # already raises.
+                fc = closed[0]
+                verdict = self._sensor._fail_closed_result(
+                    "http_request", fc.group, fc.detail)
+                if verdict.must_halt:
+                    raise DelphiBlockedError(
+                        verdict, message=f"Request refused: {fc}")
         return out
 
     def post(self, url, *, json=None, content=None, headers=None, **kwargs):
