@@ -187,6 +187,23 @@ class ScanResult:
     # sensor sets it on every result it returns or raises.
     found_action: Optional[str] = field(default=None, compare=False, repr=False)
 
+    # ── scan id (1.22.0) — the ``data.scanId`` of this scan's telemetry event ─
+    #
+    # Minted ONCE per scan, at the emitter, and put on the event and on the
+    # result together, so a caller holding the result can name the telemetry
+    # row it belongs to. The gateway attestation names this id and Core joins
+    # it to the row. Every exit of scan, scan_a2a and scan_tool_call sets it:
+    # the main path, a gate, fail-closed, not-scannable, scan-error,
+    # circuit-open, the value-origin block and a destination block; an S6
+    # transform that rebuilds the result keeps it. When a fail-closed group
+    # decides AFTER a completed scan (``controls`` or ``bounds``), two rows
+    # exist and the result names the fail-closed one, the verdict the host
+    # received. A gate that returns an object that is not a ScanResult is
+    # not stamped, so its result has no id while its event has one. Twelve
+    # hex characters, as the event's. ``compare=False``/``repr=False`` as for
+    # found_action: an id is not part of a verdict's identity.
+    scan_id: Optional[str] = field(default=None, compare=False, repr=False)
+
     @property
     def is_blocked(self) -> bool:
         """True ONLY for a denial. Deliberately does NOT cover

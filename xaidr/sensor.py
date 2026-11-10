@@ -1109,6 +1109,7 @@ class DelphiSensor:
         """
         action = self._fail_closed.verdict(group)
         rule = FAIL_CLOSED_RULES.get(group, "FAIL_CLOSED")
+        scan_id = uuid4().hex[:12]        # one id: the event's and the result's
         result = ScanResult(
             action=action,
             score=1.0,
@@ -1117,6 +1118,7 @@ class DelphiSensor:
             latency_ms=0,
             input_status="fail_closed",
             found_action=action,        # the group's verdict, before the downgrade
+            scan_id=scan_id,
         )
         logger.error(
             "xaidr: FAIL-CLOSED [%s] on %s -> %s (%s). The operator configured "
@@ -1128,7 +1130,7 @@ class DelphiSensor:
             phash = safe_content_hash(prompt) if isinstance(prompt, str) else None
             data = {
                 "timestamp": utc_now_rfc3339(),
-                "scanId": uuid4().hex[:12],
+                "scanId": scan_id,
                 "agentId": self.agent_id,
                 "action": action,
                 "score": 1.0,
@@ -1601,6 +1603,7 @@ class DelphiSensor:
         its own category/rule so an operator can tell a breaker halt from a
         content block at a glance.
         """
+        scan_id = uuid4().hex[:12]        # one id: the event's and the result's
         result = ScanResult(
             action="blocked",
             score=1.0,
@@ -1608,11 +1611,12 @@ class DelphiSensor:
             rules=[CIRCUIT_OPEN_RULE],
             latency_ms=0,
             found_action="blocked",
+            scan_id=scan_id,
         )
         try:
             data = {
                 "timestamp": utc_now_rfc3339(),
-                "scanId": uuid4().hex[:12],
+                "scanId": scan_id,
                 "agentId": self.agent_id,
                 "action": "blocked",
                 "score": 1.0,
@@ -1649,15 +1653,19 @@ class DelphiSensor:
         # A gated verdict never reaches _apply_mode, so what the gate returned
         # is what a block-mode sensor returns too: stamp it as found when the
         # extension did not say otherwise.
-        if isinstance(result, ScanResult) and result.found_action is None:
+        scan_id = uuid4().hex[:12]        # one id: the event's and the result's
+        if isinstance(result, ScanResult):
+            stamps = {"scan_id": scan_id}
+            if result.found_action is None:
+                stamps["found_action"] = result.action
             try:
-                result = replace(result, found_action=result.action)
+                result = replace(result, **stamps)
             except Exception:
                 pass                     # a subclass replace() cannot rebuild: unstamped
         try:
             data = {
                 "timestamp": utc_now_rfc3339(),
-                "scanId": uuid4().hex[:12],
+                "scanId": scan_id,
                 "agentId": self.agent_id,
                 "action": result.action,
                 "score": float(result.score),
@@ -1760,14 +1768,20 @@ class DelphiSensor:
                     "already recorded the original verdict, so a stricter "
                     "return would bypass both. Use gate() to halt a call."
                 )
-            # found is what the sensor FOUND, and a transform softens what the
-            # host receives; a candidate rebuilt without the field keeps it.
-            if (isinstance(candidate, ScanResult) and candidate.found_action is None
-                    and getattr(before, "found_action", None) is not None):
-                try:
-                    candidate = replace(candidate, found_action=before.found_action)
-                except Exception:
-                    pass                 # a subclass replace() cannot rebuild: unstamped
+            # found is what the sensor FOUND, and scan_id names the row already
+            # emitted; a transform softens what the host receives, and a
+            # candidate rebuilt without either field keeps both.
+            if isinstance(candidate, ScanResult):
+                stamps = {}
+                if candidate.found_action is None and getattr(before, "found_action", None):
+                    stamps["found_action"] = before.found_action
+                if candidate.scan_id is None and getattr(before, "scan_id", None):
+                    stamps["scan_id"] = before.scan_id
+                if stamps:
+                    try:
+                        candidate = replace(candidate, **stamps)
+                    except Exception:
+                        pass             # a subclass replace() cannot rebuild: unstamped
             result = candidate
         return result
 
@@ -1951,6 +1965,7 @@ class DelphiSensor:
         Fail OPEN (allowed, score 0) — a wrong-typed input is a caller bug, not
         an attack — but emit a telemetry event marking it so the bug is visible.
         No raw content is carried (there is none to hash)."""
+        scan_id = uuid4().hex[:12]        # one id: the event's and the result's
         result = ScanResult(
             action="allowed",
             score=0.0,
@@ -1959,10 +1974,11 @@ class DelphiSensor:
             latency_ms=0,
             input_status="not_scannable",
             found_action="allowed",
+            scan_id=scan_id,
         )
         data = {
             "timestamp": utc_now_rfc3339(),
-            "scanId": uuid4().hex[:12],
+            "scanId": scan_id,
             "agentId": self.agent_id,
             "action": "allowed",
             "score": 0.0,
@@ -2031,6 +2047,7 @@ class DelphiSensor:
             latency_ms=0,
             input_status="scan_error",
             found_action="allowed",
+            scan_id=scan_id,
         )
         try:
             phash = safe_content_hash(prompt) if isinstance(prompt, str) else None
@@ -2390,10 +2407,12 @@ class DelphiSensor:
             agent_id=self.agent_id,
             direction=direction,
         )
+        scan_id = uuid4().hex[:12]        # one id: the event's and the result's
+        result = replace(result, scan_id=scan_id)
 
         data = {
             "timestamp": utc_now_rfc3339(),
-            "scanId": uuid4().hex[:12],
+            "scanId": scan_id,
             "agentId": self.agent_id,
             "action": result.action,
             "score": result.score,
@@ -2660,6 +2679,7 @@ class DelphiSensor:
                     action = "blocked"
                     found = "blocked"
 
+        scan_id = uuid4().hex[:12]        # one id: the event's and the result's
         result = ScanResult(
             action=action,
             score=round(score, 3),
@@ -2667,11 +2687,12 @@ class DelphiSensor:
             rules=rules,
             latency_ms=result.latency_ms,
             found_action=found,
+            scan_id=scan_id,
         )
 
         data = {
             "timestamp": utc_now_rfc3339(),
-            "scanId": uuid4().hex[:12],
+            "scanId": scan_id,
             "agentId": self.agent_id,
             "action": result.action,
             "score": result.score,
@@ -2836,7 +2857,7 @@ class DelphiSensor:
             # valueOrigin reaches this event through _enqueue_event, behind the
             # consumer gate (M9). Passing it here explicitly, as 3daf41f did,
             # bypassed the gate: a result_unread block sent a value the Brain rejects.
-            self._emit_gate_verdict(result, "value_origin", "tool_call", toolName=name)
+            result = self._emit_gate_verdict(result, "value_origin", "tool_call", toolName=name)
         except Exception:
             pass                                 # telemetry never decides a verdict
         try:
@@ -3522,9 +3543,10 @@ class DelphiSensor:
         _scan_ms = round((time.perf_counter() - _t0) * 1000, 3)
         _canonical_args = _canonical_arguments(arguments)
 
+        scan_id = uuid4().hex[:12]        # one id: the event's and the result's
         result = ScanResult(
             action=action, score=score, category=category, rules=rules,
-            latency_ms=_scan_ms, found_action=found,
+            latency_ms=_scan_ms, found_action=found, scan_id=scan_id,
         )
 
         # Emit telemetry (mirrors the scan() enqueue shape, direction=tool_call)
@@ -3534,7 +3556,7 @@ class DelphiSensor:
         )
         data = {
             "timestamp": utc_now_rfc3339(),
-            "scanId": uuid4().hex[:12],
+            "scanId": scan_id,
             "agentId": self.agent_id,
             "action": action,
             "score": score,
@@ -4695,7 +4717,7 @@ class ProtectedHttpClient:
         ascii_host = self._idna(host)
         return [ascii_host] if ascii_host == host else [ascii_host, host]
 
-    def _emit_destination_block(self, result: ScanResult, dest_id: Optional[str]) -> None:
+    def _emit_destination_block(self, result: ScanResult, dest_id: Optional[str]) -> ScanResult:
         """Emit ONE telemetry event for a destination-level block.
 
         Destination blocks raise before any scan_* method runs, so without this
@@ -4710,12 +4732,21 @@ class ProtectedHttpClient:
         NEVER raises and NEVER swallows the block: it is called immediately
         before ``raise DelphiBlockedError`` and has its own guard, so an emit
         fault cannot be mistaken for a fail-open by the caller's handler.
+
+        Returns the result carrying the event's ``scan_id`` (the caller raises
+        THAT one), or the result it was given when it cannot be stamped.
         """
+        scan_id = uuid4().hex[:12]        # one id: the event's and the result's
+        if isinstance(result, ScanResult):
+            try:
+                result = replace(result, scan_id=scan_id)
+            except Exception:
+                pass
         try:
             dest = dest_id or "unknown"
             data = {
                 "timestamp": utc_now_rfc3339(),
-                "scanId": uuid4().hex[:12],
+                "scanId": scan_id,
                 "agentId": self._sensor.agent_id,
                 "action": result.action,
                 "score": result.score,
@@ -4746,6 +4777,7 @@ class ProtectedHttpClient:
                 )
             except Exception:
                 pass
+        return result
 
     def _check_destination(self, url: str, json_body: dict | None = None) -> None:
         """Destination-level block: blocked-URL list + local deny-destination
@@ -4818,7 +4850,7 @@ class ProtectedHttpClient:
                             decision = replace(decision, found_action=decision.action)
                         except Exception:
                             pass
-                    self._emit_destination_block(decision, view.dest_id)
+                    decision = self._emit_destination_block(decision, view.dest_id)
                     raise DelphiBlockedError(
                         decision,
                         message=(f"Destination '{view.dest_id}' blocked by "
@@ -4855,7 +4887,7 @@ class ProtectedHttpClient:
                         f"matches pattern '{blocked_url}'"
                     )
                     # Audit record BEFORE the raise — host only, no URL.
-                    self._emit_destination_block(result, dest_id)
+                    result = self._emit_destination_block(result, dest_id)
                     raise DelphiBlockedError(result)
 
             # 2. Local deny-destination YAML policy (host-based, structured).
@@ -4902,7 +4934,7 @@ class ProtectedHttpClient:
                         )
                         # Audit record BEFORE the raise — dest_id is the host (or
                         # the inferred destination agent), never the URL.
-                        self._emit_destination_block(result, dest_id)
+                        result = self._emit_destination_block(result, dest_id)
                         raise DelphiBlockedError(
                             result,
                             message=f"Destination '{dest_id}' blocked by policy",
