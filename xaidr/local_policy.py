@@ -19,10 +19,16 @@ Composition (policy-as-overlay, STRICTER WINS):
   over-permissive cannot disable the detector.
 
 Fail-safe: a malformed policy file logs a warning and falls through to
-detection-only. A policy error never crashes the agent and never blocks-all.
-A malformed policy passed to ``set_policy()`` is refused and the policy already
-in force keeps enforcing (keep-last-good, see ``adopt_policy``). A policy file
-with a duplicate YAML key is refused rather than keeping the last value.
+detection-only, and a policy error never blocks-all. A malformed policy passed
+to ``set_policy()`` is refused and the policy already in force keeps enforcing
+(keep-last-good, see ``adopt_policy``). A policy file with a duplicate YAML key
+is refused rather than keeping the last value.
+
+``value_origin`` is not a policy setting, and a policy that sets it raises:
+``ValueOriginEnforcementUnavailable`` for enforcement in any spelling, a
+``ValueError`` for any other value (value origin is set on the Sensor). A policy
+file that sets it raises at construction; ``set_policy()`` with one raises and
+the policy already in force stays in force.
 
 Policy YAML format (mirrors the engine's action_policy structure)::
 
@@ -127,8 +133,10 @@ def load_policy(
 ) -> Optional[dict]:
     """Load and parse a policy from a file (or the conventional default).
 
-    Returns a parsed policy dict, or None if there is no policy / it was
-    malformed (fail-safe: never raises). Logs what it loaded.
+    Returns a parsed policy dict, or None if there is no policy or it is
+    malformed (logged, not raised). A policy that sets ``value_origin`` raises:
+    ``ValueOriginEnforcementUnavailable`` for enforcement in any spelling, a
+    ``ValueError`` for any other value. Logs what it loaded.
     """
     path = policy_file
     if path is None and auto_default:
@@ -178,7 +186,8 @@ def set_policy_dict(
     *,
     extra_conditions: Optional[Mapping[str, Any]] = None,
 ) -> Optional[dict]:
-    """Parse a policy supplied programmatically as a dict. Fail-safe (None on bad).
+    """Parse a policy supplied programmatically as a dict: None if it is malformed.
+    A policy that sets ``value_origin`` raises, as in ``load_policy``.
 
     Takes `extra_conditions` for the same reason `load_policy` does: a policy
     set at RUNTIME must accept the same extension-supplied condition names a

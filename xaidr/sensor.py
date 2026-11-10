@@ -1750,9 +1750,12 @@ class DelphiSensor:
     def set_policy(self, policy: dict | None) -> bool:
         """Set the local authorization policy from a dict.
 
-        Returns True if the policy was applied. A refused policy returns False
-        and leaves the policy that was already in force (an earlier
+        Returns True if the policy was applied. A malformed policy returns
+        False and leaves the policy that was already in force (an earlier
         ``set_policy()``, or the policy file loaded at construction) enforcing.
+        A policy that sets ``value_origin`` raises
+        (``ValueOriginEnforcementUnavailable`` for enforcement in any spelling, a
+        ``ValueError`` for any other value) and leaves that policy enforcing.
         ``None`` is an explicit clear: it removes the policy and returns False.
         """
         if policy is None:
