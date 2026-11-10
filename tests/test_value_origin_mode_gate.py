@@ -1,12 +1,22 @@
 """The structural gate: no public route asks for value-origin enforcement and gets
 RECORD instead (owner, 2026-11-09).
 
-Not a list of entry points. The gate walks every public callable (everything in
-``xaidr.__all__`` and ``xaidr.value_origin.__all__``, and the public functions and
-classes of ``xaidr.integrations.*``) and every parameter named like ``mode`` or
-``value_origin``, and, where a callable forwards ``**kwargs`` to a sensor,
-``value_origin=`` through them. It calls each with every spelling of enforcement,
-alone and beside an existing sensor wherever the callable takes ``sensor=``.
+Not a list of entry points. The gate walks exactly these public names:
+
+* every name in ``xaidr.__all__``;
+* every name in ``xaidr.value_origin.__all__``;
+* in each module of ``xaidr.integrations`` whose name has no leading underscore,
+  every name without one that the module itself defines (a superset of the one
+  ``__all__`` there, ``xaidr.integrations.web``'s).
+
+Of each class among them it walks the class and its public functions. It takes
+every parameter named like ``mode`` or ``value_origin``, and, where a callable
+forwards ``**kwargs`` to a sensor, ``value_origin=`` through them, and calls each
+with every spelling of enforcement, alone and beside an existing sensor wherever
+the callable takes ``sensor=``. It builds an instance of every class among those
+names that it can (an enum by its first member) and calls the methods that take a
+policy on it; the classes it cannot build are listed exactly in
+``CANNOT_INSTANTIATE``.
 
 * A value-origin mode (``value_origin``, or ``mode`` in ``xaidr.value_origin``)
   must raise ``ValueOriginEnforcementUnavailable``.
@@ -20,6 +30,7 @@ A framework not installed is a skip, unless ``XAIDR_GATE_REQUIRE_FRAMEWORKS=1``
 from __future__ import annotations
 
 import contextlib
+import enum
 import importlib
 import inspect
 import io
@@ -80,6 +91,21 @@ SAMPLES = {"agent_id": lambda: "gate", "enforcement_mode": lambda: "monitor",
            "scan_mode": lambda: "tool_call", "mode": lambda: "record"}
 
 
+def _public_names():
+    """``(label, object, module)`` for every public name the gate walks (the module
+    docstring lists them)."""
+    for mod in (xaidr, vo):
+        for name in mod.__all__:
+            yield f"{mod.__name__}.{name}", getattr(mod, name), mod.__name__
+    for m in pkgutil.iter_modules(xaidr.integrations.__path__):
+        if m.name.startswith("_"):
+            continue
+        mod = importlib.import_module(f"xaidr.integrations.{m.name}")
+        for name, obj in sorted(vars(mod).items()):
+            if not name.startswith("_") and getattr(obj, "__module__", None) == mod.__name__:
+                yield f"{mod.__name__}.{name}", obj, mod.__name__
+
+
 def _public():
     """``[(label, callable, module)]`` for every public callable."""
     out, seen = [], set()
@@ -97,17 +123,8 @@ def _public():
             if lab not in seen:
                 seen.add(lab)
                 out.append((lab, t, module))
-    for name in xaidr.__all__:
-        add(f"xaidr.{name}", getattr(xaidr, name), "xaidr")
-    for name in vo.__all__:
-        add(f"xaidr.value_origin.{name}", getattr(vo, name), "xaidr.value_origin")
-    for m in pkgutil.iter_modules(xaidr.integrations.__path__):
-        if m.name.startswith("_"):
-            continue
-        mod = importlib.import_module(f"xaidr.integrations.{m.name}")
-        for name, obj in sorted(vars(mod).items()):
-            if not name.startswith("_") and getattr(obj, "__module__", None) == mod.__name__:
-                add(f"xaidr.integrations.{m.name}.{name}", obj, mod.__name__)
+    for label, obj, module in _public_names():
+        add(label, obj, module)
     return out
 
 
@@ -243,28 +260,20 @@ def test_a_value_that_is_not_a_mode_is_a_plain_error_never_record(bad):
 # ── instances: methods are called on real objects ────────────────────────────
 
 def _classes():
-    out = {}
-    for name in xaidr.__all__:
-        obj = getattr(xaidr, name)
-        if inspect.isclass(obj):
-            out[f"xaidr.{name}"] = obj
-    for m in pkgutil.iter_modules(xaidr.integrations.__path__):
-        if m.name.startswith("_"):
-            continue
-        mod = importlib.import_module(f"xaidr.integrations.{m.name}")
-        for name, obj in sorted(vars(mod).items()):
-            if (inspect.isclass(obj) and not name.startswith("_")
-                    and getattr(obj, "__module__", None) == mod.__name__):
-                out[f"xaidr.integrations.{m.name}.{name}"] = obj
-    return out
+    """Every class among the public names the gate walks."""
+    return {label: obj for label, obj, _m in _public_names() if inspect.isclass(obj)}
 
 
 def _build(cls):
-    """An instance from SAMPLES (a Sensor gets a null reporter), or the reason not."""
+    """An instance from SAMPLES (a Sensor gets a null reporter, an enum is its first
+    member), or the reason not."""
     if cls is xaidr.Sensor:
         return _sensor(), None
     if issubclass(cls, BaseException):
         return None, "an exception or warning class"
+    if issubclass(cls, enum.Enum):
+        members = list(cls)
+        return (members[0], None) if members else (None, "an enum with no members")
     try:
         params = inspect.signature(cls).parameters
     except (TypeError, ValueError):
@@ -302,6 +311,12 @@ CANNOT_INSTANTIATE = {
     "xaidr.ToolView": "requires 'name'",
     "xaidr.integrations.web.RequestScopeASGIMiddleware": "requires 'app'",
     "xaidr.integrations.web.RequestScopeMiddleware": "requires 'app'",
+    "xaidr.value_origin.Authority": "requires 'scheme'",
+    "xaidr.value_origin.CallVerdict": "requires 'row_state'",
+    "xaidr.value_origin.DestinationFinding": "requires 'path'",
+    "xaidr.value_origin.Finding": "requires 'path'",
+    "xaidr.value_origin.SourceDesignation": "requires 'tool'",
+    "xaidr.value_origin.Span": "requires 'text'",
 }
 
 
