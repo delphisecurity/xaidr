@@ -36,7 +36,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 
-from . import _parent_scan
+from .value_origin import _parent_scan
 import dataclasses
 import functools
 import inspect
@@ -774,7 +774,7 @@ _REQUEST_SCOPES: contextvars.ContextVar[tuple] = contextvars.ContextVar(
 # means "search wider": a tool call with no input scan in its context has no
 # parent, and nothing looks one up by flow, correlation or run tree. The value
 # lives in a cell a request shares with the contexts copied from it
-# (``xaidr._parent_scan``), which is what reaches a LangGraph tools node.
+# (``xaidr.value_origin._parent_scan``), which is what reaches a LangGraph tools node.
 
 
 def record_input_scan(scan_id: str | None) -> None:

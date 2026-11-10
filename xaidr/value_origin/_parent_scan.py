@@ -19,8 +19,9 @@ set by an output scan, and None MEANS not evaluated. None never means "search
 wider": a tool call with no input scan in its context has no parent, and nothing
 looks one up by flow, correlation or run tree.
 
-No imports from the package, so both ``provenance_chain`` and the ledger can
-read it.
+Stdlib only, inside ``value_origin`` so the vendorable core stays self-contained
+(``tests/value_origin_conformance/test_self_contained.py``); ``provenance_chain``
+reads it from here.
 """
 
 from __future__ import annotations

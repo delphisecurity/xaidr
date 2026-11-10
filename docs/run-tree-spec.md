@@ -669,7 +669,7 @@ skipped.
   1.1.3 under `create_agent`. A value set by a plain ContextVar in the
   `before_model` node never reaches the tools node (each node runs in a copy of
   the context). 1.22.0 holds the parent in a one-slot cell that the request opens
-  outside every node (`xaidr/_parent_scan.py`, the shape the value-origin ledger
+  outside every node (`xaidr/value_origin/_parent_scan.py`, the shape the value-origin ledger
   uses), and the tools node then names the input: `tool_call ... parentScanId=
   <the input's scanId>` (`scripts/release_fields_report.py`).
 - **The handler's per-callback cost:** below this benchmark's resolution (D4).

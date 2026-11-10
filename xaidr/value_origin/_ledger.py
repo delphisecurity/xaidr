@@ -89,7 +89,7 @@ import secrets
 import threading
 from contextvars import ContextVar
 
-from .. import _parent_scan
+from . import _parent_scan
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ._authority import (classify_value, key_chain, prose_candidates, result_candidates,
