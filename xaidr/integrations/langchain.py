@@ -150,6 +150,9 @@ def delphi_middleware(
             "Install with: pip install 'xaidr[langchain]'"
         ) from exc
 
+    # A misspelled keyword raises, with or without sensor= (autopatch's check).
+    from ..autopatch import _reject_unknown_sensor_kwargs
+    _reject_unknown_sensor_kwargs(sensor_kwargs, "delphi_middleware()")
     if sensor is None:
         sensor = DelphiSensor(
             agent_id=agent_id,

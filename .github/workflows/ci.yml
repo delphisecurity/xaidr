@@ -445,11 +445,12 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           cache: pip
-      - name: Install (package + pinned LangChain and Haystack)
+      - name: Install (package with its policy extra + pinned LangChain and Haystack)
         run: |
           python -m pip install --upgrade pip
-          pip install . pytest "langchain-core==1.6.1" "langchain==1.4.1" "haystack-ai==3.4.1"
-          pip list 2>/dev/null | grep -iE '^(langchain|haystack)'
+          # [policy] brings PyYAML: the gate writes value_origin into policy files.
+          pip install ".[policy]" pytest "langchain-core==1.6.1" "langchain==1.4.1" "haystack-ai==3.4.1"
+          pip list 2>/dev/null | grep -iE '^(langchain|haystack|pyyaml)'
       - name: Run the gate and the hold tests against the installed package
         env:
           XAIDR_GATE_REQUIRE_FRAMEWORKS: "1"
@@ -469,7 +470,7 @@ jobs:
           broken = [c.get("name") for c in cases
                     if c.find("failure") is not None or c.find("error") is not None]
           print(f"collected={len(cases)} skipped={len(skipped)} failed/errored={len(broken)}")
-          if len(cases) < 140 or skipped or broken:
+          if len(cases) < 190 or skipped or broken:   # 190 collected locally, frameworks required
               sys.exit(f"GUARD RED: collected {len(cases)}, skipped {skipped[:5]}, broken {broken[:5]}")
           print("GUARD GREEN")
           PY

@@ -540,6 +540,9 @@ def delphi_hooks(
     """
     _import_hooks()
     from haystack.hooks.protocol import VALID_HOOK_POINTS
+    # A misspelled keyword raises, with or without sensor= (autopatch's check).
+    from ..autopatch import _reject_unknown_sensor_kwargs
+    _reject_unknown_sensor_kwargs(sensor_kwargs, "delphi_hooks()")
     if sensor is None:
         sensor = DelphiSensor(
             agent_id=agent_id,

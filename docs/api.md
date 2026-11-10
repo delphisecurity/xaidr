@@ -60,8 +60,9 @@ without also stopping on `flagged`. The protected HTTP wrapper raises
 Value origin records in 1.22.0, and value-origin enforcement is available in a
 later release. Asking for it, `value_origin="enforce"` in any spelling or
 `Mode.ENFORCE`, from `Sensor`, `protect()`, `delphi_middleware()`,
-`delphi_hooks()`, `xaidr.value_origin.validate_mode` or `should_block`, raises
-`ValueOriginEnforcementUnavailable`, a `ValueError` subclass:
+`delphi_hooks()`, `xaidr.value_origin.validate_mode` or `should_block`, or in a
+policy file or `set_policy()`, raises `ValueOriginEnforcementUnavailable`, a
+`ValueError` subclass:
 
 ```python
 from xaidr import Sensor, ValueOriginEnforcementUnavailable

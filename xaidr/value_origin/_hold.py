@@ -7,7 +7,8 @@ Every value-origin mode in the package passes through one validator,
 keywords on (``protect(...)``, the LangChain and Haystack integrations), and
 ``should_block``. Enforcement in any spelling or type is refused; a value that is
 not a mode is a plain ValueError. Beside an existing ``sensor=``, ``value_origin``
-is refused, never dropped (``refuse_beside_sensor``). None of them falls back to
+is refused, never dropped (``refuse_beside_sensor``), and so is a ``value_origin``
+key in a policy file or ``set_policy`` (``refuse_in_policy``). None of them falls back to
 RECORD (tests/test_value_origin_mode_gate.py walks every public route).
 
 The enforcement code itself is kept and tested. It is reachable only inside
@@ -55,6 +56,19 @@ def refuse_beside_sensor(kwargs) -> None:
     validate_mode(kwargs["value_origin"])
     raise ValueError(f"value_origin={kwargs['value_origin']!r} was passed together with an "
                      "existing sensor=, which has its own; set value_origin on the Sensor")
+
+
+def refuse_in_policy(raw, where: str) -> None:
+    """A ``value_origin`` key in a policy (a policy file, or ``set_policy``):
+    refused, never parsed past and never ignored. Enforcement in any spelling
+    raises ``ValueOriginEnforcementUnavailable``; any other value raises a
+    ValueError, because value origin is the Sensor's setting, not a policy's."""
+    if not isinstance(raw, dict) or "value_origin" not in raw:
+        return
+    from ._designations import validate_mode
+    validate_mode(raw["value_origin"])
+    raise ValueError(f"{where}: a policy sets value_origin={raw['value_origin']!r}; value "
+                     "origin is not a policy setting, so set value_origin on the Sensor")
 
 
 def check_enforce() -> None:

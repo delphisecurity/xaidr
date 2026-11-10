@@ -14,7 +14,11 @@ still reconcile against the whole range (docs/releasing.md, step 1).
   `value_origin.should_block`, raises `xaidr.ValueOriginEnforcementUnavailable` (a
   `ValueError`). A value that is not a mode raises `ValueError`. `value_origin`
   passed beside an existing `sensor=` is refused rather than ignored, as is an
-  `enforcement_mode` to `protect()` that is no mode. L1 and every other
+  `enforcement_mode` to `protect()` that is no mode. A misspelled keyword beside
+  `sensor=` raises a `TypeError` with a "did you mean" hint, as it does without
+  one, in `protect()`, `delphi_middleware()` and `delphi_hooks()`. A policy that
+  sets `value_origin` is refused: a policy file raises at construction, and
+  `set_policy()` raises and keeps the policy in force. L1 and every other
   enforcement are unchanged.
 - `authority_of` returns `None` for a value that real clients send to more than
   one place. `authority_of("https://corp.example@evil.test/")` is `None`, where it

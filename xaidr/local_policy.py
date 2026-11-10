@@ -156,6 +156,11 @@ def load_policy(
         logger.warning("[xaidr] could not read policy file %s: %s (detection-only)", path, exc)
         return None
 
+    # value_origin in a policy file is refused at construction, never read as a
+    # malformed file (which would fall through to detection-only): enforcement
+    # raises ValueOriginEnforcementUnavailable, anything else a ValueError.
+    from .value_origin._hold import refuse_in_policy
+    refuse_in_policy(raw, f"policy file {path}")
     policy = parse_action_policy(raw, extra_conditions=extra_conditions)
     if policy is None:
         logger.warning(
@@ -180,6 +185,8 @@ def set_policy_dict(
     policy FILE would. `Sensor.set_policy()` goes through `adopt_policy`, which
     forwards them the same way; this function has no caller in the sensor.
     """
+    from .value_origin._hold import refuse_in_policy
+    refuse_in_policy(raw, "set_policy")
     policy = parse_action_policy(raw, extra_conditions=extra_conditions)
     if policy is None:
         logger.warning("[xaidr] set_policy: malformed policy refused")
@@ -201,6 +208,12 @@ def adopt_policy(
     policy set or cleared by another thread during the parse, stays in force.
     ``in_force`` is read only to report what stayed in force.
     """
+    # value_origin in a policy raises before anything is parsed or installed, so
+    # the policy in force stays in force (keep-last-good), and the caller learns
+    # why: enforcement is available in a later release; any other value belongs
+    # on the Sensor.
+    from .value_origin._hold import refuse_in_policy
+    refuse_in_policy(raw, "set_policy")
     parsed = parse_action_policy(raw, extra_conditions=extra_conditions)
     if parsed is not None:
         return parsed

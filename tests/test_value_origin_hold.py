@@ -255,3 +255,19 @@ def test_any_other_value_origin_beside_a_sensor_says_set_it_on_the_sensor(asked)
     with pytest.raises(ValueError, match="set value_origin on the Sensor") as e:
         _quiet(lambda: xaidr.protect(sensor=s, value_origin=asked, quiet=True))
     assert type(e.value) is ValueError
+
+
+def test_a_misspelled_keyword_beside_a_sensor_is_the_manifests_error():
+    """protect()'s never-raise contract: the misspelling is the manifest's ERROR
+    (not a note), with the hint, and nothing is installed."""
+    s = _quiet(lambda: xaidr.Sensor(agent_id="hold", reporter=_Capture()))
+    m = _quiet(lambda: xaidr.protect(sensor=s, value_orign="record", quiet=True,
+                                     raise_on_config_error=False))
+    try:
+        assert m.error and "did you mean 'value_origin'" in m.error, (
+            f"protect(sensor=..., value_orign=...) gave error={m.error!r}: the misspelling "
+            "never reached the manifest's error")
+        assert not any("value_orign" in n for n in m.notes), "the misspelling was filed as a note"
+        assert m.sensor is None and not m.patched, "protect() installed something"
+    finally:
+        _quiet(m.unprotect)

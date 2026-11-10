@@ -22,12 +22,21 @@ That covers `Sensor(value_origin=...)`, `protect(...)` and the LangChain and
 Haystack integrations (which pass the keyword to the sensor), `validate_mode`, and
 `should_block(..., mode=...)`. Where one of them is also given an existing
 `sensor=`, `value_origin` is never dropped: enforcement is refused, and any other
-value raises a `ValueError` saying to set it on the Sensor. Where a ruling below
+value raises a `ValueError` saying to set it on the Sensor. A misspelled keyword
+beside `sensor=` raises the same `TypeError`, with its "did you mean" hint, as it
+does without one (`protect(..., raise_on_config_error=False)` returns it as the
+manifest's error and installs nothing). `value_origin` is not a policy setting:
+in a policy file the sensor raises at construction, and `set_policy()` raises
+and keeps the last good policy, enforcement with
+`ValueOriginEnforcementUnavailable` and any other value with a `ValueError`
+saying to set it on the Sensor. Where a ruling below
 says a wire value blocks under ENFORCE, it states what that enforcement blocks.
 *Corrected 2026-11-09:* this paragraph said every public way refuses when
 `should_block(cv, mode="enforce")` still answered `False` and `protect`,
 `delphi_middleware` and `delphi_hooks` dropped `value_origin` beside an existing
-`sensor=`. *Pinned by:* `tests/test_value_origin_mode_gate.py`, which walks every
+`sensor=`; and again the same day, when a misspelled keyword beside `sensor=` was
+still filed as a note, and a policy carrying `value_origin` read as a malformed
+policy (detection-only at startup, `False` from `set_policy()`). *Pinned by:* `tests/test_value_origin_mode_gate.py`, which walks every
 public callable and every mode-named parameter, and
 `tests/test_value_origin_hold.py`.
 

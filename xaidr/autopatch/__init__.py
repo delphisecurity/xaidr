@@ -73,7 +73,7 @@ def active_manifests() -> list[ProtectionManifest]:
     return [m for m in _ACTIVE if m.is_active]
 
 
-def _reject_unknown_sensor_kwargs(sensor_kwargs: dict) -> None:
+def _reject_unknown_sensor_kwargs(sensor_kwargs: dict, caller: str = "xaidr.protect()") -> None:
     """Fail on a keyword the Sensor constructor does not accept, and NAME it.
 
     Why this is checked here rather than left to Python's own TypeError. The
@@ -95,6 +95,11 @@ def _reject_unknown_sensor_kwargs(sensor_kwargs: dict) -> None:
     offers the nearest accepted one. It does not change WHETHER protect() raises
     — that is still ``raise_on_config_error``'s decision, unchanged — only what
     the operator reads when it does.
+
+    The same check runs beside an existing ``sensor=`` (owner, 2026-11-09): there a
+    keyword is not forwarded at all, and a misspelling would otherwise vanish into
+    a manifest note. And ``delphi_middleware`` and ``delphi_hooks`` run it too
+    (``caller`` names which function the operator called).
     """
     if not sensor_kwargs:
         return
@@ -115,11 +120,11 @@ def _reject_unknown_sensor_kwargs(sensor_kwargs: dict) -> None:
         near = difflib.get_close_matches(name, sorted(accepted), n=1, cutoff=0.6)
         hints.append(f"{name!r}" + (f" (did you mean {near[0]!r}?)" if near else ""))
     raise TypeError(
-        "xaidr.protect() was given keyword(s) the Sensor does not accept: "
+        f"{caller} was given keyword(s) the Sensor does not accept: "
         + ", ".join(hints)
-        + ". Nothing was instrumented. protect() forwards every non-boundary "
-        "keyword to Sensor(...) verbatim, so a misspelling here disables the "
-        "sensor entirely rather than being ignored. Accepted keywords: "
+        + f". Nothing was set up. {caller} forwards every non-boundary keyword to "
+        "Sensor(...) verbatim, so a misspelling here would disable the sensor "
+        "entirely rather than be ignored. Accepted keywords: "
         + ", ".join(sorted(accepted))
         + "."
     )
@@ -234,6 +239,7 @@ def protect(
             # enforcement raises ValueOriginEnforcementUnavailable, anything else a
             # ValueError saying to set it on the Sensor (value_origin/_hold.py).
             from ..value_origin._hold import refuse_beside_sensor
+            _reject_unknown_sensor_kwargs(sensor_kwargs)     # a misspelling raises here too
             refuse_beside_sensor(sensor_kwargs)
             # An enforcement_mode that is no mode is refused here too, not dropped
             # because the existing sensor's own mode wins.
