@@ -193,10 +193,10 @@ def test_no_verb_writes_the_source_agent_header_directly():
 
     from xaidr.sensor import ProtectedHttpClient
 
-    for verb in VERBS:
-        src = inspect.getsource(getattr(ProtectedHttpClient, verb))
+    for name in VERBS + ("_body_verb",):
+        src = inspect.getsource(getattr(ProtectedHttpClient, name))
         assert SOURCE_AGENT not in src, (
-            f"{verb} still writes {SOURCE_AGENT} directly instead of going "
+            f"{name} still writes {SOURCE_AGENT} directly instead of going "
             "through the helper"
         )
 
@@ -584,3 +584,13 @@ def test_destination_policy_fault_under_fail_closed_monitor_proceeds():
                     fail_closed=("controls",), extensions=[_RaisingDestination()])
     headers = _send_through_real_httpx(sensor)
     assert headers["x-delphi-source-agent"] == "egress-test"
+
+
+@pytest.mark.parametrize("value", ["v ", " v", "v\t"], ids=["trailing", "leading", "tab"])
+def test_an_s12_value_with_edge_whitespace_is_dropped_before_the_transport(value):
+    sensor = Sensor(agent_id="egress-test",
+                    extensions=[_AddHeaders({"X-Acme-Bad": value}),
+                                _AddHeaders({"X-Acme-Other": "ok"})])
+    headers = _send_through_real_httpx(sensor)
+    assert "x-acme-bad" not in headers
+    assert headers["x-acme-other"] == "ok"

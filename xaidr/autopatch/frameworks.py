@@ -131,10 +131,16 @@ def _egress_marked(request: Any) -> dict:
     ``response_scanned`` (its response is scanned there). The send seam does
     only what is left, so one request is scanned and attested once, and nothing
     the client could not see (a ``base_url``-relative destination, a ``data=``
-    body, a GET response) goes unscanned."""
+    body, a GET response) goes unscanned. Only the sensor's own ``EgressMark``
+    counts; a dict a caller puts under the same key is not a mark."""
+    from ..sensor import EgressMark
+
     extensions = getattr(request, "extensions", None)
     mark = extensions.get("xaidr.egress") if extensions else None
-    return mark if isinstance(mark, dict) else {}
+    if isinstance(mark, EgressMark):
+        return {"request_scanned": mark.request_scanned,
+                "response_scanned": mark.response_scanned}
+    return {}
 
 
 def _patch_httpx(ctx: PatchContext) -> None:

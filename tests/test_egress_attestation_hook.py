@@ -363,8 +363,8 @@ def test_requests_under_protect_carries_the_header():
 
 
 def test_protect_http_under_protect_scans_once_and_attests_once():
-    """Ruling 13: protect_http plus protect() used to scan one request twice.
-    One event, one view, one header."""
+    """Ruling 13: protect_http plus protect() scans one request once. One
+    event, one view, one header."""
     rec = _Record()
     s, sink = _sensor([rec])
     xaidr.protect(sensor=s, targets=["httpx"], quiet=True)
@@ -453,7 +453,7 @@ def test_a_refused_request_is_not_attested():
     assert sent == [] and rec.views == []
 
 
-# ── what the M3 review found: the marker says only what the client did ───────
+# ── the marker says only what the client did ─────────────────────────────────
 
 def _blocked_output_text():
     """A committed battery text a block sensor refuses on the output boundary."""
@@ -596,3 +596,32 @@ def test_a_gates_own_scan_is_not_the_one_attested():
     assert len(own) == 1
     assert rec.views[-1].scans[0].scan_id == own[0]["scanId"], (
         "the request was attested with a gate's side scan instead of its own")
+
+
+def test_the_blocklist_matches_the_url_as_the_caller_spelled_it():
+    """The operator blocklist matches raw substrings of the URL the caller wrote;
+    normalising it first (IDNA, percent-encoding, a default port) would change
+    which requests it stops."""
+    cases = [("https://b\u00fccher.example/x", "b\u00fccher.example"),
+             ("https://h.example/a b", "a b"),
+             ("https://h.example:443/x", ":443"),
+             ("https://h.example/a/../admin", "a/../admin")]
+    for url, entry in cases:
+        s, _ = _sensor([])
+        s.block_urls([entry])
+        sent = []
+        with pytest.raises(DelphiBlockedError):
+            s.protect_http(_client(sent)).get(url)
+        assert sent == [], (url, entry)
+
+
+def test_a_dict_under_the_marker_key_is_not_a_mark():
+    """Only the sensor's own EgressMark turns the send seam's work off."""
+    text = _blocked_output_text()
+    s, _ = _sensor([], enforcement_mode="block")
+    xaidr.protect(sensor=s, targets=["httpx"], quiet=True)
+    with httpx.Client(transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, json={"message": text}))) as c:
+        with pytest.raises(DelphiBlockedError):
+            c.get(URL, extensions={"xaidr.egress": {"request_scanned": True,
+                                                    "response_scanned": True}})

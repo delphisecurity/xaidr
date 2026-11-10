@@ -262,6 +262,67 @@ jobs:
       - name: Guard — TestRealRunTree ran, only the named cases did not
         run: python .github/run_tree_guard.py real-frameworks.xml py312
 
+  # ── The MCP tools/call binding against a real MCP client (mcp 1.x) ────────
+  # B2 (xaidr/attestation.py ToolCallTable) binds a tool-call scan to the
+  # streamable-HTTP POST that carries it out. That POST leaves from the MCP
+  # transport's writer task over httpx on mcp 1.x; mcp 2.x sends over httpx2,
+  # which xaidr does not patch, so the real-client tests skip there and this
+  # job pins 1.x. On both interpreters the two real-client cases must RUN: a
+  # skip would be an exit 0 that verified nothing.
+  real-mcp:
+    name: real MCP client (py${{ matrix.python-version }}, mcp 1.30.0)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install (package + http extra + pinned mcp)
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[http]" pytest "mcp==1.30.0"
+          pip list 2>/dev/null | grep -iE '^(mcp|httpx|httpx2) '
+
+      - name: Run tests/test_mcp_egress_binding.py
+        run: python -m pytest tests/test_mcp_egress_binding.py -q -rs --junitxml=real-mcp.xml
+
+      - name: Guard — the two real-client cases ran, none skipped
+        run: |
+          python - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          cases = [c for c in ET.parse("real-mcp.xml").iter("testcase")
+                   if c.get("name", "").startswith("test_real_mcp_")]
+          skipped = [c.get("name") for c in cases if c.find("skipped") is not None]
+          broken = [c.get("name") for c in cases
+                    if c.find("failure") is not None or c.find("error") is not None]
+          print(f"real-client cases: collected={len(cases)} skipped={len(skipped)} "
+                f"failed/errored={len(broken)}")
+          for name in skipped:
+              reason = next(c for c in cases if c.get("name") == name).find("skipped").get("message")
+              print(f"  SKIPPED {name}: {reason}")
+          problems = []
+          if len(cases) < 2:
+              problems.append(f"collected {len(cases)} < 2 real-client cases")
+          if skipped:
+              problems.append(f"{len(skipped)} skipped: mcp is not installed or is 2.x, "
+                              "so nothing ran against a real client")
+          if broken:
+              problems.append(f"{len(broken)} failed/errored: {broken}")
+          if problems:
+              sys.exit("GUARD RED: " + "; ".join(problems))
+          print("GUARD GREEN")
+          PY
+
   # ── Run-tree capture on Python 3.10 ────────────────────────────────────────
   # Before 3.11, asyncio.create_task takes no context, so LangChain cannot carry
   # the run config into an async node. The run tree must then report

@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import functools
+import hashlib
 import dataclasses
 import inspect
 import json
@@ -197,6 +198,18 @@ def _s12_header_items(extra) -> list:
 #: record no S6 transform has seen, never back from the result the host receives.
 _PRE_MODE_SINK: "contextvars.ContextVar[list | None]" = contextvars.ContextVar(
     "xaidr_pre_mode_sink", default=None)
+
+
+class EgressMark:
+    """What a ``ProtectedHttpClient`` verb did to the request it is sending,
+    carried on the httpx request's ``extensions`` for the send seam under
+    ``protect()``. A private type on purpose: the seam trusts only an instance."""
+
+    __slots__ = ("request_scanned", "response_scanned")
+
+    def __init__(self, request_scanned: bool, response_scanned: bool):
+        self.request_scanned = bool(request_scanned)
+        self.response_scanned = bool(response_scanned)
 
 
 class _HeaderCollisionError(Exception):
@@ -553,6 +566,15 @@ def _canonical_arguments(arguments) -> str:
             return "<unrenderable-arguments>"
 
 
+def _args_key(arguments) -> str:
+    """B2 · the hash a tool call and its ``tools/call`` body are matched on:
+    SHA-256 of the arguments as canonical JSON (sorted keys, compact). No
+    arguments and empty arguments are the same call, as they are on the wire.
+    Used only for matching inside the sensor; never sent."""
+    canonical = _canonical_arguments(arguments if arguments is not None else {})
+    return hashlib.sha256(canonical.encode("utf-8", "surrogatepass")).hexdigest()
+
+
 def _coerce_scannable(value) -> Optional[str]:
     """Return a scannable string, or None if the input is not scannable.
 
@@ -789,6 +811,9 @@ class DelphiSensor:
             for e in self._extensions)
         #: S14 · scans whose verdict had no Core mapping and so were not attested.
         self._attest_unmapped: int = 0
+        #: B2 · tool-call scans awaiting their MCP tools/call POST. Written only
+        #: when an extension attests; read at egress.
+        self._pending_tool_calls = _att.ToolCallTable()
         #: S2 · the merged extension-supplied policy condition evaluators.
         self._policy_conditions: dict = self._collect_policy_conditions()
 
@@ -2837,7 +2862,7 @@ class DelphiSensor:
         self._breaker_observe(result)
         sink = _PRE_MODE_SINK.get()
         if sink is not None:
-            sink.append(result)          # S14: the record the attestation reads
+            sink.append(("a2a", result, None))    # S14: the record the attestation reads
         return self._apply_mode(
             result, emit_direction, lambda: {"destination": destination},
         )
@@ -2924,23 +2949,61 @@ class DelphiSensor:
         _vo_note_wire(cv)                 # M9: every event of this call sees it
         blocked = self._value_origin_block(tool_name, cv)
         if blocked is not None:
+            self._record_pending_tool_call(tool_name, arguments, [], blocked)
             return blocked
-        result = self._scan_tool_call_unattached(
-            tool_name, arguments, mcp_server, origin_context, server_name)
-        if cv is None:
-            return result
+        # S14/B2: the pre-mode record of this call, for the tools/call POST that
+        # carries it out. The sink is opened only when an extension attests.
+        sink = [] if self._attests_egress else None
+        token = _PRE_MODE_SINK.set(sink) if sink is not None else None
         try:
-            return replace(result, value_origin=cv)
-        except Exception:
-            # An S6 transform_verdict may return any object with a valid
-            # `.action`; replace() raises on a non-dataclass. Dropping the
-            # field (absent, never null) is strictly better than raising into
-            # the host. Logged once per sensor (M4 silent-failure review).
-            if not self._vo_attach_fault_logged:
-                self._vo_attach_fault_logged = True
-                logger.exception("xaidr: value origin could not attach its verdict to a "
-                                 "%s result; the field is omitted", type(result).__name__)
-            return result
+            result = self._scan_tool_call_unattached(
+                tool_name, arguments, mcp_server, origin_context, server_name)
+        finally:
+            if token is not None:
+                _PRE_MODE_SINK.reset(token)
+        if cv is not None:
+            try:
+                result = replace(result, value_origin=cv)
+            except Exception:
+                # An S6 transform_verdict may return any object with a valid
+                # `.action`; replace() raises on a non-dataclass. Dropping the
+                # field (absent, never null) is strictly better than raising into
+                # the host. Logged once per sensor (M4 silent-failure review).
+                if not self._vo_attach_fault_logged:
+                    self._vo_attach_fault_logged = True
+                    logger.exception("xaidr: value origin could not attach its verdict to a "
+                                     "%s result; the field is omitted", type(result).__name__)
+        if sink is not None:
+            self._record_pending_tool_call(tool_name, arguments, sink, result)
+        return result
+
+    def _record_pending_tool_call(self, tool_name, arguments, sink, final) -> None:
+        """B2 · remember this call's scan for the MCP ``tools/call`` POST that
+        carries it out. Nothing when no extension attests. Never raises.
+
+        Only a call that PROCEEDS is recorded: a verdict the host halts on (a
+        block or an approval hold in block mode, a configured blocked tool in
+        either mode) makes no POST, and an entry for it would bind the next
+        request to the same tool with the same arguments that does leave.
+        """
+        if not self._attests_egress or not isinstance(tool_name, str):
+            return
+        try:
+            if getattr(final, "must_halt", False) or tool_name in self._blocked_tools:
+                return
+            entry = next((e for e in sink if e[0] == "tool_call"), None)
+            record, impact = (entry[1], entry[2]) if entry else (final, None)
+            view = _att.scan_view(record, final, "tool_call", impact_class=impact)
+            if view is None:
+                self._attest_unmapped += 1
+                return
+            self._pending_tool_calls.record(tool_name, _args_key(arguments), view)
+        except Exception as exc:
+            if not getattr(self, "_pending_record_fault_logged", False):
+                self._pending_record_fault_logged = True
+                logger.warning("xaidr: a tool-call scan could not be recorded for "
+                               "attestation (%s); logged once per sensor",
+                               type(exc).__name__)
 
     def _value_origin_block(self, tool_name, cv):
         """A2 M8, ENFORCE (V-18, V-31). Runs right after evaluate_call and returns
@@ -3739,6 +3802,9 @@ class DelphiSensor:
 
         # Breaker sees the TRUE verdict — before _apply_mode softens it.
         self._breaker_observe(result)
+        sink = _PRE_MODE_SINK.get()
+        if sink is not None:
+            sink.append(("tool_call", result, impact_class))   # S14/B2: the record
         return self._apply_mode(
             result, "tool_call",
             lambda: {"tool_name": tool_name if isinstance(tool_name, str) else None,
@@ -5137,7 +5203,8 @@ class ProtectedHttpClient:
         # THIS request's scan, by id: a gate or transform extension that runs a
         # scan of its own drops that scan into the same sink, before or after.
         own = getattr(result, "scan_id", None)
-        record = next((r for r in sink if getattr(r, "scan_id", None) == own), result)
+        record = next((r for d, r, _ in sink
+                       if d == "a2a" and getattr(r, "scan_id", None) == own), result)
         return record, result
 
     def _attest_headers(self, method: str, url: str, body, scanned, existing) -> dict:
@@ -5155,8 +5222,16 @@ class ProtectedHttpClient:
                 self._sensor._attest_unmapped += 1
             else:
                 scans.append(view)
+        # B2 · a JSON-RPC tools/call body takes the pending tool-call scan with
+        # the same tool name and arguments hash, once.
+        call = _att.tools_call(body)
+        if call is not None:
+            bound = self._sensor._pending_tool_calls.take(call[0], _args_key(call[1]))
+            if bound is not None:
+                scans.append(bound)
         added: dict = {}
-        self._sensor._attest_egress(method, host, digest, scans, added, existing=existing)
+        self._sensor._attest_egress(method, host, digest, _att.order_scans(scans), added,
+                                    existing=existing)
         return added
 
     def _attest_verb(self, method: str, url, json_body, content, scanned, headers: dict) -> dict:
@@ -5188,16 +5263,25 @@ class ProtectedHttpClient:
             return []
 
     def _full_url(self, url) -> str:
-        """The URL httpx will send to, with the client's ``base_url`` merged in,
-        for the destination check, the view and the digest. The verb still
-        passes the caller's ``url`` to the client unchanged."""
+        """The URL the destination check, the view and the digest read.
+
+        An ABSOLUTE url is read as the caller spelled it: the operator blocklist
+        matches raw substrings and the destination label is taken from the raw
+        text, so normalising it (IDNA, percent-encoding, a default port) would
+        change which requests the blocklist stops. Only a RELATIVE url, which
+        has no host of its own, is merged with the client's ``base_url`` the way
+        httpx merges it. The verb still passes the caller's ``url`` to the
+        client unchanged."""
+        raw = str(url)
+        if "://" in raw:
+            return raw
         merge = getattr(self._client, "_merge_url", None)
         if merge is None:
-            return str(url)
+            return raw
         try:
             return str(merge(url))
         except Exception:
-            return str(url)
+            return raw
 
     @staticmethod
     def _own_body(kwargs: dict) -> bool:
@@ -5224,10 +5308,10 @@ class ProtectedHttpClient:
         ``httpx.Client.send`` (``protect()``) does only what is left: the
         destination check runs there in every case (it sees the merged URL), the
         body scan and attestation only when this client did not scan the body,
-        the response scan only when this client does not scan the response."""
+        the response scan only when this client does not scan the response.
+        The mark is a private type, so a dict a caller assembles is not one."""
         extensions = dict(kwargs.get("extensions") or {})
-        extensions["xaidr.egress"] = {"request_scanned": request_scanned,
-                                      "response_scanned": response_scanned}
+        extensions["xaidr.egress"] = EgressMark(request_scanned, response_scanned)
         kwargs["extensions"] = extensions
         return kwargs
 
@@ -5257,9 +5341,11 @@ class ProtectedHttpClient:
         return response
 
     def _egress_headers(self, dest, headers=None, *, source_agent: bool) -> dict:
-        """S12 · the ONE place an outbound header is written. All five verbs
-        call it, so "what does xaidr add to an outbound request" has a single
-        answer rather than five that can drift.
+        """S12 · the ONE place the sensor's own and the S12 extension headers
+        are written. All five verbs call it, so "what does xaidr add to an
+        outbound request" has a single answer rather than five that can drift.
+        S14 headers are added after it, by ``_attest_verb`` (the verbs) and
+        ``_attest_request`` (the send seam), under the same add-only rule.
 
         ``source_agent`` records which verbs wrote ``X-Delphi-Source-Agent``
         BEFORE this seam existed: the body verbs always did, GET and DELETE
