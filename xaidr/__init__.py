@@ -29,7 +29,7 @@ from .autopatch import (
 # ValueError subclass, from every public entry point (value_origin/_hold.py).
 from .value_origin._hold import ValueOriginEnforcementUnavailable
 
-__version__ = "1.21.0"
+__version__ = "1.22.0"
 
 __all__ = [
     "Sensor",
