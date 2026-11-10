@@ -174,9 +174,13 @@ def test_all_five_verbs_route_through_one_helper():
 
     from xaidr.sensor import ProtectedHttpClient
 
+    shared = inspect.getsource(ProtectedHttpClient._body_verb)
+    assert "_egress_headers(" in shared, "_body_verb does not route through _egress_headers"
     for verb in VERBS:
         src = inspect.getsource(getattr(ProtectedHttpClient, verb))
-        assert "_egress_headers(" in src, (
+        # The body verbs share _body_verb (scan, headers, attestation, send, in
+        # that order); GET and DELETE call the helper themselves.
+        assert "_egress_headers(" in src or "_body_verb(" in src, (
             f"{verb} does not route through _egress_headers — S12's whole "
             "claim is that there is exactly one place a header is written"
         )

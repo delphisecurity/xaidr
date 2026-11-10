@@ -46,11 +46,13 @@ which the scan already has). Destinations are host-only; tool arguments and
 response bodies are hashed. Whether an extension's own reporter captures
 content is that extension's configuration, not a seam here.
 
-Only S1 (attach), S5 (gate chain), S6 (verdict transform) and S7
-(enforcement policy, harden-only) are wired today. The remaining hooks are
-declared here rather than added one per PR so the public contract stops
-moving: an extension package written against this class does not have to
-re-subclass every time another seam lands.
+Wired: S1 (attach), S2 (policy conditions), S3 (escalators), S5 (gate chain),
+S6 (verdict transform), S7 (enforcement policy, harden-only), S9 (subject
+trust), S10 (destination policy), S11 (blocked URLs), S12 (outbound headers,
+add-only) and S14 (egress attestation). S4, S8 and S13 are declared and not
+wired; they are declared here rather than added one per PR so the public
+contract stops moving: an extension package written against this class does
+not have to re-subclass every time another seam lands.
 """
 
 from __future__ import annotations
@@ -64,6 +66,8 @@ __all__ = [
     "ResponseView",
     "DestinationView",
     "ToolView",
+    "ScanView",
+    "EgressView",
 ]
 
 
@@ -148,6 +152,52 @@ class ToolView:
     args_schema_hash: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class ScanView:
+    """One scan bound to an outbound request, for S14. Ids and verdicts only.
+
+    ``found`` and ``enforced`` are in Core's vocabulary (``allowed``, ``flagged``,
+    ``held``, ``blocked``): ``found`` is what the sensor found, before monitor
+    softening and before any S6 transform (``ScanResult.found_action``);
+    ``enforced`` is the verdict for the action the host received. ``scan_id`` is
+    the telemetry row's ``scanId``. ``rules`` holds at most 50 rule ids. No
+    content, no arguments, no matched text.
+    """
+
+    scan_id: Optional[str]
+    direction: str
+    found: Optional[str]
+    enforced: Optional[str]
+    rules: tuple = ()
+    category: Optional[str] = None
+    impact_class: Optional[str] = None
+    value_origin: Optional[str] = None
+    parent_scan_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class EgressView:
+    """One outbound request, for S14, as the sensor saw it before it leaves.
+
+    ``method`` and ``host`` only (never the URL, path or query). ``mode`` is
+    the enforcement policy in force (after S7); ``value_origin_mode`` is
+    ``record`` or ``off``. ``scans`` holds the scans bound to this request (at
+    most 4): the scan of the request's own bytes, and on an MCP ``tools/call``
+    the matching tool-call scan. ``body_sha256`` is the unpadded base64url
+    SHA-256 of the exact request bytes, or ``None`` when the body cannot be
+    read without consuming it. No raw content.
+    """
+
+    method: str
+    host: Optional[str]
+    mode: str
+    value_origin_mode: str
+    scans: tuple = ()
+    body_sha256: Optional[str] = None
+    sensor_version: str = ""
+    view_version: int = 1
+
+
 # ── the extension object ─────────────────────────────────────────────────────
 
 
@@ -223,7 +273,27 @@ class SensorExtension:
         """
         return None
 
-    # ── declared, not yet wired (S2, S3, S4, S8, S9, S10, S11, S12, S13) ────
+    # ── S14 ──────────────────────────────────────────────────────────────────
+    def attest_egress(self, view: "EgressView") -> Mapping[str, str]:
+        """Headers to add to one outbound request, from what the sensor found.
+
+        Called once per outbound request on every HTTP path xaidr dispatches,
+        after that request's own scan and destination check and before it is
+        sent. The returned headers are ADDED under the add-only rule: never a
+        header the sensor, the caller or an earlier extension wrote. Nothing
+        runs, and no digest is computed, when no extension overrides this.
+
+        Bounds (``xaidr.attestation``): at most 4 headers, names matching
+        ``^[a-z0-9-]{1,64}$``, values printable ASCII of at most 10,923
+        characters, 16 KiB per request. A raise, a non-Mapping return or a bound
+        violation drops ALL of this extension's headers for that request, is
+        logged once per extension per sensor, and the request proceeds; under
+        ``fail_closed=("controls",)`` the fault is a verdict instead.
+        """
+        return {}
+
+    # ── wired elsewhere: S2, S3, S9, S10, S11, S12 ──────────────────────────
+    # ── declared, not yet wired: S4, S8, S13 ────────────────────────────────
     def policy_conditions(self) -> Mapping[str, Any]:
         return {}
 

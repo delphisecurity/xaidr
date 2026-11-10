@@ -125,6 +125,18 @@ def _httpx_body(request: Any) -> tuple[Optional[dict], Any]:
     return (parsed, None) if isinstance(parsed, dict) else (None, raw)
 
 
+def _egress_marked(request: Any) -> dict:
+    """What a ``ProtectedHttpClient`` verb already did to this request, or {}:
+    ``request_scanned`` (its body was scanned and attested there) and
+    ``response_scanned`` (its response is scanned there). The send seam does
+    only what is left, so one request is scanned and attested once, and nothing
+    the client could not see (a ``base_url``-relative destination, a ``data=``
+    body, a GET response) goes unscanned."""
+    extensions = getattr(request, "extensions", None)
+    mark = extensions.get("xaidr.egress") if extensions else None
+    return mark if isinstance(mark, dict) else {}
+
+
 def _patch_httpx(ctx: PatchContext) -> None:
     ctx.module("httpx")
     ext = _http_extractor(ctx.sensor)
@@ -137,15 +149,31 @@ def _patch_httpx(ctx: PatchContext) -> None:
             if request is None:
                 return None
             body, raw = _httpx_body(request)
+            if _egress_marked(request).get("request_scanned"):
+                # ProtectedHttpClient scanned and attested this body. The
+                # destination check still runs here, on the URL httpx merged.
+                ext._check_destination(str(getattr(request, "url", "")), body)
+                return None
             # Destination check runs for EVERY verb; body content scan only has
             # something to look at on a request that carries one.
-            ext._scan_request(str(getattr(request, "url", "")), body, raw)
+            scanned = ext._scan_request(str(getattr(request, "url", "")), body, raw)
+            # S14: the attestation of this request, from its own scan, written
+            # onto the request before it leaves. Nothing when no extension attests.
+            if ctx.sensor._attests_egress:
+                try:
+                    exact = request.content
+                except Exception:
+                    exact = None                   # an unread stream is not named
+                ext._attest_request(request, exact, scanned)
             return None
 
         def after(response: Any, args: tuple, kwargs: dict) -> Any:
             if is_exempt(args) or kwargs.get("stream"):
                 # Reading the body here would consume the caller's stream.
                 return response
+            request = kwargs.get("request") or (args[1] if len(args) > 1 else None)
+            if request is not None and _egress_marked(request).get("response_scanned"):
+                return response                    # ProtectedHttpClient scans it
             return ext._scan_response(response)
 
         return make_wrapper(orig, before=before, after=after)
@@ -200,7 +228,21 @@ def _patch_requests(ctx: PatchContext) -> None:
                     pass
             else:
                 raw = None  # a generator/file body — do not consume it
-            ext._scan_request(str(getattr(request, "url", "")), body, raw)
+            scanned = ext._scan_request(str(getattr(request, "url", "")), body, raw)
+            if ctx.sensor._attests_egress:
+                exact = getattr(request, "body", None)
+                if isinstance(exact, str):
+                    # http.client writes a str body as ISO-8859-1; a body it
+                    # cannot write that way is not named.
+                    try:
+                        exact = exact.encode("iso-8859-1")
+                    except UnicodeEncodeError:
+                        exact = None
+                elif exact is None:
+                    exact = b""
+                elif not isinstance(exact, (bytes, bytearray)):
+                    exact = None                   # a generator or file: not named
+                ext._attest_request(request, exact, scanned)
             return None
 
         def after(response: Any, args: tuple, kwargs: dict) -> Any:

@@ -62,7 +62,8 @@ from .failclosed import (
     asset_faults as _asset_faults,
     resolve as _resolve_fail_closed,
 )
-from .extensions import DestinationView, ScanRequest, SensorExtension
+from . import attestation as _att
+from .extensions import DestinationView, EgressView, ScanRequest, SensorExtension
 from . import value_origin as _vo
 from . import _vo_seams
 from .value_origin import _ledger as _vo_ledger  # noqa: F401  (the input batch, the replay)
@@ -166,6 +167,36 @@ def _header_key(name) -> str:
 
 #: The found verdicts a block-mode sensor halts on (``enforcement._HALTING_ACTIONS``).
 _HALTING_FOUND = frozenset({"blocked", "approval_required"})
+
+
+def _s12_header_items(extra) -> list:
+    """Validate one extension's ``outbound_headers`` return. Raises on a shape a
+    transport would refuse later: a non-Mapping, a non-str name or value, a name
+    that is not an HTTP token, a value outside printable ASCII."""
+    if not isinstance(extra, Mapping):
+        raise TypeError(f"outbound_headers() returned {type(extra).__name__}, not a Mapping")
+    items = []
+    for name, value in extra.items():
+        if not isinstance(name, str) or not isinstance(value, str):
+            raise TypeError(
+                "outbound_headers() returned a header whose name or value is not a "
+                f"str ({type(name).__name__}: {type(value).__name__})")
+        if not _HEADER_TOKEN.fullmatch(name):
+            raise ValueError("outbound_headers() returned a header name that is not an HTTP token")
+        if not (value.isascii() and value.isprintable()) or value != value.strip():
+            raise ValueError(
+                "outbound_headers() returned a header value outside printable ASCII, or "
+                "with leading or trailing whitespace")
+        items.append((name, value))
+    return items
+
+
+#: S14 · the egress path's view of a scan BEFORE ``_apply_mode``. ``_scan_request``
+#: opens a sink for the duration of its scan_a2a call and ``_scan_a2a_impl`` drops
+#: the pre-mode result into it, so the attested found verdict is read from a
+#: record no S6 transform has seen, never back from the result the host receives.
+_PRE_MODE_SINK: "contextvars.ContextVar[list | None]" = contextvars.ContextVar(
+    "xaidr_pre_mode_sink", default=None)
 
 
 class _HeaderCollisionError(Exception):
@@ -750,6 +781,14 @@ class DelphiSensor:
         #: reported, so a broken hook is stated ONCE per sensor rather than
         #: once per scan. Same discipline as ``_breaker_faults``.
         self._extension_faults: set = set()
+        #: S14 · whether any extension overrides attest_egress. Recorded once, at
+        #: attach: with none, no view is built, no digest computed, no hook
+        #: called, and every outbound header is what it is without this seam.
+        self._attests_egress: bool = any(
+            getattr(type(e), "attest_egress", None) is not SensorExtension.attest_egress
+            for e in self._extensions)
+        #: S14 · scans whose verdict had no Core mapping and so were not attested.
+        self._attest_unmapped: int = 0
         #: S2 · the merged extension-supplied policy condition evaluators.
         self._policy_conditions: dict = self._collect_policy_conditions()
 
@@ -1498,6 +1537,86 @@ class DelphiSensor:
         # fail-closed posture. The control did run; it declined one header.
         if control_fault:
             self._control_fault(f"extension {name!r} raised in {hook}()")
+
+    def _merge_hook_headers(self, out: dict, hook: str, invoke, validate, *,
+                            existing=()) -> None:
+        """Walk the extensions for one header-producing seam (S12, S14).
+
+        ``invoke(extension)`` calls the hook; ``validate(extra)`` returns the
+        ``(name, value)`` pairs or raises on a bad shape. Every check sits inside
+        the ``try``: a raise, a bad shape or a bound violation drops all of that
+        extension's headers, is reported once per extension per sensor, and the
+        request proceeds. The merge is ADD-ONLY and case-insensitive against
+        ``out``, ``existing`` and earlier extensions; a collision degrades (the
+        header is dropped, logged once) and is never a control fault.
+
+        Under ``fail_closed=("controls",)`` a hook fault is a VERDICT. It is
+        collected rather than raised mid-walk, so one broken extension does
+        not stop the next being consulted, then travels ``_fail_closed_result``:
+        monitor records it and the request proceeds; a halting verdict is
+        raised as ``DelphiBlockedError``, the one exception this boundary
+        raises. A raw ``FailClosedError`` never leaves a header merge.
+        """
+        seen = {_header_key(n) for n in out} | {_header_key(n) for n in existing}
+        closed: list = []
+
+        def report(extension, exc):
+            try:
+                self._extension_failed(extension, hook, exc)
+            except _FailClosedError as fc:
+                closed.append(fc)
+
+        for extension in self._extensions:
+            try:
+                extra = invoke(extension)
+                if not extra:
+                    continue
+                items = validate(extra)
+            except Exception as exc:
+                report(extension, exc)
+                continue
+            for name, value in items:
+                if _header_key(name) in seen:
+                    self._extension_failed(
+                        extension, hook,
+                        _HeaderCollisionError(
+                            f"{hook}() tried to overwrite open header {name!r}; "
+                            "the extension's value was dropped"),
+                        control_fault=False,
+                    )
+                    continue
+                out[name] = value
+                seen.add(_header_key(name))
+        if closed:
+            fc = closed[0]
+            verdict = self._fail_closed_result("http_request", fc.group, fc.detail)
+            if verdict.must_halt:
+                raise DelphiBlockedError(verdict, message=f"Request refused: {fc}")
+
+    def _attest_egress(self, method: str, host, body_sha256, scans, out: dict, *,
+                       existing=()) -> None:
+        """S14 · build the EgressView for one outbound request and merge every
+        extension's ``attest_egress`` headers into ``out``, add-only.
+
+        Callers check ``_attests_egress`` first and compute the digest only then,
+        so a sensor without an attesting extension never reaches here.
+        """
+        import xaidr as _pkg
+        view = EgressView(
+            method=str(method).upper(),
+            host=host,
+            mode=self.enforcement_mode,
+            value_origin_mode=self._value_origin.value,
+            scans=tuple(scans)[:_att.MAX_SCANS],
+            body_sha256=body_sha256,
+            sensor_version=getattr(_pkg, "__version__", ""),
+        )
+        budget = [_att.MAX_HEADER_BYTES_PER_REQUEST]
+        self._merge_hook_headers(
+            out, "attest_egress",
+            lambda extension: extension.attest_egress(view),
+            lambda extra: _att.header_items(extra, budget),
+            existing=existing)
 
     def _build_scan_request(self, direction: str, **fields) -> ScanRequest:
         """The view handed to every extension hook on the scan paths."""
@@ -2716,6 +2835,9 @@ class DelphiSensor:
         })
         # Breaker sees the TRUE verdict — before _apply_mode softens it.
         self._breaker_observe(result)
+        sink = _PRE_MODE_SINK.get()
+        if sink is not None:
+            sink.append(result)          # S14: the record the attestation reads
         return self._apply_mode(
             result, emit_direction, lambda: {"destination": destination},
         )
@@ -4981,7 +5103,7 @@ class ProtectedHttpClient:
                 type(exc).__name__,
             )
 
-    def _scan_request(self, url: str, json_body: dict | None, content: str | bytes | None) -> None:
+    def _scan_request(self, url: str, json_body: dict | None, content: str | bytes | None):
         """Scan outgoing request: destination block first, then A2A body scan.
 
         Additive / stricter-wins: ``_check_destination`` blocks a denied
@@ -4989,19 +5111,125 @@ class ProtectedHttpClient:
         benign body; the existing body content scan still blocks a malicious
         body to an otherwise-allowed destination. Raises DelphiBlockedError on
         either.
+
+        Returns ``(record, final)`` for S14, or ``None`` when nothing was
+        scanned: ``record`` is the result as the sensor found it, before
+        ``_apply_mode`` (read from the pre-mode sink, so no S6 transform has
+        touched it), and ``final`` is the result the host received.
         """
         self._check_destination(url, json_body)
 
         message = self._extract_message(json_body, content)
         if not message or len(message) < 3:
-            return
+            return None
 
         destination = self._extract_destination(url, json_body)
 
-        result = self._sensor.scan_a2a(message, destination=destination)
+        sink: list = []
+        token = _PRE_MODE_SINK.set(sink)
+        try:
+            result = self._sensor.scan_a2a(message, destination=destination)
+        finally:
+            _PRE_MODE_SINK.reset(token)
 
         if result.action == 'blocked':
             raise DelphiBlockedError(result)
+        # THIS request's scan, by id: a gate or transform extension that runs a
+        # scan of its own drops that scan into the same sink, before or after.
+        own = getattr(result, "scan_id", None)
+        record = next((r for r in sink if getattr(r, "scan_id", None) == own), result)
+        return record, result
+
+    def _attest_headers(self, method: str, url: str, body, scanned, existing) -> dict:
+        """S14 · the headers to add to one outbound request. ``body`` is the exact
+        bytes the request carries (``None`` when they cannot be read without
+        consuming them); ``scanned`` is ``_scan_request``'s pair or None;
+        ``existing`` names the headers already on the request."""
+        host = self._extract_host(url)
+        digest = _att._body_sha256(body) if body is not None else None
+        scans = []
+        if scanned is not None:
+            record, final = scanned
+            view = _att.scan_view(record, final, "a2a")
+            if view is None:
+                self._sensor._attest_unmapped += 1
+            else:
+                scans.append(view)
+        added: dict = {}
+        self._sensor._attest_egress(method, host, digest, scans, added, existing=existing)
+        return added
+
+    def _attest_verb(self, method: str, url, json_body, content, scanned, headers: dict) -> dict:
+        """S14 on a ``ProtectedHttpClient`` verb: the exact bytes httpx will send
+        are read from a request built the way the verb builds it, and the
+        attestation headers are added to ``headers``. Nothing runs when no
+        extension attests. Called only for a body the verb itself built
+        (``json=``/``content=``); a ``data=``/``files=`` body is scanned and
+        attested at the send seam, from the request httpx built."""
+        if not self._sensor._attests_egress:
+            return headers
+        import httpx
+        try:
+            body = httpx.Request(method, url, json=json_body, content=content).content
+        except Exception:
+            body = None                        # a stream: not read, not named
+        out = dict(headers or {})
+        existing = list(out.keys()) + list(self._client_default_headers())
+        out.update(self._attest_headers(method, str(url), body, scanned, existing))
+        return out
+
+    def _client_default_headers(self):
+        """The names of the wrapped client's own default headers: they ride every
+        request, so the add-only rule protects them too."""
+        headers = getattr(self._client, "headers", None)
+        try:
+            return list(headers.keys()) if headers is not None else []
+        except Exception:
+            return []
+
+    def _full_url(self, url) -> str:
+        """The URL httpx will send to, with the client's ``base_url`` merged in,
+        for the destination check, the view and the digest. The verb still
+        passes the caller's ``url`` to the client unchanged."""
+        merge = getattr(self._client, "_merge_url", None)
+        if merge is None:
+            return str(url)
+        try:
+            return str(merge(url))
+        except Exception:
+            return str(url)
+
+    @staticmethod
+    def _own_body(kwargs: dict) -> bool:
+        """True when the verb built the body it will send (``json=``/``content=``);
+        a ``data=`` or ``files=`` body is built by httpx at send time."""
+        return kwargs.get("data") is None and kwargs.get("files") is None
+
+    def _attest_request(self, request, body, scanned) -> None:
+        """S14 on a request object the autopatch seam intercepted (an httpx
+        ``Request`` or a requests ``PreparedRequest``): headers are written onto
+        the request. Nothing runs when no extension attests."""
+        if not self._sensor._attests_egress:
+            return
+        headers = request.headers
+        added = self._attest_headers(
+            str(getattr(request, "method", "")), str(getattr(request, "url", "")),
+            body, scanned, list(headers.keys()))
+        for name, value in added.items():
+            headers[name] = value
+
+    @staticmethod
+    def _egress_marked(kwargs: dict, *, request_scanned: bool, response_scanned: bool) -> dict:
+        """Mark a verb's request with what this client did, so a patched
+        ``httpx.Client.send`` (``protect()``) does only what is left: the
+        destination check runs there in every case (it sees the merged URL), the
+        body scan and attestation only when this client did not scan the body,
+        the response scan only when this client does not scan the response."""
+        extensions = dict(kwargs.get("extensions") or {})
+        extensions["xaidr.egress"] = {"request_scanned": request_scanned,
+                                      "response_scanned": response_scanned}
+        kwargs["extensions"] = extensions
+        return kwargs
 
     def _scan_response(self, response: "httpx.Response") -> "httpx.Response":
         """Scan response body for output DLP.
@@ -5075,109 +5303,47 @@ class ProtectedHttpClient:
         if self._sensor._extensions:
             host = self._extract_host(dest)
             view = DestinationView(host=host, dest_id=host)
-            seen = {_header_key(name) for name in out}
-            # Under ``fail_closed=("controls",)`` a hook fault is a VERDICT, and
-            # it travels the verdict path once the walk is done (below), never
-            # as a raw FailClosedError out of a header merge. It is collected
-            # rather than raised mid-loop so one broken extension does not stop
-            # the next one being consulted.
-            closed: list = []
-
-            def report(extension, exc):
-                try:
-                    self._sensor._extension_failed(extension, "outbound_headers", exc)
-                except _FailClosedError as fc:
-                    closed.append(fc)
-
-            for extension in self._sensor._extensions:
-                try:
-                    extra = extension.outbound_headers(view)
-                    if not extra:
-                        continue
-                    # EVERY shape check sits inside the ``try``. A truthy
-                    # non-Mapping has no ``.items()`` and a non-str name has no
-                    # ``.lower()``; both raised into the host's request on the
-                    # merge as first written. The whole return is validated
-                    # BEFORE any of it is merged, so a malformed return drops
-                    # all of that extension's headers rather than half of them.
-                    if not isinstance(extra, Mapping):
-                        raise TypeError(
-                            f"outbound_headers() returned {type(extra).__name__}, "
-                            "not a Mapping")
-                    items = []
-                    for name, value in extra.items():
-                        if not isinstance(name, str) or not isinstance(value, str):
-                            raise TypeError(
-                                "outbound_headers() returned a header whose name "
-                                f"or value is not a str ({type(name).__name__}: "
-                                f"{type(value).__name__})")
-                        # What httpx and h11 refuse at build or send time is
-                        # refused HERE, inside the try: a non-token name or a
-                        # value outside printable ASCII would otherwise raise
-                        # out of the host's own send() call.
-                        if not _HEADER_TOKEN.fullmatch(name):
-                            raise ValueError(
-                                "outbound_headers() returned a header name that is "
-                                "not an HTTP token")
-                        if not (value.isascii() and value.isprintable()):
-                            raise ValueError(
-                                "outbound_headers() returned a header value outside "
-                                "printable ASCII")
-                        items.append((name, value))
-                except Exception as exc:
-                    report(extension, exc)
-                    continue
-                for name, value in items:
-                    if _header_key(name) in seen:
-                        # A collision DEGRADES and never refuses: the rule
-                        # (see _HeaderCollisionError) is log once, drop the
-                        # header, send the request, under every fail-closed
-                        # posture. So it is not a control fault.
-                        self._sensor._extension_failed(
-                            extension, "outbound_headers",
-                            _HeaderCollisionError(
-                                f"outbound_headers() tried to overwrite open "
-                                f"header {name!r}; the extension's value was "
-                                f"dropped"),
-                            control_fault=False,
-                        )
-                        continue
-                    out[name] = value
-                    seen.add(_header_key(name))
-            if closed:
-                # The same shape ``_check_destination`` gives a closed fault:
-                # mode applies inside ``_fail_closed_result`` (monitor records
-                # it as ``flagged`` and the request proceeds), and a halting
-                # verdict is raised as the one exception type this boundary
-                # already raises.
-                fc = closed[0]
-                verdict = self._sensor._fail_closed_result(
-                    "http_request", fc.group, fc.detail)
-                if verdict.must_halt:
-                    raise DelphiBlockedError(
-                        verdict, message=f"Request refused: {fc}")
+            # One walk for every header-producing seam: add-only, every shape
+            # check inside the try, a fault reported once, and a closed
+            # `controls` fault travelling the verdict path (never a raw
+            # FailClosedError out of a header merge).
+            self._sensor._merge_hook_headers(
+                out, "outbound_headers",
+                lambda extension: extension.outbound_headers(view),
+                _s12_header_items, existing=self._client_default_headers())
         return out
+
+    # The body verbs run scan, then headers, then attestation, then send: the
+    # attestation names the scan, so the scan comes first, and a refused request
+    # builds no headers at all.
+
+    def _body_verb(self, method, url, json, content, headers, kwargs):
+        """post/put/patch: scan, then headers, then attestation, then send.
+        The attestation names the scan, so the scan comes first, and a refused
+        request builds no headers at all."""
+        full = self._full_url(url)
+        scanned = self._scan_request(full, json, content)
+        headers = self._egress_headers(full, headers, source_agent=True)
+        own = self._own_body(kwargs)
+        if own:
+            headers = self._attest_verb(method, full, json, content, scanned, headers)
+        send = getattr(self._client, method.lower())
+        response = send(url, json=json, content=content, headers=headers,
+                        **self._egress_marked(kwargs, request_scanned=own,
+                                              response_scanned=True))
+        return self._scan_response(response)
 
     def post(self, url, *, json=None, content=None, headers=None, **kwargs):
         """POST with A2A scanning."""
-        headers = self._egress_headers(url, headers, source_agent=True)
-        self._scan_request(str(url), json, content)
-        response = self._client.post(url, json=json, content=content, headers=headers, **kwargs)
-        return self._scan_response(response)
+        return self._body_verb("POST", url, json, content, headers, kwargs)
 
     def put(self, url, *, json=None, content=None, headers=None, **kwargs):
         """PUT with A2A scanning."""
-        headers = self._egress_headers(url, headers, source_agent=True)
-        self._scan_request(str(url), json, content)
-        response = self._client.put(url, json=json, content=content, headers=headers, **kwargs)
-        return self._scan_response(response)
+        return self._body_verb("PUT", url, json, content, headers, kwargs)
 
     def patch(self, url, *, json=None, content=None, headers=None, **kwargs):
         """PATCH with A2A scanning."""
-        headers = self._egress_headers(url, headers, source_agent=True)
-        self._scan_request(str(url), json, content)
-        response = self._client.patch(url, json=json, content=content, headers=headers, **kwargs)
-        return self._scan_response(response)
+        return self._body_verb("PATCH", url, json, content, headers, kwargs)
 
     def get(self, url, **kwargs):
         """GET — destination-scanned (no body to content-scan).
@@ -5185,12 +5351,15 @@ class ProtectedHttpClient:
         The blocked-URL list and deny-destination policy still apply, so a GET
         to a denied destination is blocked before the request leaves the host.
         """
-        self._check_destination(str(url), None)
-        headers = self._egress_headers(url, kwargs.pop("headers", None),
+        full = self._full_url(url)
+        self._check_destination(full, None)
+        headers = self._egress_headers(full, kwargs.pop("headers", None),
                                        source_agent=False)
+        headers = self._attest_verb("GET", full, None, None, None, headers)
         if headers:
             kwargs["headers"] = headers
-        return self._client.get(url, **kwargs)
+        return self._client.get(url, **self._egress_marked(
+            kwargs, request_scanned=True, response_scanned=False))
 
     def delete(self, url, **kwargs):
         """DELETE — destination-scanned (no body to content-scan).
@@ -5198,12 +5367,15 @@ class ProtectedHttpClient:
         Same destination enforcement as GET: a DELETE to a denied destination
         is blocked before it is sent.
         """
-        self._check_destination(str(url), None)
-        headers = self._egress_headers(url, kwargs.pop("headers", None),
+        full = self._full_url(url)
+        self._check_destination(full, None)
+        headers = self._egress_headers(full, kwargs.pop("headers", None),
                                        source_agent=False)
+        headers = self._attest_verb("DELETE", full, None, None, None, headers)
         if headers:
             kwargs["headers"] = headers
-        return self._client.delete(url, **kwargs)
+        return self._client.delete(url, **self._egress_marked(
+            kwargs, request_scanned=True, response_scanned=False))
 
     def close(self):
         self._client.close()
