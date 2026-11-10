@@ -144,11 +144,19 @@ def dump_rows(pools):
             rows[f"{pool}/{e['id']}"] = _fields(
                 sensor.scan(e["prompt"], direction="input"))
 
-    # 12. value-origin flows: one call per row, inside a flow, in RECORD (what 1.22.0 ships)
+    # 12. value-origin flows: one call per row, inside a flow, in RECORD (what 1.22.0 ships).
+    # A xaidr without the `value_origin` keyword (1.21.0 and earlier) has no
+    # reading to dump, so this pool is left out of its dump and SAID so; the
+    # compare then lists every one of its rows as present on one side only.
     path = os.path.join(pools, "benign_toolcalls", "value_origin_flows.jsonl")
     if os.path.exists(path):
-        for e in _load_jsonl(path):
-            rows[f"vo.flows/{e['id']}"] = _flow_row(e)
+        import inspect
+        if "value_origin" in inspect.signature(Sensor.__init__).parameters:
+            for e in _load_jsonl(path):
+                rows[f"vo.flows/{e['id']}"] = _flow_row(e)
+        else:
+            print("value-origin flow rows: none, this xaidr has no value_origin "
+                  "keyword (they are present on the other side only)")
 
     return rows
 
