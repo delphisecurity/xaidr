@@ -3,7 +3,7 @@
 Entries are added as changes land. The release notes in the release commit body
 still reconcile against the whole range (docs/releasing.md, step 1).
 
-## Unreleased
+## 1.22.0
 
 - The egress attestation seam, S14 `SensorExtension.attest_egress(view)`: once per
   outbound request on every HTTP path xaidr dispatches (httpx sync and async and
