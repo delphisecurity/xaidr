@@ -13,6 +13,7 @@ import dataclasses
 import inspect
 import json
 import logging
+import re
 import threading
 import time
 from dataclasses import replace
@@ -148,6 +149,19 @@ _ACTION_SEVERITY = {
     "approval_required": 2,
     "blocked": 3,
 }
+
+
+#: RFC 9110 token characters: what an HTTP header NAME may be made of.
+_HEADER_TOKEN = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
+
+
+def _header_key(name) -> str:
+    """The case-folded header name the add-only merge compares on. A caller may
+    pass a bytes name (httpx accepts them); it is read as the same header as its
+    str spelling, so neither spelling opens a door past the other."""
+    if isinstance(name, (bytes, bytearray)):
+        name = bytes(name).decode("latin-1")
+    return str(name).lower()
 
 
 class _HeaderCollisionError(Exception):
@@ -743,11 +757,11 @@ class DelphiSensor:
         # past it: shadow is the deployer's explicit "watch this deployment",
         # and a control the deployer switched off for observation is not one
         # an extension may switch back on.
-        self.enforcement = (
-            _MONITOR
-            if shadow_mode
-            else self._collect_enforcement_policy(enforcement)
-        )
+        # The collector always runs, so a non-policy answer raises under
+        # shadow_mode too (loud validation); shadow then collapses whatever
+        # it returned to MONITOR.
+        hardened = self._collect_enforcement_policy(enforcement)
+        self.enforcement = _MONITOR if shadow_mode else hardened
         # The NAME stays a plain string and stays public: it is emitted as
         # `enforcementMode` in every telemetry event, handed to _CircuitRuntime,
         # and round-tripped through ProtectionManifest and the framework
@@ -1426,7 +1440,8 @@ class DelphiSensor:
                 owner[key] = name
         return merged
 
-    def _extension_failed(self, extension, hook: str, exc: Exception) -> None:
+    def _extension_failed(self, extension, hook: str, exc: Exception,
+                          *, control_fault: bool = True) -> None:
         """Report a fault inside an extension hook. ONCE per extension per hook.
 
         ERROR, not WARNING, and the message says the control is inert: an
@@ -1465,7 +1480,13 @@ class DelphiSensor:
         # one dead control rather than fifty lines of noise — but a verdict is
         # per CALL, and a deployment that refuses the first call and then
         # silently allows the next forty-nine has the worst of both postures.
-        self._control_fault(f"extension {name!r} raised in {hook}()")
+        #
+        # ``control_fault=False`` is for a violation whose seam rule says
+        # DEGRADE and nothing else: an S12 header collision is logged once and
+        # the header dropped, and the request must still go out under every
+        # fail-closed posture. The control did run; it declined one header.
+        if control_fault:
+            self._control_fault(f"extension {name!r} raised in {hook}()")
 
     def _build_scan_request(self, direction: str, **fields) -> ScanRequest:
         """The view handed to every extension hook on the scan paths."""
@@ -4960,7 +4981,7 @@ class ProtectedHttpClient:
         if self._sensor._extensions:
             host = self._extract_host(dest)
             view = DestinationView(host=host, dest_id=host)
-            seen = {name.lower() for name in out}
+            seen = {_header_key(name) for name in out}
             # Under ``fail_closed=("controls",)`` a hook fault is a VERDICT, and
             # it travels the verdict path once the walk is done (below), never
             # as a raw FailClosedError out of a header merge. It is collected
@@ -4996,22 +5017,39 @@ class ProtectedHttpClient:
                                 "outbound_headers() returned a header whose name "
                                 f"or value is not a str ({type(name).__name__}: "
                                 f"{type(value).__name__})")
+                        # What httpx and h11 refuse at build or send time is
+                        # refused HERE, inside the try: a non-token name or a
+                        # value outside printable ASCII would otherwise raise
+                        # out of the host's own send() call.
+                        if not _HEADER_TOKEN.fullmatch(name):
+                            raise ValueError(
+                                "outbound_headers() returned a header name that is "
+                                "not an HTTP token")
+                        if not (value.isascii() and value.isprintable()):
+                            raise ValueError(
+                                "outbound_headers() returned a header value outside "
+                                "printable ASCII")
                         items.append((name, value))
                 except Exception as exc:
                     report(extension, exc)
                     continue
                 for name, value in items:
-                    if name.lower() in seen:
-                        report(
-                            extension,
+                    if _header_key(name) in seen:
+                        # A collision DEGRADES and never refuses: the rule
+                        # (see _HeaderCollisionError) is log once, drop the
+                        # header, send the request, under every fail-closed
+                        # posture. So it is not a control fault.
+                        self._sensor._extension_failed(
+                            extension, "outbound_headers",
                             _HeaderCollisionError(
                                 f"outbound_headers() tried to overwrite open "
                                 f"header {name!r}; the extension's value was "
                                 f"dropped"),
+                            control_fault=False,
                         )
                         continue
                     out[name] = value
-                    seen.add(name.lower())
+                    seen.add(_header_key(name))
             if closed:
                 # The same shape ``_check_destination`` gives a closed fault:
                 # mode applies inside ``_fail_closed_result`` (monitor records

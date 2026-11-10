@@ -388,6 +388,17 @@ class _BadReturn(SensorExtension):
         return self._value
 
 
+class _Sink:
+    def __init__(self):
+        self.events = []
+
+    def report(self, batch):
+        self.events.extend(batch)
+
+    def close(self):
+        pass
+
+
 def _post_once(sensor):
     client = sensor.protect_http(httpx.Client())
     cap = _Capture()
@@ -437,8 +448,11 @@ def test_outbound_headers_bad_return_is_logged_once_per_sensor(caplog):
 def test_outbound_headers_fault_under_fail_closed_monitor_proceeds():
     """``controls`` closed, monitor: the fault is a verdict, the verdict is
     softened to flagged, and the request goes out. No raw FailClosedError."""
+    sink = _Sink()
     sensor = Sensor(agent_id="egress-test", enforcement_mode="monitor",
-                    fail_closed=("controls",), extensions=[_ThrowingHeaders()])
+                    fail_closed=("controls",), extensions=[_ThrowingHeaders()],
+                    reporter=sink)
+    sensor._telemetry_sink = sink
     try:
         seen = _post_once(sensor)
     except Exception as exc:   # pragma: no cover - the defect under test
@@ -446,6 +460,16 @@ def test_outbound_headers_fault_under_fail_closed_monitor_proceeds():
             "a fail-closed fault in outbound_headers raised a raw "
             f"{type(exc).__name__} into a MONITOR sensor's host request")
     assert seen[SOURCE_AGENT] == "egress-test"
+    # The refusal that monitor softened still left its record: one
+    # fail_closed event naming the group. Telemetry keeps the TRUE verdict
+    # (``_emit_fail_closed`` runs before the downgrade), with the mode beside
+    # it, so the operator sees what the posture would have refused.
+    sensor.flush()
+    fc = [e for e in sensor._telemetry_sink.events
+          if e["data"].get("failClosedGroup") == "controls"]
+    assert len(fc) == 1, f"expected one fail_closed event, got {len(fc)}"
+    assert fc[0]["data"]["action"] == "blocked"
+    assert fc[0]["data"]["enforcementMode"] == "monitor"
 
 
 def test_outbound_headers_fault_under_fail_closed_block_refuses_in_band():
@@ -460,6 +484,99 @@ def test_outbound_headers_fault_under_fail_closed_block_refuses_in_band():
     cap.bind(client)
     with pytest.raises(DelphiBlockedError) as exc:
         client.post("https://h.example/x", json={})
-    assert not isinstance(exc.value, FailClosedError)
     assert exc.value.result.action == "blocked"
+    assert exc.value.result.input_status == "fail_closed"
     assert "post" not in cap.seen, "a refused request was sent anyway"
+    # GET has no body scan, and the same header merge runs on it.
+    with pytest.raises(DelphiBlockedError):
+        client.get("https://h.example/x")
+    assert "get" not in cap.seen
+    assert FailClosedError is not DelphiBlockedError   # the type the host sees
+
+
+# ── M0 review follow-ups ─────────────────────────────────────────────────────
+
+
+def _send_through_real_httpx(sensor, caller_headers=None):
+    """A real httpx request build and send, through MockTransport. ``_Capture``
+    replaces the verbs, so it never reaches ``build_request``, where a header
+    outside ASCII raises."""
+    got = {}
+
+    def handler(request):
+        got["headers"] = dict(request.headers)
+        return httpx.Response(200, json={})
+
+    client = sensor.protect_http(httpx.Client(transport=httpx.MockTransport(handler)))
+    kw = {"headers": caller_headers} if caller_headers else {}
+    client.post("https://h.example/x", json={}, **kw)
+    return got["headers"]
+
+
+@pytest.mark.parametrize("value", ["caf\u00e9", "a\r\nInjected: 1", "tab\there"],
+                         ids=["non-ascii", "crlf", "tab"])
+def test_a_header_value_outside_printable_ascii_never_reaches_httpx(value, caplog):
+    sensor = Sensor(agent_id="egress-test",
+                    extensions=[_AddHeaders({"X-Acme-Bad": value}),
+                                _AddHeaders({"X-Acme-Other": "ok"})])
+    with caplog.at_level(logging.ERROR, logger="xaidr.sensor"):
+        try:
+            headers = _send_through_real_httpx(sensor)
+        except Exception as exc:   # pragma: no cover - the defect under test
+            pytest.fail(
+                "an extension's header value outside printable ASCII raised "
+                f"{type(exc).__name__} out of the host's send()")
+    assert "x-acme-bad" not in headers
+    assert headers["x-acme-other"] == "ok"
+    assert headers["x-delphi-source-agent"] == "egress-test"
+
+
+def test_a_header_name_that_is_not_a_token_never_reaches_httpx():
+    sensor = Sensor(agent_id="egress-test",
+                    extensions=[_AddHeaders({"X Acme Spaced": "v"}),
+                                _AddHeaders({"X-Acme-Other": "ok"})])
+    headers = _send_through_real_httpx(sensor)
+    assert not any("spaced" in k for k in headers)
+    assert headers["x-acme-other"] == "ok"
+
+
+def test_collision_under_fail_closed_block_still_sends_the_request():
+    """A collision DEGRADES. It is never a control fault, so ``controls`` closed
+    plus block mode drops the header and sends the request."""
+    sensor = Sensor(agent_id="egress-test", enforcement_mode="block",
+                    fail_closed=("controls",), extensions=[_OverwriteAgent()])
+    headers = _send_through_real_httpx(sensor)
+    assert headers["x-delphi-source-agent"] == "egress-test"
+
+
+def test_a_bytes_caller_header_name_is_still_protected_from_an_extension():
+    sensor = Sensor(agent_id="egress-test",
+                    extensions=[_AddHeaders({"authorization": "ext"})])
+    headers = _send_through_real_httpx(sensor, caller_headers={b"Authorization": b"caller"})
+    assert headers["authorization"] == "caller"
+
+
+def test_fault_in_a_non_last_extension_under_fail_closed_block_refuses():
+    sensor = Sensor(agent_id="egress-test", enforcement_mode="block",
+                    fail_closed=("controls",),
+                    extensions=[_ThrowingHeaders(), _AddHeaders({"X-Acme-Other": "ok"})])
+    with pytest.raises(DelphiBlockedError):
+        _send_through_real_httpx(sensor)
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "found, not fixed, in the M0 review (pre-existing on main): _check_destination "
+    "raises DelphiBlockedError on a fail-closed fault even after monitor softened "
+    "the verdict to flagged, so a monitor sensor interrupts the request there "
+    "while the header merge does not"))
+def test_destination_policy_fault_under_fail_closed_monitor_proceeds():
+    class _RaisingDestination(SensorExtension):
+        name = "acme-dest-raise"
+
+        def destination_policy(self, dest):
+            raise RuntimeError("down")
+
+    sensor = Sensor(agent_id="egress-test", enforcement_mode="monitor",
+                    fail_closed=("controls",), extensions=[_RaisingDestination()])
+    headers = _send_through_real_httpx(sensor)
+    assert headers["x-delphi-source-agent"] == "egress-test"

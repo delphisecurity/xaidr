@@ -418,3 +418,11 @@ def test_shadow_mode_still_collapses_to_monitor():
     assert s.enforcement_mode == "monitor"
     assert s._scanner.enforcement is MONITOR
     assert s.scan(_ATTACK).action == "flagged"
+
+
+def test_shadow_mode_still_validates_a_non_policy_answer():
+    """Loud validation holds under shadow_mode too: the collector runs, a bad
+    answer raises, and only a VALID answer is collapsed to MONITOR."""
+    with pytest.raises(ValueError) as exc:
+        _sensor_with_policy_extension("monitor", "block", shadow_mode=True)
+    assert "policy-extension" in str(exc.value)
