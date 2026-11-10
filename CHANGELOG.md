@@ -5,6 +5,72 @@ still reconcile against the whole range (docs/releasing.md, step 1).
 
 ## Unreleased
 
+- The egress attestation seam, S14 `SensorExtension.attest_egress(view)`: once per
+  outbound request on every HTTP path xaidr dispatches (httpx sync and async and
+  requests under `protect()`, and `ProtectedHttpClient`'s five verbs), after that
+  request's own scan and destination check and before it is sent, an extension
+  receives an `EgressView` (method, host, the enforcement mode, the value-origin
+  mode, the scans bound to the request, the body's SHA-256, the sensor version;
+  no content) and returns headers, which the sensor adds under the add-only rule.
+  Nothing runs, and no digest is computed, when no extension overrides the hook.
+  A `data=` or `files=` body sent through `protect_http` without `protect()`
+  carries no attestation. Traffic over `urllib3`, `urllib`, `aiohttp` and `httpx2`
+  (the OpenAI and Anthropic SDKs' current lines, and `mcp` 2.x) is not dispatched
+  by xaidr and carries none.
+- Two scans bind to a request: the scan of its own bytes, and on an MCP
+  `tools/call` body (mcp 1.x, over httpx) the tool-call scan with the same tool
+  name and arguments hash, taken once from a per-sensor table of 256 entries and
+  300 seconds. The view orders them strictest found first.
+- `ScanResult.found_action`: what a block-mode sensor returns for the same input,
+  before monitor softening and before any S6 transform, carried on every result
+  and read onto the attestation as `found`. A monitor sensor's attestation says
+  `found=blocked` for a call it let through as `flagged`; an enforcing gateway
+  refuses that call. It applies the documentary-prose cap on tool arguments as
+  block mode does, never carries a value-origin block in 1.22.0, and is not part
+  of a result's equality.
+- `ScanResult.scan_id`: the telemetry event's `scanId`, minted once per scan and
+  put on the result on every exit of `scan`, `scan_a2a` and `scan_tool_call`, so
+  a caller can name the row its result belongs to.
+- `ScanResult.threats` and the event key `threats`: one `{rule, category, score,
+  layer}` per rule, in the order of `rules`, at most 50 with `threatsCut` naming
+  how many more there are. `layer` is `l1`, `l2`, `dlp`, `composite`, `nano`,
+  `authz` or `gate`. Never the matched text.
+- Every `tool_call` event carries `parentScanId`, the `scanId` of the most recent
+  input scan in the execution context (absent means not evaluated), and
+  `traceParent` from the active OpenTelemetry span when one is active or from the
+  new `scan_tool_call(..., parent_context=...)` keyword, never from an inbound
+  header. The refusal emitters (fail-closed, an open circuit, an S5 gate, a
+  not-scannable input, a scan fault, a destination block) carry the same
+  `provenance` block the main path carries.
+- S7 `SensorExtension.enforcement_policy()` is wired, harden-only (#13, #50): an
+  extension's enforcing policy upgrades a non-enforcing configured one, a
+  non-enforcing answer never weakens an enforcing one, a tie keeps the configured
+  policy, `shadow_mode` still collapses to monitor, and a non-policy answer raises
+  at construction, under `shadow_mode` too.
+- S12 `outbound_headers` merging (#14, #41): an extension adds headers to
+  `ProtectedHttpClient` requests; it never overwrites one the sensor, the caller,
+  the client's defaults or an earlier extension wrote. A fault, a non-Mapping
+  return, a non-str name or value, a name that is not an HTTP token or a value
+  outside printable ASCII drops that extension's headers, logged once; under
+  `fail_closed=("controls",)` the fault is a verdict (monitor records and
+  proceeds, block refuses). A header collision degrades and never refuses.
+- `ProtectedHttpClient` body verbs run the scan, then the headers, then the
+  attestation, then send; a refused request builds no headers. `protect_http`
+  together with `protect()` scans and attests one request once (it was scanned
+  twice, under two scan ids): the client marks what it did and the send seam does
+  only what is left, so GET and DELETE responses, `base_url`-relative
+  destinations and `data=` bodies keep their scan at the send seam.
+- The run-tree keys (`runTree`, `runRootId`, `runTaskId`, `runParentId`,
+  `runNode`, `runNodePath`, `runStep`, `runSeq`, `runSource`, `toolCallId`) ship
+  in a release for the first time, under `protect()` with LangChain or LangGraph.
+- The rule bundle loader: `Sensor.load_rule_bundle(bundle)` adopts a complete rule
+  set (the seven packaged rule files as parsed JSON under an integer `version`)
+  whole or not at all, the way `set_policy` adopts a policy; a rule that would
+  not load refuses the whole bundle and the rules in force keep scanning. S15
+  `SensorExtension.rule_bundle()` hands one in at attach. While a bundle is in
+  force its version rides every event as `bundleVersion`. Open never fetches or
+  verifies a bundle.
+- The telemetry schema stays at `0.3.0`: every key this release adds is additive.
 - Value origin records: every tool-call event carries `valueOrigin`, where the
   call's destination came from, and value origin never changes an action.
   `Sensor(value_origin=...)` takes `"record"` (the default) or `"off"`.

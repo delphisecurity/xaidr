@@ -10,7 +10,7 @@ Splunk is your job (a universal forwarder tailing the file, HEC, or whatever
 your collection tier already does); this add-on makes them searchable once they
 arrive.
 
-Version 1.1.0. Targets **xaidr telemetry schema 0.2.0**. Verified on a real
+Version 1.1.0. Targets **xaidr telemetry schema 0.3.0** (0.2.0 events read the same; 0.3.0 adds keys and moves none). Verified on a real
 **Splunk 10.4.2** instance — see [How this was verified](#how-this-was-verified).
 
 Reading data from an older xaidr? See [Pre-0.2.0 data](#pre-020-data).
@@ -121,7 +121,7 @@ about breaker visibility; that advice is withdrawn.
 A trip now maps in full:
 
 ```json
-{"gen_ai.security.schema_version":"0.2.0",
+{"gen_ai.security.schema_version":"0.3.0",
  "gen_ai.security.event_type":"circuit_breaker",
  "gen_ai.security.event_id":"ed840f085f26",
  "gen_ai.security.timestamp":"2026-09-01T22:41:26.766832Z",
@@ -196,7 +196,7 @@ without inventing data:
   it into a contract, and if the model is accelerated the old values are already
   in the tsidx when it changes.
 * **The schema is bespoke and moving.** `gen_ai.security.*` is at
-  `schema_version 0.2.0`, and OCSF alignment is open work that may rename or
+  `schema_version 0.3.0`, and OCSF alignment is open work that may rename or
   restructure these attributes. A mapping written now would be re-litigated, and
   a *wrong* CIM mapping is worse than none: it is wrong at a distance, inside
   someone else's dashboard, with nothing on screen to say the fields were
