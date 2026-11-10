@@ -470,7 +470,7 @@ jobs:
           broken = [c.get("name") for c in cases
                     if c.find("failure") is not None or c.find("error") is not None]
           print(f"collected={len(cases)} skipped={len(skipped)} failed/errored={len(broken)}")
-          if len(cases) < 190 or skipped or broken:   # 190 collected locally, frameworks required
+          if len(cases) < 199 or skipped or broken:   # 199 collected locally, frameworks required
               sys.exit(f"GUARD RED: collected {len(cases)}, skipped {skipped[:5]}, broken {broken[:5]}")
           print("GUARD GREEN")
           PY

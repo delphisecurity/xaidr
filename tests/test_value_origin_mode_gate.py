@@ -498,3 +498,33 @@ def test_the_gate_walks_the_keyword_routes_it_must():
     for must in ("xaidr.protect", "xaidr.integrations.langchain.delphi_middleware",
                  "xaidr.integrations.haystack.delphi_hooks"):
         assert must in labels, f"the gate does not walk {must}"
+
+
+# Every other public callable with a ``sensor`` parameter takes no **kwargs, so its
+# own signature rejects a keyword it does not take, with or without a sensor.
+SIGNATURE_ROUTES = [(label, fn) for label, fn, _m in _public()
+                    if "sensor" in _params(fn) and (label, fn) not in KWARG_ROUTES]
+
+
+@pytest.mark.parametrize("route", SIGNATURE_ROUTES, ids=[r[0] for r in SIGNATURE_ROUTES])
+def test_a_keyword_a_sensor_taking_callable_does_not_take_raises(route):
+    label, fn = route
+    try:
+        result = _quiet(lambda: fn(sensor=_sensor(), value_orign="record"))
+    except TypeError as e:
+        assert "value_orign" in str(e), f"{label}: a TypeError that does not name the keyword: {e}"
+        return
+    except ImportError as e:
+        if REQUIRE_FRAMEWORKS:
+            raise
+        pytest.skip(f"{label}: its framework is not installed ({e})")
+    if isinstance(result, xaidr.ProtectionManifest):
+        _quiet(result.unprotect)
+    pytest.fail(f"{label}(sensor=<Sensor>, value_orign=...) returned normally "
+                f"({type(result).__name__}): a keyword it does not take was dropped")
+
+
+def test_the_gate_walks_every_sensor_taking_callable():
+    labels = {r[0] for r in SIGNATURE_ROUTES}
+    assert {"xaidr.integrations.crewai.delphi_guardrail",
+            "xaidr.integrations.langchain.route_inbound_scan"} <= labels, sorted(labels)
