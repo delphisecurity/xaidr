@@ -844,6 +844,11 @@ class LocalScanner:
             action = "flagged"
         else:
             action = "allowed"
+        # What a BLOCK-MODE scanner returns for this verdict: the same table with
+        # the mode question answered "yes". Carried on the result as found_action
+        # and never softened (1.22.0, the attestation's `found`).
+        found = ("blocked" if verdict == "block"
+                 else "flagged" if verdict == "flag" else "allowed")
 
         all_rules = (
             [t.rule for t in l1_threats]
@@ -919,6 +924,7 @@ class LocalScanner:
             latency_ms=int(scan_time_ms),
             nano_score=None if nano_score is None else round(nano_score, 4),
             nano_raw=None if nano_raw is None else round(nano_raw, 4),
+            found_action=found,
         )
 
         # --- S3 · escalation chain -------------------------------------------
@@ -946,11 +952,16 @@ class LocalScanner:
             )
             # A link's answer replaces the verdict but never the timing: the
             # latency an operator reads must be the one this scan actually took.
+            # A link has no mode: its verdict is applied in both modes, so it
+            # is what a block-mode scanner found. Set from the link's ACTION,
+            # not carried: a link that answers with replace(local, action=...)
+            # carries the local found, which is the stale one (M1 review).
             result = replace(
                 escalated,
                 latency_ms=int(round((time.perf_counter() - scan_start) * 1000)),
                 escalation=escalation,
                 escalation_reason=reason,
+                found_action=escalated.action,
             )
         return result
 

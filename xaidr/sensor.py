@@ -164,6 +164,10 @@ def _header_key(name) -> str:
     return str(name).lower()
 
 
+#: The found verdicts a block-mode sensor halts on (``enforcement._HALTING_ACTIONS``).
+_HALTING_FOUND = frozenset({"blocked", "approval_required"})
+
+
 class _HeaderCollisionError(Exception):
     """An extension's outbound_headers() tried to overwrite an open header.
 
@@ -1112,6 +1116,7 @@ class DelphiSensor:
             rules=[rule],
             latency_ms=0,
             input_status="fail_closed",
+            found_action=action,        # the group's verdict, before the downgrade
         )
         logger.error(
             "xaidr: FAIL-CLOSED [%s] on %s -> %s (%s). The operator configured "
@@ -1227,7 +1232,11 @@ class DelphiSensor:
                 direction, "controls",
                 f"escalator did not answer ({result.escalation_reason})",
                 prompt, **extra)
-        if "bounds" not in self._fail_closed or result.must_halt:
+        # Decided on what the sensor FOUND, not on the softened action: this
+        # runs after _apply_mode, and a monitor sensor would otherwise relabel
+        # the very content block that block mode returns untouched (M1 review).
+        if ("bounds" not in self._fail_closed or result.must_halt
+                or getattr(result, "found_action", None) in _HALTING_FOUND):
             return result
         verdict = self._bounds_verdict(result, arguments)
         if verdict is None:
@@ -1598,6 +1607,7 @@ class DelphiSensor:
             category=CIRCUIT_OPEN_CATEGORY,
             rules=[CIRCUIT_OPEN_RULE],
             latency_ms=0,
+            found_action="blocked",
         )
         try:
             data = {
@@ -1636,6 +1646,14 @@ class DelphiSensor:
         refactor. This function is the SAME shape, with the gate's own category
         and rules, so an operator can tell which control halted the call.
         """
+        # A gated verdict never reaches _apply_mode, so what the gate returned
+        # is what a block-mode sensor returns too: stamp it as found when the
+        # extension did not say otherwise.
+        if isinstance(result, ScanResult) and result.found_action is None:
+            try:
+                result = replace(result, found_action=result.action)
+            except Exception:
+                pass                     # a subclass replace() cannot rebuild: unstamped
         try:
             data = {
                 "timestamp": utc_now_rfc3339(),
@@ -1742,6 +1760,14 @@ class DelphiSensor:
                     "already recorded the original verdict, so a stricter "
                     "return would bypass both. Use gate() to halt a call."
                 )
+            # found is what the sensor FOUND, and a transform softens what the
+            # host receives; a candidate rebuilt without the field keeps it.
+            if (isinstance(candidate, ScanResult) and candidate.found_action is None
+                    and getattr(before, "found_action", None) is not None):
+                try:
+                    candidate = replace(candidate, found_action=before.found_action)
+                except Exception:
+                    pass                 # a subclass replace() cannot rebuild: unstamped
             result = candidate
         return result
 
@@ -1932,6 +1958,7 @@ class DelphiSensor:
             rules=[NOT_SCANNABLE_RULE],
             latency_ms=0,
             input_status="not_scannable",
+            found_action="allowed",
         )
         data = {
             "timestamp": utc_now_rfc3339(),
@@ -2003,6 +2030,7 @@ class DelphiSensor:
             rules=[SCAN_ERROR_RULE],
             latency_ms=0,
             input_status="scan_error",
+            found_action="allowed",
         )
         try:
             phash = safe_content_hash(prompt) if isinstance(prompt, str) else None
@@ -2603,6 +2631,9 @@ class DelphiSensor:
         # which is decoupled from the main enforcement_mode.
         score = result.score
         action = result.action
+        # found moves with action below: the structural signals raise a verdict
+        # in both modes, and the structural block is explicit configuration.
+        found = result.found_action or result.action
         category = result.category
         rules = list(result.rules)
 
@@ -2621,10 +2652,13 @@ class DelphiSensor:
                 # flag threshold; never downgrade a stricter content verdict.
                 if action == "allowed" and score >= self._scanner.flag_threshold:
                     action = "flagged"
+                if found == "allowed" and score >= self._scanner.flag_threshold:
+                    found = "flagged"
                 # Explicit opt-in: only when structural enforcement is "block"
                 # does a structural/id finding escalate to a hard block.
                 if self._a2a_structural_enforcement == "block":
                     action = "blocked"
+                    found = "blocked"
 
         result = ScanResult(
             action=action,
@@ -2632,6 +2666,7 @@ class DelphiSensor:
             category=category,
             rules=rules,
             latency_ms=result.latency_ms,
+            found_action=found,
         )
 
         data = {
@@ -2790,7 +2825,8 @@ class DelphiSensor:
                             # audit id the Brain-side spec defines (C-19), which the
                             # intent lens and any filter on it must keep seeing.
                             rules=([_VO_BLOCK_RULE, _VO_AUDIT_RULE] if untrusted
-                   else [_VO_UNEXAMINABLE_RULE, _VO_AUDIT_RULE]))
+                   else [_VO_UNEXAMINABLE_RULE, _VO_AUDIT_RULE]),
+                            found_action="blocked")
         # Telemetry records the TRUE verdict FIRST, then _apply_mode may soften it
         # (monitor, an S6 transform), as every other gate in this file does: the
         # S6 contract is that telemetry has already seen the original verdict.
@@ -3024,6 +3060,11 @@ class DelphiSensor:
             )
 
         action = "allowed"
+        # What a BLOCK-MODE sensor returns for this call, tracked beside `action`
+        # at every site below that asks the mode (1.22.0). It applies the same
+        # caps block mode applies and the same policy overlay; only the mode
+        # question is answered "yes". Carried as ScanResult.found_action.
+        found = "allowed"
         score = 0.0
         category: Optional[str] = None
         rules: list[str] = []
@@ -3035,6 +3076,7 @@ class DelphiSensor:
         # Blocked-tools list (the explicit operator denylist).
         if tool_name in self._blocked_tools:
             action, score, category, rules = "blocked", 1.0, "blocked_tool", ["TOOL_BLOCKED"]
+            found = "blocked"
 
         # Content scan of the tool name + string args for dangerous command /
         # code-execution patterns (ASI02/ASI05). Even with NO policy configured,
@@ -3300,10 +3342,15 @@ class DelphiSensor:
                 # key — run_command(command=…) & friends are an execution request,
                 # never documentation, so the whole attack corpus and every
                 # prefixed-attack probe are structurally out of reach of this cap.
-                if hard and self.enforcement.enforces() and self._prose_mention_arg(
+                # The cap is decided in BOTH modes, because found is the
+                # block-mode answer and block mode applies it; it lifts `hard`
+                # only when enforcing.
+                capped = bool(hard) and self._prose_mention_arg(
                     arguments, f"{tool_name} {arg_text}"
-                ):
+                )
+                if hard and self.enforcement.enforces() and capped:
                     hard = []
+                found = "blocked" if (hard and not capped) else "flagged"
                 # Only the hard (destructive/injection) categories enforce a block;
                 # the flag tier (data_exfiltration + the ambiguous model-directed
                 # categories) surfaces as a flag (monitor-default).
@@ -3364,6 +3411,7 @@ class DelphiSensor:
                     score = max(score, max(t.score for t in dlp_hits))
                     category = category or dlp_hits[0].category
                     rules = rules + [t.rule for t in dlp_hits if t.rule not in rules]
+                    found = "blocked"
                     if self.enforcement.enforces():
                         action = "blocked"
                     elif action == "allowed":
@@ -3374,6 +3422,8 @@ class DelphiSensor:
                     rules = rules + [t.rule for t in dlp_signals if t.rule not in rules]
                     if action == "allowed":
                         action = "flagged"
+                    if found == "allowed":
+                        found = "flagged"
 
             # Over-length arg content is itself anomalous — flag-default (never a
             # hard block on size alone, never a silent pass) if nothing stronger
@@ -3381,6 +3431,8 @@ class DelphiSensor:
             if len(normalized_args) > _L1_MAX_SCAN_CHARS:
                 if action == "allowed":
                     action = "flagged"
+                if found == "allowed":
+                    found = "flagged"
                 if score < 0.2:
                     score = 0.2
                 if not category:
@@ -3392,6 +3444,8 @@ class DelphiSensor:
             if _arg_backstop and _SCAN_DEGRADED_RULE not in rules:
                 if action == "allowed":
                     action = "flagged"
+                if found == "allowed":
+                    found = "flagged"
                 score = max(score, _SCAN_DEGRADED_SCORE)
                 category = category or _SCAN_DEGRADED_CATEGORY
                 rules = rules + [_SCAN_DEGRADED_RULE]
@@ -3438,6 +3492,7 @@ class DelphiSensor:
                 },
             )
             action = _policy.compose(action, pol.decision)
+            found = _policy.compose(found, pol.decision)
             _local_policy_decision = pol.decision
             _local_policy_id = pol.policy_id
 
@@ -3469,7 +3524,7 @@ class DelphiSensor:
 
         result = ScanResult(
             action=action, score=score, category=category, rules=rules,
-            latency_ms=_scan_ms,
+            latency_ms=_scan_ms, found_action=found,
         )
 
         # Emit telemetry (mirrors the scan() enqueue shape, direction=tool_call)
@@ -4758,6 +4813,11 @@ class ProtectedHttpClient:
                             "would let a destination past that open would have "
                             "stopped."
                         )
+                    if isinstance(decision, ScanResult) and decision.found_action is None:
+                        try:         # a destination block halts in both modes
+                            decision = replace(decision, found_action=decision.action)
+                        except Exception:
+                            pass
                     self._emit_destination_block(decision, view.dest_id)
                     raise DelphiBlockedError(
                         decision,
@@ -4773,6 +4833,7 @@ class ProtectedHttpClient:
                         score=1.0,
                         category="blocked_url",
                         rules=["URL_BLOCKED"],
+                        found_action="blocked",
                         latency_ms=0,
                     )
                     # Destination identifier computed ONCE and used for both the
@@ -4829,6 +4890,7 @@ class ProtectedHttpClient:
                             category="policy",
                             rules=[rule_label],
                             latency_ms=0,
+                            found_action="blocked",
                         )
                         # Same rule as the blocked-URL branch above: the
                         # destination identifier, never the full URL. `dest_id`

@@ -163,6 +163,30 @@ class ScanResult:
     # never moves an action. None on every other direction.
     value_origin: Optional[Any] = None
 
+    # ── found (1.22.0) — what a BLOCK-MODE sensor returns for this input ─────
+    #
+    # The action the sensor FOUND, before monitor softening and before any S6
+    # transform: exactly what a sensor with the same configuration and
+    # ``enforcement_mode="block"`` returns for the same input. It is set where
+    # the verdict is decided (the scanner, the tool-argument tiers, the policy
+    # overlay, the gates and the fail-closed builders) and never rewritten by
+    # ``_apply_mode``. In block mode it equals ``action``. It applies the same
+    # caps block mode applies (the documentary-prose cap on tool arguments).
+    #
+    # It is the verdict the gateway attestation carries (``ScanView.found``):
+    # a monitor sensor tells the gateway what it would have refused, and the
+    # gateway decides. It is NOT a guarantee that block mode would have raised:
+    # value origin never blocks in 1.22.0, so found never carries a value-origin
+    # block; a configured ``blocked_tools`` entry blocks in both modes; and an
+    # open circuit breaker is not a finding, so under monitor (where the breaker
+    # never refuses) found is the content verdict while block mode refuses.
+    #
+    # ``compare=False``: two results that differ only here are equal, so a
+    # monitor result compares equal to the same verdict without this field.
+    # ``repr=False`` for the same reason. None on a result a caller builds; the
+    # sensor sets it on every result it returns or raises.
+    found_action: Optional[str] = field(default=None, compare=False, repr=False)
+
     @property
     def is_blocked(self) -> bool:
         """True ONLY for a denial. Deliberately does NOT cover
