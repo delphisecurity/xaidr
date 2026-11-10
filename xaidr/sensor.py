@@ -98,6 +98,7 @@ from .scanner.directive_context import (
 from .scanner.local import LocalScanner
 from .scanner.normalizer import TypoNormalizer
 from .telemetry import SyncTelemetryQueue
+from . import trace_context as _trace
 from .trace_context import ParentContext
 from .privilege_tiers import (
     least_privileged_tier as _least_privileged_tier,
@@ -518,6 +519,8 @@ def _resolve_provenance(
     agent_id: str,
     per_call: dict | None = None,
     tier: int | None = None,
+    *,
+    record: bool = True,
 ) -> Optional[dict]:
     """Build the provenance block for one emitted event (Option-1 wiring).
 
@@ -537,7 +540,7 @@ def _resolve_provenance(
     # the next hop downstream receives it in the x-openA2A-tiers header. It only
     # ever labels the hop this sensor is adding; it can never touch another
     # hop's claim.
-    return _chain.build_provenance(agent_id, on_behalf_of=obo, tier=tier)
+    return _chain.build_provenance(agent_id, on_behalf_of=obo, tier=tier, record=record)
 
 
 def _canonical_arguments(arguments) -> str:
@@ -623,6 +626,86 @@ _VO_WIRE_VOCABULARIES = {
 # gate, not-scannable -- sees it at the one choke point, _enqueue_event.
 _VO_CALL_WIRE: "contextvars.ContextVar[list | None]" = contextvars.ContextVar(
     "xaidr_value_origin_call_wire", default=None)
+
+
+# One scan call's annotations, read at the one choke point every event of that
+# call passes (``_enqueue_event``): the per-call principal, the tool call's trace
+# parent, the per-rule detail behind the rules. Set by the public entry points
+# (scan, scan_a2a, scan_tool_call) and reset on their exit, so a nested scan an
+# extension runs has a context of its own.
+_CALL_CTX: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar(
+    "xaidr_call_ctx", default=None)
+
+
+def _call_scope(fn):
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        token = _CALL_CTX.set({})
+        try:
+            return fn(self, *args, **kwargs)
+        finally:
+            _CALL_CTX.reset(token)
+    return wrapper
+
+
+def _call_ctx() -> dict:
+    ctx = _CALL_CTX.get()
+    return ctx if ctx is not None else {}
+
+
+_GATE_LAYER_CATEGORIES = frozenset({
+    FAIL_CLOSED_CATEGORY, CIRCUIT_OPEN_CATEGORY, NOT_SCANNABLE_CATEGORY,
+    SCAN_ERROR_CATEGORY, "untrusted_destination", "unexaminable_source", "quarantine",
+})
+_AUTHZ_LAYER_RULES = frozenset({"TOOL_BLOCKED", "URL_BLOCKED", "POLICY_DENY"})
+_AUTHZ_LAYER_CATEGORIES = frozenset({"policy", "blocked_tool", "blocked_url"})
+
+
+def policy_severity_for(decision) -> float:
+    """The minimal nonzero severity a policy decision carries on an event, so a
+    score-based dashboard is not misled by 0.0 on a policy block."""
+    return {"blocked": 0.6, "approval_required": 0.6, "flag": 0.3, "monitor": 0.3}.get(
+        decision, 0.0)
+
+
+def _default_layer(rule, category, gate: bool) -> str:
+    """The layer of a rule the result carried no detail for."""
+    if gate or rule in FAIL_CLOSED_RULES.values() or rule in (
+            CIRCUIT_OPEN_RULE, NOT_SCANNABLE_RULE, SCAN_ERROR_RULE):
+        return "gate"
+    if category in _GATE_LAYER_CATEGORIES:
+        return "gate"
+    if isinstance(rule, str) and (rule.startswith("policy") or rule in _AUTHZ_LAYER_RULES):
+        return "authz"
+    if category in _AUTHZ_LAYER_CATEGORIES:
+        return "authz"
+    if isinstance(rule, str) and rule.startswith("nano:"):
+        return "nano"
+    return "l1"
+
+
+def _threat_keys(rules, detail, category, score, gate: bool) -> dict:
+    """``threats`` (one entry per rule, in order, at most 50) and ``threatsCut``
+    (how many more rules there are) for one event. Ids, a category, a score and
+    a layer: never the matched text."""
+    by_rule = {}
+    for d in detail or ():
+        try:
+            by_rule.setdefault(d[0], d)
+        except Exception:
+            continue
+    rows = []
+    for rule in list(rules)[:50]:
+        d = by_rule.get(rule)
+        if d is not None:
+            rows.append({"rule": rule, "category": d[1], "score": d[2], "layer": d[3]})
+        else:
+            rows.append({"rule": rule, "category": category, "score": score,
+                         "layer": _default_layer(rule, category, gate)})
+    out = {"threats": rows}
+    if len(rules) > 50:
+        out["threatsCut"] = len(rules) - 50
+    return out
 
 
 def _vo_call_scope(fn):
@@ -2223,6 +2306,7 @@ class DelphiSensor:
             pass
         return result
 
+    @_call_scope
     def scan(
         self,
         prompt: str,
@@ -2270,6 +2354,9 @@ class DelphiSensor:
         posture is unchanged: with ``fail_closed=()`` not one line below
         behaves differently from before the option existed.
         """
+        if direction == "input":
+            _chain.retire_parent_scan()         # a new request authorises what follows
+        _call_ctx()["origin_context"] = origin_context
         held = {"clean": None}
         try:
             return self._scan_unrecorded(prompt, direction, destination, provider,
@@ -2293,6 +2380,7 @@ class DelphiSensor:
                     "tool behind a tool RESULT and are ignored on any other direction.",
                     direction)
 
+    @_call_scope
     def _scan_tool_result(self, text, *, tool, arguments, raw_result) -> ScanResult:
         """A2 M7 (§1.2): scan a tool's RESULT exactly as scan(direction=
         "tool_result") does (same body, telemetry and refusal), then record the
@@ -2553,6 +2641,7 @@ class DelphiSensor:
         )
         scan_id = uuid4().hex[:12]        # one id: the event's and the result's
         result = replace(result, scan_id=scan_id)
+        _call_ctx()["threat_detail"] = result.threats
 
         data = {
             "timestamp": utc_now_rfc3339(),
@@ -2641,6 +2730,7 @@ class DelphiSensor:
             origin_context=origin_context,
         )
 
+    @_call_scope
     def scan_a2a(
         self,
         message: str,
@@ -2666,6 +2756,7 @@ class DelphiSensor:
         after the open-circuit check, mirroring ``scan_tool_call``, so calls
         already rejected by an open circuit do not keep re-counting.
         """
+        _call_ctx()["origin_context"] = origin_context
         if received:
             self._vo_inbound_a2a()          # Q21, A2 M6 (silent-failure review)
         emit_direction = "a2a_inbound" if received else "a2a"
@@ -2799,6 +2890,7 @@ class DelphiSensor:
         found = result.found_action or result.action
         category = result.category
         rules = list(result.rules)
+        detail = list(result.threats or ())
 
         # `body` was parsed once at the top (reused here for structural checks).
         if isinstance(body, dict):
@@ -2808,6 +2900,8 @@ class DelphiSensor:
             structural_signals = sv["signals"] + idv["signals"]
             if structural_signals:
                 rules = rules + structural_signals
+                detail += [(r, "a2a_structural", round(float(struct_score), 3), "l1")
+                           for r in structural_signals]
                 if struct_score > score:
                     score = struct_score
                 # Re-derive the action from the fused score. Structural/id hits
@@ -2832,7 +2926,9 @@ class DelphiSensor:
             latency_ms=result.latency_ms,
             found_action=found,
             scan_id=scan_id,
+            threats=tuple(detail),
         )
+        _call_ctx()["threat_detail"] = result.threats
 
         data = {
             "timestamp": utc_now_rfc3339(),
@@ -2926,8 +3022,58 @@ class DelphiSensor:
         data = event.get("data") if isinstance(event, dict) else None
         if isinstance(data, dict):
             _run_tree.stamp(data)
+            if event.get("type") == "scan":
+                self._annotate_scan_event(data)
         self._telemetry.enqueue(event)
 
+    def _annotate_scan_event(self, data: dict) -> None:
+        """The additive keys every scan event carries (1.22.0), set once, here,
+        so no exit of any entry point can leave one out. Never raises.
+
+        * ``provenance``: the principal block, when the main path did not set it
+          (the refusal exits); resolved once per event from the call's per-call
+          principal and the context.
+        * ``parentScanId`` on a tool-call event: the input scan that authorised it.
+          Absent means not evaluated. An input event records itself as the
+          parent of what follows.
+        * ``traceParent`` on a tool-call event: the active OTel span (or the
+          caller's explicit parent), resolved once per call.
+        * ``threats``: one ``{rule, category, score, layer}`` per rule, at most
+          50, with ``threatsCut`` when more exist.
+        """
+        try:
+            ctx = _call_ctx()
+            direction = data.get("direction")
+            if "provenance" not in data:
+                # The refusal exits: the principal, read from the chain as it
+                # stands. No hop is recorded here, so a refused call changes
+                # nothing a sensor downstream in the same flow reads as its
+                # upstream (the tier gate), exactly as before this key.
+                prov = _resolve_provenance(
+                    self.agent_id, per_call=ctx.get("origin_context"),
+                    tier=self._declared_tier, record=False)
+                if prov:
+                    data["provenance"] = prov
+            if direction == "tool_call":
+                parent = _chain.current_parent_scan_id()
+                if parent and "parentScanId" not in data:
+                    data["parentScanId"] = parent
+                tp = ctx.get("traceParent")
+                if tp and "traceParent" not in data:
+                    data["traceParent"] = dict(tp)
+            elif direction == "input":
+                _chain.record_input_scan(data.get("scanId"))
+            if "threats" not in data and isinstance(data.get("rules"), list):
+                data.update(_threat_keys(
+                    data["rules"], ctx.get("threat_detail") or (),
+                    data.get("category"), data.get("score"), bool(data.get("gate"))))
+        except Exception:
+            if not getattr(self, "_annotate_fault_logged", False):
+                self._annotate_fault_logged = True
+                logger.exception("xaidr: a scan event's additive keys faulted; the event "
+                                 "is sent without them")
+
+    @_call_scope
     @_vo_call_scope
     def scan_tool_call(
         self,
@@ -2936,6 +3082,7 @@ class DelphiSensor:
         mcp_server: Optional[str] = None,
         origin_context: dict | None = None,
         server_name: Optional[str] = None,
+        parent_context: Optional[ParentContext] = None,
     ) -> ScanResult:
         """Scan a tool call. Value origin is evaluated FIRST (A2 M4, V-7a):
         before the gates, the breaker and ``_resolve_provenance`` (V-7a). Its verdict is attached to whatever comes back, so every
@@ -2945,6 +3092,18 @@ class DelphiSensor:
         builds a fresh result afterwards must carry it, as
         autopatch.tool_verdict does (M4 review). RECORD and
         ENFORCE evaluate; nothing acts on the verdict until M8."""
+        ctx = _call_ctx()
+        ctx["origin_context"] = origin_context
+        # The trace parent of a tool call: the caller's explicit parent_context,
+        # else the ACTIVE OTel span, never the wire (an inbound traceparent names
+        # the request that arrived, not the call this agent makes). Absent with
+        # neither. Read onto every tool_call event of this call.
+        try:
+            pc = parent_context if parent_context is not None else _trace._from_active_span()
+            if pc is not None:
+                ctx["traceParent"] = pc.as_metadata()
+        except Exception:
+            pass
         cv = self._value_origin_verdict(tool_name, arguments)
         _vo_note_wire(cv)                 # M9: every event of this call sees it
         blocked = self._value_origin_block(tool_name, cv)
@@ -2993,7 +3152,8 @@ class DelphiSensor:
                 return
             entry = next((e for e in sink if e[0] == "tool_call"), None)
             record, impact = (entry[1], entry[2]) if entry else (final, None)
-            view = _att.scan_view(record, final, "tool_call", impact_class=impact)
+            view = _att.scan_view(record, final, "tool_call", impact_class=impact,
+                                  parent_scan_id=_chain.current_parent_scan_id())
             if view is None:
                 self._attest_unmapped += 1
                 return
@@ -3274,6 +3434,10 @@ class DelphiSensor:
         score = 0.0
         category: Optional[str] = None
         rules: list[str] = []
+        # The detail behind each rule for the event's `threats`: (rule, category,
+        # score, layer). Text findings are l1, structural (parse) findings authz,
+        # secrets dlp, the policy overlay authz. Never the matched text.
+        detail: list = []
 
         # Impact classification — feeds the local YAML policy overlay below (which
         # is the open authorization mechanism). classify() never raises.
@@ -3283,6 +3447,7 @@ class DelphiSensor:
         if tool_name in self._blocked_tools:
             action, score, category, rules = "blocked", 1.0, "blocked_tool", ["TOOL_BLOCKED"]
             found = "blocked"
+            detail.append(("TOOL_BLOCKED", "blocked_tool", 1.0, "authz"))
 
         # Content scan of the tool name + string args for dangerous command /
         # code-execution patterns (ASI02/ASI05). Even with NO policy configured,
@@ -3537,6 +3702,9 @@ class DelphiSensor:
                         if t.category not in _TOOL_ARG_FLAG_CATEGORIES]
                 category = category or (hard[0].category if hard else danger[0].category)
                 rules = rules + [t.rule for t in danger if t.rule not in rules]
+                detail += [(t.rule, t.category, float(t.score),
+                            "authz" if isinstance(t, _StructuralThreat) else "l1")
+                           for t in danger]
                 # Benign DOCUMENTARY-PROSE cap. This path runs raw L1 over the arg
                 # text with none of scan()'s context calibration, so an agent that
                 # passes an incident report, runbook, policy doc or detection-rule
@@ -3617,6 +3785,7 @@ class DelphiSensor:
                     score = max(score, max(t.score for t in dlp_hits))
                     category = category or dlp_hits[0].category
                     rules = rules + [t.rule for t in dlp_hits if t.rule not in rules]
+                    detail += [(t.rule, t.category, float(t.score), "dlp") for t in dlp_hits]
                     found = "blocked"
                     if self.enforcement.enforces():
                         action = "blocked"
@@ -3626,6 +3795,7 @@ class DelphiSensor:
                     score = max(score, max(t.score for t in dlp_signals))
                     category = category or dlp_signals[0].category
                     rules = rules + [t.rule for t in dlp_signals if t.rule not in rules]
+                    detail += [(t.rule, t.category, float(t.score), "dlp") for t in dlp_signals]
                     if action == "allowed":
                         action = "flagged"
                     if found == "allowed":
@@ -3645,6 +3815,8 @@ class DelphiSensor:
                     category = _OVERSIZED_INPUT_CATEGORY
                 if _OVERSIZED_INPUT_RULE not in rules:
                     rules = rules + [_OVERSIZED_INPUT_RULE]
+                    detail.append((_OVERSIZED_INPUT_RULE, _OVERSIZED_INPUT_CATEGORY,
+                                   float(score), "l1"))
             # The wall-clock BACKSTOP stopped the argument windows before the window
             # count did: its own reason, never a silent change (2026-11-01).
             if _arg_backstop and _SCAN_DEGRADED_RULE not in rules:
@@ -3655,6 +3827,8 @@ class DelphiSensor:
                 score = max(score, _SCAN_DEGRADED_SCORE)
                 category = category or _SCAN_DEGRADED_CATEGORY
                 rules = rules + [_SCAN_DEGRADED_RULE]
+                detail.append((_SCAN_DEGRADED_RULE, _SCAN_DEGRADED_CATEGORY,
+                               float(_SCAN_DEGRADED_SCORE), "l1"))
 
         # Compose the local YAML policy as an overlay (STRICTER WINS), BEFORE the
         # enforcement_mode gate so the same gate (_apply_mode) sees the composed
@@ -3714,14 +3888,11 @@ class DelphiSensor:
                 )
                 if rule_label not in rules:
                     rules = rules + [rule_label]
+                    detail.append((rule_label, "policy", float(policy_severity_for(pol.decision)),
+                                   "authz"))
                 # Minimal nonzero severity so score-based dashboards aren't misled
                 # by 0.0 on a policy block. Never lowers a higher real score.
-                policy_severity = {
-                    "blocked": 0.6,
-                    "approval_required": 0.6,
-                    "flag": 0.3,
-                    "monitor": 0.3,
-                }.get(pol.decision, 0.0)
+                policy_severity = policy_severity_for(pol.decision)
                 if policy_severity > score:
                     score = policy_severity
 
@@ -3732,7 +3903,9 @@ class DelphiSensor:
         result = ScanResult(
             action=action, score=score, category=category, rules=rules,
             latency_ms=_scan_ms, found_action=found, scan_id=scan_id,
+            threats=tuple(detail),
         )
+        _call_ctx()["threat_detail"] = result.threats
 
         # Emit telemetry (mirrors the scan() enqueue shape, direction=tool_call)
         # resolve the app-supplied principal (3b semantics: per-call > set context)
@@ -4949,7 +5122,8 @@ class ProtectedHttpClient:
                 "promptLength": 0,
                 "promptHash": safe_content_hash(dest),
             }
-            prov = _resolve_provenance(self._sensor.agent_id)
+            prov = _resolve_provenance(self._sensor.agent_id,
+                                       tier=self._sensor._declared_tier)
             if prov:
                 data["provenance"] = prov
             self._sensor._enqueue_event({

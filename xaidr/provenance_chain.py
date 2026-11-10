@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+
+from . import _parent_scan
 import dataclasses
 import functools
 import inspect
@@ -346,6 +348,7 @@ def current_tiers() -> list[int | None]:
 
 
 def clear_flow() -> None:
+    retire_parent_scan()                    # the request is over: no parent input scan
     try:
         _vo.unbind_ledger()                 # A2 M5: the request's ledger ends with it
     except Exception:
@@ -761,6 +764,35 @@ _REQUEST_SCOPES: contextvars.ContextVar[tuple] = contextvars.ContextVar(
     "xaidr_request_scopes", default=())
 
 
+# ── the parent input scan (1.22.0) ──────────────────────────────────────────
+# The scanId of the most recent INPUT scan in this execution context: the
+# request that authorised the tool calls that follow it. Set when an input event
+# is emitted, retired at the top of every input scan (so an input event has no
+# parent and a new turn never inherits the last), never set by an output scan,
+# and opened afresh when a request opens. Read onto every tool_call event as
+# ``parentScanId`` and onto the attestation. None MEANS not evaluated. It never
+# means "search wider": a tool call with no input scan in its context has no
+# parent, and nothing looks one up by flow, correlation or run tree. The value
+# lives in a cell a request shares with the contexts copied from it
+# (``xaidr._parent_scan``), which is what reaches a LangGraph tools node.
+
+
+def record_input_scan(scan_id: str | None) -> None:
+    """The input scan just emitted becomes the parent of what follows it here."""
+    _parent_scan.record(scan_id)
+
+
+def retire_parent_scan() -> None:
+    """At the top of an input scan: the new request authorises what follows, so
+    the previous input is no longer anyone's parent."""
+    _parent_scan.retire()
+
+
+def current_parent_scan_id() -> str | None:
+    """The parent input scan's id, or None for not evaluated."""
+    return _parent_scan.current()
+
+
 class _RequestScope:
     """``xaidr.request_scope()``'s context manager. See :func:`request_scope`."""
 
@@ -768,6 +800,7 @@ class _RequestScope:
         self._opened: list = []              # its records, wherever it is exited
 
     def __enter__(self) -> None:
+        retire_parent_scan()                    # a new request: no parent yet
         try:
             rec = _vo_ledger.request_enter(accumulate=True, kind="scope")
             self._opened.append(rec)
@@ -837,6 +870,8 @@ def build_provenance(
     agent_id: str,
     on_behalf_of: str | None = None,
     tier: int | None = None,
+    *,
+    record: bool = True,
 ) -> dict[str, Any] | None:
     """Build the provenance block from the accumulated multi-hop chain.
 
@@ -853,7 +888,10 @@ def build_provenance(
     if not is_flow_active() and not on_behalf_of:
         return None
 
-    chain = record_hop(agent_id, "agent", tier=tier)
+    # ``record=False`` reads the chain as it stands and adds no hop: the refusal
+    # emitters carry the principal without changing what a sensor downstream in
+    # the same flow sees as its upstream (the tier gate reads that chain).
+    chain = record_hop(agent_id, "agent", tier=tier) if record else list(current_chain() or [])
     corr = current_correlation_id()
 
     # derive origin/actor from the chain

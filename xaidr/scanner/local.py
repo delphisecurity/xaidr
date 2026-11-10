@@ -549,6 +549,7 @@ class LocalScanner:
         # guards keep benign inputs near zero, so always-on is safe. `scan_text`
         # is already capped (L1_MAX_SCAN_CHARS), so the path stays bounded.
         comp_rules = []
+        comp_details = []
         comp_category = None
         comp_score = 0.0
         if direction == "a2a":
@@ -561,6 +562,7 @@ class LocalScanner:
         comp_score = comp["score"]
         if comp_score > 0:
             comp_rules = [d["rule"] for d in comp.get("details", [])]
+            comp_details = list(comp.get("details", []))
             if comp.get("details"):
                 comp_category = comp["details"][0].get("category")
 
@@ -613,6 +615,7 @@ class LocalScanner:
                 # closed.
                 comp_score = 0.0
                 comp_rules = []
+                comp_details = []
                 comp_category = None
 
         score = self._compute_composite(l1_score, l2_score, dlp_score)
@@ -856,6 +859,15 @@ class LocalScanner:
             + dlp_rules
             + comp_rules
         )
+        # The detail behind each rule, for the event's `threats`: which layer
+        # found it, its category and its score. Never the matched text.
+        detail = (
+            [(t.rule, t.category, t.score, "l1") for t in l1_threats]
+            + [(t.rule, t.category, t.score, "l2") for t in l2_threats]
+            + [(t.rule, t.category, t.score, "dlp") for t in dlp_threats]
+            + [(d.get("rule"), d.get("category"), float(d.get("confidence", comp_score) or 0.0),
+                "composite") for d in comp_details]
+        )
         # ATTRIBUTION for a nano-driven flag. Without this a nano flag arrives
         # with `rules == []` and `category is None`: the operator sees a flagged
         # event that names nothing at all, which is indistinguishable from a bug
@@ -878,15 +890,25 @@ class LocalScanner:
         # would be dead branches pretending to be defence.
         if nano_family and nano_family != NANO_FAMILY_SILENT:
             all_rules.append(f"nano:{nano_family}")
+            detail.append((f"nano:{nano_family}", "prompt_injection",
+                           float(nano_score or 0.0), "nano"))
         if bypass_hit:
             all_rules.append("DIRECTIVE_protective_override_bypass")
+            detail.append(("DIRECTIVE_protective_override_bypass", "system_prompt_leak",
+                           round(score, 3), "l1"))
         if encoding_hit:
             all_rules.append("LLM01_encoded_payload_directive")
+            detail.append(("LLM01_encoded_payload_directive", "prompt_injection",
+                           round(score, 3), "l1"))
         if url_score > 0:
             all_rules.append("LLM01_url_encoded_danger")
+            detail.append(("LLM01_url_encoded_danger", "prompt_injection",
+                           round(url_score, 3), "l1"))
         for r in oversize_rules:
             if r not in all_rules:
                 all_rules.append(r)
+                detail.append((r, oversize_category or OVERSIZED_INPUT_CATEGORY,
+                               round(score, 3), "l1"))
 
         all_threats = list(l1_threats) + list(l2_threats) + list(dlp_threats)
         top_threat = max(all_threats, key=lambda t: t.score, default=None)
@@ -925,6 +947,7 @@ class LocalScanner:
             nano_score=None if nano_score is None else round(nano_score, 4),
             nano_raw=None if nano_raw is None else round(nano_raw, 4),
             found_action=found,
+            threats=tuple(d for d in detail if d[0] in all_rules),
         )
 
         # --- S3 · escalation chain -------------------------------------------
@@ -956,12 +979,20 @@ class LocalScanner:
             # is what a block-mode scanner found. Set from the link's ACTION,
             # not carried: a link that answers with replace(local, action=...)
             # carries the local found, which is the stale one (M1 review).
+            # A link's own rule ids are a CONTROL's answer, not a local
+            # detector's: layer gate, with the link's category and score, where
+            # the local detail has none. (`l2` is the local intent layer.)
+            known = {d[0] for d in getattr(escalated, "threats", ()) or ()}
+            extra_detail = tuple(
+                (r, escalated.category, float(escalated.score), "gate")
+                for r in (escalated.rules or []) if r not in known)
             result = replace(
                 escalated,
                 latency_ms=int(round((time.perf_counter() - scan_start) * 1000)),
                 escalation=escalation,
                 escalation_reason=reason,
                 found_action=escalated.action,
+                threats=tuple(getattr(escalated, "threats", ()) or ()) + extra_detail,
             )
         return result
 

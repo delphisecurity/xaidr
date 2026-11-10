@@ -88,6 +88,8 @@ import os
 import secrets
 import threading
 from contextvars import ContextVar
+
+from .. import _parent_scan
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ._authority import (classify_value, key_chain, prose_candidates, result_candidates,
@@ -251,6 +253,7 @@ def request_enter(*, accumulate: bool = False, kind: str = "job") -> Optional[_R
             new.saved_state = [get() for get, _ in _REQUEST_STATE]
         _REQUEST.set(new)
         _LEDGER.set(None)
+        _parent_scan.open_cell()          # a new request: no parent input scan yet
         return new
     except Exception:
         _log.exception("value origin: opening a request faulted")

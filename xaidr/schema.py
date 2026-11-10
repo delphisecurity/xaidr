@@ -28,6 +28,8 @@ the internal event, so this is forward-compatible.
 
 from __future__ import annotations
 
+import json
+
 from typing import Any
 from uuid import uuid4
 
@@ -266,6 +268,7 @@ def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
     # Trace correlation applies to every event type, so it is resolved before
     # the branch.
     _passthrough_trace(data, out)
+    _passthrough_release_keys(data, out)
     _passthrough_run_tree(data, out)
 
     if event_type == EVENT_TYPE_CIRCUIT_BREAKER:
@@ -512,6 +515,27 @@ def _map_circuit_breaker(data: dict[str, Any], out: dict[str, Any]) -> None:
     mode = data.get("enforcementMode") or data.get("enforcement_mode")
     if mode:
         out["gen_ai.security.detection.enforcement_mode"] = mode
+
+
+def _passthrough_release_keys(data: dict[str, Any], out: dict[str, Any]) -> None:
+    """The additive keys of 1.22.0, when present: the parent input scan, the
+    rule bundle version, and the per-rule threat list (as one JSON string, since
+    an attribute holds no list of objects). Absent stays absent."""
+    parent = data.get("parentScanId")
+    if isinstance(parent, str) and parent:
+        out["gen_ai.security.parent_scan_id"] = parent
+    bundle = data.get("bundleVersion")
+    if isinstance(bundle, int) and not isinstance(bundle, bool):
+        out["gen_ai.security.bundle_version"] = bundle
+    threats = data.get("threats")
+    if isinstance(threats, list) and threats:
+        try:
+            out["gen_ai.security.threats"] = json.dumps(threats, separators=(",", ":"))
+        except (TypeError, ValueError):
+            pass
+    cut = data.get("threatsCut")
+    if isinstance(cut, int) and not isinstance(cut, bool) and cut > 0:
+        out["gen_ai.security.threats_cut"] = cut
 
 
 def _passthrough_trace(data: dict[str, Any], out: dict[str, Any]) -> None:

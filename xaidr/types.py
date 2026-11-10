@@ -204,6 +204,17 @@ class ScanResult:
     # found_action: an id is not part of a verdict's identity.
     scan_id: Optional[str] = field(default=None, compare=False, repr=False)
 
+    # ── threats (1.22.0) — one ``(rule, category, score, layer)`` per rule ────
+    #
+    # The per-rule detail behind ``rules``, in the same order, from the layer
+    # that produced each: ``l1``, ``l2``, ``dlp``, ``composite``, ``nano``,
+    # ``authz`` or ``gate``. The event's ``threats`` key is built from it. Never
+    # the matched text: ids, a category and a score only. Empty when the layer
+    # recorded no detail; the event then carries the result's category and
+    # score for that rule. ``compare=False``/``repr=False`` as for the two
+    # fields above.
+    threats: tuple = field(default=(), compare=False, repr=False)
+
     @property
     def is_blocked(self) -> bool:
         """True ONLY for a denial. Deliberately does NOT cover
