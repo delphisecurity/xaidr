@@ -64,6 +64,18 @@ def _load_ruleset() -> dict:
             "impact-classes.json",
             f"failed to load ({type(exc).__name__}); using defaults only")
         return {"version": 0, "default": dict(_FALLBACK_DEFAULT), "rules": [], "argument_escalations": []}
+    return _build_ruleset(raw)
+
+
+def _build_ruleset(raw, *, strict: bool = False) -> dict:
+    """Compile the parsed ``impact-classes.json`` into the table the classifier
+    reads. The import path drops an entry whose pattern does not compile and
+    records the fault; a bundle (``strict=True``) is refused on the same defect
+    (``xaidr.rule_bundle``). The caller's object is not written to."""
+    import copy as _copy
+    if not isinstance(raw, dict):
+        raise TypeError("impact-classes.json: not an object")
+    raw = _copy.deepcopy(raw)
 
     # Pre-compile value patterns; drop escalation entries with bad regexes.
     escalations = []
@@ -73,6 +85,8 @@ def _load_ruleset() -> dict:
             try:
                 esc = {**esc, "value_pattern": re.compile(pattern)}
             except re.error as exc:
+                if strict:
+                    raise
                 print(f"[xaidr] Warning: escalation {esc.get('id')} regex failed: {exc}")
                 _record_asset_fault(
                     "impact-classes.json",
@@ -91,6 +105,8 @@ def _load_ruleset() -> dict:
             try:
                 compiled.append(_compile_command_entry(entry))
             except re.error as exc:
+                if strict:
+                    raise
                 print(f"[xaidr] Warning: command classifier {entry.get('id')} regex failed: {exc}")
                 _record_asset_fault(
                     "impact-classes.json",
@@ -107,6 +123,8 @@ def _load_ruleset() -> dict:
         try:
             compiled.append(_compile_command_entry(entry))
         except re.error as exc:
+            if strict:
+                raise
             print(f"[xaidr] Warning: sql classifier {entry.get('id')} regex failed: {exc}")
             _record_asset_fault(
                 "impact-classes.json",
@@ -123,6 +141,8 @@ def _load_ruleset() -> dict:
         try:
             compiled.append(_compile_command_entry(entry))
         except re.error as exc:
+            if strict:
+                raise
             print(f"[xaidr] Warning: url classifier {entry.get('id')} regex failed: {exc}")
             _record_asset_fault(
                 "impact-classes.json",

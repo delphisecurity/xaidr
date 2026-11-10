@@ -333,8 +333,20 @@ def _load_and_compile(filename: str) -> list:
         _record_asset_fault(
             filename, f"failed to load ({type(e).__name__}); using empty ruleset")
         return []
+    return _compile_rules(raw, filename)
 
+
+def _compile_rules(raw, filename: str, *, strict: bool = False) -> list:
+    """Compile one rule file's parsed JSON into the rule list the scanner reads.
+
+    The import path (``strict=False``) degrades as it always has: a rule whose
+    pattern does not compile is dropped and recorded as an asset fault. A rule
+    BUNDLE (``xaidr.rule_bundle``, ``strict=True``) is held to the whole-or-
+    nothing rule: the same defect raises, and the bundle is refused.
+    """
     if not isinstance(raw, list):
+        if strict:
+            raise TypeError(f"{filename}: not a rule list")
         print(f"[xaidr] Warning: {filename} is not a rule list; using empty ruleset")
         _record_asset_fault(filename, "not a rule list; using empty ruleset")
         return []
@@ -404,6 +416,8 @@ def _load_and_compile(filename: str) -> list:
                 "filter_reserved_email": bool(r.get("filter_reserved_email", False)),
             })
         except re.error as e:
+            if strict:
+                raise
             # A rule that will not COMPILE is the same defect as a rule with an
             # unknown category (see the UnknownRuleCategory raise above): it
             # loads and never fires, and nothing downstream can tell the

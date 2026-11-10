@@ -64,6 +64,7 @@ from .failclosed import (
     resolve as _resolve_fail_closed,
 )
 from . import attestation as _att
+from . import rule_bundle as _bundle
 from .extensions import DestinationView, EgressView, ScanRequest, SensorExtension
 from . import value_origin as _vo
 from . import _vo_seams
@@ -918,6 +919,23 @@ class DelphiSensor:
         # and round-tripped through ProtectionManifest and the framework
         # integrations. Those want a JSON-serialisable name, not a policy.
         self.enforcement_mode = self.enforcement.name
+
+        # ── S15 · the rule bundle an extension hands in, read ONCE at attach ──
+        # Before the scanner is built, so its normaliser reads the bundle's
+        # table. The first bundle in extension order wins. A raise fails
+        # construction, as the other attach-time collectors do; a bundle that is
+        # REFUSED is logged once and the packaged rules keep scanning.
+        for extension in self._extensions:
+            bundle = extension.rule_bundle()
+            if bundle is None:
+                continue
+            if _bundle.install(bundle):
+                break
+            name = getattr(extension, "name", type(extension).__name__)
+            logger.error(
+                "xaidr: extension %r returned a rule bundle from rule_bundle() that was "
+                "REFUSED (not a complete rule set, or a rule in it does not load); the "
+                "packaged rules keep scanning. Logged once per sensor.", name)
 
         self._scanner = LocalScanner(
             block_threshold=block_threshold,
@@ -2161,10 +2179,13 @@ class DelphiSensor:
         (the latter from a ``require_approval`` policy). Monitor mode must never
         interrupt the agent — an approval gate halts autonomous execution just as
         a block does, so leaving it un-downgraded would make monitor mode stop
-        traffic. Telemetry keeps the true pre-downgrade verdict (it is emitted
-        from the composed action BEFORE this gate runs); only the returned action
-        is softened. The local scanner already gates on the policy; this is a
-        belt-and-suspenders guard. Quarantine is never downgraded.
+        traffic. Telemetry records the composed action as it reaches this gate:
+        for the tool-call, policy and A2A paths that is the verdict before this
+        downgrade, and for a content block the scanner has already answered the
+        mode question itself, so a monitor sensor's scan event says ``flagged``
+        for a score that block mode refuses. What the sensor FOUND is
+        ``ScanResult.found_action`` on every path, and the attestation carries
+        it. Quarantine is never downgraded.
 
         Which actions are halting, and what they soften to, is the policy's to
         say — see EnforcementPolicy.downgrade. Calling it unconditionally and
@@ -2970,11 +2991,9 @@ class DelphiSensor:
         scan() path applies) so obfuscated tool args are folded identically to
         prompt content; builds one lazily as a fallback. Cached after first use.
         """
-        n = getattr(self, "_tool_arg_norm", None)
-        if n is None:
-            n = getattr(self._scanner, "_normalizer", None) or TypoNormalizer()
-            self._tool_arg_norm = n
-        return n
+        # Read each time: the normaliser in force can change when a rule bundle
+        # installs, and a cached instance would keep the old table.
+        return getattr(self._scanner, "_normalizer", None) or TypoNormalizer()
 
     def _vo_first_withheld(self, wire: str) -> bool:
         """True the first time ``wire`` is withheld (under the lock: silent-failure review)."""
@@ -3022,9 +3041,36 @@ class DelphiSensor:
         data = event.get("data") if isinstance(event, dict) else None
         if isinstance(data, dict):
             _run_tree.stamp(data)
+            bundle_version = _bundle.version()
+            if bundle_version is not None:
+                data["bundleVersion"] = bundle_version      # the rules in force
             if event.get("type") == "scan":
                 self._annotate_scan_event(data)
         self._telemetry.enqueue(event)
+
+    def load_rule_bundle(self, bundle) -> bool:
+        """Adopt a complete rule set, whole or not at all, the way ``set_policy``
+        adopts a policy. Returns True when the bundle is in force; False when it
+        was refused and the rules in force are unchanged. Never raises.
+
+        The shape is ``xaidr.rule_bundle``'s: an integer ``version`` and
+        ``files``, the seven packaged rule files as parsed JSON, every one of
+        them. A rule that would not load refuses the whole bundle. The tables are
+        the process's and every scanner reads them at call time, so the bundle is
+        in force for EVERY sensor in the process, built before or after, from the
+        next scan each starts; a scan in flight when the swap lands may read one
+        layer's old table and the next layer's new one. The version rides every
+        event as ``bundleVersion`` from then on.
+
+        Open never fetches or verifies a bundle; that is the caller's.
+        """
+        if not _bundle.install(bundle):
+            logger.error(
+                "xaidr: Sensor(agent_id=%r): load_rule_bundle refused the bundle (not a "
+                "complete rule set, or a rule in it does not load); the rules in force "
+                "are unchanged", self.agent_id)
+            return False
+        return True
 
     def _annotate_scan_event(self, data: dict) -> None:
         """The additive keys every scan event carries (1.22.0), set once, here,

@@ -47,6 +47,7 @@ from .l1 import (
     iter_scan_windows,
 )
 from .l2 import scan_l2
+from . import normalizer as _normalizer_mod
 from .normalizer import TypoNormalizer
 
 logger = logging.getLogger("xaidr.scanner.local")
@@ -399,7 +400,8 @@ class LocalScanner:
         # the gate below.
         self.enforcement = _MONITOR if shadow_mode else _resolve_enforcement(enforcement_mode)
         self.enforcement_mode = self.enforcement.name
-        self._normalizer = TypoNormalizer()
+        # The normaliser is read at call time (see the property below), so a
+        # rule bundle's typo table reaches this scanner the moment it installs.
         self._compositional = CompositionalScanner()
 
         # --- S3: the escalation chain (empty in open) -------------------------
@@ -477,6 +479,11 @@ class LocalScanner:
             # the fetch step; fetching it is a separate, deliberate act
             # (nano.resolve_model_dir(auto_download=True)).
             self._nano = DelphiNano.get(nano_model_dir, auto_download=False)
+
+    @property
+    def _normalizer(self) -> TypoNormalizer:
+        """The normaliser in force: the packaged typo table's, or a rule bundle's."""
+        return _normalizer_mod.current()
 
     def scan(
         self,

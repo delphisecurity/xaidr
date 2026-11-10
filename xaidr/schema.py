@@ -57,7 +57,16 @@ from .types import safe_content_hash, utc_now_rfc3339
 #: guarantee on 0.x minors: 0.x is where a schema is allowed to still be wrong.
 #: The version rides on every event precisely so a consumer can branch on it,
 #: which is worth nothing if it does not move when the shape does.
-SCHEMA_VERSION = "0.3.0"   # M9 (Q14): valueOrigin; absent = "not reported" or withheld by value_origin_wire
+#:
+#: 0.3.0 is the version the value-origin work moved to: ``valueOrigin`` on a
+#: tool-call event, where an ABSENT key means "not reported" (OFF, a fault, or
+#: withheld by ``value_origin_wire``), which is a changed meaning of an absence.
+#: The keys 1.22.0 adds beside it are additive and move nothing: the run-tree
+#: keys, ``parentScanId``, ``traceParent`` on tool-call events, ``provenance``
+#: on the refusal emitters, ``threats``/``threatsCut`` and ``bundleVersion``.
+#: The rule, pinned by tests/test_audit_f9_tool_telemetry.py: an added key does
+#: not move this constant; a changed meaning does.
+SCHEMA_VERSION = "0.3.0"
 
 #: Envelope ``type`` values the sensor emits, and the values that appear on
 #: ``gen_ai.security.event_type``. Passed through as-is rather than translated:

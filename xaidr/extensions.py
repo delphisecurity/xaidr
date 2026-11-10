@@ -49,10 +49,10 @@ content is that extension's configuration, not a seam here.
 Wired: S1 (attach), S2 (policy conditions), S3 (escalators), S5 (gate chain),
 S6 (verdict transform), S7 (enforcement policy, harden-only), S9 (subject
 trust), S10 (destination policy), S11 (blocked URLs), S12 (outbound headers,
-add-only) and S14 (egress attestation). S4, S8 and S13 are declared and not
-wired; they are declared here rather than added one per PR so the public
-contract stops moving: an extension package written against this class does
-not have to re-subclass every time another seam lands.
+add-only), S14 (egress attestation) and S15 (rule bundle). S4, S8 and S13 are
+declared and not wired; they are declared here rather than added one per PR so
+the public contract stops moving: an extension package written against this
+class does not have to re-subclass every time another seam lands.
 """
 
 from __future__ import annotations
@@ -291,6 +291,24 @@ class SensorExtension:
         ``fail_closed=("controls",)`` the fault is a verdict instead.
         """
         return {}
+
+    # ── S15 ──────────────────────────────────────────────────────────────────
+    def rule_bundle(self) -> Optional[Mapping[str, Any]]:
+        """A complete rule set to adopt at attach, or None to run the packaged rules.
+
+        Read ONCE, at construction, before the scanner is built; the first
+        extension in order that returns one wins. The shape is
+        ``xaidr.rule_bundle``'s: an integer ``version`` and ``files``, the seven
+        packaged rule files as parsed JSON. It is adopted whole or not at all; a
+        bundle that is refused is logged once (the extension name and the hook,
+        never a rule's text) and the packaged rules keep scanning. A raise here
+        fails construction, like the other attach-time collectors. While a bundle
+        is in force its version rides every event as ``bundleVersion``.
+
+        Open never fetches or verifies a bundle. Checking its signature is the
+        extension's, before it is returned from here.
+        """
+        return None
 
     # ── wired elsewhere: S2, S3, S9, S10, S11, S12 ──────────────────────────
     # ── declared, not yet wired: S4, S8, S13 ────────────────────────────────
