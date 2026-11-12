@@ -68,8 +68,9 @@ In the log of every CI run, printed by the job that measured them.
 | `pytest (py<ver>, full)` | `N passed, M skipped` — `pip install ".[http,trace,dev]"` | any test fails |
 | `corpus report (py<ver>)` | corpus table, nested-A2A FP count, intent catch rate + denominator, and the three held-out report figures | a benign gate is violated, or the nested-A2A structural FP gate is non-zero |
 | `rules-in-wheel guard` | rules shipped in the built wheel | fewer than 7 rules JSON ship, or a clean-venv install cannot scan |
+| `httpx2 + real SDKs (py<ver>, httpx2 <ver>)` | `httpx2 cases: collected=… xfailed=11 skipped=0 … per file={…}` — `pip install ".[http]"` plus `requests` and pinned httpx2 (2.14.0 on 3.10, 2.16.0 on 3.12), openai 3.49.0, anthropic 2.8.0, mcp 2.3.0 | a case fails, a case in `tests/test_httpx2_*.py` skips, a file collects fewer cases than it has, or the strict xfails are not exactly the 11 declared |
 
-Two of those lines are gates and two are measurements, and the distinction is
+Three of those lines are gates and two are measurements, and the distinction is
 deliberate: `corpus report` prints the intent metrics and the held-out battery
 figures without gating on them, because they are numbers, not contracts. The
 contract for the benign pools is in pytest — `tests/test_privilege_action.py`
@@ -118,6 +119,7 @@ a hand-kept count cannot stay honest. `python -m pytest -q
 | `nano` needs `onnxruntime` + the pinned local artifact | `pip install ".[nano]"` and set `XAIDR_NANO_TEST_ARTIFACTS` |
 | real Haystack not installed | `pip install ".[haystack]"` |
 | needs the `[http]` extra | `pip install ".[http]"` |
+| `httpx2` (and, for the real-SDK cases, `openai`, `anthropic`, `mcp` 2.x) not installed | `pip install httpx2 openai anthropic "mcp>=2"`; CI's `httpx2` job runs them with pins |
 | real LangChain / `langchain-core` not installed | `pip install ".[langchain]"` |
 | real LangGraph (with LangChain) not installed | `pip install langgraph` |
 | real CrewAI not installed | `pip install ".[crewai]"` |

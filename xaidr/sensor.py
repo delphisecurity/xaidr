@@ -15,6 +15,7 @@ import inspect
 import json
 import logging
 import re
+import sys
 import threading
 import time
 from dataclasses import replace
@@ -4616,7 +4617,7 @@ class DelphiSensor:
         return sorted(_BIND_FAILURES)
 
     def protect_http(self, client: "httpx.Client") -> "ProtectedHttpClient":
-        """Wrap an httpx.Client to enforce on outgoing HTTP calls.
+        """Wrap an httpx.Client or an httpx2.Client to enforce on outgoing HTTP calls.
 
         Two independent, stricter-wins enforcement layers:
 
@@ -4629,9 +4630,10 @@ class DelphiSensor:
           fields) and scanned via ``scan_a2a``; the response body is scanned for
           output DLP. A malicious body is blocked even to an allowed destination.
 
-        Requires the ``http`` extra (``pip install xaidr[http]`` — pulls in
-        httpx). Destination agent is inferred from URL (/agents/{id}/) or body
-        (targetAgent, agentId).
+        An ``httpx.Client`` needs the ``http`` extra (``pip install xaidr[http]``
+        — pulls in httpx); an ``httpx2.Client`` needs only httpx2, which the
+        OpenAI 3.x, Anthropic 2.x and MCP 2.x SDKs install. Destination agent is
+        inferred from URL (/agents/{id}/) or body (targetAgent, agentId).
 
         Usage::
 
@@ -4646,7 +4648,7 @@ class DelphiSensor:
             resp = protected.post("http://billing:3002/ask", json={"message": task})
 
         Args:
-            client: An httpx.Client instance to wrap.
+            client: An httpx.Client or httpx2.Client instance to wrap.
 
         Returns:
             A ProtectedHttpClient that proxies all methods, blocks denied
@@ -4703,7 +4705,7 @@ import re as _re
 
 
 class ProtectedHttpClient:
-    """Wraps httpx.Client to auto-scan outgoing A2A HTTP traffic.
+    """Wraps an httpx.Client or httpx2.Client to auto-scan outgoing A2A HTTP traffic.
 
     Proxies all methods to the underlying client. POST, PUT, and PATCH
     requests are scanned before sending. Response bodies are scanned
@@ -5463,15 +5465,66 @@ class ProtectedHttpClient:
         attested at the send seam, from the request httpx built."""
         if not self._sensor._attests_egress:
             return headers
-        import httpx
+        request_class = self._request_class()
         try:
-            body = httpx.Request(method, url, json=json_body, content=content).content
+            body = request_class(method, url, json=json_body, content=content).content
         except Exception:
             body = None                        # a stream: not read, not named
         out = dict(headers or {})
         existing = list(out.keys()) + list(self._client_default_headers())
         out.update(self._attest_headers(method, str(url), body, scanned, existing))
         return out
+
+    def _client_family(self) -> Optional[str]:
+        """``"httpx"`` or ``"httpx2"``: the package the wrapped client comes from,
+        read from the first class in its MRO whose root module is one of them (an
+        SDK subclass such as openai's lives in another module). None otherwise."""
+        for klass in type(self._client).__mro__:
+            root = str(getattr(klass, "__module__", "") or "").partition(".")[0]
+            if root in ("httpx", "httpx2"):
+                return root
+        return None
+
+    def _refused_body(self, method, url, json_body, content, kwargs):
+        """The bytes of a verb's request, read only where reading consumes
+        nothing: ``json=``/``content=`` built as the client builds them, or a
+        ``data=`` str or bytes. A stream or a form is not read (None)."""
+        if json_body is None and content is None:
+            data = kwargs.get("data")
+            if isinstance(data, str):
+                return data.encode("utf-8")
+            return bytes(data) if isinstance(data, (bytes, bytearray)) else None
+        try:
+            return self._request_class()(method, url, json=json_body, content=content).content
+        except Exception:
+            return None
+
+    def _request_class(self):
+        """The ``Request`` class of the wrapped client's package, so the bytes
+        attested are built the way that client builds them. Anything that is not
+        an httpx or httpx2 client reads ``httpx.Request``. An ``httpx2.Client``
+        never needs httpx installed."""
+        family = self._client_family()
+        request_class = getattr(sys.modules.get(family), "Request", None) if family else None
+        if request_class is not None:
+            return request_class
+        import httpx
+        return httpx.Request
+
+    def _drop_pending_call(self, body) -> None:
+        """A ``tools/call`` request refused before it leaves drops one pending
+        tool-call entry for its tool name and arguments hash
+        (``ToolCallTable.discard``: the least strict, so the strictest stays for
+        the request that leaves). With one matching entry, that is the refused
+        call's own, and it binds no later request; when found verdicts differ the
+        strictest stays, which can be the refused call's. Used on the httpx2
+        paths. Never raises."""
+        try:
+            call = _att.tools_call(body)
+            if call is not None:
+                self._sensor._pending_tool_calls.discard(call[0], _args_key(call[1]))
+        except Exception:
+            pass
 
     def _client_default_headers(self):
         """The names of the wrapped client's own default headers: they ride every
@@ -5628,8 +5681,17 @@ class ProtectedHttpClient:
         The attestation names the scan, so the scan comes first, and a refused
         request builds no headers at all."""
         full = self._full_url(url)
-        scanned = self._scan_request(full, json, content)
-        headers = self._egress_headers(full, headers, source_agent=True)
+        try:
+            scanned = self._scan_request(full, json, content)
+            headers = self._egress_headers(full, headers, source_agent=True)
+        except DelphiBlockedError:
+            # httpx2 (as at its send seam): a tools/call refused before it leaves,
+            # by its scan or a fail-closed header seam, drops its pending
+            # tool-call entry. The attestation takes it only after this point.
+            # An httpx client keeps 1.22.0.
+            if self._sensor._attests_egress and self._client_family() == "httpx2":
+                self._drop_pending_call(self._refused_body(method, full, json, content, kwargs))
+            raise
         own = self._own_body(kwargs)
         if own:
             headers = self._attest_verb(method, full, json, content, scanned, headers)

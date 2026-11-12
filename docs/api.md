@@ -32,7 +32,7 @@ flush and stop one early.
 | `block_tools(names)` / `unblock_tools(names)` | operator tool blocklist |
 | `block_urls(urls)` / `unblock_urls(urls)` | operator destination blocklist |
 | `protect_tools(tools)` | wrap tools with enforcement (idempotent — a tool already wrapped is returned unchanged) |
-| `protect_http(client)` | wrap an `httpx.Client` |
+| `protect_http(client)` | wrap an `httpx.Client` or an `httpx2.Client` |
 | `privilege_tier` | this sensor's configured [tier](https://github.com/delphisecurity/xaidr/blob/main/docs/privilege-tiers.md) (property; read-only, set at construction) |
 | `circuit_state` | `"closed"` / `"open"` (property; always `"closed"` with no breaker) |
 | `reset_circuit()` | close the circuit breaker now, clear its counters |

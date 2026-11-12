@@ -14,8 +14,9 @@ is logged once per tool; evictions and expiries are counted.
 
 The MCP transport's POST leaves from the transport's writer task, not from the
 task that called ``call_tool`` (READ §10.1, measured on mcp 1.30.0), which is
-why the binding is a table and not a ContextVar. On mcp 2.x the POST leaves
-over ``httpx2``, which xaidr does not patch; the real-client test skips there.
+why the binding is a table and not a ContextVar. The real-client cases drive
+the mcp 1.x API (``FastMCP``, ``streamablehttp_client``) and skip on mcp 2.x,
+which ``tests/test_httpx2_mcp.py`` drives over httpx2.
 
 Inputs: committed corpus rows and plain benign arguments. No attack string.
 """
@@ -385,8 +386,7 @@ def _mcp_major():
 def mcp_server():
     pytest.importorskip("mcp")
     if (_mcp_major() or 0) >= 2:
-        pytest.skip("mcp 2.x sends over httpx2, which xaidr does not patch; the binding "
-                    "runs on mcp 1.x (READ §10.1)")
+        pytest.skip("drives the mcp 1.x client API (FastMCP, streamablehttp_client)")
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]

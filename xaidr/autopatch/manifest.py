@@ -97,6 +97,11 @@ class ProtectionManifest:
         # the framework's own unregister rather than restoring an attribute.
         # (label, uninstall_callable)
         self._teardowns: list[tuple[str, Any]] = []
+        # Import hooks armed for a module not imported yet (httpx2 only). Not a
+        # patch site until it fires, so disarming one restores nothing and is
+        # not reported as a restored site; the sites it installs when it fires
+        # are in ``_sites`` like any other.
+        self._disarms: list[Any] = []
         self._reverted = False
 
     # ── the dict contract ────────────────────────────────────────────────
@@ -146,7 +151,7 @@ class ProtectionManifest:
     @property
     def is_active(self) -> bool:
         """True while this handle's instrumentation is installed."""
-        return bool(self._sites or self._teardowns) and not self._reverted
+        return bool(self._sites or self._teardowns or self._disarms) and not self._reverted
 
     # ── reversal ─────────────────────────────────────────────────────────
 
@@ -164,6 +169,12 @@ class ProtectionManifest:
         """
         restored: list[str] = []
         stranded: list[str] = []
+        for disarm in self._disarms:
+            try:
+                disarm()
+            except Exception:  # never fatal; a hook that cannot leave is inert once fired
+                pass
+        self._disarms = []
         # Registry-based instrumentation first: it sits ABOVE the patched call
         # sites (a hook runs before the executor reaches the tool), so it comes
         # out first, mirroring the reverse-install-order rule below.

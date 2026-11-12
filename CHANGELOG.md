@@ -6,8 +6,9 @@ still reconcile against the whole range (docs/releasing.md, step 1).
 ## 1.22.0
 
 - The egress attestation seam, S14 `SensorExtension.attest_egress(view)`: once per
-  outbound request on every HTTP path xaidr dispatches (httpx sync and async and
-  requests under `protect()`, and `ProtectedHttpClient`'s five verbs), after that
+  outbound request on every HTTP path xaidr dispatches (httpx and httpx2, sync and
+  async, and requests under `protect()`, and `ProtectedHttpClient`'s five verbs over
+  an httpx or httpx2 client), after that
   request's own scan and destination check and before it is sent, an extension
   receives an `EgressView` (method, host, the enforcement mode, the value-origin
   mode, the scans bound to the request, the body's SHA-256, the sensor version;
@@ -18,9 +19,24 @@ still reconcile against the whole range (docs/releasing.md, step 1).
   and `requests` clients: `httpx.Client` and `httpx.AsyncClient` and
   `requests.Session` under `protect()`, and `ProtectedHttpClient`.
 - Two scans bind to a request: the scan of its own bytes, and on an MCP
-  `tools/call` body (mcp 1.x, over httpx) the tool-call scan with the same tool
-  name and arguments hash, taken once from a per-sensor table of 256 entries and
-  300 seconds. The view orders them strictest found first.
+  `tools/call` body (mcp 1.x over httpx, mcp 2.x over httpx2) the tool-call scan
+  with the same tool name and arguments hash, taken once from a per-sensor table of
+  256 entries and 300 seconds. The view orders them strictest found first.
+- Egress scanning and the attestation also cover `httpx2`, the client the OpenAI
+  3.x, Anthropic 2.x and MCP 2.x Python SDKs send over: `protect()` wraps
+  `httpx2.Client.send` and `httpx2.AsyncClient.send` with the wrapper it puts on
+  httpx's (the destination check, the scan of the request's own bytes, the S14
+  headers, the send, and the response scan unless the response is streamed), and
+  `protect_http` wraps an `httpx2.Client`. When httpx2 is installed but not yet
+  imported, `protect()` arms one import hook for that module, which patches it
+  when the host imports it, and `unprotect()` disarms it; with httpx2 not
+  installed nothing is armed. On the httpx2 paths a `tools/call` refused before
+  it leaves (by its destination, its own scan, or a fail-closed header seam in a
+  `protect_http` verb) drops one pending tool-call entry for its tool and
+  arguments, the least strict when found verdicts differ, so the strictest stays
+  for the request that leaves; a body that can be read only by consuming it is
+  not read, and its entry stays. On httpx that entry stays pending. httpx2 stays
+  optional: no extra installs it.
 - `ScanResult.found_action`: what a block-mode sensor returns for the same input,
   before monitor softening and before any S6 transform, carried on every result
   and read onto the attestation as `found`. A monitor sensor's attestation says
