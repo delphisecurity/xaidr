@@ -14,9 +14,9 @@ still reconcile against the whole range (docs/releasing.md, step 1).
   no content) and returns headers, which the sensor adds under the add-only rule.
   Nothing runs, and no digest is computed, when no extension overrides the hook.
   A `data=` or `files=` body sent through `protect_http` without `protect()`
-  carries no attestation. Traffic over `urllib3`, `urllib`, `aiohttp` and `httpx2`
-  (the OpenAI and Anthropic SDKs' current lines, and `mcp` 2.x) is not dispatched
-  by xaidr and carries none.
+  carries no attestation. Egress scanning and the attestation cover the `httpx`
+  and `requests` clients: `httpx.Client` and `httpx.AsyncClient` and
+  `requests.Session` under `protect()`, and `ProtectedHttpClient`.
 - Two scans bind to a request: the scan of its own bytes, and on an MCP
   `tools/call` body (mcp 1.x, over httpx) the tool-call scan with the same tool
   name and arguments hash, taken once from a per-sensor table of 256 entries and
