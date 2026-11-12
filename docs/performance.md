@@ -63,6 +63,30 @@ what a machine ten times slower than a runner looks like to them, the runners'
 worst case reached 43.7 s of the 120 s (a document over the cap, py3.10), and no
 backstop fired in any cell.
 
+**The egress seam, per send, on httpx and httpx2.** Under `protect()` every
+client-level send on `httpx` and `httpx2` (the client the OpenAI 3.x, Anthropic
+2.x and MCP 2.x SDKs send over) runs the same seam: the destination check, the
+scan of the request body, the response scan (not for a `stream=True` response),
+and with an S14 extension the body digest and the header merge.
+`scripts/egress_send_overhead.py` times one
+`client.post` of a 208-byte A2A body through an in-process transport (no socket,
+so the transport costs the same with and without the seam), 2000 sends per cell
+after 200 warmup, three repeats (each repeat runs the three configurations in
+the same order: the client alone, then the scans, then the scans and the
+attestation), on the build machine (macOS 26.6.2 arm64, 18 cores). Each figure is the range of the three medians; the added time is the
+median minus the client alone, same family, same repeat:
+
+| family | python | the client alone | added: the scans | added: the scans and the attestation |
+|---|---|---:|---:|---:|
+| httpx 0.28.1 | 3.12.13 | 0.033–0.034 ms | 0.747–0.782 ms | 0.769–0.809 ms |
+| httpx2 2.16.0 | 3.12.13 | 0.023–0.025 ms | 0.752–0.784 ms | 0.782–0.804 ms |
+| httpx 0.28.1 | 3.10.20 | 0.048 ms | 0.847–0.904 ms | 0.881–0.943 ms |
+| httpx2 2.14.0 | 3.10.20 | 0.032–0.034 ms | 0.847–0.906 ms | 0.874–0.905 ms |
+
+The two families add the same time within the spread of one repeat to the
+next, as one wrapper on both would. The attestation adds 0.00–0.04 ms on top
+across these runs, within the noise of one repeat. Run it on your machine; it prints every cell and asserts nothing.
+
 **Reproduce this yourself: `python scripts/benchmark.py`.** It prints the
 machine, the payload size, and median/p95/p99/max per boundary, and it asserts
 nothing.

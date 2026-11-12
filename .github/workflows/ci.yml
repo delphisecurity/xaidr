@@ -266,9 +266,9 @@ jobs:
   # B2 (xaidr/attestation.py ToolCallTable) binds a tool-call scan to the
   # streamable-HTTP POST that carries it out. That POST leaves from the MCP
   # transport's writer task over httpx on mcp 1.x. tests/test_mcp_egress_binding.py
-  # drives the mcp 1.x API (its real-client tests skip on mcp 2.x), so this job
-  # pins 1.x. On both interpreters the two real-client cases must RUN: a skip
-  # would be an exit 0 that verified nothing.
+  # drives the mcp 1.x API, so this job pins 1.x; mcp 2.x, over httpx2, is the
+  # `httpx2` job below. On both interpreters the two real-client cases must RUN:
+  # a skip would be an exit 0 that verified nothing.
   real-mcp:
     name: real MCP client (py${{ matrix.python-version }}, mcp 1.30.0)
     runs-on: ubuntu-latest
@@ -316,6 +316,99 @@ jobs:
           if skipped:
               problems.append(f"{len(skipped)} skipped: mcp is not installed or is 2.x, "
                               "so nothing ran against a real client")
+          if broken:
+              problems.append(f"{len(broken)} failed/errored: {broken}")
+          if problems:
+              sys.exit("GUARD RED: " + "; ".join(problems))
+          print("GUARD GREEN")
+          PY
+
+  # ── httpx2 and the SDKs that send over it ──────────────────────────────────
+  # The current OpenAI (3.x), Anthropic (2.x) and MCP (2.x) Python SDKs send over
+  # httpx2, a separate package from httpx. No other job installs it, so this is
+  # the job where the httpx2 seam, the httpx/httpx2 differential and the real
+  # SDKs run: each SDK on its own default client against a loopback listener
+  # (no network, no API key), MCP 2.x against a local streamable-HTTP server.
+  # httpx2 needs Python >= 3.11 from 2.15.0, so the 3.10 cell pins 2.14.0, the
+  # newest for 3.10, and the two cells test two minor lines. The guard reads the
+  # junit report: every case in the httpx2 files must run (a declared strict
+  # xfail is the one outcome allowed besides a pass), so a skip cannot pass as
+  # coverage.
+  httpx2:
+    name: httpx2 + real SDKs (py${{ matrix.python-version }}, httpx2 ${{ matrix.httpx2 }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.10"
+            httpx2: "2.14.0"
+          - python-version: "3.12"
+            httpx2: "2.16.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install (package + http extra + pinned httpx2 and SDKs)
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[http]" pytest "httpx2==${{ matrix.httpx2 }}" \
+            "openai==3.49.0" "anthropic==2.8.0" "mcp==2.3.0"
+          pip list 2>/dev/null | grep -iE '^(httpx|httpx2|httpcore2|openai|anthropic|mcp) '
+
+      - name: Run the httpx2 tests and the egress tests they share a seam with
+        run: |
+          python -m pytest tests/test_httpx2_egress.py tests/test_httpx2_async.py \
+            tests/test_httpx2_streams.py tests/test_httpx2_mcp.py \
+            tests/test_httpx2_differential.py tests/test_httpx2_real_sdks.py \
+            tests/test_egress_attestation_hook.py tests/test_egress_attestation_found.py \
+            tests/test_egress_headers.py tests/test_protect_manifest.py \
+            tests/test_protect_boundaries.py \
+            -q -rsx --junitxml=httpx2.xml
+
+      - name: Guard — every httpx2 case ran, none skipped
+        run: |
+          python - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          cases = [c for c in ET.parse("httpx2.xml").iter("testcase")
+                   if ".test_httpx2_" in c.get("classname", "")]
+          def skipped(c):
+              s = c.find("skipped")
+              return s is not None and s.get("type") != "pytest.xfail"
+          xfailed = [c for c in cases if c.find("skipped") is not None and not skipped(c)]
+          skips = [c.get("name") for c in cases if skipped(c)]
+          broken = [c.get("name") for c in cases
+                    if c.find("failure") is not None or c.find("error") is not None]
+          per_file = {}
+          for c in cases:
+              f = c.get("classname").rsplit(".", 1)[-1]
+              per_file[f] = per_file.get(f, 0) + 1
+          print(f"httpx2 cases: collected={len(cases)} xfailed={len(xfailed)} "
+                f"skipped={len(skips)} failed/errored={len(broken)} per file={per_file}")
+          for name in skips:
+              print(f"  SKIPPED {name}")
+          problems = []
+          expected = {"test_httpx2_egress": 35, "test_httpx2_async": 16,
+                      "test_httpx2_streams": 20, "test_httpx2_mcp": 27,
+                      "test_httpx2_differential": 193, "test_httpx2_real_sdks": 7}
+          for f, n in expected.items():
+              if per_file.get(f, 0) < n:
+                  problems.append(f"{f}: collected {per_file.get(f, 0)} < {n}")
+          # The strict xfails each name a behaviour shared with the httpx path,
+          # recorded and not changed here: 5 in test_httpx2_mcp (httpx keeps a
+          # refused call's entry), 2 in test_httpx2_async (a send that never
+          # started), 4 in test_httpx2_streams (redirect log, protect_http hop).
+          if len(xfailed) != 11:
+              problems.append(f"{len(xfailed)} xfailed, expected the 11 declared ones")
+          if skips:
+              problems.append(f"{len(skips)} skipped: httpx2 or an SDK is not installed, so nothing ran")
           if broken:
               problems.append(f"{len(broken)} failed/errored: {broken}")
           if problems:

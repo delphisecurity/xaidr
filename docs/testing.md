@@ -68,6 +68,7 @@ In the log of every CI run, printed by the job that measured them.
 | `pytest (py<ver>, full)` | `N passed, M skipped` — `pip install ".[http,trace,dev]"` | any test fails |
 | `corpus report (py<ver>)` | corpus table, nested-A2A FP count, intent catch rate + denominator, and the three held-out report figures | a benign gate is violated, or the nested-A2A structural FP gate is non-zero |
 | `rules-in-wheel guard` | rules shipped in the built wheel | fewer than 7 rules JSON ship, or a clean-venv install cannot scan |
+| `httpx2 + real SDKs (py<ver>, httpx2 <ver>)` | `httpx2 cases: collected=… xfailed=11 skipped=0 … per file={…}` — `pip install ".[http]"` plus pinned httpx2 (2.14.0 on 3.10, 2.16.0 on 3.12), openai 3.49.0, anthropic 2.8.0, mcp 2.3.0 | a case fails, a case in `tests/test_httpx2_*.py` skips, a file collects fewer cases than it has, or the strict xfails are not exactly the 11 declared |
 
 Two of those lines are gates and two are measurements, and the distinction is
 deliberate: `corpus report` prints the intent metrics and the held-out battery
