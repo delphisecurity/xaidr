@@ -119,6 +119,10 @@ Optional extras are installed only when you use the matching feature:
 | `xaidr[trace]` | read an inbound `traceparent` / active OTel span | `opentelemetry-api` |
 | `xaidr[nano]` | the optional local ML signal for the rules-silent band (experimental, off by default) | `onnxruntime`, `tokenizers`, `numpy`, `huggingface-hub` |
 
+`httpx2`, the client the OpenAI 3.x, Anthropic 2.x and MCP 2.x Python SDKs send
+over, is not an extra: those SDKs install it. `protect()` instruments it as it
+instruments `httpx`, and `protect_http` wraps an `httpx2.Client` too.
+
 The `nano` extra installs the runtime, **not the model**. The 130 MB artifact is
 a separate deliberate fetch on the first `Sensor(enable_nano=True)`, or a
 directory you point `XAIDR_NANO_MODEL` at. Installing the extra alone changes no
