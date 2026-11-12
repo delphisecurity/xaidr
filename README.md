@@ -114,7 +114,7 @@ Optional extras are installed only when you use the matching feature:
 | `xaidr[crewai]` | CrewAI `before_tool_call` hook + `Task(guardrail=…)` | `crewai` |
 | `xaidr[haystack]` | Haystack `Agent(hooks=…)` (all three boundaries) | `haystack-ai` |
 | `xaidr[policy]` | loading a YAML policy **file** (`set_policy(dict)` needs nothing) | `PyYAML` |
-| `xaidr[http]` | `protect_http` / `ProtectedHttpClient`, `WebhookReporter` | `httpx` |
+| `xaidr[http]` | `protect_http` / `ProtectedHttpClient` over an `httpx.Client`, `WebhookReporter` | `httpx` |
 | `xaidr[otel]` | `OTelReporter` (emit events as OTel log records) | `opentelemetry-api` |
 | `xaidr[trace]` | read an inbound `traceparent` / active OTel span | `opentelemetry-api` |
 | `xaidr[nano]` | the optional local ML signal for the rules-silent band (experimental, off by default) | `onnxruntime`, `tokenizers`, `numpy`, `huggingface-hub` |
@@ -680,7 +680,8 @@ import xaidr
 print(xaidr.protect(agent_id="support-agent", enforcement_mode="block"))
 ```
 
-`protect()` patches only what is already in `sys.modules`, is idempotent, and
+`protect()` patches only what is already in `sys.modules` (with one exception,
+`httpx2`, which it patches when the host imports it), is idempotent, and
 returns a loud manifest saying what it patched, what it found and could not
 patch, and what was not present. There are also explicit seams for tool wrapping,
 outbound HTTP, LangChain middleware and Haystack `Agent(hooks=...)`.

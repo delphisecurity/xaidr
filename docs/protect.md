@@ -38,7 +38,7 @@ the reversal handle (`manifest.unprotect()`). Four rules govern it:
 
 | Rule | What it means |
 |---|---|
-| **Patches only what is in `sys.modules`** | `protect()` never imports a framework to instrument it. That is what keeps `pip install xaidr` a zero-dependency install. |
+| **Patches only what is in `sys.modules`** | `protect()` never imports a framework to instrument it. That is what keeps `pip install xaidr` a zero-dependency install. `httpx2` is the one framework it patches later, when the host imports it, by an import hook armed by the call; it still imports nothing itself. |
 | **Explicit call only** | Importing `xaidr` patches nothing and installs nothing, and there is no `.pth` magic — a control with no call site cannot be audited. `protect()` installs no import hook, with one exception it names in its notes: when `httpx2` is installed but not yet imported, it arms a hook for that one module, which patches httpx2 when the host imports it; `unprotect()` disarms it. |
 | **Loud about gaps** | A framework that is present but *not* patched raises `XaidrProtectionWarning`, prints to stderr, and heads the manifest. Silence about an unprotected boundary is the one outcome ruled out. |
 | **Idempotent** | A second `protect()` reports each site as `already_patched` rather than double-wrapping — which makes "call it again after importing more" a supported workflow. |
@@ -63,7 +63,9 @@ the reversal handle (`manifest.unprotect()`). Four rules govern it:
 | `haystack` | `components.agents.agent.Agent.__init__` | input + output + tool, via `delphi_hooks` injection. **Agents built *before* `protect()` are not covered** — a constructor seam cannot reach an object that already exists |
 
 **Known limits, in the manifest rather than the footnotes.** A framework
-imported *after* `protect()` is not patched — call `protect()` again. A
+imported *after* `protect()` is not patched — call `protect()` again. The one
+exception is `httpx2`, which the import hook named in the manifest's notes
+patches when it is imported. A
 module-function seam (`create_agent`) does not reach a name already bound by
 `from langchain.agents import create_agent`; a class-method seam (everything
 else) does. LangGraph's own graph boundary, the OpenAI Agents SDK's per-instance

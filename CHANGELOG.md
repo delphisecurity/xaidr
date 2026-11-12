@@ -33,9 +33,10 @@ still reconcile against the whole range (docs/releasing.md, step 1).
   installed nothing is armed. On the httpx2 paths a `tools/call` refused before
   it leaves (by its destination, its own scan, or a fail-closed header seam in a
   `protect_http` verb) drops one pending tool-call entry for its tool and
-  arguments, the least strict when found verdicts differ, so a refused call never
-  lends its scan to a later request; on httpx that entry stays pending. httpx2
-  stays optional: no extra installs it.
+  arguments, the least strict when found verdicts differ, so the strictest stays
+  for the request that leaves; a body that can be read only by consuming it is
+  not read, and its entry stays. On httpx that entry stays pending. httpx2 stays
+  optional: no extra installs it.
 - `ScanResult.found_action`: what a block-mode sensor returns for the same input,
   before monitor softening and before any S6 transform, carried on every result
   and read onto the attestation as `found`. A monitor sensor's attestation says

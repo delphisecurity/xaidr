@@ -10,7 +10,9 @@ implementation detail.
 1. **Only what is already imported.** ``protect()`` patches modules found in
    ``sys.modules`` and imports nothing. A framework you have not imported is
    reported in ``not_present``, never pulled in. This is what keeps
-   ``pip install xaidr`` a zero-dependency install.
+   ``pip install xaidr`` a zero-dependency install. The one deferred case is
+   httpx2: when it is installed but not imported, the call arms an import hook
+   that patches it at the host's own import (see the ``protect()`` docstring).
 2. **Explicit call.** Nothing installs itself at import time. A security control
    that appears without a call site cannot be audited, and being auditable is
    half of what this is for.

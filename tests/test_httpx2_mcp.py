@@ -13,8 +13,9 @@ strictest found on ambiguity). A call the host halts records no entry. A
 ``tools/call`` POST refused on an httpx2 path before it leaves (by its
 destination, its own scan, or a fail-closed header seam) drops a matching entry,
 the least strict one when found verdicts differ, so the strictest stays for the
-request that does leave (Q14) and a refused call never lends its scan. A body
-that can only be read by consuming it is not read, so its entry stays.
+request that does leave (Q14): with one matching entry, the refused call's own
+entry is gone and binds no later request. A body that can only be read by
+consuming it is not read, so its entry stays.
 
 Faults (Q12): an ``attest_egress`` fault drops that extension's headers, is
 logged once, and the request proceeds; under ``fail_closed=("controls",)``

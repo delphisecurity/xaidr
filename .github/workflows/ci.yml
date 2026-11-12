@@ -357,9 +357,9 @@ jobs:
       - name: Install (package + http extra + pinned httpx2 and SDKs)
         run: |
           python -m pip install --upgrade pip
-          pip install ".[http]" pytest "httpx2==${{ matrix.httpx2 }}" \
+          pip install ".[http]" pytest "requests>=2" "httpx2==${{ matrix.httpx2 }}" \
             "openai==3.49.0" "anthropic==2.8.0" "mcp==2.3.0"
-          pip list 2>/dev/null | grep -iE '^(httpx|httpx2|httpcore2|openai|anthropic|mcp) '
+          pip list 2>/dev/null | grep -iE '^(httpx|httpx2|httpcore2|openai|anthropic|mcp|requests) '
 
       - name: Run the httpx2 tests and the egress tests they share a seam with
         run: |

@@ -4617,7 +4617,7 @@ class DelphiSensor:
         return sorted(_BIND_FAILURES)
 
     def protect_http(self, client: "httpx.Client") -> "ProtectedHttpClient":
-        """Wrap an httpx.Client to enforce on outgoing HTTP calls.
+        """Wrap an httpx.Client or an httpx2.Client to enforce on outgoing HTTP calls.
 
         Two independent, stricter-wins enforcement layers:
 
@@ -4630,9 +4630,10 @@ class DelphiSensor:
           fields) and scanned via ``scan_a2a``; the response body is scanned for
           output DLP. A malicious body is blocked even to an allowed destination.
 
-        Requires the ``http`` extra (``pip install xaidr[http]`` — pulls in
-        httpx). Destination agent is inferred from URL (/agents/{id}/) or body
-        (targetAgent, agentId).
+        An ``httpx.Client`` needs the ``http`` extra (``pip install xaidr[http]``
+        — pulls in httpx); an ``httpx2.Client`` needs only httpx2, which the
+        OpenAI 3.x, Anthropic 2.x and MCP 2.x SDKs install. Destination agent is
+        inferred from URL (/agents/{id}/) or body (targetAgent, agentId).
 
         Usage::
 
@@ -4647,7 +4648,7 @@ class DelphiSensor:
             resp = protected.post("http://billing:3002/ask", json={"message": task})
 
         Args:
-            client: An httpx.Client instance to wrap.
+            client: An httpx.Client or httpx2.Client instance to wrap.
 
         Returns:
             A ProtectedHttpClient that proxies all methods, blocks denied
@@ -4704,7 +4705,7 @@ import re as _re
 
 
 class ProtectedHttpClient:
-    """Wraps httpx.Client to auto-scan outgoing A2A HTTP traffic.
+    """Wraps an httpx.Client or httpx2.Client to auto-scan outgoing A2A HTTP traffic.
 
     Proxies all methods to the underlying client. POST, PUT, and PATCH
     requests are scanned before sending. Response bodies are scanned
@@ -5514,8 +5515,10 @@ class ProtectedHttpClient:
         """A ``tools/call`` request refused before it leaves drops one pending
         tool-call entry for its tool name and arguments hash
         (``ToolCallTable.discard``: the least strict, so the strictest stays for
-        the request that leaves), so a refused call never lends its scan to a
-        later request. Used on the httpx2 paths. Never raises."""
+        the request that leaves). With one matching entry, that is the refused
+        call's own, and it binds no later request; when found verdicts differ the
+        strictest stays, which can be the refused call's. Used on the httpx2
+        paths. Never raises."""
         try:
             call = _att.tools_call(body)
             if call is not None:
