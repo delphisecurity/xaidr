@@ -7,7 +7,9 @@ can quietly break them:
    resolves the owning module by exact ``sys.modules`` key and never imports.
    ``protect()`` additionally snapshots ``sys.modules`` around the whole patch
    phase and reports any module that appeared, so a violation introduced later
-   is visible rather than theoretical.
+   is visible rather than theoretical. The one deferred form,
+   :meth:`PatchContext.install_on_import` (httpx2 only), imports nothing either:
+   it waits for the host's own import of that one module, then patches it.
 2. **Explicit call, no import-time magic.** Nothing in this package runs on
    import; ``xaidr/__init__.py`` binds the name and stops.
 3. **Loud manifest.** Every failure path routes to
@@ -25,10 +27,12 @@ import functools
 import inspect
 import logging
 import sys
+import threading
+import warnings
 from typing import Any, Callable, Optional
 
 from ..types import DelphiBlockedError, ScanResult
-from .manifest import PatchRecord, ProtectionManifest, _shout
+from .manifest import PatchRecord, ProtectionManifest, XaidrProtectionWarning, _shout
 
 logger = logging.getLogger("xaidr.protect")
 
@@ -68,6 +72,122 @@ _INSTALLED_REGISTRY_HOOKS: set[str] = set()
 
 #: Attribute marking an HTTP client whose traffic the egress patches must ignore.
 EXEMPT_ATTR = "_xaidr_exempt"
+
+#: The import hook of each module name ``install_on_import`` has served: one
+#: object per name for the life of the process. It is inserted into
+#: ``sys.meta_path`` once and never taken out (removing an entry while another
+#: thread's import walks the list makes that walk skip the next finder); it is
+#: ARMED by a ``protect()`` and DISARMED when it fires or by ``unprotect()``,
+#: and a disarmed hook answers nothing.
+_IMPORT_HOOKS: dict = {}
+_HOOKS_LOCK = threading.Lock()
+
+
+class _ImportHook:
+    """A meta-path hook for ONE module name; inert unless armed.
+
+    Armed, it answers ``find_spec`` for its name only, and only by asking the
+    finders behind it for the real spec: it never imports and never changes
+    which module is loaded. It wraps that spec's loader's ``exec_module`` on the
+    loader instance; when the module of ITS name has run its own code (a loader
+    shared by several modules, as zipimport's is, runs others through the same
+    wrapper first), the loader is restored and the armed callback runs once,
+    under a lock that ``disarm`` also takes, so an ``unprotect()`` either lands
+    before it (nothing is patched) or after it (the patch is unwound). A fault
+    in the callback is logged and never raised into the host's import.
+    """
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self._lock = threading.RLock()
+        self._on_loaded: Optional[Callable[[Any], None]] = None
+
+    @property
+    def armed(self) -> bool:
+        return self._on_loaded is not None
+
+    def arm(self, on_loaded: Callable[[Any], None]) -> bool:
+        with self._lock:
+            if self._on_loaded is not None:
+                return False
+            self._on_loaded = on_loaded
+            return True
+
+    def disarm(self, on_loaded: Optional[Callable[[Any], None]] = None) -> None:
+        """Disarm, or, given ``on_loaded``, disarm only if that is what is armed."""
+        with self._lock:
+            if on_loaded is None or self._on_loaded is on_loaded:
+                self._on_loaded = None
+
+    def find_spec(self, fullname, path=None, target=None):  # the finder protocol
+        if fullname != self._name or self._on_loaded is None:
+            return None
+        spec = _spec_behind(self, fullname, path, target)
+        loader = getattr(spec, "loader", None)
+        exec_module = getattr(loader, "exec_module", None)
+        if exec_module is None:
+            return None                    # the import proceeds exactly as without us
+        hook = self
+
+        def exec_module_then_patch(module):
+            exec_module(module)
+            if getattr(module, "__name__", None) != hook._name:
+                return                     # a shared loader running another module
+            try:
+                del loader.exec_module     # the loader is the module's __loader__
+            except Exception:
+                pass
+            hook._loaded(module)
+
+        try:
+            loader.exec_module = exec_module_then_patch
+        except Exception:
+            return None
+        return spec
+
+    def _loaded(self, module: Any) -> None:
+        with self._lock:
+            on_loaded, self._on_loaded = self._on_loaded, None
+            if on_loaded is None:
+                return
+            try:
+                on_loaded(module)
+            except Exception as exc:  # never into the host's import
+                logger.warning(
+                    "xaidr.protect: the deferred patch for %s failed (%s); it is NOT "
+                    "instrumented", self._name, type(exc).__name__,
+                )
+
+
+def _spec_behind(hook: Any, fullname: str, path=None, target=None):
+    """The spec the finders other than xaidr's import hooks give ``fullname``,
+    asked in ``sys.meta_path`` order, as the import system asks them. Reads a
+    spec; imports nothing."""
+    for finder in list(sys.meta_path):
+        if finder is hook or isinstance(finder, _ImportHook):
+            continue
+        find = getattr(finder, "find_spec", None)
+        if find is None:
+            continue
+        spec = find(fullname, path, target)
+        if spec is not None:
+            return spec
+    return None
+
+
+def _installed(name: str) -> bool:
+    """Whether a top-level module ``name`` is importable here, read the way the
+    import system reads it and without importing it (nor ``importlib.util``)."""
+    try:
+        return _spec_behind(None, name) is not None
+    except Exception:
+        return False
+
+
+def is_armed_on_import(name: str) -> bool:
+    """True while an import hook for ``name`` is armed in this process."""
+    hook = _IMPORT_HOOKS.get(name)
+    return hook is not None and hook.armed
 
 
 def exempt(obj: Any) -> Any:
@@ -368,6 +488,76 @@ class PatchContext:
                 detail=detail,
             )
         )
+        return True
+
+    # ── the third primitive: a patch that waits for the host's import ───
+
+    def install_on_import(self, module_name: str, apply: Callable[["PatchContext"], None],
+                          summary: str) -> bool:
+        """Arm the import hook for ``module_name``, so ``apply`` runs when the host
+        first imports it, for a target whose module is installed but not imported.
+
+        Imports nothing: whether the module is installed is read from the import
+        system's own finders, and the hook waits for the host's import. When the
+        module is not installed nothing is armed and nothing is noted. One armed
+        hook per module name in the process (rule 4); ``unprotect()`` disarms it.
+        When it fires, ``apply`` runs on this manifest and sensor as ``protect()``
+        would have, its sites join ``manifest.patched`` and are unwound by
+        ``unprotect()``, and a site it cannot patch is warned and shouted then,
+        because the manifest was printed at ``protect()``. Returns whether this
+        call armed it.
+        """
+        if module_name in sys.modules:
+            return False
+        if is_armed_on_import(module_name):
+            self.note(
+                f"{module_name}: its import hook was already armed by an earlier "
+                "xaidr.protect(); left as-is (not armed twice)")
+            return False
+        if not _installed(module_name):
+            return False
+
+        manifest, sensor, framework = self.manifest, self.sensor, self.framework
+
+        def on_loaded(module: Any) -> None:
+            if manifest._reverted:
+                return
+            ctx = PatchContext(manifest, sensor, framework)
+            seen = len(manifest.found_unpatchable)
+            try:
+                apply(ctx)
+            except PatchUnavailable as exc:
+                ctx.unpatchable(f"{framework} (whole framework)", summary, str(exc))
+            except Exception as exc:
+                ctx.unpatchable(
+                    f"{framework} (whole framework)", summary,
+                    f"unexpected error while instrumenting ({type(exc).__name__}: {exc})")
+            if framework in manifest.not_present:
+                manifest.not_present.remove(framework)
+            for r in manifest.found_unpatchable[seen:]:
+                msg = (f"xaidr.protect(): {r.framework} was imported after protect() but "
+                       f"its {r.boundary} boundary at {r.target} was NOT instrumented — "
+                       f"{r.detail}")
+                warnings.warn(msg, XaidrProtectionWarning, stacklevel=2)
+                _shout(msg)
+            done = [r.target for r in manifest.patched if r.framework == framework]
+            if done:
+                logger.info("xaidr.protect: %s imported after protect(); patched %s",
+                            framework, ", ".join(done))
+
+        with _HOOKS_LOCK:
+            hook = _IMPORT_HOOKS.get(module_name)
+            if hook is None:
+                hook = _IMPORT_HOOKS[module_name] = _ImportHook(module_name)
+            if not any(f is hook for f in sys.meta_path):
+                sys.meta_path.insert(0, hook)
+            if not hook.arm(on_loaded):
+                return False
+        self.manifest._disarms.append(lambda: hook.disarm(on_loaded))
+        self.note(
+            f"{module_name}: installed but not imported yet. protect() armed an import "
+            f"hook for this one module, which patches it when the host imports it; "
+            f"unprotect() disarms the hook. protect() itself imports nothing.")
         return True
 
     def try_install(self, module_name: str, dotted: str, boundary: str,

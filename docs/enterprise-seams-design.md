@@ -199,7 +199,7 @@ After wrapping, call `ext.on_tools_declared(tools)` once with `ToolView`s (name,
 
 **Faults and bounds**: a raise, a non-Mapping return, a non-str name or value, a name outside `^[a-z0-9-]{1,64}$`, a value outside printable ASCII or with edge whitespace or longer than 10,923 characters (Core's header bound), more than 4 headers per extension or more than 16 KiB per request drop ALL of that extension's headers for that request, reported once per extension per sensor, and the request proceeds; Core then reads the attestation as absent. Under `fail_closed=("controls",)` the fault is a verdict: monitor records it and proceeds, block refuses with `DelphiBlockedError`. S12 and S14 share one walk (`Sensor._merge_hook_headers`), and S12's values are held to the same ASCII and whitespace rule.
 
-**What does not reach this seam**: traffic over `urllib3`, `urllib`, `aiohttp` and `httpx2` (the OpenAI and Anthropic SDKs since their 3.x/2.x lines, and `mcp` 2.x) is not dispatched by xaidr and carries no attestation. `scripts/egress_attestation_probe.py` prints, from a listener in a subprocess, the header set each path delivers.
+**What does not reach this seam**: traffic over `urllib3`, `urllib` and `aiohttp` is not dispatched by xaidr and carries no attestation. Traffic over `httpx2` (the OpenAI 3.x, Anthropic 2.x and `mcp` 2.x SDKs) is dispatched as httpx traffic is, under `protect()` and through `protect_http`. `scripts/egress_attestation_probe.py` prints, from a listener in a subprocess, the header set each path delivers.
 
 ### S15 · rule bundle — `rule_bundle`, BUILT (1.22.0)
 

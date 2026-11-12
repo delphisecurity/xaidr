@@ -265,10 +265,10 @@ jobs:
   # ── The MCP tools/call binding against a real MCP client (mcp 1.x) ────────
   # B2 (xaidr/attestation.py ToolCallTable) binds a tool-call scan to the
   # streamable-HTTP POST that carries it out. That POST leaves from the MCP
-  # transport's writer task over httpx on mcp 1.x; mcp 2.x sends over httpx2,
-  # which xaidr does not patch, so the real-client tests skip there and this
-  # job pins 1.x. On both interpreters the two real-client cases must RUN: a
-  # skip would be an exit 0 that verified nothing.
+  # transport's writer task over httpx on mcp 1.x. tests/test_mcp_egress_binding.py
+  # drives the mcp 1.x API (its real-client tests skip on mcp 2.x), so this job
+  # pins 1.x. On both interpreters the two real-client cases must RUN: a skip
+  # would be an exit 0 that verified nothing.
   real-mcp:
     name: real MCP client (py${{ matrix.python-version }}, mcp 1.30.0)
     runs-on: ubuntu-latest

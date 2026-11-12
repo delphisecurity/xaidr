@@ -111,7 +111,7 @@ def _mcp_run(sensor) -> str:
     except Exception as exc:                                    # pragma: no cover
         return f"skipped ({type(exc).__name__})"
     if int(version.split(".")[0]) >= 2:
-        return f"skipped (mcp {version} sends over httpx2, which xaidr does not dispatch)"
+        return f"skipped (mcp {version}: this report drives the mcp 1.x client API)"
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]

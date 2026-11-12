@@ -15,6 +15,7 @@ import inspect
 import json
 import logging
 import re
+import sys
 import threading
 import time
 from dataclasses import replace
@@ -5463,15 +5464,38 @@ class ProtectedHttpClient:
         attested at the send seam, from the request httpx built."""
         if not self._sensor._attests_egress:
             return headers
-        import httpx
+        request_class = self._request_class()
         try:
-            body = httpx.Request(method, url, json=json_body, content=content).content
+            body = request_class(method, url, json=json_body, content=content).content
         except Exception:
             body = None                        # a stream: not read, not named
         out = dict(headers or {})
         existing = list(out.keys()) + list(self._client_default_headers())
         out.update(self._attest_headers(method, str(url), body, scanned, existing))
         return out
+
+    def _client_family(self) -> Optional[str]:
+        """``"httpx"`` or ``"httpx2"``: the package the wrapped client comes from,
+        read from the first class in its MRO whose root module is one of them (an
+        SDK subclass such as openai's lives in another module). None otherwise."""
+        for klass in type(self._client).__mro__:
+            root = str(getattr(klass, "__module__", "") or "").partition(".")[0]
+            if root in ("httpx", "httpx2"):
+                return root
+        return None
+
+    def _request_class(self):
+        """The ``Request`` class of the wrapped client's package, so the bytes
+        attested are built the way that client builds them. Anything that is not
+        an httpx or httpx2 client reads ``httpx.Request``. An ``httpx2.Client``
+        never needs httpx installed."""
+        family = self._client_family()
+        request_class = getattr(sys.modules.get(family), "Request", None) if family else None
+        if request_class is not None:
+            return request_class
+        import httpx
+        return httpx.Request
+
 
     def _client_default_headers(self):
         """The names of the wrapped client's own default headers: they ride every

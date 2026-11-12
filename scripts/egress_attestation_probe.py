@@ -7,8 +7,12 @@ each path xaidr dispatches, and prints the header set the LISTENER received for
 each path, with the ``EgressView`` the extension saw.
 
 Paths: ``httpx-sync`` and ``httpx-async`` under ``protect()``, ``requests``
-under ``protect()``, and ``ProtectedHttpClient`` post, put, patch, get and
-delete. A path is reported PRESENT when the listener received the header and
+under ``protect()``, ``ProtectedHttpClient`` post, put, patch, get and delete;
+and, when ``httpx2`` is installed (the OpenAI 3.x, Anthropic 2.x and MCP 2.x
+SDKs send over it), ``httpx2-sync`` and ``httpx2-async`` under ``protect()``,
+``ProtectedHttpClient`` over an ``httpx2.Client``, each verb, and
+``httpx2-imported-after-protect``: a fresh interpreter that calls ``protect()``
+before httpx2 is imported, as a host does when an SDK imports httpx2 for it. A path is reported PRESENT when the listener received the header and
 ABSENT when it did not; GET and DELETE carry ``scans=()``.
 
 Standard library, ``xaidr`` and the HTTP clients it wraps. No network beyond
@@ -90,6 +94,54 @@ def _refused_row():
     return None
 
 
+_CHILD = r'''
+import json, sys
+import xaidr
+from xaidr import Sensor, SensorExtension
+views = []
+class Demo(SensorExtension):
+    name = "probe-attest"
+    def attest_egress(self, view):
+        views.append(view)
+        return {"x-delphi-attestation": "probe"}
+class Null:
+    def report(self, *a, **k): pass
+    def close(self, *a, **k): pass
+sensor = Sensor(agent_id="probe", extensions=[Demo()], reporter=Null())
+xaidr.protect(sensor=sensor, targets=["httpx2"], quiet=True)
+assert "httpx2" not in sys.modules, "httpx2 was imported before the probe imported it"
+import httpx2
+httpx2.post(sys.argv[1], json=json.loads(sys.argv[2]))
+v = views[-1] if views else None
+print(json.dumps(None if v is None else {
+    "method": v.method, "host": v.host, "mode": v.mode, "value_origin_mode": v.value_origin_mode,
+    "body_sha256": v.body_sha256,
+    "scans": [{"found": sc.found, "enforced": sc.enforced} for sc in v.scans]}))
+'''
+
+
+def _installed(name: str) -> bool:
+    import importlib.util
+    return importlib.util.find_spec(name) is not None
+
+
+def _after_protect_child(url, body, srv):
+    """``httpx2-imported-after-protect``: run ``_CHILD`` with the xaidr in use."""
+    from types import SimpleNamespace
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.path.dirname(os.path.dirname(os.path.abspath(xaidr.__file__)))
+    out = subprocess.run([sys.executable, "-c", _CHILD, url, json.dumps(body)],
+                         capture_output=True, text=True, env=env, timeout=120)
+    ready, _, _ = select.select([srv.stdout], [], [], 10)
+    seen = json.loads(srv.stdout.readline()) if ready else {"headers": {}, "body_sha256": None}
+    view = None
+    if out.returncode == 0 and out.stdout.strip() not in ("", "null"):
+        d = json.loads(out.stdout.strip().splitlines()[-1])
+        d["scans"] = [SimpleNamespace(**sc) for sc in d["scans"]]
+        view = SimpleNamespace(**d)
+    return ("httpx2-imported-after-protect", seen, view)
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -168,6 +220,39 @@ def main() -> int:
                 run("protect_http-post (refused row)", 
                     lambda s, b: s.protect_http(httpx.Client()).post(url, json=b),
                     body={"message": refused})
+
+        try:
+            import httpx2
+        except ImportError:
+            httpx2 = None
+
+        if httpx2 is not None:
+            for verb in ("post", "put", "patch"):
+                run(f"protect_http(httpx2)-{verb}",
+                    lambda s, b, v=verb: getattr(s.protect_http(httpx2.Client()), v)(url, json=b))
+            for verb in ("get", "delete"):
+                run(f"protect_http(httpx2)-{verb}",
+                    lambda s, b, v=verb: getattr(s.protect_http(httpx2.Client()), v)(url))
+
+            def httpx2_sync(s, b):
+                xaidr.protect(sensor=s, targets=["httpx2"], quiet=True)
+                httpx2.post(url, json=b)
+            run("httpx2-sync", httpx2_sync)
+
+            def httpx2_async(s, b):
+                xaidr.protect(sensor=s, targets=["httpx2"], quiet=True)
+
+                async def go():
+                    async with httpx2.AsyncClient() as c:
+                        await c.post(url, json=b)
+                asyncio.run(go())
+            run("httpx2-async", httpx2_async)
+
+        # protect() BEFORE httpx2 is imported, in a fresh interpreter: the order a
+        # host writes when an SDK imports httpx2 for it. The import hook patches
+        # httpx2 when it is imported; the child reports the view it attested.
+        if _installed("httpx2"):
+            results.append(_after_protect_child(url, body, srv))
 
         if requests is not None:
             def req(s, b):

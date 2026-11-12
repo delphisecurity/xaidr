@@ -43,7 +43,7 @@ from __future__ import annotations
 import sys
 from typing import Any, Iterable, Optional
 
-from .core import PatchContext, PatchUnavailable, exempt
+from .core import PatchContext, PatchUnavailable, exempt, is_armed_on_import
 from .frameworks import TARGETS, TARGETS_BY_NAME
 from .manifest import (
     PatchRecord,
@@ -183,6 +183,15 @@ def protect(
     self-installing machinery rule 2 exists to forbid. Call ``protect()`` again
     afterwards — rule 4 makes that safe.
 
+    ONE EXCEPTION, ``httpx2``: the HTTP client the OpenAI 3.x, Anthropic 2.x and
+    MCP 2.x SDKs send over, which an application rarely imports itself before
+    building a client. When httpx2 is installed but not yet imported, this call
+    arms one import hook for that one module name; it patches httpx2's
+    ``Client.send`` and ``AsyncClient.send`` when the host imports httpx2, and
+    ``unprotect()`` disarms it. It is armed by this explicit call, named in the
+    manifest's notes, and imports nothing: when httpx2 is not installed, nothing
+    is armed.
+
     DEEP AGENTS: CALL THIS BEFORE ``import deepagents``. Ordering is usually a
     performance detail; here it silently decides whether a boundary exists at
     all, so it is stated rather than left to the general rule above.
@@ -264,11 +273,12 @@ def protect(
             f"({type(exc).__name__}: {exc})"
         )
 
-    if manifest._sites or manifest._teardowns:
+    if manifest._sites or manifest._teardowns or manifest._disarms:
         # Only a call that actually installed something needs unwinding; a
         # fully-idempotent repeat call owns no sites and must not appear active.
         # Registry hooks count: they are instrumentation this call owns and must
-        # remove, even though they patched no attribute.
+        # remove, even though they patched no attribute. So does an armed import
+        # hook (httpx2), which patches nothing until it fires.
         _ACTIVE.append(manifest)
     manifest.announce(quiet=quiet)
     return manifest
@@ -294,6 +304,7 @@ def _dispatch(
     before_modules = set(sys.modules)
 
     skipped: list[str] = []
+    armed: list[str] = []
     for target in TARGETS:
         if selected is not None and target.name not in selected:
             # Not attempted — and named, because a framework this call chose not
@@ -302,6 +313,17 @@ def _dispatch(
             continue
         if not target.present():
             manifest.not_present.append(target.name)
+            if target.on_import:
+                ctx = PatchContext(manifest, sensor, target.name)
+                try:
+                    ctx.install_on_import(target.detect[0], target.apply, target.summary)
+                    if is_armed_on_import(target.detect[0]):
+                        armed.append(target.name)      # by this call or an earlier one
+                except Exception as exc:  # arming must never fail protect()
+                    manifest.notes.append(
+                        f"{target.name}: the import hook could not be armed "
+                        f"({type(exc).__name__}); import {target.name} before "
+                        "xaidr.protect(), or call protect() again after importing it")
             continue
         ctx = PatchContext(manifest, sensor, target.name)
         try:
@@ -334,12 +356,21 @@ def _dispatch(
         )
         _shout("protect() imported modules while patching: " + ", ".join(foreign))
 
-    if manifest.not_present:
+    if manifest.not_present and not armed:
         manifest.notes.append(
             "protect() patches only what is ALREADY in sys.modules and installs "
             "no import hook. Anything listed under NOT PRESENT that you import "
             "later will be UNINSTRUMENTED until you call xaidr.protect() again "
             "(which is idempotent and will only add the new sites)."
+        )
+    elif manifest.not_present:
+        manifest.notes.append(
+            "protect() patches only what is ALREADY in sys.modules and installs "
+            "no import hook, except the one for "
+            + ", ".join(armed)
+            + " (see its note). Anything else listed under NOT PRESENT that you "
+            "import later will be UNINSTRUMENTED until you call xaidr.protect() "
+            "again (which is idempotent and will only add the new sites)."
         )
     if manifest.patched and all(r.already_patched for r in manifest.patched):
         manifest.notes.append(

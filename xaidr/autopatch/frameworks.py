@@ -67,6 +67,10 @@ class FrameworkTarget:
     #: would be a false alarm, and false alarms are how a loud manifest stops
     #: being read. Returns False -> treated as not present at all.
     verify: Optional[Callable[[Any], bool]] = None
+    #: True for a target ``protect()`` may patch AFTER the call, when its module
+    #: is installed but not yet imported: one import hook for that one module,
+    #: never an import (see ``PatchContext.install_on_import``). httpx2 only.
+    on_import: bool = False
 
     def present(self) -> bool:
         """True if ANY detection key is imported AND looks like this framework.
@@ -143,9 +147,15 @@ def _egress_marked(request: Any) -> dict:
     return {}
 
 
-def _patch_httpx(ctx: PatchContext) -> None:
-    ctx.module("httpx")
-    ext = _http_extractor(ctx.sensor)
+def _httpx_send_factory(ctx: PatchContext, ext: Any) -> Callable[[Callable], Callable]:
+    """The ``Client.send`` / ``AsyncClient.send`` wrapper, ONE for httpx and httpx2.
+
+    Both packages hand ``send`` a finished ``Request`` (URL, headers and body
+    merged) and run every redirect and auth hop inside that one call, so one
+    wrapper gives both the same hook: the destination check, the scan of the
+    request's own bytes, then the S14 headers, then the send; then the response
+    scan unless the caller streams it or ``ProtectedHttpClient`` scans it.
+    """
 
     def factory(orig: Callable) -> Callable:
         def before(args: tuple, kwargs: dict) -> Optional[Halt]:
@@ -184,6 +194,13 @@ def _patch_httpx(ctx: PatchContext) -> None:
 
         return make_wrapper(orig, before=before, after=after)
 
+    return factory
+
+
+def _patch_httpx(ctx: PatchContext) -> None:
+    ctx.module("httpx")
+    factory = _httpx_send_factory(ctx, _http_extractor(ctx.sensor))
+
     ctx.install(
         "httpx", "Client.send", "egress", factory,
         "outgoing request: destination blocklist + deny-destination policy on "
@@ -204,6 +221,41 @@ def _patch_httpx(ctx: PatchContext) -> None:
         "every Client instance — including ones built before protect() — are "
         "covered. Streaming responses (stream=True) are NOT body-scanned: "
         "reading them would consume the caller's stream."
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# httpx2 — egress. The package the OpenAI 3.x, Anthropic 2.x and MCP 2.x
+# Python SDKs send over. A fork of httpx 0.28 with the same send path, so it
+# takes the same wrapper. Installed lazily: see FrameworkTarget.on_import.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _patch_httpx2(ctx: PatchContext) -> None:
+    ctx.module("httpx2")
+    factory = _httpx_send_factory(ctx, _http_extractor(ctx.sensor))
+
+    ctx.install(
+        "httpx2", "Client.send", "egress", factory,
+        "outgoing request: destination blocklist + deny-destination policy on "
+        "every verb, A2A/JSON body content scan, response output-DLP scan "
+        "(the OpenAI 3.x, Anthropic 2.x and MCP 2.x SDKs send here)",
+    )
+    ctx.try_install(
+        "httpx2", "AsyncClient.send", "egress", factory,
+        "same coverage on the async client",
+    )
+    ctx.note(
+        "egress: a telemetry reporter that ships events over HTTP would otherwise "
+        "scan its own POST, enqueue another event, and loop forever. xaidr's "
+        "WebhookReporter is exempted automatically; if you wrote your own HTTP "
+        "reporter, wrap its client in xaidr.autopatch.exempt()."
+    )
+    ctx.note(
+        "httpx2: patched at Client.send, so httpx2.get()/post() module helpers and "
+        "every Client instance — including ones built before protect() — are "
+        "covered. Streaming responses (stream=True, which is every MCP 2.x POST) "
+        "are NOT body-scanned: reading them would consume the caller's stream."
     )
 
 
@@ -1384,6 +1436,11 @@ TARGETS: tuple[FrameworkTarget, ...] = (
     FrameworkTarget(
         "httpx", ("httpx",), _patch_httpx,
         "egress: destination policy, request body, response DLP",
+    ),
+    FrameworkTarget(
+        "httpx2", ("httpx2",), _patch_httpx2,
+        "egress: destination policy, request body, response DLP",
+        on_import=True,
     ),
     FrameworkTarget(
         "requests", ("requests",), _patch_requests,
