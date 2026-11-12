@@ -273,7 +273,7 @@ def test_a_header_value_at_the_bound_is_sent_and_one_past_it_is_dropped(hx, capl
 
 # ── recorded, shared with httpx: found, not changed here ─────────────────────
 
-_SHARED = "shared with the httpx path; changing it changes httpx too (.review D6)"
+_SHARED = "the httpx path behaves the same, and changing it changes httpx too"
 
 
 @pytest.mark.xfail(strict=True, reason="a redirect's dropped duplicate header uses the "

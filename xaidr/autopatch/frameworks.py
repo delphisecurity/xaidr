@@ -147,7 +147,8 @@ def _egress_marked(request: Any) -> dict:
     return {}
 
 
-def _httpx_send_factory(ctx: PatchContext, ext: Any) -> Callable[[Callable], Callable]:
+def _httpx_send_factory(ctx: PatchContext, ext: Any, *,
+                        drop_refused_call: bool = False) -> Callable[[Callable], Callable]:
     """The ``Client.send`` / ``AsyncClient.send`` wrapper, ONE for httpx and httpx2.
 
     Both packages hand ``send`` a finished ``Request`` (URL, headers and body
@@ -155,6 +156,11 @@ def _httpx_send_factory(ctx: PatchContext, ext: Any) -> Callable[[Callable], Cal
     wrapper gives both the same hook: the destination check, the scan of the
     request's own bytes, then the S14 headers, then the send; then the response
     scan unless the caller streams it or ``ProtectedHttpClient`` scans it.
+
+    ``drop_refused_call`` (httpx2): a ``tools/call`` POST refused here, by its
+    destination or its own scan, takes the pending tool-call entry it would
+    have carried with it, so that entry never binds a later request. The httpx
+    seam passes False and keeps its 1.22.0 behaviour.
     """
 
     def factory(orig: Callable) -> Callable:
@@ -172,7 +178,15 @@ def _httpx_send_factory(ctx: PatchContext, ext: Any) -> Callable[[Callable], Cal
                 return None
             # Destination check runs for EVERY verb; body content scan only has
             # something to look at on a request that carries one.
-            scanned = ext._scan_request(str(getattr(request, "url", "")), body, raw)
+            try:
+                scanned = ext._scan_request(str(getattr(request, "url", "")), body, raw)
+            except DelphiBlockedError:
+                if drop_refused_call and ctx.sensor._attests_egress:
+                    try:
+                        ext._drop_pending_call(request.content)
+                    except Exception:
+                        pass                       # an unread stream is no tools/call
+                raise
             # S14: the attestation of this request, from its own scan, written
             # onto the request before it leaves. Nothing when no extension attests.
             if ctx.sensor._attests_egress:
@@ -233,7 +247,7 @@ def _patch_httpx(ctx: PatchContext) -> None:
 
 def _patch_httpx2(ctx: PatchContext) -> None:
     ctx.module("httpx2")
-    factory = _httpx_send_factory(ctx, _http_extractor(ctx.sensor))
+    factory = _httpx_send_factory(ctx, _http_extractor(ctx.sensor), drop_refused_call=True)
 
     ctx.install(
         "httpx2", "Client.send", "egress", factory,

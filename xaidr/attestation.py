@@ -180,6 +180,34 @@ class ToolCallTable:
             return chosen[3]
 
 
+    def discard(self, name: str, args_key: str) -> bool:
+        """Drop one pending entry for a ``tools/call`` refused before it left.
+
+        The refused request attests nothing, so which entry it drops decides only
+        what the requests that DO leave can still bind: it drops the least strict
+        matching entry (the oldest of those), so the strictest stays for the next
+        request, as ``take`` would bind it (Q14). Expired entries are pruned as
+        ``take`` prunes them. Returns whether an entry was dropped."""
+        now = self._now()
+        with self._lock:
+            live = collections.deque()
+            matches = []
+            for entry in self._entries:
+                if now - entry[0] > self.TTL_SECONDS:
+                    self.expired += 1
+                    continue
+                live.append(entry)
+                if entry[1] == name and entry[2] == args_key:
+                    matches.append(entry)
+            self._entries = live
+            if not matches:
+                return False
+            least = min(_SEVERITY.get(m[3].found, -1) for m in matches)
+            chosen = next(m for m in matches if _SEVERITY.get(m[3].found, -1) == least)
+            self._entries.remove(chosen)
+            return True
+
+
 def _body_sha256(data: bytes) -> str:
     """Unpadded base64url SHA-256 of the exact request bytes: Core's body form."""
     return base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode("ascii")

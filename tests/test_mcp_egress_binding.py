@@ -15,7 +15,8 @@ is logged once per tool; evictions and expiries are counted.
 The MCP transport's POST leaves from the transport's writer task, not from the
 task that called ``call_tool`` (READ §10.1, measured on mcp 1.30.0), which is
 why the binding is a table and not a ContextVar. The real-client cases drive
-the mcp 1.x API (``FastMCP``, ``streamablehttp_client``) and skip on mcp 2.x.
+the mcp 1.x API (``FastMCP``, ``streamablehttp_client``) and skip on mcp 2.x,
+which ``tests/test_httpx2_mcp.py`` drives over httpx2.
 
 Inputs: committed corpus rows and plain benign arguments. No attack string.
 """
