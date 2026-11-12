@@ -140,9 +140,11 @@ Measured, no extensions vs one no-op extension: median 0.320 ms → 0.324 ms, p9
 
 The seven sites are six string-literal comparisons of `enforcement_mode` plus one membership test: `_circuit_is_blocking`, `_apply_mode`, three sites in the tool-argument hard-category path (`_scan_tool_call_impl` region), `LocalScanner.scan` (which collapses block→flagged inside the scanner before the sensor sees it), and the constructor's `not in ("monitor", "block")`. A design-time list named four; the grep found seven. **Census lesson: enumerate sites from the tree, never from a document's line list.**
 
-Built: `xaidr/enforcement.py` with `EnforcementPolicy` (`name`, `enforces()`, `downgrade(action)`), instances `MONITOR` and `BLOCK`, and `resolve()` mapping the two strings to objects and raising on anything else. All six comparison sites ask one question (does a halting verdict halt) and map to `enforces()`; `_apply_mode` maps to `downgrade()`. Sensor and `LocalScanner` accept a name or a resolved policy; a bare `LocalScanner` with an unimplemented mode raises rather than silently behaving as monitor. An extension may register further names through `resolve()` (a `watch` mode, or a policy driven by a fleet control plane), so `Sensor(enforcement_mode="watch")` raises with no extension and works with an extension that registers it.
+Built: `xaidr/enforcement.py` with `EnforcementPolicy` (`name`, `enforces()`, `downgrade(action)`), instances `MONITOR` and `BLOCK`, and `resolve()` mapping the two strings to objects and raising on anything else. All six comparison sites ask one question (does a halting verdict halt) and map to `enforces()`; `_apply_mode` maps to `downgrade()`. Sensor and `LocalScanner` accept a name or a resolved policy; a bare `LocalScanner` with an unimplemented mode raises rather than silently behaving as monitor. `resolve()` reads the private `_POLICIES` table and no seam registers a name in it, so `Sensor(enforcement_mode="watch")` raises whatever extensions are attached. **[CORRECTED 2026-11-09]** The sentence that stood here said an extension could register a `watch` mode and make that call work; nothing in the tree does that, and S7 as wired (#13, below) is harden-only: an extension's `enforcement_policy()` upgrades a non-enforcing configured policy and never names a new one. A non-enforcing named mode is outside 1.22.0 on purpose. S7 does not govern the value-origin mode in 1.22.0, which has no enforcing option.
 
 Two tripwires: (1) `git grep` for `enforcement_mode ==` / `!=` in `xaidr/` must be empty, both operand orders; (2) the literal two-mode tuple must not reappear. **Tripwire lesson: `git grep -E` is POSIX ERE, so `\s` is a literal `s`; use `[[:space:]]`, and pair every grep tripwire with a harness test that greps for a construct known to exist, so a dialect change fails loudly.** Non-vacuity: reverting the sources fails 8 tests (both tripwires plus six wiring tests).
+
+Follow-up (#13): `enforcement_policy()` is now WIRED, harden-only. The issue's decision was between replace, strengthen, and delete-as-redundant, and the wiring takes strengthen. The sensor resolves the configured policy first (bad names still raise before anything else is validated), then, after the extensions are validated and collected, asks each one in order for its floor and takes the strongest on offer: an enforcing policy hardens a non-enforcing configured one, a non-enforcing answer never weakens an enforcing one, and on a tie the configured policy wins (the two answer the only questions a mode is asked identically, so they differ by name alone). Replace was rejected because it would let an extension silently downgrade a blocking deployment to monitor, the S6-strengthening failure with the sign flipped; delete was rejected because `resolve()`/`_POLICIES` register NAMES, and a distribution that needs a per-deployment floor would otherwise have to fork the sensor to set it. A non-policy answer raises `ValueError` at construction naming the extension and the type, and a fault inside the hook fails construction like the other collectors. `shadow_mode` still collapses the hardened policy to MONITOR afterwards, so an extension may not harden past an explicit observe-only run. The hardened name flows to the scanner, the breaker, telemetry and the manifest through `sensor.enforcement_mode`, unchanged from the configured path.
 
 ### S8 · on_response — `ProtectedHttpClient._scan_response` (`sensor.py:2551`)
 
@@ -179,11 +181,33 @@ One `_egress_headers(dest, headers, *, source_agent) -> dict` used by all five v
 
 Within `xaidr/`, this seam is the only caller of `inject_context`; otherwise only the `__init__.py` export, tests and the user-facing docs reference it. With the flag on, the writer is wired; with it off, it is not.
 
-**Still design, NOT built here:** merging `ext.outbound_headers(dest)` from each extension, with the collision rule (extensions may add headers, never remove or overwrite a core one). The helper is the seam that will host it; what is built is the consolidation and the flag only.
+**Built:** merging `ext.outbound_headers(dest)` from each extension, with the collision rule (extensions may add headers, never remove or overwrite a core one; a collision is logged once, then the extension's header is dropped). The merge is case-insensitive on header names.
 
 ### S13 · tools declared — `Sensor.protect_tools` (`sensor.py:1956`)
 
 After wrapping, call `ext.on_tools_declared(tools)` once with `ToolView`s (name, description hash, `args_schema` hash). This is the seam the tool-definition-drift work will use; an extension package can use it to register the tool inventory with a remote verdict service.
+
+### S14 · egress attestation — `attest_egress`, BUILT (1.22.0)
+
+`SensorExtension.attest_egress(view: EgressView) -> Mapping[str, str]`. Open calls it once per outbound request, after that request's own scan and destination check and before the request is handed on to be sent, on every HTTP path xaidr dispatches: `httpx.Client.send` and `AsyncClient.send` and `requests.Session.send` under `protect()`, and `ProtectedHttpClient`'s post, put, patch, get and delete. It returns headers; open adds them under S12's add-only rule (never a header the sensor, the caller, the client's defaults or an earlier extension wrote). The overlay's transport signs them as extra components. A `data=` or `files=` body sent through `protect_http` alone carries no attestation: that body is built by httpx at send time, the client never scans it, and the hook runs for it only at the send seam under `protect()`.
+
+**The view** (`extensions.EgressView`): `method`, `host` (never the URL, path or query), `mode` (the enforcement policy in force after S7), `value_origin_mode` (`record` or `off`), `scans` (at most 4 `ScanView`s), `body_sha256` (the unpadded base64url SHA-256 of the exact bytes the request carries, `None` for a body that cannot be read without consuming it), `sensor_version`, `view_version = 1`. No raw content crosses the seam.
+
+**The scans bound to a request** are exactly two, and nothing joined by flow, correlation or run tree: B1, the scan of the request's own bytes (every path); B2, on an MCP `tools/call` body, the tool-call scan with the same tool name and arguments hash, taken once from a per-sensor table (256 entries, 300 s, oldest evicted, evictions and expiries counted; on two matches with differing found verdicts the strictest binds and the ambiguity is logged once per tool). `scans` is ordered strictest found first, a tie putting the tool-call scan first; the attestation names `scans[0]` and never merges two. Each `ScanView` carries `scan_id` (the telemetry row's `scanId`), `direction`, `found`, `enforced`, `rules` (at most 50), `category`, `impact_class`, `value_origin`, `parent_scan_id`. `found` is the Core verdict (`allowed`, `flagged`, `held`, `blocked`; `xaidr.attestation.core_verdict`) of `ScanResult.found_action`, what a block-mode sensor returns, read from the record taken before `_apply_mode` and matched by scan id, so neither monitor softening nor an S6 transform reaches it. `enforced` is the verdict of the action the host received. In monitor mode the two differ on every call the sensor found a block in; that is the point of the seam.
+
+**Unregistered means unchanged**: when no extension overrides `attest_egress`, the sensor builds no view, computes no digest, writes no pending tool-call entry and calls no hook, and every outbound header is what it is without this seam (`tests/test_egress_attestation_hook.py`, with a counter on the digest function). `ProtectedHttpClient` and `protect()` together scan and attest one request once: the client marks its request with what it did (`EgressMark`), and the send seam does only what is left.
+
+**Faults and bounds**: a raise, a non-Mapping return, a non-str name or value, a name outside `^[a-z0-9-]{1,64}$`, a value outside printable ASCII or with edge whitespace or longer than 10,923 characters (Core's header bound), more than 4 headers per extension or more than 16 KiB per request drop ALL of that extension's headers for that request, reported once per extension per sensor, and the request proceeds; Core then reads the attestation as absent. Under `fail_closed=("controls",)` the fault is a verdict: monitor records it and proceeds, block refuses with `DelphiBlockedError`. S12 and S14 share one walk (`Sensor._merge_hook_headers`), and S12's values are held to the same ASCII and whitespace rule.
+
+**What does not reach this seam**: traffic over `urllib3`, `urllib`, `aiohttp` and `httpx2` (the OpenAI and Anthropic SDKs since their 3.x/2.x lines, and `mcp` 2.x) is not dispatched by xaidr and carries no attestation. `scripts/egress_attestation_probe.py` prints, from a listener in a subprocess, the header set each path delivers.
+
+### S15 · rule bundle — `rule_bundle`, BUILT (1.22.0)
+
+`SensorExtension.rule_bundle() -> Optional[Mapping]`, read once at attach, before the scanner is built; the first extension in order that returns one wins. The shape is `xaidr.rule_bundle`'s: an integer `version` and `files`, the seven packaged rule files (`all-l1-rules.json`, `output-l1-rules.json`, `dangerous-intents.json`, `composite-rules.json`, `attack-chains.json`, `typo-keywords.json`, `impact-classes.json`) as parsed JSON, every one of them. `Sensor.load_rule_bundle(bundle) -> bool` takes the same shape at any time.
+
+**Whole or nothing**, the way `set_policy` adopts a policy: every file is staged through the same compile step the import uses, in a strict mode where a rule that the import would drop (a pattern that does not compile, a file that is not its shape) refuses the whole bundle; only when all seven stage are all seven swapped, under one lock. A refused bundle leaves every table as it was, is logged once (the extension name and the hook; `load_rule_bundle` returns False), and the rules in force keep scanning. The tables are the modules' own, read by the detectors at call time, so a bundle is in force for every sensor in the process; the typo normaliser snapshots its table when a scanner is built, so `load_rule_bundle` rebuilds that sensor's normaliser. While a bundle is in force its `version` rides every event as `bundleVersion`; with none the key is absent.
+
+**Open is unsigned.** It never fetches a bundle and never verifies one; signature checking is the overlay's, before the bundle is returned from this hook. The zero-movement proof has two cases (`tests/test_rule_bundle.py`): no bundle, and a bundle equal to the packaged rules, which moves no verdict over the committed corpus on four boundaries. The positive control is a bundle with every rule list empty, under which a committed attack row scans `allowed`.
 
 ### Eliminated: telemetry hook
 
@@ -204,7 +228,18 @@ _apply_mode                (core downgrade, then S6)   ← :919/:1132/:1662
 return
 ```
 
-Invariants pinned by tests: (a) a gated verdict never reaches enqueue; (b) enqueue and observe see the pre-S6 verdict; (c) S6 cannot strengthen; (d) S3 runs before enqueue so the escalated verdict is what telemetry records.
+On an outbound HTTP request (`ProtectedHttpClient` verbs; the send seam under `protect()`):
+
+```
+S10 destination_policy, blocklist, deny-destination policy
+scan_a2a of the body         (the sequence above; the pre-mode record is kept for S14)
+S12 outbound_headers         (add-only)
+S14 attest_egress            (the EgressView: the pre-mode found, the enforced action, the digest)
+send
+S8  on_response              (declared, not wired)
+```
+
+Invariants pinned by tests: (a) a gated verdict never reaches enqueue; (b) enqueue and observe see the pre-S6 verdict; (c) S6 cannot strengthen; (d) S3 runs before enqueue so the escalated verdict is what telemetry records; (e) S14 reads `found` from the record taken before `_apply_mode`, so neither the mode nor S6 reaches the attestation (`tests/test_egress_attestation_found.py`).
 
 ## 4. Fault handling contract
 
@@ -233,8 +268,11 @@ Contract violations share a base, `_ExtensionContractError`, and every scan entr
 3. **S2** policy conditions through `parse_action_policy`. BUILT.
 4. **S3** escalation chain in `LocalScanner`, flag-band cap, degraded signal, construction-time health. BUILT.
 5. **S9 + S10 + S11** trust, destination policy, blocked-URL provider. BUILT.
-6. **S12** egress header consolidation, with `inject_context` wiring behind a default-off flag. BUILT (extension `outbound_headers` merging still design).
-7. **S4 + S8 + S13** before_scan, on_response, tools declared.
+6. **S12** egress header consolidation, with `inject_context` wiring behind a default-off flag, plus extension `outbound_headers` merging with the add-only collision rule. BUILT.
+7. **S7** `enforcement_policy()`, harden-only (#13). BUILT.
+8. **S14** `attest_egress`, the egress attestation view on every HTTP path, with the B1 and B2 bindings. BUILT (1.22.0).
+9. **S15** `rule_bundle`, the whole-or-nothing bundle loader with `bundleVersion` on every event. BUILT (1.22.0).
+10. **S4 + S8 + S13** before_scan, on_response, tools declared.
 
 An extension package pins a released version of this package and builds on these seams: its own reporter, a quarantine gate, a `watch` policy, a `trust_below` condition, a destination policy, a remote escalator, identity/context modules. A parity guard on the extension side checks that the extension's behaviour is a superset of this package's, and stays green by construction.
 

@@ -51,8 +51,14 @@ def _load_json(filename: str) -> list:
     return data
 
 
-def _compile_intents():
-    raw = _load_json("dangerous-intents.json")
+def _compile_intents(raw=None, *, strict: bool = False):
+    """Compile the intent table. The import path reads the packaged file and
+    drops an intent that does not compile; a bundle (``strict=True``) is refused
+    on the same defect (``xaidr.rule_bundle``)."""
+    if raw is None:
+        raw = _load_json("dangerous-intents.json")
+    elif not isinstance(raw, list):
+        raise TypeError("dangerous-intents.json: not a list")
     compiled = []
     for r in raw:
         try:
@@ -68,6 +74,8 @@ def _compile_intents():
                 "modifiedScore": r.get("modifiedScore", 0.75),
             })
         except re.error as e:
+            if strict:
+                raise
             print(f"[xaidr] Warning: intent {r.get('name')} regex failed: {e}")
             _record_asset_fault(
                 "dangerous-intents.json",

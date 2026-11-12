@@ -33,7 +33,7 @@ import re
 import urllib.parse
 
 from .l1 import scan_l1, L1_MAX_SCAN_CHARS
-from .normalizer import TypoNormalizer
+from . import normalizer as _normalizer_mod
 
 # ── Encoded blobs of meaningful length ───────────────────────────────────────
 # Bounded upper repeat ({N,4096}) → linear scan, no catastrophic backtracking.
@@ -174,7 +174,6 @@ _MIN_ESCAPES = 2
 # manufacture a long all-whitespace string that trips L1's repeat-scan
 # backtracking (the main pipeline never feeds L1 raw whitespace runs for exactly
 # this reason). Module-level singleton — the normalizer is reusable and stateless.
-_NORMALIZER = TypoNormalizer()
 
 
 def url_decoded_danger(text: str) -> float:
@@ -196,7 +195,7 @@ def url_decoded_danger(text: str) -> float:
     decoded = urllib.parse.unquote(view)
     if decoded == view:
         return 0.0
-    normalized = _NORMALIZER.normalize(decoded)
+    normalized = _normalizer_mod.current().normalize(decoded)
     danger = [
         t.score for t in scan_l1(normalized).threats
         if t.category in _URL_DANGER_CATEGORIES

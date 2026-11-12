@@ -6,7 +6,7 @@ import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 #: Wire format for every timestamp this SDK emits: RFC 3339, UTC, microseconds.
 #:
@@ -155,6 +155,65 @@ class ScanResult:
     # opt-in and only ever sees inputs the rules layer scored exactly 0.0.
     nano_score: Optional[float] = None
     nano_raw: Optional[float] = None
+
+    # ── value origin (A2 M4) — None unless the sensor's value_origin mode is ──
+    # RECORD or ENFORCE. A ``value_origin.CallVerdict`` on EVERY tool-call exit
+    # (C-13), attached after ``_post_scan_gate``, so an S6 transform_verdict
+    # never sees it (C-28). Not part of the C-11 digest: RECORD reports, it
+    # never moves an action. None on every other direction.
+    value_origin: Optional[Any] = None
+
+    # ── found (1.22.0) — what a BLOCK-MODE sensor returns for this input ─────
+    #
+    # The action the sensor FOUND, before monitor softening and before any S6
+    # transform: exactly what a sensor with the same configuration and
+    # ``enforcement_mode="block"`` returns for the same input. It is set where
+    # the verdict is decided (the scanner, the tool-argument tiers, the policy
+    # overlay, the gates and the fail-closed builders) and never rewritten by
+    # ``_apply_mode``. In block mode it equals ``action``. It applies the same
+    # caps block mode applies (the documentary-prose cap on tool arguments).
+    #
+    # It is the verdict the gateway attestation carries (``ScanView.found``):
+    # a monitor sensor tells the gateway what it would have refused, and the
+    # gateway decides. It is NOT a guarantee that block mode would have raised:
+    # value origin never blocks in 1.22.0, so found never carries a value-origin
+    # block; a configured ``blocked_tools`` entry blocks in both modes; and an
+    # open circuit breaker is not a finding, so under monitor (where the breaker
+    # never refuses) found is the content verdict while block mode refuses.
+    #
+    # ``compare=False``: two results that differ only here are equal, so a
+    # monitor result compares equal to the same verdict without this field.
+    # ``repr=False`` for the same reason. None on a result a caller builds; the
+    # sensor sets it on every result it returns or raises.
+    found_action: Optional[str] = field(default=None, compare=False, repr=False)
+
+    # ── scan id (1.22.0) — the ``data.scanId`` of this scan's telemetry event ─
+    #
+    # Minted ONCE per scan, at the emitter, and put on the event and on the
+    # result together, so a caller holding the result can name the telemetry
+    # row it belongs to. The gateway attestation names this id and Core joins
+    # it to the row. Every exit of scan, scan_a2a and scan_tool_call sets it:
+    # the main path, a gate, fail-closed, not-scannable, scan-error,
+    # circuit-open, the value-origin block and a destination block; an S6
+    # transform that rebuilds the result keeps it. When a fail-closed group
+    # decides AFTER a completed scan (``controls`` or ``bounds``), two rows
+    # exist and the result names the fail-closed one, the verdict the host
+    # received. A gate that returns an object that is not a ScanResult is
+    # not stamped, so its result has no id while its event has one. Twelve
+    # hex characters, as the event's. ``compare=False``/``repr=False`` as for
+    # found_action: an id is not part of a verdict's identity.
+    scan_id: Optional[str] = field(default=None, compare=False, repr=False)
+
+    # ── threats (1.22.0) — one ``(rule, category, score, layer)`` per rule ────
+    #
+    # The per-rule detail behind ``rules``, in the same order, from the layer
+    # that produced each: ``l1``, ``l2``, ``dlp``, ``composite``, ``nano``,
+    # ``authz`` or ``gate``. The event's ``threats`` key is built from it. Never
+    # the matched text: ids, a category and a score only. Empty when the layer
+    # recorded no detail; the event then carries the result's category and
+    # score for that rule. ``compare=False``/``repr=False`` as for the two
+    # fields above.
+    threats: tuple = field(default=(), compare=False, repr=False)
 
     @property
     def is_blocked(self) -> bool:

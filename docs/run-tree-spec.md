@@ -195,8 +195,11 @@ events never carry it), and `nano*`.
   then a worker thread flushes. A stamp taken at enqueue time therefore reads the
   caller's context. V2 below confirms this, including on LangGraph's pool threads.
 - **Mapping:** `schema.py` maps events to `gen_ai.security.*`, `SCHEMA_VERSION =
-  "0.2.0"` (`schema.py:58`). `traceParent` maps to `gen_ai.security.trace.*`
-  (`:510`) and provenance to `gen_ai.security.provenance.*` (`:540`).
+  "0.3.0"` (`schema.py:58`). `traceParent` maps to the top-level `trace_id`,
+  `span_id` and `trace_flags` attributes (`_passthrough_trace`) and provenance to
+  `gen_ai.security.provenance.*` (`_passthrough_provenance`). **[CORRECTED
+  2026-11-09]** An earlier version of this line named `gen_ai.security.trace.*`
+  and `0.2.0`; neither is what the code writes.
 - **A single funnel exists only on an unmerged branch.** `feat/value-origin-seams`
   adds `DelphiSensor._enqueue_event`, through which "every telemetry event this
   sensor emits passes" (that branch's `sensor.py:2474`), and bumps `SCHEMA_VERSION`
@@ -569,8 +572,11 @@ Sub-decisions:
   to coordinate.** This repo's rule, pinned by
   `tests/test_audit_f9_tool_telemetry.py::test_schema_version_did_not_move_for_this_change`,
   is that additive keys do not move `SCHEMA_VERSION` and a changed meaning does.
-  The `run*` keys and `gen_ai.tool.call.id` are additive, so run-tree keeps
-  `0.2.0`. Whether `valueOrigin` moves it is that branch's own question.
+  The `run*` keys and `gen_ai.tool.call.id` are additive, so run-tree moves
+  nothing. **[CORRECTED 2026-11-09]** "run-tree keeps `0.2.0`" stood here;
+  `SCHEMA_VERSION` is `0.3.0` since `feat/value-origin-seams` landed (`valueOrigin`
+  changed the meaning of an absence), and 1.22.0 is the first release that
+  carries the run-tree keys, under that version.
 
 **What would change it:** a Brain consumer that needs runs with no scan event in v1.
 That is C, built together with item 2.
@@ -659,7 +665,13 @@ skipped.
   design keys per turn. Whether value origin's flow should span turns is item 3's
   question.
 - **Whether the paid SDK's `parentScanId` ContextVar survives LangGraph's node
-  boundary** (§2d): not measured.
+  boundary** (§2d): measured, 2026-11-09, with langchain 1.2.13 and langgraph
+  1.1.3 under `create_agent`. A value set by a plain ContextVar in the
+  `before_model` node never reaches the tools node (each node runs in a copy of
+  the context). 1.22.0 holds the parent in a one-slot cell that the request opens
+  outside every node (`xaidr/value_origin/_parent_scan.py`, the shape the value-origin ledger
+  uses), and the tools node then names the input: `tool_call ... parentScanId=
+  <the input's scanId>` (`scripts/release_fields_report.py`).
 - **The handler's per-callback cost:** below this benchmark's resolution (D4).
 
 ---

@@ -429,7 +429,10 @@ def test_with_enforcement_neutered_the_same_attack_goes_through(b, cap, monkeypa
     from xaidr.types import ScanResult
 
     sensor = xaidr.Sensor(agent_id="neutered", enforcement_mode="block", reporter=cap)
-    for name in ("scan", "scan_output", "scan_a2a", "scan_tool_call"):
+    # `_scan_tool_result` since A2 M7: the LangChain and MCP result seams take
+    # their verdict from it (it records the read with the tool's identity), so it
+    # is a verdict entry point like the public four and must be disarmed with them.
+    for name in ("scan", "scan_output", "scan_a2a", "scan_tool_call", "_scan_tool_result"):
         monkeypatch.setattr(
             sensor, name, lambda *a, **k: ScanResult(action="allowed", score=0.0)
         )
@@ -559,12 +562,14 @@ def test_the_operator_blocked_tools_list_holds_in_monitor_mode(cap):
 def test_langchain_middleware_and_basetool_do_not_double_scan(cap, wait_events):
     fakes.install_langchain_core()
     fakes.install_langchain()
-    _protect(["langchain", "langchain_core"], cap, enforcement_mode="monitor")
+    manifest = _protect(["langchain", "langchain_core"], cap, enforcement_mode="monitor")
 
     agent = _langchain_agent(lambda command: f"ran {command}")
     agent.call_tool("run_command", {"command": "ls -la /tmp"})
 
-    wait_events(cap, 1)
+    # Sweep, 2026-10-06: waiting for ONE event and then counting passed while a
+    # second (double-scan) event was still in flight. Flush first, then count.
+    manifest.unprotect(close_sensor=True)
     tool_events = [e for e in cap.events if e["data"].get("toolName") == "run_command"]
     assert len(tool_events) == 1, (
         f"one tool call produced {len(tool_events)} scans — the middleware / "
@@ -647,19 +652,27 @@ def test_an_http_reporters_own_traffic_is_not_scanned(cap, wait_events):
     import httpx
     from xaidr.autopatch import exempt
 
-    _protect(["httpx"], cap)
+    manifest = _protect(["httpx"], cap)
 
     reporter_client = exempt(_httpx_client())
     reporter_client.post(
         "http://collector.internal/events", json={"message": INJECTION}
     )
 
-    # The attack text went out unscanned precisely because it is OUR OWN
-    # telemetry, and telemetry about telemetry is the loop.
-    assert cap.events == [], cap.events
-
     # ...while an ordinary client on the same patched class still blocks it.
     assert _blocked(_attack_httpx_body)
+
+    # Flush BEFORE reading `cap` (fresh review, 2026-10-05): telemetry is
+    # flushed on its own thread, so `cap.events == []` read at once passed
+    # whether or not the reporter's POST had been scanned. The ordinary block is
+    # the control: it MUST arrive, which proves the flush delivered.
+    manifest.unprotect(close_sensor=True)
+    # The attack text went out unscanned precisely because it is OUR OWN
+    # telemetry, and telemetry about telemetry is the loop. Exactly ONE event:
+    # the control's block. A scan of the reporter's POST would be one more (an
+    # event does not name its destination, so it is counted, not matched).
+    actions = [e.get("data", {}).get("action") for e in cap.events]
+    assert actions == ["blocked"], cap.events
 
 
 @requires_httpx

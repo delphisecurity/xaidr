@@ -230,6 +230,15 @@ def protect(
                     f"identifiable."
                 )
         else:
+            # value_origin= beside an existing sensor is refused, never dropped:
+            # enforcement raises ValueOriginEnforcementUnavailable, anything else a
+            # ValueError saying to set it on the Sensor (value_origin/_hold.py).
+            from ..value_origin._hold import refuse_beside_sensor
+            refuse_beside_sensor(sensor_kwargs)
+            # An enforcement_mode that is no mode is refused here too, not dropped
+            # because the existing sensor's own mode wins.
+            from ..sensor import _resolve_enforcement
+            _resolve_enforcement(enforcement_mode)
             if sensor_kwargs:
                 manifest.notes.append(
                     "an existing sensor= was passed, so these kwargs were IGNORED: "

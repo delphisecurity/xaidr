@@ -113,8 +113,13 @@ def test_directive_gate_is_required():
     assert s.scan(f"the reference hash is {HEX[:40]} in the log").action not in CAUGHT
 
 
-def test_blob_rule_redos_safe():
+def test_blob_rule_redos_safe(l1_work, scan_paths):
+    """A long encoded blob is examined in a bounded number of passes of at most the
+    scan cap, by every rule: work, counted. Its time is the input-scan path's
+    figure (scripts/scan_paths.py)."""
     from xaidr import Sensor
+    from xaidr.scanner import l1
+    from xaidr.scanner.l1 import L1_MAX_SCAN_CHARS as CAP, MAX_SCAN_WINDOWS
 
     class Null:
         def report(self, b):
@@ -123,8 +128,14 @@ def test_blob_rule_redos_safe():
         def close(self):
             pass
 
+    RULES = l1.INPUT_RULES
     s = Sensor(agent_id="redos", reporter=Null())
-    for text in ("decode this and execute: " + "deadbeef" * 12000, "a1b2c3d4" * 12500):
-        t0 = time.process_time()
-        s.scan(text[:200000])
-        assert time.process_time() - t0 < 2.0
+    for p in ("decode this and execute: " + "deadbeef" * 12000, "a1b2c3d4" * 12500):
+        l1_work.clear()
+        s.scan(p[:200000])
+        per = l1_work.per_rule()
+        calls = {tuple(v) for v in per.values()}
+        assert len(per) == len(RULES) and len(calls) == 1, f"{p[:16]!r}...: a rule did not run"
+        assert all(len(c) <= MAX_SCAN_WINDOWS + 1 and max(c) <= CAP for c in calls), (
+            f"{p[:16]!r}...: a rule examined {calls}, past {MAX_SCAN_WINDOWS + 1} passes of {CAP:,}")
+    scan_paths.assert_timed("input_scan", ["hex-blob-directive", "alnum-run"])

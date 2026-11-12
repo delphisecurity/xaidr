@@ -40,11 +40,14 @@ from .l1 import (
     L1_MAX_SCAN_CHARS,
     OVERSIZED_INPUT_CATEGORY,
     OVERSIZED_INPUT_RULE,
+    SCAN_DEGRADED_RULE,
+    SCAN_DEGRADED_SCORE,
     SCAN_INCOMPLETE_RULE,
     SCAN_INCOMPLETE_SCORE,
     iter_scan_windows,
 )
 from .l2 import scan_l2
+from . import normalizer as _normalizer_mod
 from .normalizer import TypoNormalizer
 
 logger = logging.getLogger("xaidr.scanner.local")
@@ -397,7 +400,8 @@ class LocalScanner:
         # the gate below.
         self.enforcement = _MONITOR if shadow_mode else _resolve_enforcement(enforcement_mode)
         self.enforcement_mode = self.enforcement.name
-        self._normalizer = TypoNormalizer()
+        # The normaliser is read at call time (see the property below), so a
+        # rule bundle's typo table reaches this scanner the moment it installs.
         self._compositional = CompositionalScanner()
 
         # --- S3: the escalation chain (empty in open) -------------------------
@@ -476,6 +480,11 @@ class LocalScanner:
             # (nano.resolve_model_dir(auto_download=True)).
             self._nano = DelphiNano.get(nano_model_dir, auto_download=False)
 
+    @property
+    def _normalizer(self) -> TypoNormalizer:
+        """The normaliser in force: the packaged typo table's, or a rule bundle's."""
+        return _normalizer_mod.current()
+
     def scan(
         self,
         prompt: str,
@@ -547,6 +556,7 @@ class LocalScanner:
         # guards keep benign inputs near zero, so always-on is safe. `scan_text`
         # is already capped (L1_MAX_SCAN_CHARS), so the path stays bounded.
         comp_rules = []
+        comp_details = []
         comp_category = None
         comp_score = 0.0
         if direction == "a2a":
@@ -559,6 +569,7 @@ class LocalScanner:
         comp_score = comp["score"]
         if comp_score > 0:
             comp_rules = [d["rule"] for d in comp.get("details", [])]
+            comp_details = list(comp.get("details", []))
             if comp.get("details"):
                 comp_category = comp["details"][0].get("category")
 
@@ -611,6 +622,7 @@ class LocalScanner:
                 # closed.
                 comp_score = 0.0
                 comp_rules = []
+                comp_details = []
                 comp_category = None
 
         score = self._compute_composite(l1_score, l2_score, dlp_score)
@@ -842,12 +854,26 @@ class LocalScanner:
             action = "flagged"
         else:
             action = "allowed"
+        # What a BLOCK-MODE scanner returns for this verdict: the same table with
+        # the mode question answered "yes". Carried on the result as found_action
+        # and never softened (1.22.0, the attestation's `found`).
+        found = ("blocked" if verdict == "block"
+                 else "flagged" if verdict == "flag" else "allowed")
 
         all_rules = (
             [t.rule for t in l1_threats]
             + [t.rule for t in l2_threats]
             + dlp_rules
             + comp_rules
+        )
+        # The detail behind each rule, for the event's `threats`: which layer
+        # found it, its category and its score. Never the matched text.
+        detail = (
+            [(t.rule, t.category, t.score, "l1") for t in l1_threats]
+            + [(t.rule, t.category, t.score, "l2") for t in l2_threats]
+            + [(t.rule, t.category, t.score, "dlp") for t in dlp_threats]
+            + [(d.get("rule"), d.get("category"), float(d.get("confidence", comp_score) or 0.0),
+                "composite") for d in comp_details]
         )
         # ATTRIBUTION for a nano-driven flag. Without this a nano flag arrives
         # with `rules == []` and `category is None`: the operator sees a flagged
@@ -871,15 +897,25 @@ class LocalScanner:
         # would be dead branches pretending to be defence.
         if nano_family and nano_family != NANO_FAMILY_SILENT:
             all_rules.append(f"nano:{nano_family}")
+            detail.append((f"nano:{nano_family}", "prompt_injection",
+                           float(nano_score or 0.0), "nano"))
         if bypass_hit:
             all_rules.append("DIRECTIVE_protective_override_bypass")
+            detail.append(("DIRECTIVE_protective_override_bypass", "system_prompt_leak",
+                           round(score, 3), "l1"))
         if encoding_hit:
             all_rules.append("LLM01_encoded_payload_directive")
+            detail.append(("LLM01_encoded_payload_directive", "prompt_injection",
+                           round(score, 3), "l1"))
         if url_score > 0:
             all_rules.append("LLM01_url_encoded_danger")
+            detail.append(("LLM01_url_encoded_danger", "prompt_injection",
+                           round(url_score, 3), "l1"))
         for r in oversize_rules:
             if r not in all_rules:
                 all_rules.append(r)
+                detail.append((r, oversize_category or OVERSIZED_INPUT_CATEGORY,
+                               round(score, 3), "l1"))
 
         all_threats = list(l1_threats) + list(l2_threats) + list(dlp_threats)
         top_threat = max(all_threats, key=lambda t: t.score, default=None)
@@ -917,6 +953,8 @@ class LocalScanner:
             latency_ms=int(scan_time_ms),
             nano_score=None if nano_score is None else round(nano_score, 4),
             nano_raw=None if nano_raw is None else round(nano_raw, 4),
+            found_action=found,
+            threats=tuple(d for d in detail if d[0] in all_rules),
         )
 
         # --- S3 · escalation chain -------------------------------------------
@@ -944,11 +982,24 @@ class LocalScanner:
             )
             # A link's answer replaces the verdict but never the timing: the
             # latency an operator reads must be the one this scan actually took.
+            # A link has no mode: its verdict is applied in both modes, so it
+            # is what a block-mode scanner found. Set from the link's ACTION,
+            # not carried: a link that answers with replace(local, action=...)
+            # carries the local found, which is the stale one (M1 review).
+            # A link's own rule ids are a CONTROL's answer, not a local
+            # detector's: layer gate, with the link's category and score, where
+            # the local detail has none. (`l2` is the local intent layer.)
+            known = {d[0] for d in getattr(escalated, "threats", ()) or ()}
+            extra_detail = tuple(
+                (r, escalated.category, float(escalated.score), "gate")
+                for r in (escalated.rules or []) if r not in known)
             result = replace(
                 escalated,
                 latency_ms=int(round((time.perf_counter() - scan_start) * 1000)),
                 escalation=escalation,
                 escalation_reason=reason,
+                found_action=escalated.action,
+                threats=tuple(getattr(escalated, "threats", ()) or ()) + extra_detail,
             )
         return result
 
@@ -1078,7 +1129,8 @@ class LocalScanner:
         rules: list = []
         category = None
         covered = 0
-        for idx, window, end in iter_scan_windows(prompt, scan_start):
+        stopped: list = []
+        for idx, window, end in iter_scan_windows(prompt, scan_start, report=stopped):
             covered = max(covered, end)
             if idx == 0:
                 continue  # head already scanned by the main pipeline
@@ -1120,6 +1172,11 @@ class LocalScanner:
         if covered < len(prompt):
             rules.append(SCAN_INCOMPLETE_RULE)
             max_score = max(max_score, SCAN_INCOMPLETE_SCORE)
+        # ...and if the wall-clock BACKSTOP, not the window count, is what stopped
+        # the windows, that is its own reason on the event (2026-11-01).
+        if stopped:
+            rules.append(SCAN_DEGRADED_RULE)
+            max_score = max(max_score, SCAN_DEGRADED_SCORE)
 
         return max_score, rules, category
 

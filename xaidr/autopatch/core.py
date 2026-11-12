@@ -470,6 +470,9 @@ def tool_verdict(sensor: Any, tool_name: str, arguments: Any) -> Optional[ScanRe
         return ScanResult(
             action="blocked", score=1.0, category="blocked_tool",
             rules=["TOOL_BLOCKED"], latency_ms=result.latency_ms,
+            value_origin=getattr(result, "value_origin", None),   # C-13, A2 M4
+            found_action="blocked",            # configuration: blocks in both modes
+            scan_id=getattr(result, "scan_id", None),   # the row this call emitted
         )
     if result.must_halt:
         _shout(

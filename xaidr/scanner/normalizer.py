@@ -8,7 +8,7 @@ import json
 import os
 import re
 import unicodedata
-from typing import Dict, List, Set
+from typing import Optional, Dict, List, Set
 from ..failclosed import record_asset_fault as _record_asset_fault
 
 _RULES_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "rules")
@@ -209,10 +209,16 @@ def _damerau_levenshtein(s1: str, s2: str) -> int:
 
 
 class TypoNormalizer:
-    """Corrects typos of security-relevant keywords before scanning."""
+    """Corrects typos of security-relevant keywords before scanning.
 
-    def __init__(self):
-        config = _load_typo_config()
+    ``config`` is the parsed ``typo-keywords.json`` to build from; with none,
+    the table in force (the packaged file, or a rule bundle's). Building one
+    from a candidate table is how a bundle's typo file is staged: a shape that
+    does not build refuses the bundle before anything is installed.
+    """
+
+    def __init__(self, config: Optional[dict] = None):
+        config = _load_typo_config() if config is None else config
         self.keywords: List[str] = config.get("all_keywords", [])
         self.denylist: Set[str] = set(
             w.lower() for w in config.get("denylist", [])
@@ -436,3 +442,23 @@ class TypoNormalizer:
                 result.append(token)
 
         return " ".join(result)
+
+
+# THE NORMALISER IN FORCE, one per process. Every scanner reads it at call time
+# (``LocalScanner._normalizer`` is a view onto it), so a rule bundle's typo
+# table is in force for every sensor the moment it is installed, and a sensor
+# built earlier reads it like one built later. Built once at import from the
+# packaged table; rebuilt by ``xaidr.rule_bundle`` on a swap, from the staged
+# config, so an instance that did not build never becomes current.
+_CURRENT: TypoNormalizer = TypoNormalizer()
+
+
+def current() -> TypoNormalizer:
+    """The normaliser in force."""
+    return _CURRENT
+
+
+def set_current(normalizer: TypoNormalizer) -> None:
+    """Install a normaliser built from the table now in force (``rule_bundle``)."""
+    global _CURRENT
+    _CURRENT = normalizer

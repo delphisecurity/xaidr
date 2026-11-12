@@ -74,6 +74,12 @@ WHICH_GUARDED = "which-guarded"
 ALWAYS_PRESENT = "always-present"
 
 _ALLOWED_EXTERNAL_BINARIES = {
+    ("test_disclosure_scan.py", "_git"): (ALWAYS_PRESENT, (
+        "git. The scan under test reads git history, and the test builds its own "
+        "repository in a temporary directory, so it needs the binary and nothing "
+        "else; every runner has it (actions/checkout@v4 is a git clone). A skip "
+        "would turn the pre-push disclosure gate's exemption check into a no-op."
+    )),
     ("test_enforcement_policy_seam.py", "_git_grep"): (ALWAYS_PRESENT, (
         "git. Guaranteed on ubuntu-latest AND guaranteed to have a repo to "
         "read: actions/checkout@v4 IS a git clone, so a runner that got as far "
@@ -386,24 +392,25 @@ _ALLOWED_PRIVATE_STDLIB = {
     ("test_case_insensitivity_property.py", "sre_parse"): (
         "the 3.10 half of the same guarded import."
     ),
-    ("test_redos_pattern_audit.py", "re._parser"): (
+    ("scan_paths.py", "re._parser"): (
         "the regex PARSE TREE, for the same reason as above. The generated-seed "
-        "sweep (test_generated_trigger_growth_is_not_superlinear) walks every "
+        "inputs of the l1_rule timing path (moved from test_redos_pattern_audit.py "
+        "on 2026-11-02) walk every "
         "rule's SubPattern tree to build a trigger-then-whitespace input: it has "
         "to know which positions are literals, classes, repeats and branches, "
         "and the compiled Pattern exposes none of that. `re.DEBUG` prints the "
         "same tree as unversioned text on stdout, which is the private format "
         "with a parser of our own on top. Guarded, with `sre_parse` on 3.10."
     ),
-    ("test_redos_pattern_audit.py", "re._constants"): (
+    ("scan_paths.py", "re._constants"): (
         "the opcodes (LITERAL, IN, BRANCH, MAX_REPEAT, CATEGORY_SPACE, ...) the "
         "parse tree above is made of. Meaningless without that tree and private "
         "for the same reason. Guarded, with `sre_constants` on 3.10."
     ),
-    ("test_redos_pattern_audit.py", "sre_parse"): (
+    ("scan_paths.py", "sre_parse"): (
         "the 3.10 half of the guarded re._parser import."
     ),
-    ("test_redos_pattern_audit.py", "sre_constants"): (
+    ("scan_paths.py", "sre_constants"): (
         "the 3.10 half of the guarded re._constants import."
     ),
 }

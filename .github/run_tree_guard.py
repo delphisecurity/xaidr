@@ -13,18 +13,14 @@ import xml.etree.ElementTree as ET
 CLASS = "TestRealRunTree"
 MINIMUM = 18
 
-INJECTED_MIDDLEWARE = (
-    "test_async_create_agent_with_injected_middleware_is_stamped",
-    "pre-existing: DelphiMiddleware has no awrap_tool_call, so async create_agent "
-    "under protect() raises at its first tool call (strict xfail)")
 NOT_RUN = {
     "py312": dict([
-        INJECTED_MIDDLEWARE,
         ("test_py310_async_events_are_unplaceable_never_rooted",
          "asserts the Python < 3.11 degradation; skipped from 3.11"),
     ]),
     "py310": dict([
-        INJECTED_MIDDLEWARE,
+        ("test_async_create_agent_with_injected_middleware_is_stamped",
+         "Python < 3.11: no context reaches an async node (strict xfail)"),
         ("test_t6_canary_async_langchain_still_routes_through_configure",
          "Python < 3.11: no context reaches an async node (strict xfail)"),
         ("test_async_toolnode_graph_is_stamped_on_one_root",
@@ -42,7 +38,8 @@ MUST_PASS = {
               "test_t5_a_direct_tool_run_is_no_run_and_never_a_synthesized_root",
               "test_t6_canary_sync_langchain_still_routes_through_configure",
               "test_t6_canary_async_langchain_still_routes_through_configure",
-              "test_async_toolnode_graph_is_stamped_on_one_root"},
+              "test_async_toolnode_graph_is_stamped_on_one_root",
+              "test_async_create_agent_with_injected_middleware_is_stamped"},
     "py310": {"test_t1_every_event_in_one_graph_run_carries_one_root",
               "test_t2_a_reused_child_run_id_in_two_concurrent_flows_never_merges",
               "test_t2_a_collided_root_id_stays_collided_after_the_first_flow_ends",

@@ -9,7 +9,7 @@ from .sensor import DelphiSensor as Sensor, ProtectedHttpClient
 from .circuit_breaker import CircuitBreaker
 from .provenance import set_origin, origin_scope, clear_origin
 from .provenance_chain import (
-    begin_flow, inject_context, extract_context, clear_flow,
+    begin_flow, inject_context, extract_context, clear_flow, flow, request_scope,
     propagate_context,
 )
 from .types import DelphiBlockedError, ScanResult
@@ -25,8 +25,11 @@ from .extensions import (
 from .autopatch import (
     protect, unprotect, ProtectionManifest, XaidrProtectionWarning,
 )
+# Value origin records in this release; asking for its enforcement raises this, a
+# ValueError subclass, from every public entry point (value_origin/_hold.py).
+from .value_origin._hold import ValueOriginEnforcementUnavailable
 
-__version__ = "1.21.0"
+__version__ = "1.22.0"
 
 __all__ = [
     "Sensor",
@@ -37,6 +40,7 @@ __all__ = [
     "XaidrProtectionWarning",
     "ScanResult",
     "DelphiBlockedError",
+    "ValueOriginEnforcementUnavailable",
     "FAIL_CLOSED_GROUPS",
     "CircuitBreaker",
     "SensorExtension",
@@ -53,6 +57,8 @@ __all__ = [
     "inject_context",
     "extract_context",
     "clear_flow",
+    "flow",
+    "request_scope",
     "propagate_context",
     "__version__",
 ]

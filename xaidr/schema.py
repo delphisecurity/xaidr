@@ -19,7 +19,7 @@ Design:
   ``detection.*`` / ``interaction.*``; breaker transitions carry
   ``circuit_breaker.*``. Do not expect a verdict on a breaker record.
 
-Spec: openA2A-schema-spec.md (schema_version 0.2.0).
+Spec: openA2A-schema-spec.md (schema_version 0.3.0).
 
 Provenance/OBO fields (gen_ai.security.provenance.*) are defined by the spec but
 populated in a later phase; the mapper already passes them through if present on
@@ -27,6 +27,8 @@ the internal event, so this is forward-compatible.
 """
 
 from __future__ import annotations
+
+import json
 
 from typing import Any
 from uuid import uuid4
@@ -55,7 +57,16 @@ from .types import safe_content_hash, utc_now_rfc3339
 #: guarantee on 0.x minors: 0.x is where a schema is allowed to still be wrong.
 #: The version rides on every event precisely so a consumer can branch on it,
 #: which is worth nothing if it does not move when the shape does.
-SCHEMA_VERSION = "0.2.0"
+#:
+#: 0.3.0 is the version the value-origin work moved to: ``valueOrigin`` on a
+#: tool-call event, where an ABSENT key means "not reported" (OFF, a fault, or
+#: withheld by ``value_origin_wire``), which is a changed meaning of an absence.
+#: The keys 1.22.0 adds beside it are additive and move nothing: the run-tree
+#: keys, ``parentScanId``, ``traceParent`` on tool-call events, ``provenance``
+#: on the refusal emitters, ``threats``/``threatsCut`` and ``bundleVersion``.
+#: The rule, pinned by tests/test_audit_f9_tool_telemetry.py: an added key does
+#: not move this constant; a changed meaning does.
+SCHEMA_VERSION = "0.3.0"
 
 #: Envelope ``type`` values the sensor emits, and the values that appear on
 #: ``gen_ai.security.event_type``. Passed through as-is rather than translated:
@@ -204,6 +215,16 @@ def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
 
     # --- envelope -----------------------------------------------------------
     out["gen_ai.security.schema_version"] = SCHEMA_VERSION
+    # M9 (Q14): the value-origin wire value, on tool-call events only. OMITTED when
+    # absent -- "not reported" since 0.3.0 -- never defaulted.
+    vo_wire = data.get("valueOrigin") if isinstance(data, dict) else None
+    if isinstance(vo_wire, str) and vo_wire:
+        out["gen_ai.security.value_origin"] = vo_wire
+    # Beside it, when a wall-clock backstop cut a result that call's verdict read
+    # past (2026-11-01): the backstop's own reason, distinct from the work limit.
+    vo_backstop = data.get("valueOriginBackstop") if isinstance(data, dict) else None
+    if isinstance(vo_backstop, str) and vo_backstop:
+        out["gen_ai.security.value_origin_backstop"] = vo_backstop
 
     # THE DISCRIMINATOR, and why it is emitted rather than inferred.
     #
@@ -256,6 +277,7 @@ def to_openA2A(event: dict[str, Any]) -> dict[str, Any]:
     # Trace correlation applies to every event type, so it is resolved before
     # the branch.
     _passthrough_trace(data, out)
+    _passthrough_release_keys(data, out)
     _passthrough_run_tree(data, out)
 
     if event_type == EVENT_TYPE_CIRCUIT_BREAKER:
@@ -502,6 +524,27 @@ def _map_circuit_breaker(data: dict[str, Any], out: dict[str, Any]) -> None:
     mode = data.get("enforcementMode") or data.get("enforcement_mode")
     if mode:
         out["gen_ai.security.detection.enforcement_mode"] = mode
+
+
+def _passthrough_release_keys(data: dict[str, Any], out: dict[str, Any]) -> None:
+    """The additive keys of 1.22.0, when present: the parent input scan, the
+    rule bundle version, and the per-rule threat list (as one JSON string, since
+    an attribute holds no list of objects). Absent stays absent."""
+    parent = data.get("parentScanId")
+    if isinstance(parent, str) and parent:
+        out["gen_ai.security.parent_scan_id"] = parent
+    bundle = data.get("bundleVersion")
+    if isinstance(bundle, int) and not isinstance(bundle, bool):
+        out["gen_ai.security.bundle_version"] = bundle
+    threats = data.get("threats")
+    if isinstance(threats, list) and threats:
+        try:
+            out["gen_ai.security.threats"] = json.dumps(threats, separators=(",", ":"))
+        except (TypeError, ValueError):
+            pass
+    cut = data.get("threatsCut")
+    if isinstance(cut, int) and not isinstance(cut, bool) and cut > 0:
+        out["gen_ai.security.threats_cut"] = cut
 
 
 def _passthrough_trace(data: dict[str, Any], out: dict[str, Any]) -> None:

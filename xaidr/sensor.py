@@ -6,9 +6,16 @@ model (allow / flag / block). No account, no backend, no network escalation.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+import functools
+import hashlib
+import dataclasses
 import inspect
 import json
 import logging
+import re
+import threading
 import time
 from dataclasses import replace
 from typing import Mapping, Optional, Sequence
@@ -43,7 +50,11 @@ from .circuit_breaker import (
     CircuitBreaker,
     _CircuitRuntime,
 )
-from .enforcement import MONITOR as _MONITOR, resolve as _resolve_enforcement
+from .enforcement import (
+    EnforcementPolicy,
+    MONITOR as _MONITOR,
+    resolve as _resolve_enforcement,
+)
 from .escalation import ESCALATION_SKIPPED, Escalator
 from .failclosed import (
     FAIL_CLOSED_CATEGORY,
@@ -52,7 +63,13 @@ from .failclosed import (
     asset_faults as _asset_faults,
     resolve as _resolve_fail_closed,
 )
-from .extensions import DestinationView, ScanRequest, SensorExtension
+from . import attestation as _att
+from . import rule_bundle as _bundle
+from .extensions import DestinationView, EgressView, ScanRequest, SensorExtension
+from . import value_origin as _vo
+from . import _vo_seams
+from .value_origin import _ledger as _vo_ledger  # noqa: F401  (the input batch, the replay)
+from .value_origin._designations import source_matches as _vo_source_matches
 from .reporters import Reporter, safe_fault
 from .scanner.a2a_structural import A2AStructuralValidator, A2AIdTracker
 from .scanner.command_parse import reconstruct as _reconstruct_command
@@ -70,6 +87,9 @@ from .scanner.l1 import (
     OVERSIZED_INPUT_CATEGORY as _OVERSIZED_INPUT_CATEGORY,
     OVERSIZED_INPUT_RULE as _OVERSIZED_INPUT_RULE,
     SCAN_INCOMPLETE_RULE as _SCAN_INCOMPLETE_RULE,
+    SCAN_DEGRADED_CATEGORY as _SCAN_DEGRADED_CATEGORY,
+    SCAN_DEGRADED_RULE as _SCAN_DEGRADED_RULE,
+    SCAN_DEGRADED_SCORE as _SCAN_DEGRADED_SCORE,
     iter_scan_windows as _iter_scan_windows,
 )
 from .scanner.directive_context import (
@@ -79,6 +99,7 @@ from .scanner.directive_context import (
 from .scanner.local import LocalScanner
 from .scanner.normalizer import TypoNormalizer
 from .telemetry import SyncTelemetryQueue
+from . import trace_context as _trace
 from .trace_context import ParentContext
 from .privilege_tiers import (
     least_privileged_tier as _least_privileged_tier,
@@ -132,6 +153,76 @@ _ACTION_SEVERITY = {
     "approval_required": 2,
     "blocked": 3,
 }
+
+
+#: RFC 9110 token characters: what an HTTP header NAME may be made of.
+_HEADER_TOKEN = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
+
+
+def _header_key(name) -> str:
+    """The case-folded header name the add-only merge compares on. A caller may
+    pass a bytes name (httpx accepts them); it is read as the same header as its
+    str spelling, so neither spelling opens a door past the other."""
+    if isinstance(name, (bytes, bytearray)):
+        name = bytes(name).decode("latin-1")
+    return str(name).lower()
+
+
+#: The found verdicts a block-mode sensor halts on (``enforcement._HALTING_ACTIONS``).
+_HALTING_FOUND = frozenset({"blocked", "approval_required"})
+
+
+def _s12_header_items(extra) -> list:
+    """Validate one extension's ``outbound_headers`` return. Raises on a shape a
+    transport would refuse later: a non-Mapping, a non-str name or value, a name
+    that is not an HTTP token, a value outside printable ASCII."""
+    if not isinstance(extra, Mapping):
+        raise TypeError(f"outbound_headers() returned {type(extra).__name__}, not a Mapping")
+    items = []
+    for name, value in extra.items():
+        if not isinstance(name, str) or not isinstance(value, str):
+            raise TypeError(
+                "outbound_headers() returned a header whose name or value is not a "
+                f"str ({type(name).__name__}: {type(value).__name__})")
+        if not _HEADER_TOKEN.fullmatch(name):
+            raise ValueError("outbound_headers() returned a header name that is not an HTTP token")
+        if not (value.isascii() and value.isprintable()) or value != value.strip():
+            raise ValueError(
+                "outbound_headers() returned a header value outside printable ASCII, or "
+                "with leading or trailing whitespace")
+        items.append((name, value))
+    return items
+
+
+#: S14 · the egress path's view of a scan BEFORE ``_apply_mode``. ``_scan_request``
+#: opens a sink for the duration of its scan_a2a call and ``_scan_a2a_impl`` drops
+#: the pre-mode result into it, so the attested found verdict is read from a
+#: record no S6 transform has seen, never back from the result the host receives.
+_PRE_MODE_SINK: "contextvars.ContextVar[list | None]" = contextvars.ContextVar(
+    "xaidr_pre_mode_sink", default=None)
+
+
+class EgressMark:
+    """What a ``ProtectedHttpClient`` verb did to the request it is sending,
+    carried on the httpx request's ``extensions`` for the send seam under
+    ``protect()``. A private type on purpose: the seam trusts only an instance."""
+
+    __slots__ = ("request_scanned", "response_scanned")
+
+    def __init__(self, request_scanned: bool, response_scanned: bool):
+        self.request_scanned = bool(request_scanned)
+        self.response_scanned = bool(response_scanned)
+
+
+class _HeaderCollisionError(Exception):
+    """An extension's outbound_headers() tried to overwrite an open header.
+
+    Deliberately NOT an _ExtensionContractError: the S12 rule says a collision
+    is reported log-once-then-degrade (the header is dropped, the request goes
+    out without it), never a hard failure. It is constructed at the collision
+    site and handed straight to ``_extension_failed`` — never raised through a
+    hook — so the fail-open machinery never sees it.
+    """
 
 
 class _ExtensionContractError(RuntimeError):
@@ -403,10 +494,34 @@ _TOOL_ARG_KEEP_CATEGORIES = _TOOL_ARG_BLOCK_CATEGORIES | _TOOL_ARG_FLAG_CATEGORI
 _BIND_FAILURES: set = set()
 
 
+# A2 M6: the principal input value origin records, capped like a tool-result leaf.
+_VO_INPUT_CAP = 65_536   # the core's key n-gram window (MAX_INPUT_NGRAM_CHARS); the input is no longer cut at it
+# V-31 as ruled by the owner (2026-10-04): a value-origin block's category and rule.
+_VO_BLOCK_CATEGORY = "untrusted_destination"
+_VO_BLOCK_RULE = "ORIGIN_UNTRUSTED_DESTINATION"
+# The spec's V-31 audit key (the value-origin architecture specification,
+# V-31/C-19): the waterfall renders the intent stage `decided` iff findings carry
+# it. Carried beside the owner's rule so the cross-repo contract is not broken
+# while the two namings are reconciled (M8 report).
+_VO_AUDIT_RULE = "intent.value_origin_untrusted"
+# Owner, 2026-10-05: a call blocked because a source could not be examined
+# (result_unread) is NOT an untrusted destination; saying so would be a false
+# statement in the audit record. Its own names:
+_VO_UNEXAMINABLE_CATEGORY = "unexaminable_source"
+_VO_UNEXAMINABLE_RULE = "ORIGIN_UNEXAMINABLE_SOURCE"
+# Q18: a raw result from these modules may hold an unread stream; recording it
+# would consume it under default RECORD, a host-behaviour change no verdict sees.
+_IO_BACKED_MODULES = frozenset({"httpx", "requests", "urllib3", "aiohttp"})
+
+
+
+
 def _resolve_provenance(
     agent_id: str,
     per_call: dict | None = None,
     tier: int | None = None,
+    *,
+    record: bool = True,
 ) -> Optional[dict]:
     """Build the provenance block for one emitted event (Option-1 wiring).
 
@@ -426,7 +541,7 @@ def _resolve_provenance(
     # the next hop downstream receives it in the x-openA2A-tiers header. It only
     # ever labels the hop this sensor is adding; it can never touch another
     # hop's claim.
-    return _chain.build_provenance(agent_id, on_behalf_of=obo, tier=tier)
+    return _chain.build_provenance(agent_id, on_behalf_of=obo, tier=tier, record=record)
 
 
 def _canonical_arguments(arguments) -> str:
@@ -455,6 +570,15 @@ def _canonical_arguments(arguments) -> str:
             return "<unrenderable-arguments>"
 
 
+def _args_key(arguments) -> str:
+    """B2 · the hash a tool call and its ``tools/call`` body are matched on:
+    SHA-256 of the arguments as canonical JSON (sorted keys, compact). No
+    arguments and empty arguments are the same call, as they are on the wire.
+    Used only for matching inside the sensor; never sent."""
+    canonical = _canonical_arguments(arguments if arguments is not None else {})
+    return hashlib.sha256(canonical.encode("utf-8", "surrogatepass")).hexdigest()
+
+
 def _coerce_scannable(value) -> Optional[str]:
     """Return a scannable string, or None if the input is not scannable.
 
@@ -470,6 +594,142 @@ def _coerce_scannable(value) -> Optional[str]:
         except Exception:
             return None
     return None
+
+
+# ── M9: the valueOrigin wire field, and its consumer gate (owner, 2026-10-06) ──
+# The consumer is Delphi Core (docs/value-origin-wire-consumers.md). Withholding,
+# under "v1" only, applies to EVERY reporter.
+# The sensor names the consumer's vocabulary (Sensor(value_origin_wire=...)):
+#   "v1"  the nine below, for a consumer that accepts only those;
+#   "v2"  all fifteen -- the DEFAULT (2026-11-01);
+#   "off" emit nothing.
+# A value outside the active vocabulary is WITHHELD -- the key is absent, as for
+# a sensor that does not report -- and named in a once-per-value warning; it is
+# always on ScanResult.value_origin. The DEFAULT is "v2" since 2026-11-01 (owner:
+# under the default, any state that decided a verdict reaches the wire; nothing
+# that changes a verdict is withheld); "v1" is for a consumer that takes nine.
+# Literals, not WireValue, so this module reaches into the core only inside
+# guarded calls (the fault-isolation sweep);
+# tests/test_value_origin_m9.py pins v2 == every WireValue.
+_VO_WIRE_V1 = frozenset({
+    "principal", "principal_undeclared_span", "trusted_source", "untrusted_source",
+    "unresolved", "no_destination", "no_flow", "ledger_absent", "ledger_saturated",
+})
+_VO_WIRE_VOCABULARIES = {
+    "off": frozenset(),
+    "v1": _VO_WIRE_V1,
+    "v2": _VO_WIRE_V1 | frozenset({"input_truncated", "argument_bound", "result_truncated",
+                                    "result_unread", "extraction_incomplete",
+                                    "write_dropped"}),
+}
+# One tool call's wire value, scoped by @_vo_call_scope around scan_tool_call so
+# every emitter that call reaches -- main, circuit-open, scan-error, fail-closed,
+# gate, not-scannable -- sees it at the one choke point, _enqueue_event.
+_VO_CALL_WIRE: "contextvars.ContextVar[list | None]" = contextvars.ContextVar(
+    "xaidr_value_origin_call_wire", default=None)
+
+
+# One scan call's annotations, read at the one choke point every event of that
+# call passes (``_enqueue_event``): the per-call principal, the tool call's trace
+# parent, the per-rule detail behind the rules. Set by the public entry points
+# (scan, scan_a2a, scan_tool_call) and reset on their exit, so a nested scan an
+# extension runs has a context of its own.
+_CALL_CTX: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar(
+    "xaidr_call_ctx", default=None)
+
+
+def _call_scope(fn):
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        token = _CALL_CTX.set({})
+        try:
+            return fn(self, *args, **kwargs)
+        finally:
+            _CALL_CTX.reset(token)
+    return wrapper
+
+
+def _call_ctx() -> dict:
+    ctx = _CALL_CTX.get()
+    return ctx if ctx is not None else {}
+
+
+_GATE_LAYER_CATEGORIES = frozenset({
+    FAIL_CLOSED_CATEGORY, CIRCUIT_OPEN_CATEGORY, NOT_SCANNABLE_CATEGORY,
+    SCAN_ERROR_CATEGORY, "untrusted_destination", "unexaminable_source", "quarantine",
+})
+_AUTHZ_LAYER_RULES = frozenset({"TOOL_BLOCKED", "URL_BLOCKED", "POLICY_DENY"})
+_AUTHZ_LAYER_CATEGORIES = frozenset({"policy", "blocked_tool", "blocked_url"})
+
+
+def policy_severity_for(decision) -> float:
+    """The minimal nonzero severity a policy decision carries on an event, so a
+    score-based dashboard is not misled by 0.0 on a policy block."""
+    return {"blocked": 0.6, "approval_required": 0.6, "flag": 0.3, "monitor": 0.3}.get(
+        decision, 0.0)
+
+
+def _default_layer(rule, category, gate: bool) -> str:
+    """The layer of a rule the result carried no detail for."""
+    if gate or rule in FAIL_CLOSED_RULES.values() or rule in (
+            CIRCUIT_OPEN_RULE, NOT_SCANNABLE_RULE, SCAN_ERROR_RULE):
+        return "gate"
+    if category in _GATE_LAYER_CATEGORIES:
+        return "gate"
+    if isinstance(rule, str) and (rule.startswith("policy") or rule in _AUTHZ_LAYER_RULES):
+        return "authz"
+    if category in _AUTHZ_LAYER_CATEGORIES:
+        return "authz"
+    if isinstance(rule, str) and rule.startswith("nano:"):
+        return "nano"
+    return "l1"
+
+
+def _threat_keys(rules, detail, category, score, gate: bool) -> dict:
+    """``threats`` (one entry per rule, in order, at most 50) and ``threatsCut``
+    (how many more rules there are) for one event. Ids, a category, a score and
+    a layer: never the matched text."""
+    by_rule = {}
+    for d in detail or ():
+        try:
+            by_rule.setdefault(d[0], d)
+        except Exception:
+            continue
+    rows = []
+    for rule in list(rules)[:50]:
+        d = by_rule.get(rule)
+        if d is not None:
+            rows.append({"rule": rule, "category": d[1], "score": d[2], "layer": d[3]})
+        else:
+            rows.append({"rule": rule, "category": category, "score": score,
+                         "layer": _default_layer(rule, category, gate)})
+    out = {"threats": rows}
+    if len(rules) > 50:
+        out["threatsCut"] = len(rules) - 50
+    return out
+
+
+def _vo_call_scope(fn):
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        token = _VO_CALL_WIRE.set([None, None])
+        try:
+            return fn(self, *args, **kwargs)
+        finally:
+            _VO_CALL_WIRE.reset(token)
+    return wrapper
+
+
+def _vo_note_wire(cv) -> None:
+    """Record this call's wire value for its events (absent on OFF or a fault), and
+    the backstop that decided it, if one did (``CallVerdict.backstop``)."""
+    holder = _VO_CALL_WIRE.get()
+    if holder is not None:
+        wire = getattr(getattr(cv, "wire", None), "value", None)
+        holder[0] = wire if isinstance(wire, str) and wire else None
+        backstop = getattr(cv, "backstop", None)
+        holder[1] = backstop if isinstance(backstop, str) and backstop else None
+
 
 
 class DelphiSensor:
@@ -509,6 +769,9 @@ class DelphiSensor:
         extensions: Sequence[SensorExtension] = (),
         emit_provenance_headers: bool = False,
         fail_closed=(),
+        value_origin="record",
+        value_origin_sources: Sequence = (),
+        value_origin_wire: str = "v2",
     ):
         if not agent_id:
             raise ValueError("agent_id is required")
@@ -582,20 +845,19 @@ class DelphiSensor:
         # is the gate for that, because the corpus oracle cannot see headers.
         self.emit_provenance_headers = emit_provenance_headers
         self.shadow_mode = shadow_mode
-        # shadow_mode forces observe-only — it IS monitor mode.
-        self.enforcement = _MONITOR if shadow_mode else enforcement
-        # The NAME stays a plain string and stays public: it is emitted as
-        # `enforcementMode` in every telemetry event, handed to _CircuitRuntime,
-        # and round-tripped through ProtectionManifest and the framework
-        # integrations. Those want a JSON-serialisable name, not a policy.
-        self.enforcement_mode = self.enforcement.name
+        # The effective policy is resolved AFTER the extensions are collected
+        # below (S7, #13): an extension may harden it, and the scanner built
+        # next takes the hardened policy. `enforcement` here is only the
+        # CONFIGURED policy. resolve() already raised on a bad name above, so
+        # the raise order for a bad mode string is unchanged.
 
         # ── S1 · attach, part 1 of 2: validate + collect ──────────────────
-        # FIRST of the three things that consume extensions, because both of the
-        # others are built below and need their contributions at CONSTRUCTION:
+        # FIRST of the four things that consume extensions, because all four
+        # are built below and need their contributions at CONSTRUCTION:
         #
         #   S3  the escalation chain, passed into LocalScanner (next block)
         #   S2  policy condition names, needed by parse_action_policy
+        #   S7  the effective enforcement policy (hardened, never weakened)
         #
         # on_attach still runs LAST (see part 2 at the end of __init__), so the
         # split preserves its contract: hooks that CONTRIBUTE run early, the
@@ -625,11 +887,55 @@ class DelphiSensor:
         #: reported, so a broken hook is stated ONCE per sensor rather than
         #: once per scan. Same discipline as ``_breaker_faults``.
         self._extension_faults: set = set()
+        #: S14 · whether any extension overrides attest_egress. Recorded once, at
+        #: attach: with none, no view is built, no digest computed, no hook
+        #: called, and every outbound header is what it is without this seam.
+        self._attests_egress: bool = any(
+            getattr(type(e), "attest_egress", None) is not SensorExtension.attest_egress
+            for e in self._extensions)
+        #: S14 · scans whose verdict had no Core mapping and so were not attested.
+        self._attest_unmapped: int = 0
+        #: B2 · tool-call scans awaiting their MCP tools/call POST. Written only
+        #: when an extension attests; read at egress.
+        self._pending_tool_calls = _att.ToolCallTable()
         #: S2 · the merged extension-supplied policy condition evaluators.
         self._policy_conditions: dict = self._collect_policy_conditions()
 
         #: S3 · the escalation chain, in extension order. Empty in open.
         self._escalators: tuple = self._collect_escalators()
+
+        # S7 (#13) · the effective enforcement policy. shadow_mode forces
+        # observe-only (it IS monitor mode), and an extension may not harden
+        # past it: shadow is the deployer's explicit "watch this deployment",
+        # and a control the deployer switched off for observation is not one
+        # an extension may switch back on.
+        # The collector always runs, so a non-policy answer raises under
+        # shadow_mode too (loud validation); shadow then collapses whatever
+        # it returned to MONITOR.
+        hardened = self._collect_enforcement_policy(enforcement)
+        self.enforcement = _MONITOR if shadow_mode else hardened
+        # The NAME stays a plain string and stays public: it is emitted as
+        # `enforcementMode` in every telemetry event, handed to _CircuitRuntime,
+        # and round-tripped through ProtectionManifest and the framework
+        # integrations. Those want a JSON-serialisable name, not a policy.
+        self.enforcement_mode = self.enforcement.name
+
+        # ── S15 · the rule bundle an extension hands in, read ONCE at attach ──
+        # Before the scanner is built, so its normaliser reads the bundle's
+        # table. The first bundle in extension order wins. A raise fails
+        # construction, as the other attach-time collectors do; a bundle that is
+        # REFUSED is logged once and the packaged rules keep scanning.
+        for extension in self._extensions:
+            bundle = extension.rule_bundle()
+            if bundle is None:
+                continue
+            if _bundle.install(bundle):
+                break
+            name = getattr(extension, "name", type(extension).__name__)
+            logger.error(
+                "xaidr: extension %r returned a rule bundle from rule_bundle() that was "
+                "REFUSED (not a complete rule set, or a rule in it does not load); the "
+                "packaged rules keep scanning. Logged once per sensor.", name)
 
         self._scanner = LocalScanner(
             block_threshold=block_threshold,
@@ -752,6 +1058,73 @@ class DelphiSensor:
                     circuit_breaker, self.agent_id, self.enforcement_mode
                 )
                 self._breaker._emit_hook = self._emit_circuit_event
+
+        # ── value origin (A2): validated LOUDLY here, inert until wired ───
+        # ``Sensor(value_origin="off"|"record", value_origin_sources=
+        # [SourceDesignation, ...])`` (spec V-34). RECORD is the default (C-11):
+        # it evaluates and reports and never changes an action. Value origin
+        # records in 1.22.0: "enforce" raises ValueOriginEnforcementUnavailable, and
+        # value-origin enforcement is available in a later release
+        # (value_origin/_hold.py). A bad value
+        # raises ValueError naming it (non-negotiable 2), AFTER every existing
+        # check, so the raise order for a constructor given several bad
+        # arguments is what it has always been.
+        #
+        # INERT at this milestone (A2 M1): stored and read by nothing. Each seam
+        # that reads it lands on its own milestone, measured against the C-11
+        # gate (tests/test_value_origin_c11.py), which this storage exists to
+        # let construct OFF and RECORD sensors side by side.
+        # A2 M4: NO LONGER INERT. RECORD (the default) and ENFORCE evaluate every
+        # tool call in scan_tool_call, attach ScanResult.value_origin, and log one
+        # no_flow warning per sensor (Q6). The comment above predates M4.
+        self._value_origin = _vo.validate_mode(value_origin)
+        self._value_origin_sources = _vo.validate_designations(value_origin_sources)
+        # M9: which wire values the consumer accepts (see _VO_WIRE_VOCABULARIES).
+        if value_origin_wire not in _VO_WIRE_VOCABULARIES:
+            raise ValueError(
+                f"value_origin_wire must be one of {sorted(_VO_WIRE_VOCABULARIES)}, "
+                f"not {value_origin_wire!r}")
+        self._vo_wire_name = value_origin_wire
+        self._vo_wire_vocab = _VO_WIRE_VOCABULARIES[value_origin_wire]
+        self._vo_withheld_warned: set = set()
+        self._vo_emit_fault_logged = False
+        self._vo_no_flow_warned = False          # Q6: one no_flow warning per sensor
+        self._vo_attach_fault_logged = False
+        self._vo_spans_warned = False            # M6: spans= on a non-input direction
+        self._vo_record_fault_logged = False     # M6: input recording fault, logged once
+        self._vo_result_fault_logged = False     # M7: result recording fault, logged once
+        self._vo_lock = threading.Lock()
+        if self._value_origin is not _vo.Mode.OFF:
+            # Ruling 4: each ThreadPoolExecutor work item is one request, so a pool
+            # thread never hands one job's ledger, and its authority, to the next.
+            _vo_seams.install_executor_requests()
+            _vo_seams.install_threadpool_requests()
+        if self._value_origin is _vo.Mode.ENFORCE:
+            # ONE warning, and only for ENFORCE. Two facts an operator must not
+            # learn from an incident (the owner's Q6 principle: a configuration
+            # that silently does nothing is a defect):
+            #   * A2 M8 wired ENFORCE: an untrusted destination BLOCKS (V-31).
+            #   * C-11: with no designations no read is ever trusted, so every
+            #     destination any tool result names is blocked. The owner ruled
+            #     ENFORCE off by default until designations exist (V-31).
+            # The blocking states are generated from _UNEXAMINABLE_WIRES, the
+            # set should_block reads, so the warning cannot name a state that
+            # does not block (tests/test_value_origin_m8.py).
+            from .value_origin._evaluate import _UNEXAMINABLE_WIRES
+            unexaminable = ", ".join(sorted(w.value for w in _UNEXAMINABLE_WIRES))
+            logger.warning(
+                "xaidr: Sensor(agent_id=%r, value_origin='enforce'): value origin "
+                "ENFORCES: a tool call whose wire value is untrusted_source (its "
+                "destination traces to an untrusted source; category "
+                "untrusted_destination) or one of %s (a source value origin could "
+                "not examine; category unexaminable_source) gets a block verdict: "
+                "returned as 'blocked' under enforcement_mode='block' and as "
+                "'flagged' under the default 'monitor'.%s", self.agent_id, unexaminable,
+                "" if self._value_origin_sources else
+                " With NO value_origin_sources designations, no tool result can be "
+                "a trusted source, so EVERY tool call whose destination came from a "
+                "tool result gets that verdict; measured block rates on benign "
+                "corpora are in docs/value-origin-enforce.md.")
 
         # ── S1 · attach, part 2 of 2: on_attach ──────────────────────────
         # LAST in the constructor, deliberately: on_attach receives a fully
@@ -877,19 +1250,6 @@ class DelphiSensor:
         if "controls" in self._fail_closed:
             raise _FailClosedError("controls", detail)
 
-    def _enqueue_event(self, event: dict) -> None:
-        """Every telemetry event this sensor emits passes here, once.
-
-        The one place an event's ``data`` gains keys that describe where it
-        was emitted rather than what was scanned: the run-tree keys
-        (``xaidr.run_tree``). That stamp never raises and only adds keys, so
-        the event and its verdict reach the reporter exactly as built.
-        """
-        data = event.get("data") if isinstance(event, dict) else None
-        if isinstance(data, dict):
-            _run_tree.stamp(data)
-        self._telemetry.enqueue(event)
-
     def _emit_fail_closed(
         self, direction: str, group: str, detail: str, prompt=None, **extra
     ) -> ScanResult:
@@ -914,6 +1274,7 @@ class DelphiSensor:
         """
         action = self._fail_closed.verdict(group)
         rule = FAIL_CLOSED_RULES.get(group, "FAIL_CLOSED")
+        scan_id = uuid4().hex[:12]        # one id: the event's and the result's
         result = ScanResult(
             action=action,
             score=1.0,
@@ -921,6 +1282,8 @@ class DelphiSensor:
             rules=[rule],
             latency_ms=0,
             input_status="fail_closed",
+            found_action=action,        # the group's verdict, before the downgrade
+            scan_id=scan_id,
         )
         logger.error(
             "xaidr: FAIL-CLOSED [%s] on %s -> %s (%s). The operator configured "
@@ -932,7 +1295,7 @@ class DelphiSensor:
             phash = safe_content_hash(prompt) if isinstance(prompt, str) else None
             data = {
                 "timestamp": utc_now_rfc3339(),
-                "scanId": uuid4().hex[:12],
+                "scanId": scan_id,
                 "agentId": self.agent_id,
                 "action": action,
                 "score": 1.0,
@@ -1036,7 +1399,11 @@ class DelphiSensor:
                 direction, "controls",
                 f"escalator did not answer ({result.escalation_reason})",
                 prompt, **extra)
-        if "bounds" not in self._fail_closed or result.must_halt:
+        # Decided on what the sensor FOUND, not on the softened action: this
+        # runs after _apply_mode, and a monitor sensor would otherwise relabel
+        # the very content block that block mode returns untouched (M1 review).
+        if ("bounds" not in self._fail_closed or result.must_halt
+                or getattr(result, "found_action", None) in _HALTING_FOUND):
             return result
         verdict = self._bounds_verdict(result, arguments)
         if verdict is None:
@@ -1147,6 +1514,69 @@ class DelphiSensor:
                 chain.append(link)
         return tuple(chain)
 
+    def _collect_enforcement_policy(self, configured):
+        """S7 (#13) · the effective enforcement policy: the configured one,
+        hardened by the first extension that supplies an enforcing policy.
+
+        HARDEN-ONLY, and that direction is the design decision the issue
+        records. The three options were replace, strengthen, or delete the
+        hook as redundant: replace would let an extension silently downgrade
+        a blocking deployment to monitor, which is the same failure shape as
+        S6 strengthening (a seam moving a verdict the wrong way) with the
+        sign flipped; delete would leave an embedding distribution with no
+        way to harden the policy per deployment without forking the sensor.
+        So the hook declares the FLOOR the extension requires, and the
+        sensor takes the strongest floor on offer: the configured policy,
+        upgraded to the first enforcing policy any extension returns.
+
+        Consequences, each pinned by a test:
+
+        * A non-enforcing answer never weakens an enforcing configured
+          policy. It is ignored, not an error: an extension returning
+          MONITOR declares "I need at least observe-only", which every
+          configured policy already satisfies.
+        * On a tie (configured and extension both enforcing) the configured
+          policy wins. The two answer the only questions a mode is asked
+          identically, so they differ by name alone, and the deployer's
+          spelling is the one the manifest and telemetry should carry.
+        * The answer must be an EnforcementPolicy or None. Anything else
+          raises ValueError naming the extension and the received type: a
+          security control handed a value it does not understand fails at
+          construction, the way the escalator and condition collectors
+          already do, rather than defaulting quietly.
+        * A fault inside the hook is a construction failure, not a runtime
+          degradation, for the same reason as the other collectors: an
+          extension that cannot say what its floor is has failed to
+          install. The exception propagates unchanged.
+
+        shadow_mode is applied by the CALLER, after this returns: it
+        collapses the hardened policy to MONITOR, so an extension may not
+        harden past an explicit observe-only run.
+        """
+        if not self._extensions:
+            return configured
+        effective = configured
+        for extension in self._extensions:
+            name = getattr(extension, "name", type(extension).__name__)
+            policy = extension.enforcement_policy()
+            if policy is None:
+                continue
+            if not isinstance(policy, EnforcementPolicy):
+                raise ValueError(
+                    f"extension {name!r} returned {type(policy).__name__} "
+                    "from enforcement_policy(); expected an "
+                    "EnforcementPolicy instance or None"
+                )
+            if policy.enforces() and not effective.enforces():
+                logger.info(
+                    "xaidr: extension %r hardened the enforcement policy from %r to %r",
+                    name,
+                    effective.name,
+                    policy.name,
+                )
+                effective = policy
+        return effective
+
     def _collect_policy_conditions(self) -> dict:
         """Merge every extension's `policy_conditions()` into one map.
 
@@ -1186,7 +1616,8 @@ class DelphiSensor:
                 owner[key] = name
         return merged
 
-    def _extension_failed(self, extension, hook: str, exc: Exception) -> None:
+    def _extension_failed(self, extension, hook: str, exc: Exception,
+                          *, control_fault: bool = True) -> None:
         """Report a fault inside an extension hook. ONCE per extension per hook.
 
         ERROR, not WARNING, and the message says the control is inert: an
@@ -1225,7 +1656,93 @@ class DelphiSensor:
         # one dead control rather than fifty lines of noise — but a verdict is
         # per CALL, and a deployment that refuses the first call and then
         # silently allows the next forty-nine has the worst of both postures.
-        self._control_fault(f"extension {name!r} raised in {hook}()")
+        #
+        # ``control_fault=False`` is for a violation whose seam rule says
+        # DEGRADE and nothing else: an S12 header collision is logged once and
+        # the header dropped, and the request must still go out under every
+        # fail-closed posture. The control did run; it declined one header.
+        if control_fault:
+            self._control_fault(f"extension {name!r} raised in {hook}()")
+
+    def _merge_hook_headers(self, out: dict, hook: str, invoke, validate, *,
+                            existing=()) -> None:
+        """Walk the extensions for one header-producing seam (S12, S14).
+
+        ``invoke(extension)`` calls the hook; ``validate(extra)`` returns the
+        ``(name, value)`` pairs or raises on a bad shape. Every check sits inside
+        the ``try``: a raise, a bad shape or a bound violation drops all of that
+        extension's headers, is reported once per extension per sensor, and the
+        request proceeds. The merge is ADD-ONLY and case-insensitive against
+        ``out``, ``existing`` and earlier extensions; a collision degrades (the
+        header is dropped, logged once) and is never a control fault.
+
+        Under ``fail_closed=("controls",)`` a hook fault is a VERDICT. It is
+        collected rather than raised mid-walk, so one broken extension does
+        not stop the next being consulted, then travels ``_fail_closed_result``:
+        monitor records it and the request proceeds; a halting verdict is
+        raised as ``DelphiBlockedError``, the one exception this boundary
+        raises. A raw ``FailClosedError`` never leaves a header merge.
+        """
+        seen = {_header_key(n) for n in out} | {_header_key(n) for n in existing}
+        closed: list = []
+
+        def report(extension, exc):
+            try:
+                self._extension_failed(extension, hook, exc)
+            except _FailClosedError as fc:
+                closed.append(fc)
+
+        for extension in self._extensions:
+            try:
+                extra = invoke(extension)
+                if not extra:
+                    continue
+                items = validate(extra)
+            except Exception as exc:
+                report(extension, exc)
+                continue
+            for name, value in items:
+                if _header_key(name) in seen:
+                    self._extension_failed(
+                        extension, hook,
+                        _HeaderCollisionError(
+                            f"{hook}() tried to overwrite open header {name!r}; "
+                            "the extension's value was dropped"),
+                        control_fault=False,
+                    )
+                    continue
+                out[name] = value
+                seen.add(_header_key(name))
+        if closed:
+            fc = closed[0]
+            verdict = self._fail_closed_result("http_request", fc.group, fc.detail)
+            if verdict.must_halt:
+                raise DelphiBlockedError(verdict, message=f"Request refused: {fc}")
+
+    def _attest_egress(self, method: str, host, body_sha256, scans, out: dict, *,
+                       existing=()) -> None:
+        """S14 · build the EgressView for one outbound request and merge every
+        extension's ``attest_egress`` headers into ``out``, add-only.
+
+        Callers check ``_attests_egress`` first and compute the digest only then,
+        so a sensor without an attesting extension never reaches here.
+        """
+        import xaidr as _pkg
+        view = EgressView(
+            method=str(method).upper(),
+            host=host,
+            mode=self.enforcement_mode,
+            value_origin_mode=self._value_origin.value,
+            scans=tuple(scans)[:_att.MAX_SCANS],
+            body_sha256=body_sha256,
+            sensor_version=getattr(_pkg, "__version__", ""),
+        )
+        budget = [_att.MAX_HEADER_BYTES_PER_REQUEST]
+        self._merge_hook_headers(
+            out, "attest_egress",
+            lambda extension: extension.attest_egress(view),
+            lambda extra: _att.header_items(extra, budget),
+            existing=existing)
 
     def _build_scan_request(self, direction: str, **fields) -> ScanRequest:
         """The view handed to every extension hook on the scan paths."""
@@ -1331,17 +1848,20 @@ class DelphiSensor:
         its own category/rule so an operator can tell a breaker halt from a
         content block at a glance.
         """
+        scan_id = uuid4().hex[:12]        # one id: the event's and the result's
         result = ScanResult(
             action="blocked",
             score=1.0,
             category=CIRCUIT_OPEN_CATEGORY,
             rules=[CIRCUIT_OPEN_RULE],
             latency_ms=0,
+            found_action="blocked",
+            scan_id=scan_id,
         )
         try:
             data = {
                 "timestamp": utc_now_rfc3339(),
-                "scanId": uuid4().hex[:12],
+                "scanId": scan_id,
                 "agentId": self.agent_id,
                 "action": "blocked",
                 "score": 1.0,
@@ -1375,10 +1895,22 @@ class DelphiSensor:
         refactor. This function is the SAME shape, with the gate's own category
         and rules, so an operator can tell which control halted the call.
         """
+        # A gated verdict never reaches _apply_mode, so what the gate returned
+        # is what a block-mode sensor returns too: stamp it as found when the
+        # extension did not say otherwise.
+        scan_id = uuid4().hex[:12]        # one id: the event's and the result's
+        if isinstance(result, ScanResult):
+            stamps = {"scan_id": scan_id}
+            if result.found_action is None:
+                stamps["found_action"] = result.action
+            try:
+                result = replace(result, **stamps)
+            except Exception:
+                pass                     # a subclass replace() cannot rebuild: unstamped
         try:
             data = {
                 "timestamp": utc_now_rfc3339(),
-                "scanId": uuid4().hex[:12],
+                "scanId": scan_id,
                 "agentId": self.agent_id,
                 "action": result.action,
                 "score": float(result.score),
@@ -1481,6 +2013,20 @@ class DelphiSensor:
                     "already recorded the original verdict, so a stricter "
                     "return would bypass both. Use gate() to halt a call."
                 )
+            # found is what the sensor FOUND, and scan_id names the row already
+            # emitted; a transform softens what the host receives, and a
+            # candidate rebuilt without either field keeps both.
+            if isinstance(candidate, ScanResult):
+                stamps = {}
+                if candidate.found_action is None and getattr(before, "found_action", None):
+                    stamps["found_action"] = before.found_action
+                if candidate.scan_id is None and getattr(before, "scan_id", None):
+                    stamps["scan_id"] = before.scan_id
+                if stamps:
+                    try:
+                        candidate = replace(candidate, **stamps)
+                    except Exception:
+                        pass             # a subclass replace() cannot rebuild: unstamped
             result = candidate
         return result
 
@@ -1633,10 +2179,13 @@ class DelphiSensor:
         (the latter from a ``require_approval`` policy). Monitor mode must never
         interrupt the agent — an approval gate halts autonomous execution just as
         a block does, so leaving it un-downgraded would make monitor mode stop
-        traffic. Telemetry keeps the true pre-downgrade verdict (it is emitted
-        from the composed action BEFORE this gate runs); only the returned action
-        is softened. The local scanner already gates on the policy; this is a
-        belt-and-suspenders guard. Quarantine is never downgraded.
+        traffic. Telemetry records the composed action as it reaches this gate:
+        for the tool-call, policy and A2A paths that is the verdict before this
+        downgrade, and for a content block the scanner has already answered the
+        mode question itself, so a monitor sensor's scan event says ``flagged``
+        for a score that block mode refuses. What the sensor FOUND is
+        ``ScanResult.found_action`` on every path, and the attestation carries
+        it. Quarantine is never downgraded.
 
         Which actions are halting, and what they soften to, is the policy's to
         say — see EnforcementPolicy.downgrade. Calling it unconditionally and
@@ -1664,6 +2213,7 @@ class DelphiSensor:
         Fail OPEN (allowed, score 0) — a wrong-typed input is a caller bug, not
         an attack — but emit a telemetry event marking it so the bug is visible.
         No raw content is carried (there is none to hash)."""
+        scan_id = uuid4().hex[:12]        # one id: the event's and the result's
         result = ScanResult(
             action="allowed",
             score=0.0,
@@ -1671,10 +2221,12 @@ class DelphiSensor:
             rules=[NOT_SCANNABLE_RULE],
             latency_ms=0,
             input_status="not_scannable",
+            found_action="allowed",
+            scan_id=scan_id,
         )
         data = {
             "timestamp": utc_now_rfc3339(),
-            "scanId": uuid4().hex[:12],
+            "scanId": scan_id,
             "agentId": self.agent_id,
             "action": "allowed",
             "score": 0.0,
@@ -1742,6 +2294,8 @@ class DelphiSensor:
             rules=[SCAN_ERROR_RULE],
             latency_ms=0,
             input_status="scan_error",
+            found_action="allowed",
+            scan_id=scan_id,
         )
         try:
             phash = safe_content_hash(prompt) if isinstance(prompt, str) else None
@@ -1773,6 +2327,7 @@ class DelphiSensor:
             pass
         return result
 
+    @_call_scope
     def scan(
         self,
         prompt: str,
@@ -1781,8 +2336,32 @@ class DelphiSensor:
         provider: Optional[str] = None,
         origin_context: dict | None = None,
         parent_context: Optional[ParentContext] = None,
+        *,
+        spans=None,
+        tool: Optional[str] = None,
+        arguments: Optional[Mapping[str, object]] = None,
     ) -> ScanResult:
         """Synchronous scan — used by LangChain middleware and direct calls.
+
+        ``tool=`` / ``arguments=`` (keyword-only; ``direction="tool_result"``
+        only; owner RULING 3a after M8): which tool produced this result and the
+        arguments it was called with. With them the read can match a
+        ``value_origin_sources`` designation and be a trusted source, decided by
+        this scan's own pre-mode verdict; without them it is recorded nameless
+        and untrusted (V-26). On any other direction they are ignored, and
+        a warning says so once.
+
+        A2 M6 (§1.1): with value origin on, EVERY ``direction="input"`` exit
+        records the principal input (``record_principal_input``): the normal
+        path, the gate, circuit-open, fail-closed, scan-error and
+        not-scannable ones, and a raised ``DelphiBlockedError``. A new input is a
+        new request (S-2). ``input_clean`` is True only when the scanner's
+        PRE-mode action was ``allowed`` and ``_post_scan_gate`` left the
+        result unchanged. It is False for a gate verdict, fail-closed or a block,
+        and None for circuit-open or a scan error. ``spans`` (Q8, keyword-only)
+        is a sequence of ``value_origin.Span`` declaring who wrote which part of
+        the input. It is honoured for ``direction="input"`` only; elsewhere it is
+        ignored with one WARNING per sensor.
 
         Wrapped so an UNEXPECTED internal fault fails OPEN with a signal (see
         ``_emit_scan_error``) instead of raising into the host. ``DelphiBlockedError``
@@ -1796,6 +2375,199 @@ class DelphiSensor:
         posture is unchanged: with ``fail_closed=()`` not one line below
         behaves differently from before the option existed.
         """
+        if direction == "input":
+            _chain.retire_parent_scan()         # a new request authorises what follows
+        _call_ctx()["origin_context"] = origin_context
+        held = {"clean": None}
+        try:
+            return self._scan_unrecorded(prompt, direction, destination, provider,
+                                         origin_context, parent_context, held)
+        finally:
+            self._vo_record_input(prompt, spans, direction, held["clean"])
+            if direction == "tool_result":
+                # V-26, amended by owner RULING 3a after M8: with tool= the public
+                # seam has an identity, so a designation can match and the clean
+                # PRE-mode scan decides trust, exactly as _scan_tool_result does.
+                # With no tool= the read stays nameless and untrusted.
+                if tool:
+                    self._vo_record_result(tool, arguments, prompt, held.get("true"))
+                else:
+                    self._vo_record_result("", None, prompt, None)
+            elif (tool is not None or arguments is not None) and not getattr(
+                    self, "_vo_identity_warned", False):
+                self._vo_identity_warned = True
+                logger.warning(
+                    "xaidr: scan(direction=%r, tool=...): tool= and arguments= name the "
+                    "tool behind a tool RESULT and are ignored on any other direction.",
+                    direction)
+
+    @_call_scope
+    def _scan_tool_result(self, text, *, tool, arguments, raw_result) -> ScanResult:
+        """A2 M7 (§1.2): scan a tool's RESULT exactly as scan(direction=
+        "tool_result") does (same body, telemetry and refusal), then record the
+        RAW result with the tool's identity, its arguments and the PRE-mode
+        verdict (V-2). It never reaches the public seam's nameless V-26 record:
+        that untrusted entry, landing first, would pin a designated read at
+        untrusted (C-18). Recording never raises into the host."""
+        held = {"clean": None}
+        try:
+            return self._scan_unrecorded(text, "tool_result", None, None, None, None, held)
+        finally:
+            self._vo_record_result(tool, arguments, raw_result, held.get("true"))
+
+    def _vo_record_result(self, tool, arguments, raw, true) -> None:
+        """Record one tool read (§1.2). ``true`` is the PRE-mode result scan, or
+        None when the result was not scanned (then the read is untrusted, Q10).
+        Never raises: a fault is logged once per sensor (owner, M7: the safety
+        layer must not crash what it protects)."""
+        try:
+            if self._value_origin is _vo.Mode.OFF:
+                return
+            # Q18: an I/O-backed result is passed on UNREAD. The core never reads
+            # it either (_extract._normalise_result_node), but marks the ledger,
+            # so a later miss reads result_unread and blocks under ENFORCE. This
+            # early-returned until 2026-10-05: the read vanished silently.
+            if isinstance(raw, (bytes, bytearray)):
+                raw = _coerce_scannable(raw)
+            blocked = None
+            if true is not None:
+                blocked = (true.action in ("blocked", "approval_required")
+                           or (true.action == "flagged"
+                               and true.score >= self._scanner.block_threshold))
+            if isinstance(arguments, dict):
+                args = arguments
+            else:
+                args = {} if arguments is None else {"input": arguments}
+            name = tool if isinstance(tool, str) else ""
+            _vo.record_tool_result(name, args, raw,
+                                   designations=self._value_origin_sources if name else (),
+                                   result_blocked=blocked)
+        except Exception:
+            if not self._vo_result_fault_logged:
+                self._vo_result_fault_logged = True
+                logger.exception("xaidr: value origin's tool-result recording faulted; the "
+                                 "verdict and the tool's result are unaffected")
+
+    def _vo_record_input(self, prompt, spans, direction, clean) -> None:
+        """The value-origin input seam (§1.1). Never raises: a fault here is
+        logged once per sensor at ERROR and never becomes a scan verdict."""
+        try:
+            if self._value_origin is _vo.Mode.OFF:
+                return
+            if direction != "input":
+                if spans is not None and not self._vo_spans_warned:
+                    self._vo_spans_warned = True
+                    logger.warning("xaidr: Sensor(agent_id=%r): scan(spans=...) is honoured only "
+                                   "for direction='input'; ignored for %r. Logged once.",
+                                   self.agent_id, direction)
+                return
+            if _vo_seams.NESTED_RUN.get() or _vo_seams.NOT_PRINCIPAL.get():
+                # A run hooked inside another hooked run (its input is the outer
+                # run's model text), or run input that is a tool output or an
+                # assistant turn: scanned above, never principal input.
+                return
+            text = _coerce_scannable(prompt)
+            spans = list(spans) if spans is not None else None
+            truncated = text is not None and len(text) > _VO_INPUT_CAP
+            if truncated:
+                # Deliberately NOT cut here (owner, 2026-10-05): the core bounds its
+                # own work. It reads key n-grams and destination atoms from the first
+                # 64 KiB in full, and destination atoms from the rest under
+                # ATOM_WORK_BUDGET. Past 64 KiB a miss reads input_truncated, or
+                # extraction_incomplete when that budget ran out; neither blocks.
+                pass
+            batch = _vo_seams.INPUT_BATCH.get()
+            if batch is not None and spans is None and text is not None:
+                # One input in several strings: the hook records them in one write.
+                batch.append((text, _vo.Writer.PRINCIPAL if clean is True
+                              else _vo.Writer.UNTRUSTED, truncated))
+                return
+            out = _vo.record_principal_input(text if text is not None else prompt,
+                                             spans, input_clean=clean, truncated=truncated)
+            # A FAULT on a scannable input means the record was dropped (a spans
+            # list that does not concatenate to the text, or a core fault): say
+            # so once (M6 silent-failure review). A non-scannable input FAULTs by
+            # design after binding (S-2), and is not logged.
+            if (out is _vo.RecordOutcome.FAULT and text is not None
+                    and not self._vo_record_fault_logged):
+                self._vo_record_fault_logged = True
+                logger.warning("xaidr: Sensor(agent_id=%r): value origin did not record this "
+                               "input%s. Logged once.", self.agent_id,
+                               " (its spans do not concatenate to the text)"
+                               if spans is not None else "")
+        except Exception:
+            if not self._vo_record_fault_logged:
+                self._vo_record_fault_logged = True
+                logger.exception("xaidr: value origin's input recording faulted; the "
+                                 "verdict is unaffected")
+
+    @contextlib.contextmanager
+    def _vo_input_batch(self, *, declared: bool = False):
+        """Scans inside this block that would each record principal input are
+        recorded together, in ONE write, when it ends: an input a framework hands
+        over as several strings (a run's input list, a kickoff's values) is one
+        input, so a later part never replaces an earlier one's record. Each part
+        keeps its own scan's verdict (a part that was not clean is untrusted) and
+        is its own span. ``declared``: the seam knows the span structure (each
+        part is one template variable's value). Recording never raises."""
+        parts: list = []
+        token = _vo_seams.INPUT_BATCH.set(parts)
+        try:
+            yield parts
+        finally:
+            _vo_seams.INPUT_BATCH.reset(token)
+            try:
+                if parts and self._value_origin is not _vo.Mode.OFF:
+                    out = _vo._ledger.record_input_parts(
+                        [(t, w) for t, w, _ in parts], declared=declared,
+                        truncated=any(tr for _, _, tr in parts))
+                    if out is _vo.RecordOutcome.FAULT and not self._vo_record_fault_logged:
+                        self._vo_record_fault_logged = True
+                        logger.warning("xaidr: Sensor(agent_id=%r): value origin did not "
+                                       "record this input. Logged once.", self.agent_id)
+            except Exception:
+                if not self._vo_record_fault_logged:
+                    self._vo_record_fault_logged = True
+                    logger.exception("xaidr: value origin's input recording faulted; the "
+                                     "verdict stands")
+
+    def _vo_replay_result(self, tool, arguments, text, call_id) -> None:
+        """Record a tool output a request replays from history (§1.2): the model
+        reads it again, so a destination it names is untrusted in this request
+        too. Untrusted and nameless, because this request did not scan it; an
+        output from a designated source is not replayed, so it can never pin a
+        read this request makes of that source again at untrusted (the write rule:
+        a read never raises). Never raises."""
+        try:
+            if self._value_origin is _vo.Mode.OFF or not isinstance(text, str) or not text:
+                return
+            args = arguments if isinstance(arguments, Mapping) else {}
+            if isinstance(tool, str) and tool and any(
+                    _vo_source_matches(d, tool, args) for d in self._value_origin_sources):
+                return
+            _vo._ledger.record_replayed_result(text, key=f"{call_id}\x00{text}")
+        except Exception:
+            if not self._vo_result_fault_logged:
+                self._vo_result_fault_logged = True
+                logger.exception("xaidr: value origin's replayed tool-output recording "
+                                 "faulted; the verdict stands")
+
+    def _vo_inbound_a2a(self) -> None:
+        """Q21 (owner, YES): an inbound A2A message starts a fresh ledger. It ends
+        the previous request's IMPLICIT ledger through S-2's own path (bind for an
+        input, recording nothing) and keeps an EXPLICIT one from begin_flow
+        (ruling 3.1). C-17: it records no destination. Never raises."""
+        try:
+            if self._value_origin is not _vo.Mode.OFF:
+                _vo.record_principal_input("", None, input_clean=None)
+        except Exception:
+            if not self._vo_record_fault_logged:
+                self._vo_record_fault_logged = True
+                logger.exception("xaidr: value origin's inbound-A2A bind faulted")
+
+    def _scan_unrecorded(self, prompt, direction, destination, provider,
+                         origin_context, parent_context, held) -> ScanResult:
+        """``scan``'s body. ``held['clean']`` carries ``input_clean`` out (§1.1)."""
         extra = {
             "destinationType": "external_api",
             "destinationIdentifier": destination or provider or "llm",
@@ -1808,27 +2580,40 @@ class DelphiSensor:
                 **extra,
             )
             if gated is not None:
+                held["clean"] = (None if "CIRCUIT_BREAKER_OPEN" in (gated.rules or [])
+                                 else False)
                 return gated
+            true = []
             result = self._scan_impl(
-                prompt, direction, destination, provider, origin_context, parent_context
+                prompt, direction, destination, provider, origin_context, parent_context,
+                _true=true,
             )
         except (DelphiBlockedError, _ExtensionContractError):
+            held["clean"] = False
             # _VerdictStrengthenedError is a CONTRACT violation in an
             # extension, not an environment fault. Failing it open would
             # turn a mis-written enterprise control into a silent
             # 'allowed', which is the exact shape this sensor refuses.
             raise
         except _FailClosedError as fc:
+            held["clean"] = False
             return self._fail_closed_result(
                 direction, fc.group, fc.detail, prompt, **extra)
         except Exception as exc:
+            held["clean"] = None
             if "internal" in self._fail_closed:
                 return self._fail_closed_result(
                     direction, "internal",
                     f"{type(exc).__name__} in {self._fault_origin(exc)}",
                     prompt, **extra)
             return self._emit_scan_error(direction, exc, prompt, **extra)
-        return self._post_scan_gate(result, direction, prompt, **extra)
+        held["clean"] = False
+        final = self._post_scan_gate(result, direction, prompt, **extra)
+        # the scanner's PRE-mode verdict (monitor softening never yields
+        # "allowed"; an S6 transform runs after it), and no post-scan gate change
+        held["clean"] = bool(true) and true[0].action == "allowed" and final is result
+        held["true"] = true[0] if true else None      # A2 M7: the pre-mode result verdict
+        return final
 
     def _scan_impl(
         self,
@@ -1838,6 +2623,7 @@ class DelphiSensor:
         provider: Optional[str] = None,
         origin_context: dict | None = None,
         parent_context: Optional[ParentContext] = None,
+        _true: Optional[list] = None,
     ) -> ScanResult:
         """Core scan implementation — see ``scan`` for the fail-open wrapper.
 
@@ -1874,10 +2660,13 @@ class DelphiSensor:
             agent_id=self.agent_id,
             direction=direction,
         )
+        scan_id = uuid4().hex[:12]        # one id: the event's and the result's
+        result = replace(result, scan_id=scan_id)
+        _call_ctx()["threat_detail"] = result.threats
 
         data = {
             "timestamp": utc_now_rfc3339(),
-            "scanId": uuid4().hex[:12],
+            "scanId": scan_id,
             "agentId": self.agent_id,
             "action": result.action,
             "score": result.score,
@@ -1938,6 +2727,8 @@ class DelphiSensor:
 
         # Breaker sees the TRUE verdict — before _apply_mode softens it.
         self._breaker_observe(result)
+        if _true is not None:
+            _true.append(result)            # A2 M6: the pre-mode verdict, for input_clean
         return self._apply_mode(
             result, direction,
             lambda: {"text": prompt if isinstance(prompt, str) else None,
@@ -1960,6 +2751,7 @@ class DelphiSensor:
             origin_context=origin_context,
         )
 
+    @_call_scope
     def scan_a2a(
         self,
         message: str,
@@ -1985,6 +2777,9 @@ class DelphiSensor:
         after the open-circuit check, mirroring ``scan_tool_call``, so calls
         already rejected by an open circuit do not keep re-counting.
         """
+        _call_ctx()["origin_context"] = origin_context
+        if received:
+            self._vo_inbound_a2a()          # Q21, A2 M6 (silent-failure review)
         emit_direction = "a2a_inbound" if received else "a2a"
         extra = {"destinationAgent": destination}
         text = message if isinstance(message, str) else None
@@ -2111,8 +2906,12 @@ class DelphiSensor:
         # which is decoupled from the main enforcement_mode.
         score = result.score
         action = result.action
+        # found moves with action below: the structural signals raise a verdict
+        # in both modes, and the structural block is explicit configuration.
+        found = result.found_action or result.action
         category = result.category
         rules = list(result.rules)
+        detail = list(result.threats or ())
 
         # `body` was parsed once at the top (reused here for structural checks).
         if isinstance(body, dict):
@@ -2122,6 +2921,8 @@ class DelphiSensor:
             structural_signals = sv["signals"] + idv["signals"]
             if structural_signals:
                 rules = rules + structural_signals
+                detail += [(r, "a2a_structural", round(float(struct_score), 3), "l1")
+                           for r in structural_signals]
                 if struct_score > score:
                     score = struct_score
                 # Re-derive the action from the fused score. Structural/id hits
@@ -2129,22 +2930,30 @@ class DelphiSensor:
                 # flag threshold; never downgrade a stricter content verdict.
                 if action == "allowed" and score >= self._scanner.flag_threshold:
                     action = "flagged"
+                if found == "allowed" and score >= self._scanner.flag_threshold:
+                    found = "flagged"
                 # Explicit opt-in: only when structural enforcement is "block"
                 # does a structural/id finding escalate to a hard block.
                 if self._a2a_structural_enforcement == "block":
                     action = "blocked"
+                    found = "blocked"
 
+        scan_id = uuid4().hex[:12]        # one id: the event's and the result's
         result = ScanResult(
             action=action,
             score=round(score, 3),
             category=category,
             rules=rules,
             latency_ms=result.latency_ms,
+            found_action=found,
+            scan_id=scan_id,
+            threats=tuple(detail),
         )
+        _call_ctx()["threat_detail"] = result.threats
 
         data = {
             "timestamp": utc_now_rfc3339(),
-            "scanId": uuid4().hex[:12],
+            "scanId": scan_id,
             "agentId": self.agent_id,
             "action": result.action,
             "score": result.score,
@@ -2168,6 +2977,9 @@ class DelphiSensor:
         })
         # Breaker sees the TRUE verdict — before _apply_mode softens it.
         self._breaker_observe(result)
+        sink = _PRE_MODE_SINK.get()
+        if sink is not None:
+            sink.append(("a2a", result, None))    # S14: the record the attestation reads
         return self._apply_mode(
             result, emit_direction, lambda: {"destination": destination},
         )
@@ -2179,13 +2991,310 @@ class DelphiSensor:
         scan() path applies) so obfuscated tool args are folded identically to
         prompt content; builds one lazily as a fallback. Cached after first use.
         """
-        n = getattr(self, "_tool_arg_norm", None)
-        if n is None:
-            n = getattr(self._scanner, "_normalizer", None) or TypoNormalizer()
-            self._tool_arg_norm = n
-        return n
+        # Read each time: the normaliser in force can change when a rule bundle
+        # installs, and a cached instance would keep the old table.
+        return getattr(self._scanner, "_normalizer", None) or TypoNormalizer()
 
+    def _vo_first_withheld(self, wire: str) -> bool:
+        """True the first time ``wire`` is withheld (under the lock: silent-failure review)."""
+        with self._vo_lock:
+            first = wire not in self._vo_withheld_warned
+            self._vo_withheld_warned.add(wire)
+        return first
+
+    def _enqueue_event(self, event: dict) -> None:
+        """Every telemetry event this sensor emits passes here, once.
+
+        Two additions, both keys only, so the event and its verdict reach the
+        reporter exactly as built. A TOOL-CALL event gets ``valueOrigin`` at the
+        top level of ``data`` when its call has a wire value the consumer's
+        vocabulary accepts; otherwise the key stays absent (OFF, an evaluate
+        fault, every other direction, or a withheld value), never None. Every
+        event gets the run-tree keys (``xaidr.run_tree``), which describe where
+        it was emitted rather than what was scanned; that stamp never raises. A
+        fault in either never costs the event."""
+        try:
+            holder = _VO_CALL_WIRE.get()
+            wire = holder[0] if holder else None
+            data = event.get("data") if isinstance(event, dict) else None
+            if (holder and holder[1] and isinstance(data, dict)
+                    and data.get("direction") == "tool_call" and self._vo_wire_vocab):
+                # A wall-clock backstop cut a tool result this call's verdict read
+                # past: its own reason, beside the wire value (2026-11-01).
+                data["valueOriginBackstop"] = holder[1]
+            if wire is not None and isinstance(data, dict) and data.get("direction") == "tool_call":
+                if wire in self._vo_wire_vocab:
+                    data["valueOrigin"] = wire
+                elif self._vo_wire_vocab and self._vo_first_withheld(wire):
+                    logger.warning(
+                        "xaidr: Sensor(agent_id=%r): value-origin wire value %r withheld from "
+                        "telemetry (every reporter): value_origin_wire=%r, the vocabulary the "
+                        "consumer accepts, does not include it. The v1 vocabulary is "
+                        "nine values. It is still on ScanResult.value_origin. Set "
+                        "value_origin_wire='v2' once the consumer accepts all fifteen.",
+                        self.agent_id, wire, self._vo_wire_name)
+        except Exception:
+            if not self._vo_emit_fault_logged:
+                self._vo_emit_fault_logged = True
+                logger.exception("xaidr: value origin's wire-field emission faulted; the event "
+                                 "is sent without valueOrigin")
+        data = event.get("data") if isinstance(event, dict) else None
+        if isinstance(data, dict):
+            _run_tree.stamp(data)
+            bundle_version = _bundle.version()
+            if bundle_version is not None:
+                data["bundleVersion"] = bundle_version      # the rules in force
+            if event.get("type") == "scan":
+                self._annotate_scan_event(data)
+        self._telemetry.enqueue(event)
+
+    def load_rule_bundle(self, bundle) -> bool:
+        """Adopt a complete rule set, whole or not at all, the way ``set_policy``
+        adopts a policy. Returns True when the bundle is in force; False when it
+        was refused and the rules in force are unchanged. Never raises.
+
+        The shape is ``xaidr.rule_bundle``'s: an integer ``version`` and
+        ``files``, the seven packaged rule files as parsed JSON, every one of
+        them. A rule that would not load refuses the whole bundle. The tables are
+        the process's and every scanner reads them at call time, so the bundle is
+        in force for EVERY sensor in the process, built before or after, from the
+        next scan each starts; a scan in flight when the swap lands may read one
+        layer's old table and the next layer's new one. The version rides every
+        event as ``bundleVersion`` from then on.
+
+        Open never fetches or verifies a bundle; that is the caller's.
+        """
+        if not _bundle.install(bundle):
+            logger.error(
+                "xaidr: Sensor(agent_id=%r): load_rule_bundle refused the bundle (not a "
+                "complete rule set, or a rule in it does not load); the rules in force "
+                "are unchanged", self.agent_id)
+            return False
+        return True
+
+    def _annotate_scan_event(self, data: dict) -> None:
+        """The additive keys every scan event carries (1.22.0), set once, here,
+        so no exit of any entry point can leave one out. Never raises.
+
+        * ``provenance``: the principal block, when the main path did not set it
+          (the refusal exits); resolved once per event from the call's per-call
+          principal and the context.
+        * ``parentScanId`` on a tool-call event: the input scan that authorised it.
+          Absent means not evaluated. An input event records itself as the
+          parent of what follows.
+        * ``traceParent`` on a tool-call event: the active OTel span (or the
+          caller's explicit parent), resolved once per call.
+        * ``threats``: one ``{rule, category, score, layer}`` per rule, at most
+          50, with ``threatsCut`` when more exist.
+        """
+        try:
+            ctx = _call_ctx()
+            direction = data.get("direction")
+            if "provenance" not in data:
+                # The refusal exits: the principal, read from the chain as it
+                # stands. No hop is recorded here, so a refused call changes
+                # nothing a sensor downstream in the same flow reads as its
+                # upstream (the tier gate), exactly as before this key.
+                prov = _resolve_provenance(
+                    self.agent_id, per_call=ctx.get("origin_context"),
+                    tier=self._declared_tier, record=False)
+                if prov:
+                    data["provenance"] = prov
+            if direction == "tool_call":
+                parent = _chain.current_parent_scan_id()
+                if parent and "parentScanId" not in data:
+                    data["parentScanId"] = parent
+                tp = ctx.get("traceParent")
+                if tp and "traceParent" not in data:
+                    data["traceParent"] = dict(tp)
+            elif direction == "input":
+                _chain.record_input_scan(data.get("scanId"))
+            if "threats" not in data and isinstance(data.get("rules"), list):
+                data.update(_threat_keys(
+                    data["rules"], ctx.get("threat_detail") or (),
+                    data.get("category"), data.get("score"), bool(data.get("gate"))))
+        except Exception:
+            if not getattr(self, "_annotate_fault_logged", False):
+                self._annotate_fault_logged = True
+                logger.exception("xaidr: a scan event's additive keys faulted; the event "
+                                 "is sent without them")
+
+    @_call_scope
+    @_vo_call_scope
     def scan_tool_call(
+        self,
+        tool_name: str,
+        arguments: dict | None = None,
+        mcp_server: Optional[str] = None,
+        origin_context: dict | None = None,
+        server_name: Optional[str] = None,
+        parent_context: Optional[ParentContext] = None,
+    ) -> ScanResult:
+        """Scan a tool call. Value origin is evaluated FIRST (A2 M4, V-7a):
+        before the gates, the breaker and ``_resolve_provenance`` (V-7a). Its verdict is attached to whatever comes back, so every
+        exit carries it (C-13): the main path, the circuit-open, gate,
+        fail-closed, scan-error and not-scannable ones. Attaching it once,
+        here, means no exit INSIDE this method can miss it; a caller that
+        builds a fresh result afterwards must carry it, as
+        autopatch.tool_verdict does (M4 review). RECORD and
+        ENFORCE evaluate; nothing acts on the verdict until M8."""
+        ctx = _call_ctx()
+        ctx["origin_context"] = origin_context
+        # The trace parent of a tool call: the caller's explicit parent_context,
+        # else the ACTIVE OTel span, never the wire (an inbound traceparent names
+        # the request that arrived, not the call this agent makes). Absent with
+        # neither. Read onto every tool_call event of this call.
+        try:
+            pc = parent_context if parent_context is not None else _trace._from_active_span()
+            if pc is not None:
+                ctx["traceParent"] = pc.as_metadata()
+        except Exception:
+            pass
+        cv = self._value_origin_verdict(tool_name, arguments)
+        _vo_note_wire(cv)                 # M9: every event of this call sees it
+        blocked = self._value_origin_block(tool_name, cv)
+        if blocked is not None:
+            self._record_pending_tool_call(tool_name, arguments, [], blocked)
+            return blocked
+        # S14/B2: the pre-mode record of this call, for the tools/call POST that
+        # carries it out. The sink is opened only when an extension attests.
+        sink = [] if self._attests_egress else None
+        token = _PRE_MODE_SINK.set(sink) if sink is not None else None
+        try:
+            result = self._scan_tool_call_unattached(
+                tool_name, arguments, mcp_server, origin_context, server_name)
+        finally:
+            if token is not None:
+                _PRE_MODE_SINK.reset(token)
+        if cv is not None:
+            try:
+                result = replace(result, value_origin=cv)
+            except Exception:
+                # An S6 transform_verdict may return any object with a valid
+                # `.action`; replace() raises on a non-dataclass. Dropping the
+                # field (absent, never null) is strictly better than raising into
+                # the host. Logged once per sensor (M4 silent-failure review).
+                if not self._vo_attach_fault_logged:
+                    self._vo_attach_fault_logged = True
+                    logger.exception("xaidr: value origin could not attach its verdict to a "
+                                     "%s result; the field is omitted", type(result).__name__)
+        if sink is not None:
+            self._record_pending_tool_call(tool_name, arguments, sink, result)
+        return result
+
+    def _record_pending_tool_call(self, tool_name, arguments, sink, final) -> None:
+        """B2 · remember this call's scan for the MCP ``tools/call`` POST that
+        carries it out. Nothing when no extension attests. Never raises.
+
+        Only a call that PROCEEDS is recorded: a verdict the host halts on (a
+        block or an approval hold in block mode, a configured blocked tool in
+        either mode) makes no POST, and an entry for it would bind the next
+        request to the same tool with the same arguments that does leave.
+        """
+        if not self._attests_egress or not isinstance(tool_name, str):
+            return
+        try:
+            if getattr(final, "must_halt", False) or tool_name in self._blocked_tools:
+                return
+            entry = next((e for e in sink if e[0] == "tool_call"), None)
+            record, impact = (entry[1], entry[2]) if entry else (final, None)
+            view = _att.scan_view(record, final, "tool_call", impact_class=impact,
+                                  parent_scan_id=_chain.current_parent_scan_id())
+            if view is None:
+                self._attest_unmapped += 1
+                return
+            self._pending_tool_calls.record(tool_name, _args_key(arguments), view)
+        except Exception as exc:
+            if not getattr(self, "_pending_record_fault_logged", False):
+                self._pending_record_fault_logged = True
+                logger.warning("xaidr: a tool-call scan could not be recorded for "
+                               "attestation (%s); logged once per sensor",
+                               type(exc).__name__)
+
+    def _value_origin_block(self, tool_name, cv):
+        """A2 M8, ENFORCE (V-18, V-31). Runs right after evaluate_call and returns
+        BEFORE the circuit check, the gates and detection, so a value-origin block
+        holds on open's fail-open paths too. It goes through the existing emit
+        path and _apply_mode, so monitor gives `flagged`. It is NOT counted by the
+        circuit breaker (Q13, owner): if this layer could trip the breaker, an
+        open breaker would disable detection generally. Never raises into the
+        host; a should_block fault means no value-origin block, logged."""
+        if cv is None or self._value_origin is not _vo.Mode.ENFORCE:
+            return None
+        try:
+            fire = _vo.should_block(cv, mode=self._value_origin)
+        except Exception:
+            logger.exception("xaidr: value origin's should_block faulted; value origin "
+                             "does not block this call")
+            return None
+        if not fire:
+            return None
+        name = tool_name if isinstance(tool_name, str) else None
+        untrusted = getattr(cv, "verdict", None) is _vo.Verdict.UNAUTHORIZED
+        result = ScanResult(action="blocked", score=1.0, category=(_VO_BLOCK_CATEGORY if untrusted else _VO_UNEXAMINABLE_CATEGORY),
+                            # Both ids on an unexaminable block (owner, 2026-10-06): its
+                            # own rule says WHY; intent.value_origin_untrusted is the
+                            # audit id the Brain-side spec defines (C-19), which the
+                            # intent lens and any filter on it must keep seeing.
+                            rules=([_VO_BLOCK_RULE, _VO_AUDIT_RULE] if untrusted
+                   else [_VO_UNEXAMINABLE_RULE, _VO_AUDIT_RULE]),
+                            found_action="blocked")
+        # Telemetry records the TRUE verdict FIRST, then _apply_mode may soften it
+        # (monitor, an S6 transform), as every other gate in this file does: the
+        # S6 contract is that telemetry has already seen the original verdict.
+        # (M8 silent-failure review: emitting after _apply_mode left a softened
+        # value-origin block with no trace anywhere.)
+        try:
+            # valueOrigin reaches this event through _enqueue_event, behind the
+            # consumer gate (M9). Passing it here explicitly, as 3daf41f did,
+            # bypassed the gate: a result_unread block sent a value the Brain rejects.
+            result = self._emit_gate_verdict(result, "value_origin", "tool_call", toolName=name)
+        except Exception:
+            pass                                 # telemetry never decides a verdict
+        try:
+            result = self._apply_mode(result, "tool_call", lambda: {"tool_name": name})
+        except (DelphiBlockedError, _ExtensionContractError):
+            raise
+        except Exception:
+            logger.exception("xaidr: _apply_mode faulted on a value-origin block; the "
+                             "block stands")
+        return replace(result, value_origin=cv)
+
+    def _value_origin_verdict(self, tool_name, arguments):
+        """``evaluate_call`` for this call, or None (OFF, or a fault: the field
+        is then omitted, never null). Q6 as the owner ruled it: the FIRST call
+        this sensor sees under ``no_flow`` logs ONE warning naming the fix."""
+        if self._value_origin is _vo.Mode.OFF:
+            return None
+        try:
+            cv = _vo.evaluate_call(tool_name if isinstance(tool_name, str) else "",
+                                   arguments, flow_active=_chain.is_flow_active())
+        except Exception:                       # evaluate_call never raises; belt and braces
+            logger.exception("xaidr: value origin evaluate_call faulted")
+            return None
+        if cv is not None and cv.wire is _vo.WireValue.NO_FLOW and not self._vo_no_flow_warned:
+            with self._vo_lock:
+                first, self._vo_no_flow_warned = not self._vo_no_flow_warned, True
+            if first:
+                logger.warning(
+                    "xaidr: Sensor(agent_id=%r): value origin saw a tool call with NO flow "
+                    "active (wire no_flow), so it can trace no destination and, under "
+                    "ENFORCE, can never block. Open a flow per agent request: run it inside "
+                    "`with xaidr.flow(principal=...):` (a sync request handler can be "
+                    "decorated with @xaidr.flow(...)); for a request that arrived from "
+                    "another service, call extract_context() on its headers. A server "
+                    "loop that handles one request after another on one thread marks "
+                    "each with `with xaidr.request_scope():`. The plain "
+                    "xaidr.begin_flow() ... xaidr.clear_flow() pair still works; outside "
+                    "a request, if clear_flow() is skipped (for example because the "
+                    "request raised) the next request on the same thread inherits the "
+                    "flow. Under protect(), each run of an agent LangChain's "
+                    "create_agent built is a request of its own; a LangGraph graph run "
+                    "any other way needs the flow opened OUTSIDE the graph. "
+                    "Logged once per sensor.", self.agent_id)
+        return cv
+
+    def _scan_tool_call_unattached(
         self,
         tool_name: str,
         arguments: dict | None = None,
@@ -2363,9 +3472,18 @@ class DelphiSensor:
             )
 
         action = "allowed"
+        # What a BLOCK-MODE sensor returns for this call, tracked beside `action`
+        # at every site below that asks the mode (1.22.0). It applies the same
+        # caps block mode applies and the same policy overlay; only the mode
+        # question is answered "yes". Carried as ScanResult.found_action.
+        found = "allowed"
         score = 0.0
         category: Optional[str] = None
         rules: list[str] = []
+        # The detail behind each rule for the event's `threats`: (rule, category,
+        # score, layer). Text findings are l1, structural (parse) findings authz,
+        # secrets dlp, the policy overlay authz. Never the matched text.
+        detail: list = []
 
         # Impact classification — feeds the local YAML policy overlay below (which
         # is the open authorization mechanism). classify() never raises.
@@ -2374,6 +3492,8 @@ class DelphiSensor:
         # Blocked-tools list (the explicit operator denylist).
         if tool_name in self._blocked_tools:
             action, score, category, rules = "blocked", 1.0, "blocked_tool", ["TOOL_BLOCKED"]
+            found = "blocked"
+            detail.append(("TOOL_BLOCKED", "blocked_tool", 1.0, "authz"))
 
         # Content scan of the tool name + string args for dangerous command /
         # code-execution patterns (ASI02/ASI05). Even with NO policy configured,
@@ -2400,8 +3520,10 @@ class DelphiSensor:
             # helper, same total budget as scan()), so a payload past the cap is
             # reached; and flag over-length so it is never a silent pass.
             _arg_scan_start = time.perf_counter()
+            _arg_backstop: list = []        # the wall-clock backstop stopped the windows
             danger = []
-            for _idx, _win, _end in _iter_scan_windows(normalized_args, _arg_scan_start):
+            for _idx, _win, _end in _iter_scan_windows(normalized_args, _arg_scan_start,
+                                                       report=_arg_backstop):
                 danger.extend(
                     t for t in _scan_l1(_win).threats
                     if t.category in _TOOL_ARG_KEEP_CATEGORIES
@@ -2415,7 +3537,8 @@ class DelphiSensor:
             # only ADD a finding and never change one that already fired.
             if normalized_args != raw_args:
                 _seen_rules = {t.rule for t in danger}
-                for _idx, _win, _end in _iter_scan_windows(raw_args, _arg_scan_start):
+                for _idx, _win, _end in _iter_scan_windows(raw_args, _arg_scan_start,
+                                                           report=_arg_backstop):
                     for _t in _scan_l1(_win).threats:
                         if (_t.category in _TOOL_ARG_KEEP_CATEGORIES
                                 and _t.rule not in _seen_rules):
@@ -2625,6 +3748,9 @@ class DelphiSensor:
                         if t.category not in _TOOL_ARG_FLAG_CATEGORIES]
                 category = category or (hard[0].category if hard else danger[0].category)
                 rules = rules + [t.rule for t in danger if t.rule not in rules]
+                detail += [(t.rule, t.category, float(t.score),
+                            "authz" if isinstance(t, _StructuralThreat) else "l1")
+                           for t in danger]
                 # Benign DOCUMENTARY-PROSE cap. This path runs raw L1 over the arg
                 # text with none of scan()'s context calibration, so an agent that
                 # passes an incident report, runbook, policy doc or detection-rule
@@ -2636,10 +3762,15 @@ class DelphiSensor:
                 # key — run_command(command=…) & friends are an execution request,
                 # never documentation, so the whole attack corpus and every
                 # prefixed-attack probe are structurally out of reach of this cap.
-                if hard and self.enforcement.enforces() and self._prose_mention_arg(
+                # The cap is decided in BOTH modes, because found is the
+                # block-mode answer and block mode applies it; it lifts `hard`
+                # only when enforcing.
+                capped = bool(hard) and self._prose_mention_arg(
                     arguments, f"{tool_name} {arg_text}"
-                ):
+                )
+                if hard and self.enforcement.enforces() and capped:
                     hard = []
+                found = "blocked" if (hard and not capped) else "flagged"
                 # Only the hard (destructive/injection) categories enforce a block;
                 # the flag tier (data_exfiltration + the ambiguous model-directed
                 # categories) surfaces as a flag (monitor-default).
@@ -2700,6 +3831,8 @@ class DelphiSensor:
                     score = max(score, max(t.score for t in dlp_hits))
                     category = category or dlp_hits[0].category
                     rules = rules + [t.rule for t in dlp_hits if t.rule not in rules]
+                    detail += [(t.rule, t.category, float(t.score), "dlp") for t in dlp_hits]
+                    found = "blocked"
                     if self.enforcement.enforces():
                         action = "blocked"
                     elif action == "allowed":
@@ -2708,8 +3841,11 @@ class DelphiSensor:
                     score = max(score, max(t.score for t in dlp_signals))
                     category = category or dlp_signals[0].category
                     rules = rules + [t.rule for t in dlp_signals if t.rule not in rules]
+                    detail += [(t.rule, t.category, float(t.score), "dlp") for t in dlp_signals]
                     if action == "allowed":
                         action = "flagged"
+                    if found == "allowed":
+                        found = "flagged"
 
             # Over-length arg content is itself anomalous — flag-default (never a
             # hard block on size alone, never a silent pass) if nothing stronger
@@ -2717,12 +3853,28 @@ class DelphiSensor:
             if len(normalized_args) > _L1_MAX_SCAN_CHARS:
                 if action == "allowed":
                     action = "flagged"
+                if found == "allowed":
+                    found = "flagged"
                 if score < 0.2:
                     score = 0.2
                 if not category:
                     category = _OVERSIZED_INPUT_CATEGORY
                 if _OVERSIZED_INPUT_RULE not in rules:
                     rules = rules + [_OVERSIZED_INPUT_RULE]
+                    detail.append((_OVERSIZED_INPUT_RULE, _OVERSIZED_INPUT_CATEGORY,
+                                   float(score), "l1"))
+            # The wall-clock BACKSTOP stopped the argument windows before the window
+            # count did: its own reason, never a silent change (2026-11-01).
+            if _arg_backstop and _SCAN_DEGRADED_RULE not in rules:
+                if action == "allowed":
+                    action = "flagged"
+                if found == "allowed":
+                    found = "flagged"
+                score = max(score, _SCAN_DEGRADED_SCORE)
+                category = category or _SCAN_DEGRADED_CATEGORY
+                rules = rules + [_SCAN_DEGRADED_RULE]
+                detail.append((_SCAN_DEGRADED_RULE, _SCAN_DEGRADED_CATEGORY,
+                               float(_SCAN_DEGRADED_SCORE), "l1"))
 
         # Compose the local YAML policy as an overlay (STRICTER WINS), BEFORE the
         # enforcement_mode gate so the same gate (_apply_mode) sees the composed
@@ -2766,6 +3918,7 @@ class DelphiSensor:
                 },
             )
             action = _policy.compose(action, pol.decision)
+            found = _policy.compose(found, pol.decision)
             _local_policy_decision = pol.decision
             _local_policy_id = pol.policy_id
 
@@ -2781,24 +3934,24 @@ class DelphiSensor:
                 )
                 if rule_label not in rules:
                     rules = rules + [rule_label]
+                    detail.append((rule_label, "policy", float(policy_severity_for(pol.decision)),
+                                   "authz"))
                 # Minimal nonzero severity so score-based dashboards aren't misled
                 # by 0.0 on a policy block. Never lowers a higher real score.
-                policy_severity = {
-                    "blocked": 0.6,
-                    "approval_required": 0.6,
-                    "flag": 0.3,
-                    "monitor": 0.3,
-                }.get(pol.decision, 0.0)
+                policy_severity = policy_severity_for(pol.decision)
                 if policy_severity > score:
                     score = policy_severity
 
         _scan_ms = round((time.perf_counter() - _t0) * 1000, 3)
         _canonical_args = _canonical_arguments(arguments)
 
+        scan_id = uuid4().hex[:12]        # one id: the event's and the result's
         result = ScanResult(
             action=action, score=score, category=category, rules=rules,
-            latency_ms=_scan_ms,
+            latency_ms=_scan_ms, found_action=found, scan_id=scan_id,
+            threats=tuple(detail),
         )
+        _call_ctx()["threat_detail"] = result.threats
 
         # Emit telemetry (mirrors the scan() enqueue shape, direction=tool_call)
         # resolve the app-supplied principal (3b semantics: per-call > set context)
@@ -2807,7 +3960,7 @@ class DelphiSensor:
         )
         data = {
             "timestamp": utc_now_rfc3339(),
-            "scanId": uuid4().hex[:12],
+            "scanId": scan_id,
             "agentId": self.agent_id,
             "action": action,
             "score": score,
@@ -2868,6 +4021,9 @@ class DelphiSensor:
 
         # Breaker sees the TRUE verdict — before _apply_mode softens it.
         self._breaker_observe(result)
+        sink = _PRE_MODE_SINK.get()
+        if sink is not None:
+            sink.append(("tool_call", result, impact_class))   # S14/B2: the record
         return self._apply_mode(
             result, "tool_call",
             lambda: {"tool_name": tool_name if isinstance(tool_name, str) else None,
@@ -2969,6 +4125,41 @@ class DelphiSensor:
             fn = fn._xaidr_protect_original
             seen += 1
         return False
+
+    def _agents_invoke(self, invoke, tool_name, tool_verdict):
+        """An Agents SDK ``on_invoke_tool`` that decides each call first. The
+        arguments arrive as one JSON string; a value that is not a JSON object is
+        scanned as ``{"input": value}``."""
+        import json as _json
+
+        async def on_invoke_tool(ctx, input_json, *args, **kwargs):
+            try:
+                arguments = _json.loads(input_json) if input_json else {}
+            except (TypeError, ValueError):
+                arguments = {"input": input_json}
+            if not isinstance(arguments, dict):
+                arguments = {"input": arguments}
+            refusal = tool_verdict(None, tool_name, (), {}, arguments=arguments)
+            if refusal is not None:
+                return refusal
+            out = invoke(ctx, input_json, *args, **kwargs)
+            if inspect.isawaitable(out):
+                out = await out
+            if not _vo_seams.RESULT_SEAM.get():
+                self._vo_record_result(tool_name, arguments, out, None)
+                if not isinstance(out, str):
+                    # The SDK hands the model str() of a return value it does not
+                    # convert itself, and str() of a container shows its members'
+                    # repr(): that text is recorded too, so a destination the model
+                    # reads is recorded however the value is shaped (2026-11-01).
+                    try:
+                        text = str(out)
+                    except Exception:
+                        text = None
+                    if isinstance(text, str):
+                        self._vo_record_result(tool_name, arguments, text, None)
+            return out
+        return on_invoke_tool
 
     def protect_tools(self, tools: list) -> list:
         """Wrap tools so every invocation is scanned and enforced before it runs.
@@ -3191,7 +4382,7 @@ class DelphiSensor:
                     arguments.update(kwargs)
                     return arguments
 
-            def tool_verdict(orig_func, tname, args, kwargs):
+            def tool_verdict(orig_func, tname, args, kwargs, arguments=None):
                 """The whole decision, shared by the sync and async wrappers.
 
                 Returns the in-band refusal STRING when the call must not run,
@@ -3210,7 +4401,8 @@ class DelphiSensor:
                 needs both is an async tool called positionally with a
                 dangerous argument.
                 """
-                arguments = bind_arguments(orig_func, tname, args, kwargs)
+                if arguments is None:
+                    arguments = bind_arguments(orig_func, tname, args, kwargs)
                 # scan_tool_call applies blocked-tools + L1 arg scan +
                 # local YAML policy, emits telemetry, and NEVER raises
                 # (internal faults fail open with a degraded signal).
@@ -3247,6 +4439,19 @@ class DelphiSensor:
                     )
                 return None
 
+            def record_unscanned(orig_func, tname, args, kwargs, out):
+                """A2 M7, protect_tools' RESULT POSITION (owed since M1). This
+                seam scans no result, so its read is untrusted (Q10). It records
+                only when no scanned seam encloses the call: that outer seam
+                records the same invocation with its verdict (§1.2 item 3, F7)."""
+                if _vo_seams.RESULT_SEAM.get():
+                    return
+                try:
+                    arguments = bind_arguments(orig_func, tname, args, kwargs)
+                except Exception:
+                    arguments = {}
+                self._vo_record_result(tname, arguments, out, None)
+
             def make_wrapper(orig_func, tname):
                 """Wrap one callable, MATCHING ITS SYNC/ASYNC-NESS.
 
@@ -3274,15 +4479,22 @@ class DelphiSensor:
                         refusal = tool_verdict(orig_func, tname, args, kwargs)
                         if refusal is not None:
                             return refusal
-                        return await orig_func(*args, **kwargs)
+                        out = await orig_func(*args, **kwargs)
+                        record_unscanned(orig_func, tname, args, kwargs, out)
+                        return out
                 else:
                     def wrapper(*args, **kwargs):
                         refusal = tool_verdict(orig_func, tname, args, kwargs)
                         if refusal is not None:
                             return refusal
-                        if orig_func is not None:
-                            return orig_func(*args, **kwargs)
-                        return None
+                        if orig_func is None:
+                            # the no-implementation shape: scan, enforce, return
+                            # None (M7 review: the result position read an
+                            # unassigned result here and crashed the host)
+                            return None
+                        out = orig_func(*args, **kwargs)
+                        record_unscanned(orig_func, tname, args, kwargs, out)
+                        return out
                 return wrapper
 
             def mark(fn, orig):
@@ -3309,6 +4521,22 @@ class DelphiSensor:
             # what this branch did before the async split. Building it
             # unconditionally keeps that, and keeps the `else` branch below able
             # to set __name__ on it.
+            # An OpenAI Agents SDK FunctionTool: a dataclass whose implementation
+            # is its `on_invoke_tool(ctx, input_json)` field. The copy keeps every
+            # other field (name, schema, guardrails), so an Agent still names and
+            # calls the tool, and each call is decided on its parsed arguments.
+            invoke = getattr(t, "on_invoke_tool", None)
+            if (callable(invoke) and hasattr(t, "params_json_schema")
+                    and dataclasses.is_dataclass(t)
+                    and type(t).__module__.split(".")[0] == "agents"):
+                if self._wrapped_by_self(invoke):
+                    wrapped.append(t)
+                    continue
+                wrapped.append(dataclasses.replace(
+                    t, on_invoke_tool=mark(self._agents_invoke(invoke, tool_name, tool_verdict),
+                                           invoke)))
+                continue
+
             new_func = protect_half(original_func)
 
             # CrewAI first: it also has model_copy, but its implementation hangs
@@ -3896,7 +5124,7 @@ class ProtectedHttpClient:
         ascii_host = self._idna(host)
         return [ascii_host] if ascii_host == host else [ascii_host, host]
 
-    def _emit_destination_block(self, result: ScanResult, dest_id: Optional[str]) -> None:
+    def _emit_destination_block(self, result: ScanResult, dest_id: Optional[str]) -> ScanResult:
         """Emit ONE telemetry event for a destination-level block.
 
         Destination blocks raise before any scan_* method runs, so without this
@@ -3911,12 +5139,21 @@ class ProtectedHttpClient:
         NEVER raises and NEVER swallows the block: it is called immediately
         before ``raise DelphiBlockedError`` and has its own guard, so an emit
         fault cannot be mistaken for a fail-open by the caller's handler.
+
+        Returns the result carrying the event's ``scan_id`` (the caller raises
+        THAT one), or the result it was given when it cannot be stamped.
         """
+        scan_id = uuid4().hex[:12]        # one id: the event's and the result's
+        if isinstance(result, ScanResult):
+            try:
+                result = replace(result, scan_id=scan_id)
+            except Exception:
+                pass
         try:
             dest = dest_id or "unknown"
             data = {
                 "timestamp": utc_now_rfc3339(),
-                "scanId": uuid4().hex[:12],
+                "scanId": scan_id,
                 "agentId": self._sensor.agent_id,
                 "action": result.action,
                 "score": result.score,
@@ -3931,7 +5168,8 @@ class ProtectedHttpClient:
                 "promptLength": 0,
                 "promptHash": safe_content_hash(dest),
             }
-            prov = _resolve_provenance(self._sensor.agent_id)
+            prov = _resolve_provenance(self._sensor.agent_id,
+                                       tier=self._sensor._declared_tier)
             if prov:
                 data["provenance"] = prov
             self._sensor._enqueue_event({
@@ -3947,6 +5185,7 @@ class ProtectedHttpClient:
                 )
             except Exception:
                 pass
+        return result
 
     def _check_destination(self, url: str, json_body: dict | None = None) -> None:
         """Destination-level block: blocked-URL list + local deny-destination
@@ -4014,7 +5253,12 @@ class ProtectedHttpClient:
                             "would let a destination past that open would have "
                             "stopped."
                         )
-                    self._emit_destination_block(decision, view.dest_id)
+                    if isinstance(decision, ScanResult) and decision.found_action is None:
+                        try:         # a destination block halts in both modes
+                            decision = replace(decision, found_action=decision.action)
+                        except Exception:
+                            pass
+                    decision = self._emit_destination_block(decision, view.dest_id)
                     raise DelphiBlockedError(
                         decision,
                         message=(f"Destination '{view.dest_id}' blocked by "
@@ -4029,6 +5273,7 @@ class ProtectedHttpClient:
                         score=1.0,
                         category="blocked_url",
                         rules=["URL_BLOCKED"],
+                        found_action="blocked",
                         latency_ms=0,
                     )
                     # Destination identifier computed ONCE and used for both the
@@ -4050,7 +5295,7 @@ class ProtectedHttpClient:
                         f"matches pattern '{blocked_url}'"
                     )
                     # Audit record BEFORE the raise — host only, no URL.
-                    self._emit_destination_block(result, dest_id)
+                    result = self._emit_destination_block(result, dest_id)
                     raise DelphiBlockedError(result)
 
             # 2. Local deny-destination YAML policy (host-based, structured).
@@ -4085,6 +5330,7 @@ class ProtectedHttpClient:
                             category="policy",
                             rules=[rule_label],
                             latency_ms=0,
+                            found_action="blocked",
                         )
                         # Same rule as the blocked-URL branch above: the
                         # destination identifier, never the full URL. `dest_id`
@@ -4096,7 +5342,7 @@ class ProtectedHttpClient:
                         )
                         # Audit record BEFORE the raise — dest_id is the host (or
                         # the inferred destination agent), never the URL.
-                        self._emit_destination_block(result, dest_id)
+                        result = self._emit_destination_block(result, dest_id)
                         raise DelphiBlockedError(
                             result,
                             message=f"Destination '{dest_id}' blocked by policy",
@@ -4143,7 +5389,7 @@ class ProtectedHttpClient:
                 type(exc).__name__,
             )
 
-    def _scan_request(self, url: str, json_body: dict | None, content: str | bytes | None) -> None:
+    def _scan_request(self, url: str, json_body: dict | None, content: str | bytes | None):
         """Scan outgoing request: destination block first, then A2A body scan.
 
         Additive / stricter-wins: ``_check_destination`` blocks a denied
@@ -4151,19 +5397,143 @@ class ProtectedHttpClient:
         benign body; the existing body content scan still blocks a malicious
         body to an otherwise-allowed destination. Raises DelphiBlockedError on
         either.
+
+        Returns ``(record, final)`` for S14, or ``None`` when nothing was
+        scanned: ``record`` is the result as the sensor found it, before
+        ``_apply_mode`` (read from the pre-mode sink, so no S6 transform has
+        touched it), and ``final`` is the result the host received.
         """
         self._check_destination(url, json_body)
 
         message = self._extract_message(json_body, content)
         if not message or len(message) < 3:
-            return
+            return None
 
         destination = self._extract_destination(url, json_body)
 
-        result = self._sensor.scan_a2a(message, destination=destination)
+        sink: list = []
+        token = _PRE_MODE_SINK.set(sink)
+        try:
+            result = self._sensor.scan_a2a(message, destination=destination)
+        finally:
+            _PRE_MODE_SINK.reset(token)
 
         if result.action == 'blocked':
             raise DelphiBlockedError(result)
+        # THIS request's scan, by id: a gate or transform extension that runs a
+        # scan of its own drops that scan into the same sink, before or after.
+        own = getattr(result, "scan_id", None)
+        record = next((r for d, r, _ in sink
+                       if d == "a2a" and getattr(r, "scan_id", None) == own), result)
+        return record, result
+
+    def _attest_headers(self, method: str, url: str, body, scanned, existing) -> dict:
+        """S14 · the headers to add to one outbound request. ``body`` is the exact
+        bytes the request carries (``None`` when they cannot be read without
+        consuming them); ``scanned`` is ``_scan_request``'s pair or None;
+        ``existing`` names the headers already on the request."""
+        host = self._extract_host(url)
+        digest = _att._body_sha256(body) if body is not None else None
+        scans = []
+        if scanned is not None:
+            record, final = scanned
+            view = _att.scan_view(record, final, "a2a")
+            if view is None:
+                self._sensor._attest_unmapped += 1
+            else:
+                scans.append(view)
+        # B2 · a JSON-RPC tools/call body takes the pending tool-call scan with
+        # the same tool name and arguments hash, once.
+        call = _att.tools_call(body)
+        if call is not None:
+            bound = self._sensor._pending_tool_calls.take(call[0], _args_key(call[1]))
+            if bound is not None:
+                scans.append(bound)
+        added: dict = {}
+        self._sensor._attest_egress(method, host, digest, _att.order_scans(scans), added,
+                                    existing=existing)
+        return added
+
+    def _attest_verb(self, method: str, url, json_body, content, scanned, headers: dict) -> dict:
+        """S14 on a ``ProtectedHttpClient`` verb: the exact bytes httpx will send
+        are read from a request built the way the verb builds it, and the
+        attestation headers are added to ``headers``. Nothing runs when no
+        extension attests. Called only for a body the verb itself built
+        (``json=``/``content=``); a ``data=``/``files=`` body is scanned and
+        attested at the send seam, from the request httpx built."""
+        if not self._sensor._attests_egress:
+            return headers
+        import httpx
+        try:
+            body = httpx.Request(method, url, json=json_body, content=content).content
+        except Exception:
+            body = None                        # a stream: not read, not named
+        out = dict(headers or {})
+        existing = list(out.keys()) + list(self._client_default_headers())
+        out.update(self._attest_headers(method, str(url), body, scanned, existing))
+        return out
+
+    def _client_default_headers(self):
+        """The names of the wrapped client's own default headers: they ride every
+        request, so the add-only rule protects them too."""
+        headers = getattr(self._client, "headers", None)
+        try:
+            return list(headers.keys()) if headers is not None else []
+        except Exception:
+            return []
+
+    def _full_url(self, url) -> str:
+        """The URL the destination check, the view and the digest read.
+
+        An ABSOLUTE url is read as the caller spelled it: the operator blocklist
+        matches raw substrings and the destination label is taken from the raw
+        text, so normalising it (IDNA, percent-encoding, a default port) would
+        change which requests the blocklist stops. Only a RELATIVE url, which
+        has no host of its own, is merged with the client's ``base_url`` the way
+        httpx merges it. The verb still passes the caller's ``url`` to the
+        client unchanged."""
+        raw = str(url)
+        if "://" in raw:
+            return raw
+        merge = getattr(self._client, "_merge_url", None)
+        if merge is None:
+            return raw
+        try:
+            return str(merge(url))
+        except Exception:
+            return raw
+
+    @staticmethod
+    def _own_body(kwargs: dict) -> bool:
+        """True when the verb built the body it will send (``json=``/``content=``);
+        a ``data=`` or ``files=`` body is built by httpx at send time."""
+        return kwargs.get("data") is None and kwargs.get("files") is None
+
+    def _attest_request(self, request, body, scanned) -> None:
+        """S14 on a request object the autopatch seam intercepted (an httpx
+        ``Request`` or a requests ``PreparedRequest``): headers are written onto
+        the request. Nothing runs when no extension attests."""
+        if not self._sensor._attests_egress:
+            return
+        headers = request.headers
+        added = self._attest_headers(
+            str(getattr(request, "method", "")), str(getattr(request, "url", "")),
+            body, scanned, list(headers.keys()))
+        for name, value in added.items():
+            headers[name] = value
+
+    @staticmethod
+    def _egress_marked(kwargs: dict, *, request_scanned: bool, response_scanned: bool) -> dict:
+        """Mark a verb's request with what this client did, so a patched
+        ``httpx.Client.send`` (``protect()``) does only what is left: the
+        destination check runs there in every case (it sees the merged URL), the
+        body scan and attestation only when this client did not scan the body,
+        the response scan only when this client does not scan the response.
+        The mark is a private type, so a dict a caller assembles is not one."""
+        extensions = dict(kwargs.get("extensions") or {})
+        extensions["xaidr.egress"] = EgressMark(request_scanned, response_scanned)
+        kwargs["extensions"] = extensions
+        return kwargs
 
     def _scan_response(self, response: "httpx.Response") -> "httpx.Response":
         """Scan response body for output DLP.
@@ -4191,9 +5561,11 @@ class ProtectedHttpClient:
         return response
 
     def _egress_headers(self, dest, headers=None, *, source_agent: bool) -> dict:
-        """S12 · the ONE place an outbound header is written. All five verbs
-        call it, so "what does xaidr add to an outbound request" has a single
-        answer rather than five that can drift.
+        """S12 · the ONE place the sensor's own and the S12 extension headers
+        are written. All five verbs call it, so "what does xaidr add to an
+        outbound request" has a single answer rather than five that can drift.
+        S14 headers are added after it, by ``_attest_verb`` (the verbs) and
+        ``_attest_request`` (the send seam), under the same add-only rule.
 
         ``source_agent`` records which verbs wrote ``X-Delphi-Source-Agent``
         BEFORE this seam existed: the body verbs always did, GET and DELETE
@@ -4219,28 +5591,65 @@ class ProtectedHttpClient:
             # nothing in the sensor's own egress ever called it. This is that
             # wiring, behind the flag.
             out = _chain.inject_context(out)
+        # S12 follow-up (#14) · merge each extension's outbound_headers().
+        # ADD-ONLY: an extension may contribute new headers, never remove or
+        # overwrite one that is already open. A collision is a contract
+        # violation against the S12 rule, and the rule says what happens:
+        # it is reported at call time, ONCE, then the extension's header is
+        # dropped — the log-once-then-degrade discipline from
+        # ``_extension_failed``, not a hard failure, because a collision must
+        # never take down an outbound request. Only the colliding header is
+        # dropped; the extension's other headers still merge.
+        #
+        # Comparison is case-insensitive. HTTP header names are, and a
+        # lowercase `x-delphi-source-agent` overwriting the sensor's
+        # `X-Delphi-Source-Agent` would be the same misattribution through a
+        # smaller door. `seen` covers the sensor's own headers, the caller's,
+        # and headers merged from earlier extensions in this same call.
+        if self._sensor._extensions:
+            host = self._extract_host(dest)
+            view = DestinationView(host=host, dest_id=host)
+            # One walk for every header-producing seam: add-only, every shape
+            # check inside the try, a fault reported once, and a closed
+            # `controls` fault travelling the verdict path (never a raw
+            # FailClosedError out of a header merge).
+            self._sensor._merge_hook_headers(
+                out, "outbound_headers",
+                lambda extension: extension.outbound_headers(view),
+                _s12_header_items, existing=self._client_default_headers())
         return out
+
+    # The body verbs run scan, then headers, then attestation, then send: the
+    # attestation names the scan, so the scan comes first, and a refused request
+    # builds no headers at all.
+
+    def _body_verb(self, method, url, json, content, headers, kwargs):
+        """post/put/patch: scan, then headers, then attestation, then send.
+        The attestation names the scan, so the scan comes first, and a refused
+        request builds no headers at all."""
+        full = self._full_url(url)
+        scanned = self._scan_request(full, json, content)
+        headers = self._egress_headers(full, headers, source_agent=True)
+        own = self._own_body(kwargs)
+        if own:
+            headers = self._attest_verb(method, full, json, content, scanned, headers)
+        send = getattr(self._client, method.lower())
+        response = send(url, json=json, content=content, headers=headers,
+                        **self._egress_marked(kwargs, request_scanned=own,
+                                              response_scanned=True))
+        return self._scan_response(response)
 
     def post(self, url, *, json=None, content=None, headers=None, **kwargs):
         """POST with A2A scanning."""
-        headers = self._egress_headers(url, headers, source_agent=True)
-        self._scan_request(str(url), json, content)
-        response = self._client.post(url, json=json, content=content, headers=headers, **kwargs)
-        return self._scan_response(response)
+        return self._body_verb("POST", url, json, content, headers, kwargs)
 
     def put(self, url, *, json=None, content=None, headers=None, **kwargs):
         """PUT with A2A scanning."""
-        headers = self._egress_headers(url, headers, source_agent=True)
-        self._scan_request(str(url), json, content)
-        response = self._client.put(url, json=json, content=content, headers=headers, **kwargs)
-        return self._scan_response(response)
+        return self._body_verb("PUT", url, json, content, headers, kwargs)
 
     def patch(self, url, *, json=None, content=None, headers=None, **kwargs):
         """PATCH with A2A scanning."""
-        headers = self._egress_headers(url, headers, source_agent=True)
-        self._scan_request(str(url), json, content)
-        response = self._client.patch(url, json=json, content=content, headers=headers, **kwargs)
-        return self._scan_response(response)
+        return self._body_verb("PATCH", url, json, content, headers, kwargs)
 
     def get(self, url, **kwargs):
         """GET — destination-scanned (no body to content-scan).
@@ -4248,12 +5657,15 @@ class ProtectedHttpClient:
         The blocked-URL list and deny-destination policy still apply, so a GET
         to a denied destination is blocked before the request leaves the host.
         """
-        self._check_destination(str(url), None)
-        headers = self._egress_headers(url, kwargs.pop("headers", None),
+        full = self._full_url(url)
+        self._check_destination(full, None)
+        headers = self._egress_headers(full, kwargs.pop("headers", None),
                                        source_agent=False)
+        headers = self._attest_verb("GET", full, None, None, None, headers)
         if headers:
             kwargs["headers"] = headers
-        return self._client.get(url, **kwargs)
+        return self._client.get(url, **self._egress_marked(
+            kwargs, request_scanned=True, response_scanned=False))
 
     def delete(self, url, **kwargs):
         """DELETE — destination-scanned (no body to content-scan).
@@ -4261,12 +5673,15 @@ class ProtectedHttpClient:
         Same destination enforcement as GET: a DELETE to a denied destination
         is blocked before it is sent.
         """
-        self._check_destination(str(url), None)
-        headers = self._egress_headers(url, kwargs.pop("headers", None),
+        full = self._full_url(url)
+        self._check_destination(full, None)
+        headers = self._egress_headers(full, kwargs.pop("headers", None),
                                        source_agent=False)
+        headers = self._attest_verb("DELETE", full, None, None, None, headers)
         if headers:
             kwargs["headers"] = headers
-        return self._client.delete(url, **kwargs)
+        return self._client.delete(url, **self._egress_marked(
+            kwargs, request_scanned=True, response_scanned=False))
 
     def close(self):
         self._client.close()

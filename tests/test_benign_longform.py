@@ -153,7 +153,9 @@ def test_the_pool_straddles_the_window_coverage_limit(corpus):
     covered = [r for r in corpus
                if L1_MAX_SCAN_CHARS < r["chars"] <= limit]
     truncated = [r for r in corpus if r["chars"] > limit]
-    assert len(covered) >= 10, (
+    # 5, not 10, since 2026-11-01: the window cap is two windows (199,488 chars),
+    # not eight, and the pool holds 6 items between the cap and that coverage.
+    assert len(covered) >= 5, (
         f"only {len(covered)} items are over the {L1_MAX_SCAN_CHARS:,}-char cap "
         f"and within the {limit:,}-char window coverage — the 'long but fully "
         "read' case this group exists to NOT refuse is barely represented."

@@ -177,6 +177,23 @@ release are what those six jobs consist of, and a pool that avoided them would
 measure nothing — the same discipline the "It exercises the detectors on purpose"
 section below states for the blind pool.
 
+### A fifth pool, for value origin: who gave the destination
+
+`value_origin_flows.jsonl` (96 rows) is the one pool read inside a flow, in
+`value_origin="record"`, the mode 1.22.0 ships. Each row names a destination `value` and a `source`:
+the principal typed it (`principal`), a designated trusted source returned it
+(`designated`), a read through a designation on the value's own host returned a
+partner destination (`designated_at`), or an undesignated result named it
+(`untrusted`, the control, which reads `untrusted_source`). The `cut_*` sources
+are the same three with the result padded past its 64-leaf bound. The shapes are
+the ones the value-origin readings decide differently from a plain host: IPv6
+literals with a digit and a hex last group, with and without a port; IPv4-mapped,
+zoned and IPvFuture hosts; international names; ftp and file URLs; the names only
+a stdlib client makes (userinfo kept in the host, `<URL:...>`, a numeric host with
+a trailing dot); and cut results. `scripts/corpus_diff.py` runs every row as one
+call and records its wire and each finding's key and origin beside the usual
+fields, so a release comparison names any row whose origin moved.
+
 ## How it was written
 
 From **agent workflows, not from the detectors.** Five personas, each doing its

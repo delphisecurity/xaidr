@@ -140,9 +140,10 @@ def test_exfil_is_flag_not_block(block):
         assert block.scan(cmd).action != "blocked", f"exfil blocked (should flag): {cmd}"
 
 
-def test_batch_c_redos_safe():
-    import time
-    from xaidr.scanner.l1 import scan_l1
+def test_batch_c_redos_safe(l1_work, scan_paths):
+    """Every rule examines each payload once, up to the scan cap: work, counted.
+    Their time is the input-scan path's figure (scripts/scan_paths.py)."""
+    from xaidr.scanner.l1 import L1_MAX_SCAN_CHARS as CAP, scan_l1
 
     payloads = [
         "curl -X POST " + "a" * 300_000,
@@ -151,6 +152,11 @@ def test_batch_c_redos_safe():
         "wget --post-data=" + "$" * 200_000,
     ]
     for p in payloads:
-        t0 = time.process_time()
+        l1_work.clear()
         scan_l1(p)
-        assert time.process_time() - t0 < 1.5, "Batch-C exfil pattern too slow (possible ReDoS)"
+        per = l1_work.per_rule()
+        assert per and all(v == [min(len(p), CAP)] for v in per.values()), (
+            f"{p[:16]!r}...: a rule examined {sorted({tuple(v) for v in per.values()})}, "
+            f"not the payload up to the {CAP:,}-char cap, once")
+    scan_paths.assert_timed("input_scan", ["batch-c-post", "batch-c-requests", "batch-c-ips",
+                                           "batch-c-wget"])
