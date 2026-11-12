@@ -940,6 +940,10 @@ honest boundary, not an oversight.
 
 ## API reference
 
+> **Value origin records in 1.22.0.** Every tool-call event carries `valueOrigin`, where the call's destination came from (the principal's input, a designated source, an untrusted source, or nothing recorded), and value origin never changes an action. `Sensor(value_origin=...)` takes `"record"` (the default) or `"off"`. Value-origin enforcement is available in a later release; asking for it (`value_origin="enforce"` in any spelling, from `Sensor`, `protect()`, an integration or a policy) raises `xaidr.ValueOriginEnforcementUnavailable`, a `ValueError` you can catch by name ([docs/value-origin-rulings.md](docs/value-origin-rulings.md)).
+
+> **`value origin saw a tool call with NO flow active`** (logged once per sensor) means that call's destination could not be traced. Run each agent request inside `with xaidr.flow(principal=...):`, which opens the request scope value origin traces in and ends it even when the request raises. Each `ThreadPoolExecutor` job, each CrewAI kickoff and Agents SDK run, and each `with xaidr.request_scope():` block is one request too, and a request's value-origin ledger ends with it. The plain `xaidr.begin_flow()` … `xaidr.clear_flow()` pair still works; outside any request, if `clear_flow()` is skipped, the next request on the same thread inherits the flow.
+
 ```python
 from xaidr import Sensor, ScanResult, DelphiBlockedError, CircuitBreaker
 

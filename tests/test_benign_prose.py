@@ -398,13 +398,12 @@ def test_strip_code_spans_leaves_the_prose():
     "Runbook: " + "`a" * 5000,
     "```" + "x" * 5000,
 ])
-def test_code_span_matching_is_bounded_on_adversarial_input(text):
+def test_code_span_matching_is_bounded_on_adversarial_input(text, scan_paths):
     """All three alternatives use negated character classes with bounded repeats,
-    so pathological backtick input cannot backtrack."""
-    import time
-
+    so pathological backtick input cannot backtrack. It returns; its time is the
+    text-detector path's figure (scripts/scan_paths.py, the code-span-* inputs)."""
     from xaidr.scanner.directive_context import documentary_mention
 
-    start = time.process_time()
-    documentary_mention(text)
-    assert time.process_time() - start < 1.0
+    assert documentary_mention(text) in (True, False)
+    scan_paths.assert_timed("text_detectors", [
+        "code-span-backticks", "code-span-runbook", "code-span-fence"])

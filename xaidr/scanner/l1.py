@@ -10,7 +10,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 from ..failclosed import record_asset_fault as _record_asset_fault
 from .dlp import _is_reserved_email
@@ -123,21 +123,31 @@ class UnknownRuleCategory(ValueError):
 # the same way so L2/DLP/compositional are bounded too.
 L1_MAX_SCAN_CHARS = 100_000
 
-# Defense-in-depth wall-clock budget for one L1 scan. Checked BETWEEN rules, and
-# that limitation is fundamental rather than a shortcut: in CPython a running
+# THE WORK LIMIT AND THE BACKSTOPS (owner, 2026-11-01: no verdict may depend on
+# machine load). What one scan reads is decided by WORK alone: every rule runs over
+# at most L1_MAX_SCAN_CHARS of text, and a long input is read in at most
+# MAX_SCAN_WINDOWS windows. The wall-clock limits below are BACKSTOPS, 120 s, set far
+# above the worst case of that work on the CI runners, the slowest reference
+# (docs/performance.md): they fire only when something no work
+# limit bounds goes wrong (a pattern gone super-linear, a stalled machine), and
+# each records its own rule on the event, so a backstop never changes a verdict
+# silently. Until 2026-11-01 they were 0.5 s, 1.0 s and 1.0 s and decided what was
+# read, so the same input read one way on an idle machine and another on a busy
+# one.
+#
+# The rule-loop backstop for one L1 scan. Checked BETWEEN rules, and that
+# limitation is fundamental rather than a shortcut: in CPython a running
 # ``re.search`` is a single C call, so no signal handler and no thread can
-# interrupt it. A budget can therefore only ever observe that a pattern WAS
+# interrupt it. A backstop can therefore only ever observe that a pattern WAS
 # pathological — it cannot stop one. That is why the real fix for a backtracker
 # is always a linear pattern (see repetition.py) and never a timeout.
-_L1_SCAN_BUDGET_SEC = 0.5
+_L1_SCAN_BUDGET_SEC = 120.0
 
 # Per-rule wall-clock above which ONE pattern is treated as having behaved
-# pathologically on this input. Calibrated by measurement, not guessed: with every
-# pattern linear, the slowest single rule on a full-size 100k adversarial
-# input measures 376ms, so 1.0s leaves ~2.7x headroom for a loaded machine. The
-# margin is wide on purpose: it costs nothing in detection and removes any
-# chance of firing on honest work.
-_L1_RULE_SLOW_SEC = 1.0
+# pathologically on this input: a backstop. With every pattern linear, the slowest
+# single rule on an adversarial input is far below it (docs/performance.md), so no
+# load reaches this, and it still catches a pattern gone exponential.
+_L1_RULE_SLOW_SEC = 120.0
 
 # WHAT HAPPENS WHEN A BOUND IS BLOWN — AND WHY NEITHER IS A TIMEOUT.
 #
@@ -179,25 +189,26 @@ SCAN_DEGRADED_SCORE = 0.25
 # Truncating to the first L1_MAX_SCAN_CHARS would silently drop everything past
 # the cap — an attacker could pad >100k of benign filler to push a payload past
 # it, and the whole engine would never see the payload. Instead of dropping the
-# tail we scan the FULL input in successive OVERLAPPING windows, but
-# under a HARD TOTAL wall-clock budget so a megabyte-class input cannot impose
-# unbounded latency (the very DoS the cap existed to prevent).
+# tail we scan the input in successive OVERLAPPING windows, up to a fixed WINDOW
+# COUNT, so a megabyte-class input cannot impose unbounded latency (the very DoS
+# the cap existed to prevent).
 #
 # The overlap ensures a payload straddling a window boundary appears whole in at
-# least one window. The total budget (checked BETWEEN windows — a single regex
-# can't be interrupted) bounds the worst case to a FIXED ceiling regardless of
-# input size: a 100k input is one window (unchanged); a 10MB input scans as many
-# windows as the budget allows, then stops. Over-length is ALSO surfaced as a
-# flag by the caller, so even a payload past the budget is never a silent pass.
-# The total budget must keep the WHOLE scan (head + tail windows) inside the
-# engine's hard per-scan latency bound (the ReDoS invariant, ~2s). Since a single
-# window can't be interrupted mid-regex, the true worst case is budget + one
-# window, so this is set well below the 2s bound. Over-length is ALWAYS flagged
-# regardless of how far the windowed scan reaches, so a tail the budget can't
-# reach is still surfaced — never a silent pass.
+# least one window. The window count bounds the worst case to a FIXED ceiling
+# regardless of input size: a 100k input is one window (unchanged); a 10MB input
+# scans MAX_SCAN_WINDOWS windows, then stops. The count must keep the WHOLE scan
+# (head + tail windows) inside the engine's per-scan latency bound (the ReDoS
+# invariant, ~2s), measured on the slowest interpreter. A tail the windows do not
+# reach is ALWAYS surfaced (SCAN_INCOMPLETE_RULE) — never a silent pass.
+# The WINDOW COUNT is the work limit: a long input is read in at most
+# MAX_SCAN_WINDOWS windows (the head and one tail window), whatever the machine,
+# every rule over each. What a whole scan of the worst input costs is a measured
+# figure, on the CI runners and on 14 interpreters here (docs/performance.md), not a
+# limit. TOTAL_SCAN_BUDGET_SEC is the backstop (see above). It was 8 windows under a 1.0 s budget, which in
+# practice let the clock decide (2026-11-01).
 SCAN_WINDOW_OVERLAP = 512
-MAX_SCAN_WINDOWS = 8
-TOTAL_SCAN_BUDGET_SEC = 1.0
+MAX_SCAN_WINDOWS = 2
+TOTAL_SCAN_BUDGET_SEC = 120.0
 
 # Signal attached by callers when the input exceeds L1_MAX_SCAN_CHARS. Flag-band
 # (monitor-surfaced), not a hard block: legitimate inputs are rarely this large,
@@ -225,6 +236,11 @@ OVERSIZED_INPUT_CATEGORY = "oversized_input"
 SCAN_INCOMPLETE_RULE = "LLM01_input_tail_unscanned"
 SCAN_INCOMPLETE_SCORE = 0.25
 
+# What ``iter_scan_windows`` appends to ``report`` when the wall-clock backstop,
+# not the window count, stopped it: the caller records SCAN_DEGRADED_RULE beside
+# SCAN_INCOMPLETE_RULE, so the backstop is its own reason on the event.
+WINDOW_BACKSTOP = "window_backstop"
+
 
 def iter_scan_windows(
     text: str,
@@ -234,16 +250,18 @@ def iter_scan_windows(
     overlap: int = SCAN_WINDOW_OVERLAP,
     max_windows: int = MAX_SCAN_WINDOWS,
     budget_sec: float = TOTAL_SCAN_BUDGET_SEC,
+    report: Optional[list] = None,
 ):
-    """Yield successive overlapping windows of ``text`` under a total budget.
+    """Yield successive overlapping windows of ``text``, at most ``max_windows``.
 
     Yields ``(index, window_text, end_offset)`` where ``end_offset`` is the
     index one past the last character this window covered. The FIRST window is
     always yielded (so a ``<= window`` input behaves exactly as an un-windowed
-    scan). Subsequent windows are yielded only while BOTH the window count is
-    under ``max_windows`` AND the cumulative wall-clock since ``start_time`` is
-    under ``budget_sec`` (checked between windows — a running regex cannot be
-    interrupted, so the true ceiling is budget + one window). Consecutive
+    scan). Subsequent windows are yielded only while the window count is under
+    ``max_windows``, the work limit; ``budget_sec`` of wall-clock time since
+    ``start_time`` is the backstop, checked between windows, and when it is what
+    stops the windows, ``WINDOW_BACKSTOP`` is appended to ``report`` (2026-11-01:
+    the clock decided how many windows were read). Consecutive
     windows overlap by ``overlap`` so a payload spanning a boundary appears
     whole in at least one window.
 
@@ -266,6 +284,8 @@ def iter_scan_windows(
             if idx >= max_windows:
                 break
             if (time.perf_counter() - start_time) > budget_sec:
+                if report is not None:
+                    report.append(WINDOW_BACKSTOP)   # the backstop, not the window count
                 break
         yield idx, text[pos:pos + window], min(pos + window, n)
         if pos + window >= n:

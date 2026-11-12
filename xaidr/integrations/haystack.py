@@ -71,6 +71,9 @@ L0+L1+L2+compositional+DLP stack and emits through the sensor's reporter.
 
 from __future__ import annotations
 
+import contextvars
+import functools
+import inspect
 import logging
 from typing import Any
 
@@ -93,7 +96,10 @@ EXIT_REASON_BLOCKED = "xaidr_blocked"
 _STOP_SENTINEL = 2 ** 62
 
 #: Hook points this integration registers under, in run-loop order.
-_POINTS = ("before_run", "before_tool", "after_run")
+_POINTS = ("before_run", "before_tool", "after_tool", "after_run")
+#: The points a build must offer; ``after_tool`` (value origin's result record)
+#: is registered where the build offers it.
+_REQUIRED = ("before_run", "before_tool", "after_run")
 
 
 def _import_hooks() -> None:
@@ -119,7 +125,7 @@ def _import_hooks() -> None:
             "haystack-ai, or scan tool calls explicitly with "
             "Sensor.protect_tools()."
         ) from exc
-    missing = [p for p in _POINTS if p not in VALID_HOOK_POINTS]
+    missing = [p for p in _REQUIRED if p not in VALID_HOOK_POINTS]
     if missing:
         raise ImportError(
             "haystack.hooks does not offer the hook point(s) "
@@ -134,7 +140,7 @@ def _import_hooks() -> None:
 class _DelphiHook:
     """One xaidr boundary, shaped as a Haystack ``Hook``.
 
-    One class, three instances: Haystack calls ``run(state)`` with no indication
+    One class, one instance per point: Haystack calls ``run(state)`` with no indication
     of WHICH hook point it is calling from, so a single object registered at
     several points could not tell an input scan from an output scan. Each
     instance is therefore bound to exactly one point and declares it in
@@ -218,7 +224,25 @@ class _DelphiHook:
         if last_user is None or not last_user.text.strip():
             return
 
-        result = self.sensor.scan(last_user.text, direction="input")
+        variables = _RUN_VARIABLES.get()
+        batch = getattr(self.sensor, "_vo_input_batch", None)
+        if variables is None or batch is None:
+            result = self.sensor.scan(last_user.text, direction="input")
+        else:
+            # Value origin: the Agent rendered this message from its user_prompt
+            # template, so it is the template author's text with the run's
+            # variables filled in, and a variable may be a retrieved document. Only
+            # the string variables are the principal's input: each is a declared
+            # span, recorded with the rendered message's own scan verdict, in one
+            # write. The rest of the rendered text is scanned and not recorded.
+            with batch(declared=True) as parts:
+                result = self.sensor.scan(last_user.text, direction="input")
+                if parts:
+                    _, writer, truncated = parts.pop()
+                    parts.extend((v, writer, truncated) for v in variables
+                                 if v in last_user.text)
+                    if not parts:
+                        parts.append(("", writer, truncated))   # a new input still binds
         if not getattr(result, "must_halt", False):
             return
 
@@ -286,6 +310,29 @@ class _DelphiHook:
                 )
             )
         state.set("messages", rebuilt, handler_override=replace_values)
+
+    # ── TOOL RESULT (value origin) ───────────────────────────────────────
+
+    def _after_tool(self, state: Any) -> None:
+        """Record each result the tools just produced for value origin: the text
+        Haystack hands the model (its ``ToolCallResult.result``: the return value
+        through ``_result_to_string``, JSON or ``str()``), under the call's tool
+        name and arguments. Not scanned, so the read is untrusted (Q10), as
+        ``protect_tools`` records one; nothing in State changes (2026-11-01)."""
+        record = getattr(self.sensor, "_vo_record_result", None)
+        if record is None:
+            return
+        messages = state.data.get("messages") or []
+        fresh = []
+        for m in reversed(messages):            # the step's results: the trailing tool messages
+            if not m.is_from("tool"):
+                break
+            fresh.append(m)
+        for m in reversed(fresh):
+            for r in m.tool_call_results:
+                call = getattr(r, "origin", None)
+                record(getattr(call, "tool_name", "") or "", getattr(call, "arguments", None),
+                       r.result, None)
 
     # ── OUTPUT ───────────────────────────────────────────────────────────
 
@@ -363,6 +410,42 @@ class _DelphiHook:
         return cls(**data.get("init_parameters", {}))
 
 
+#: The string template variables of the ``Agent.run`` in progress, when the Agent
+#: renders a ``user_prompt``: set by protect()'s ``Agent.run``/``run_async``
+#: wrapper (``run_variables``), read by the before_run hook. None otherwise.
+_RUN_VARIABLES: contextvars.ContextVar = contextvars.ContextVar(
+    "xaidr_haystack_run_variables", default=None)
+
+
+def run_variables(fn):
+    """``fn`` (``Agent.run`` or ``Agent.run_async``) with the run's string template
+    variables visible to the before_run hook for the duration of the call."""
+    def variables(agent, kwargs):
+        builder = getattr(agent, "_user_chat_prompt_builder", None)
+        if builder is None:
+            return None
+        names = getattr(builder, "variables", None) or ()
+        return [kwargs[k] for k in names if isinstance(kwargs.get(k), str)]
+
+    if inspect.iscoroutinefunction(fn):
+        @functools.wraps(fn)
+        async def wrapped(self, *args, **kwargs):
+            token = _RUN_VARIABLES.set(variables(self, kwargs))
+            try:
+                return await fn(self, *args, **kwargs)
+            finally:
+                _RUN_VARIABLES.reset(token)
+    else:
+        @functools.wraps(fn)
+        def wrapped(self, *args, **kwargs):
+            token = _RUN_VARIABLES.set(variables(self, kwargs))
+            try:
+                return fn(self, *args, **kwargs)
+            finally:
+                _RUN_VARIABLES.reset(token)
+    return wrapped
+
+
 def _refusal_text(result: Any) -> str:
     """The refusal an input/output boundary puts in the transcript.
 
@@ -392,7 +475,7 @@ def delphi_hooks(
 ) -> dict[str, list[Any]]:
     """Build the ``hooks=`` mapping for a Haystack ``Agent``.
 
-    Returns a dict ready to hand straight to the Agent, covering three boundaries
+    Returns a dict ready to hand straight to the Agent, covering four boundaries
     with ONE sensor (one agent_id, one reporter, one policy, one circuit
     breaker)::
 
@@ -411,6 +494,8 @@ def delphi_hooks(
       via ``scan_tool_call`` BEFORE it executes. A halting verdict removes that
       call and returns a refusal tool-result in its place; other calls in the
       same step still run, and the Agent loops on and can recover.
+    * ``after_tool`` — TOOL RESULT, for value origin only: records each result
+      the step's tools produced, unscanned, and changes nothing.
     * ``after_run`` — OUTPUT. Scans the final assistant text via ``scan_output``
       and replaces it on a halting verdict.
 
@@ -433,12 +518,14 @@ def delphi_hooks(
        arbitrary per-component input dict, which is not a place a message-shaped
        scan can be made honestly. Scan at your own entry point with
        ``sensor.scan()`` instead.
-    3. **Tool RESULTS are not scanned.** Only tool ARGUMENTS are. Haystack does
-       offer the seam for it — the ``after_tool`` hook point runs once the result
-       messages are in ``State`` — and this module deliberately does not register
-       there, so a tool that returns an injected payload is not caught. Pinned by
-       a negative test so a change here fails loudly rather than silently
-       widening the claim.
+    3. **Tool RESULTS are not scanned.** Only tool ARGUMENTS are, so a tool that
+       returns an injected payload is not caught. The ``after_tool`` hook point
+       (it runs once the result messages are in ``State``) is registered for
+       value origin only: it RECORDS each result, as the model is handed it, so a
+       later call to a destination the result named is traced to it (untrusted,
+       since the result was not scanned), and it changes nothing in ``State``
+       (2026-11-01). Pinned by a negative test so a change here fails loudly
+       rather than silently widening the claim.
 
     Args:
         agent_id: identifier for this agent (appears in telemetry).
@@ -452,6 +539,10 @@ def delphi_hooks(
         **sensor_kwargs: forwarded to DelphiSensor (e.g. policy_file=, schema=).
     """
     _import_hooks()
+    from haystack.hooks.protocol import VALID_HOOK_POINTS
+    # A misspelled keyword raises, with or without sensor= (autopatch's check).
+    from ..autopatch import _reject_unknown_sensor_kwargs
+    _reject_unknown_sensor_kwargs(sensor_kwargs, "delphi_hooks()")
     if sensor is None:
         sensor = DelphiSensor(
             agent_id=agent_id,
@@ -459,7 +550,13 @@ def delphi_hooks(
             reporter=reporter,
             **sensor_kwargs,
         )
-    return {point: [_DelphiHook(point, sensor=sensor)] for point in _POINTS}
+    else:
+        # value_origin= beside an existing sensor is refused, never dropped
+        # (value_origin/_hold.py).
+        from ..value_origin._hold import refuse_beside_sensor
+        refuse_beside_sensor(sensor_kwargs)
+    return {point: [_DelphiHook(point, sensor=sensor)] for point in _POINTS
+            if point in _REQUIRED or point in VALID_HOOK_POINTS}
 
 
 def inject_hooks(existing: Any, hooks: dict[str, list[Any]]) -> dict[str, list[Any]]:

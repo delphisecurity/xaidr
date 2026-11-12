@@ -19,10 +19,16 @@ Composition (policy-as-overlay, STRICTER WINS):
   over-permissive cannot disable the detector.
 
 Fail-safe: a malformed policy file logs a warning and falls through to
-detection-only. A policy error never crashes the agent and never blocks-all.
-A malformed policy passed to ``set_policy()`` is refused and the policy already
-in force keeps enforcing (keep-last-good, see ``adopt_policy``). A policy file
-with a duplicate YAML key is refused rather than keeping the last value.
+detection-only, and a policy error never blocks-all. A malformed policy passed
+to ``set_policy()`` is refused and the policy already in force keeps enforcing
+(keep-last-good, see ``adopt_policy``). A policy file with a duplicate YAML key
+is refused rather than keeping the last value.
+
+``value_origin`` is not a policy setting, and a policy that sets it raises:
+``ValueOriginEnforcementUnavailable`` for enforcement in any spelling, a
+``ValueError`` for any other value (value origin is set on the Sensor). A policy
+file that sets it raises at construction; ``set_policy()`` with one raises and
+the policy already in force stays in force.
 
 Policy YAML format (mirrors the engine's action_policy structure)::
 
@@ -127,8 +133,10 @@ def load_policy(
 ) -> Optional[dict]:
     """Load and parse a policy from a file (or the conventional default).
 
-    Returns a parsed policy dict, or None if there is no policy / it was
-    malformed (fail-safe: never raises). Logs what it loaded.
+    Returns a parsed policy dict, or None if there is no policy or it is
+    malformed (logged, not raised). A policy that sets ``value_origin`` raises:
+    ``ValueOriginEnforcementUnavailable`` for enforcement in any spelling, a
+    ``ValueError`` for any other value. Logs what it loaded.
     """
     path = policy_file
     if path is None and auto_default:
@@ -156,6 +164,11 @@ def load_policy(
         logger.warning("[xaidr] could not read policy file %s: %s (detection-only)", path, exc)
         return None
 
+    # value_origin in a policy file is refused at construction, never read as a
+    # malformed file (which would fall through to detection-only): enforcement
+    # raises ValueOriginEnforcementUnavailable, anything else a ValueError.
+    from .value_origin._hold import refuse_in_policy
+    refuse_in_policy(raw, f"policy file {path}")
     policy = parse_action_policy(raw, extra_conditions=extra_conditions)
     if policy is None:
         logger.warning(
@@ -173,13 +186,16 @@ def set_policy_dict(
     *,
     extra_conditions: Optional[Mapping[str, Any]] = None,
 ) -> Optional[dict]:
-    """Parse a policy supplied programmatically as a dict. Fail-safe (None on bad).
+    """Parse a policy supplied programmatically as a dict: None if it is malformed.
+    A policy that sets ``value_origin`` raises, as in ``load_policy``.
 
     Takes `extra_conditions` for the same reason `load_policy` does: a policy
     set at RUNTIME must accept the same extension-supplied condition names a
     policy FILE would. `Sensor.set_policy()` goes through `adopt_policy`, which
     forwards them the same way; this function has no caller in the sensor.
     """
+    from .value_origin._hold import refuse_in_policy
+    refuse_in_policy(raw, "set_policy")
     policy = parse_action_policy(raw, extra_conditions=extra_conditions)
     if policy is None:
         logger.warning("[xaidr] set_policy: malformed policy refused")
@@ -201,6 +217,12 @@ def adopt_policy(
     policy set or cleared by another thread during the parse, stays in force.
     ``in_force`` is read only to report what stayed in force.
     """
+    # value_origin in a policy raises before anything is parsed or installed, so
+    # the policy in force stays in force (keep-last-good), and the caller learns
+    # why: enforcement is available in a later release; any other value belongs
+    # on the Sensor.
+    from .value_origin._hold import refuse_in_policy
+    refuse_in_policy(raw, "set_policy")
     parsed = parse_action_policy(raw, extra_conditions=extra_conditions)
     if parsed is not None:
         return parsed

@@ -386,14 +386,22 @@ never weaken detection — a policy `allow` cannot switch off a detected attack.
 A misconfigured policy therefore fails safe: over-restrictive merely blocks more;
 over-permissive cannot disable the detector. A malformed policy file logs a
 warning and falls through to detection-only; it never crashes the agent and
-never blocks everything.
+never blocks everything. One key is the exception: `value_origin` is not a policy
+setting, and a policy that carries it is refused loudly. In a policy file the
+sensor raises at construction, `ValueOriginEnforcementUnavailable` when it asks
+for enforcement (available in a later release) and a `ValueError` saying to set
+`value_origin` on the Sensor for any other value; it never falls through to
+detection-only.
 
 **Keep-last-good.** `set_policy()` parses the new policy in full before it
 changes anything. If the policy is refused, `set_policy()` returns `False`,
 logs the refusal at ERROR, and the policy that was already in force (an earlier
 `set_policy()` or the policy file loaded at startup) keeps enforcing. A bad
 input never leaves the sensor with less policy than it had. `set_policy(None)`
-is the explicit way to clear the policy.
+is the explicit way to clear the policy. A policy carrying `value_origin` is
+refused the same way, with an exception instead of `False`: `set_policy()`
+raises (`ValueOriginEnforcementUnavailable` for enforcement, a `ValueError`
+otherwise) and the policy in force keeps enforcing.
 
 `trust_below` is **rejected at load** with a clear error rather than silently
 never firing — it needs a per-agent trust score that only the platform tier

@@ -150,6 +150,9 @@ def delphi_middleware(
             "Install with: pip install 'xaidr[langchain]'"
         ) from exc
 
+    # A misspelled keyword raises, with or without sensor= (autopatch's check).
+    from ..autopatch import _reject_unknown_sensor_kwargs
+    _reject_unknown_sensor_kwargs(sensor_kwargs, "delphi_middleware()")
     if sensor is None:
         sensor = DelphiSensor(
             agent_id=agent_id,
@@ -158,6 +161,10 @@ def delphi_middleware(
             **sensor_kwargs,
         )
     else:
+        # value_origin= beside an existing sensor is refused, never dropped
+        # (value_origin/_hold.py).
+        from ..value_origin._hold import refuse_beside_sensor
+        refuse_beside_sensor(sensor_kwargs)
         agent_id = sensor.agent_id
 
     # Both "blocked" and "approval_required" HALT the turn, but they are
@@ -177,6 +184,38 @@ def delphi_middleware(
             "I can't help with that request. "
             f"(xaidr:{result.category or 'policy'})"
         )
+
+    def _message_text(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "\n".join(b if isinstance(b, str) else b.get("text", "")
+                             for b in content
+                             if isinstance(b, str) or (isinstance(b, dict)
+                                                       and isinstance(b.get("text"), str)))
+        return ""
+
+    def _replay_tool_messages(messages: list) -> None:
+        """Value origin: every ToolMessage the model is about to read again is a
+        tool output, and is recorded as one (untrusted) in this request -- turn 2
+        of a conversation is its own request, and the destination a turn-1 tool
+        output named must not read as merely unknown there. Only tool output is
+        replayed: the principal's own turn is the input scan above, and system and
+        assistant text is never a source of authority."""
+        replay = getattr(sensor, "_vo_replay_result", None)
+        if replay is None:
+            return
+        calls = {}
+        for m in messages:
+            if isinstance(m, AIMessage):
+                for tc in getattr(m, "tool_calls", None) or ():
+                    if isinstance(tc, dict) and tc.get("id"):
+                        calls[tc["id"]] = tc
+        for m in messages:
+            if isinstance(m, ToolMessage):
+                tc = calls.get(getattr(m, "tool_call_id", None)) or {}
+                replay(getattr(m, "name", None) or tc.get("name"), tc.get("args"),
+                       _message_text(m.content), getattr(m, "tool_call_id", None))
 
     class DelphiMiddleware(AgentMiddleware):
         """xaidr full-boundary middleware: input + tool-call + output."""
@@ -207,6 +246,7 @@ def delphi_middleware(
             # so this decides on payload shape alone. The old 15s thread-local
             # timing heuristic is gone — unsound across processes/containers.
             result, is_a2a = route_inbound_scan(sensor, content, agent_id)
+            _replay_tool_messages(messages)
 
             print(
                 f"[xaidr] scan action={result.action} score={result.score:.2f} "
@@ -223,8 +263,9 @@ def delphi_middleware(
             return None
 
         # ── TOOL-CALL boundary ───────────────────────────────────────────
-        def wrap_tool_call(self, request: Any, handler: Any) -> Any:
-            """Scan a tool call before execution; block → tool NOT invoked."""
+        def _tool_refusal(self, request: Any) -> Any:
+            """The refusal ToolMessage for a call that must not run, else None.
+            One decision for the sync and async hooks, so they cannot drift."""
             tool_call = getattr(request, "tool_call", None) or {}
             tool_name = tool_call.get("name") if isinstance(tool_call, dict) else None
             arguments = tool_call.get("args") if isinstance(tool_call, dict) else None
@@ -267,8 +308,18 @@ def delphi_middleware(
                         name=tool_name,
                         status="error",
                     )
+            return None
 
-            return handler(request)
+        def wrap_tool_call(self, request: Any, handler: Any) -> Any:
+            """Scan a tool call before execution; block → tool NOT invoked."""
+            refusal = self._tool_refusal(request)
+            return refusal if refusal is not None else handler(request)
+
+        async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
+            """The same, for an agent run with ``ainvoke``: the decision is the
+            sync hook's, and the tool runs only when it allows."""
+            refusal = self._tool_refusal(request)
+            return refusal if refusal is not None else await handler(request)
 
         # ── OUTPUT boundary ──────────────────────────────────────────────
         @hook_config(can_jump_to=["end"])

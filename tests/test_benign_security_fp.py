@@ -200,9 +200,14 @@ def test_fp2_intentionally_still_flagged(sensor):
     assert r.action in CAUGHT
 
 
-def test_redos_safe_on_pathological_input(sensor):
-    """The new bounded patterns add no ReDoS surface — a large adversarial input
-    scans well under a second."""
+def test_redos_safe_on_pathological_input(sensor, l1_work, scan_paths):
+    """The new bounded patterns add no ReDoS surface: a large adversarial input is
+    examined in a bounded number of passes of at most the scan cap, by every rule.
+    Its time is the input-scan path's figure (scripts/scan_paths.py)."""
+    from xaidr.scanner import l1
+    from xaidr.scanner.l1 import L1_MAX_SCAN_CHARS as CAP, MAX_SCAN_WINDOWS
+
+    RULES = l1.INPUT_RULES
     payloads = [
         "base64 " + "a " * 5000,
         "json.loads " + "x" * 20000,
@@ -210,6 +215,12 @@ def test_redos_safe_on_pathological_input(sensor):
         "exfiltrate " + "z" * 20000,
     ]
     for p in payloads:
-        t0 = time.process_time()
+        l1_work.clear()
         sensor.scan(p)
-        assert time.process_time() - t0 < 1.0, f"scan too slow on {p[:20]!r}"
+        per = l1_work.per_rule()
+        calls = {tuple(v) for v in per.values()}
+        assert len(per) == len(RULES) and len(calls) == 1, f"{p[:16]!r}...: a rule did not run"
+        assert all(len(c) <= MAX_SCAN_WINDOWS + 1 and max(c) <= CAP for c in calls), (
+            f"{p[:16]!r}...: a rule examined {calls}, past {MAX_SCAN_WINDOWS + 1} passes of {CAP:,}")
+    scan_paths.assert_timed("input_scan", ["base64-word-run", "json-loads-run", "decode-run",
+                                           "exfiltrate-run"])

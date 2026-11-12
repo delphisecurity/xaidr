@@ -139,15 +139,14 @@ def test_base64_hex_unregressed(block_sensor_tc):
     assert block_sensor_tc.scan(blob).action in CAUGHT  # bare blob still caught
 
 
-def test_url_decode_is_redos_safe():
-    import time
-
+def test_url_decode_is_redos_safe(scan_paths):
+    """Each pathological input returns; its time is the text-detector path's
+    figure (scripts/scan_paths.py, the url-* inputs)."""
     payloads = [
         "%20" * 200_000,
         "decode and run: " + "%72" * 100_000,
         "https://x/" + "%2F" * 200_000,
     ]
     for p in payloads:
-        t0 = time.process_time()
         url_decoded_danger(p)
-        assert time.process_time() - t0 < 1.0, "url decode-and-rescan too slow (possible ReDoS)"
+    scan_paths.assert_timed("text_detectors", ["url-space-run", "url-decode-run", "url-slash-run"])
