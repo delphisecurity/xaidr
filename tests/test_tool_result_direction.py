@@ -308,10 +308,11 @@ def test_nano_still_does_not_run_on_output():
 # ── the seam's own advice must not contradict the seam ───────────────────────
 
 
-def test_the_haystack_tool_result_gap_advises_the_tool_result_direction():
-    """The haystack entry tells an operator to scan a tool result themselves.
-    Advising `direction='input'` would instruct them to reproduce, by hand, the
-    conflation the MCP seam avoids."""
+def test_the_haystack_tool_result_gap_is_closed_not_advised():
+    """The haystack entry no longer tells an operator to scan a tool result
+    themselves: the after_tool hook scans it, so the do-it-yourself advice is
+    gone with the gap. What must stay true is the direction: a result is
+    scanned as a tool result, never as principal input."""
     fakes.install_mcp()
     src = (sys.modules["xaidr.autopatch.frameworks"].__file__)
     with open(src, encoding="utf-8") as fh:
@@ -319,4 +320,14 @@ def test_the_haystack_tool_result_gap_advises_the_tool_result_direction():
     assert "sensor.scan(result, direction='input')" not in text, (
         "a seam still advises scanning a tool result as principal input"
     )
-    assert "sensor.scan(result, direction='tool_result')" in text
+    assert "sensor.scan(result, direction='tool_result')" not in text, (
+        "the haystack entry still advises scanning a tool result by hand — "
+        "the after_tool hook scans it now"
+    )
+    from xaidr.integrations import haystack
+
+    with open(haystack.__file__, encoding="utf-8") as fh:
+        hook = fh.read()
+    assert 'direction="tool_result"' in hook, (
+        "the haystack after_tool scan no longer names direction='tool_result'"
+    )
