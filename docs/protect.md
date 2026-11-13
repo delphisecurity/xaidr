@@ -189,23 +189,26 @@ credential read executes once with only the sync method patched, and zero times
 with both. A documented gap is still a gap, and documenting it is not the same
 as being unable to close it.
 
-**Tool RESULTS are scanned at the `langchain-core` and `mcp` seams, and not at
-the others.** A tool that fetches a poisoned document, reads a poisoned row or
-calls a poisoned MCP server is the inbound half of the tool boundary. A
-`BaseTool.run`/`.arun` seam with no `after` position scans arguments and hands
-the return value to the model unread; this one scans the result as
-`direction="tool_result"`, on both the sync and async halves, and
-refuses it in the same type the caller was promised. What is *not* covered, said
-here rather than left to be discovered:
+**Tool RESULTS are scanned at the `langchain-core`, `mcp`, `crewai`,
+`autogen-core`, `autogen` (0.2) and `llama-index` seams.** A tool that fetches
+a poisoned document, reads a poisoned row or calls a poisoned MCP server is
+the inbound half of the tool boundary, and until 1.20.0 the
+`BaseTool.run`/`.arun` seam had no `after` position at all: it scanned
+arguments and handed the return value to the model unread. It now scans the
+result as `direction="tool_result"`, on both the sync and async halves, and
+refuses it in the same type the caller was promised. The four seams below it
+had the same gap — arguments scanned, results handed over verbatim — and now
+scan their results too. What is *not* covered, said here rather than left to
+be discovered:
 
 | seam | arguments | result |
 |---|---|---|
 | `langchain-core` `BaseTool.run` / `.arun` | yes | **yes** |
 | `mcp` `ClientSession.call_tool` | yes | **yes** |
-| `crewai` `before_tool_call` hook | yes | no — the `after_tool_call` hook is registered but only restates our refusal in our own vocabulary; it reads `context.tool_result` and does not scan it |
-| `autogen-core` `BaseTool.run_json` | yes | no |
-| `autogen` `ConversableAgent.execute_function` / `a_execute_function` | yes | no |
-| `llama-index` `FunctionTool.call` / `.acall` | yes | no |
+| `crewai` `after_tool_call` hook | yes | **yes** — the refusal is the string the hook returns, which CrewAI's reducer makes the result the agent reads |
+| `autogen-core` `BaseTool.run_json` | yes | **yes** — the refusal is the same plain string the argument path returns, since `run_json` returns the tool's raw return |
+| `autogen` `ConversableAgent.execute_function` / `a_execute_function` | yes | **yes** — the refusal keeps the `(is_exec_success, response_dict)` tuple shape the argument path already builds |
+| `llama-index` `FunctionTool.call` / `.acall` | yes | **yes** — the refusal is a `ToolOutput`, not a bare string |
 | `haystack` `Agent` hooks | yes | no — reported as `found_unpatchable`; close it with your own `after_tool` hook |
 | `openai-agents` | n/a (no patchable tool seam) | n/a |
 
@@ -216,14 +219,17 @@ model reads nor bounded. Scan those yourself with
 
 **Enforcement shape.** Tool boundaries return a `[BLOCKED]` / `[APPROVAL
 REQUIRED]` refusal the agent can read and recover from, rather than raising.
-It is a plain string everywhere except one case: the `langchain-core`
-`BaseTool.run`/`.arun` seam returns that same text as a **`ToolMessage`** (with
-`status="error"`) when the caller passed a `tool_call_id`, because that caller
-is a `ToolNode` or a `create_agent` tool loop and a string is not a legal return
-there. Direct `tool.run(args)` callers still get the string, and no other
-framework's seam is affected. **If you match on the refusal, match on
-`str(result)`, not on `isinstance(result, str)`** — see the LangGraph section
-above for why. Transport and entrypoint boundaries raise
+It is a plain string everywhere except two framework-shaped cases. The
+`langchain-core` `BaseTool.run`/`.arun` seam returns that same text as a
+**`ToolMessage`** (with `status="error"`) when the caller passed a
+`tool_call_id`, because that caller is a `ToolNode` or a `create_agent` tool
+loop and a string is not a legal return there. Direct `tool.run(args)` callers
+still get the string. The `llama-index` `FunctionTool.call`/`.acall` seam
+returns the refusal as a **`ToolOutput`**, because that is what those methods
+promise, and a string there is the same crash class (right verdict, wrong return
+type). **If you match on the refusal, match on `str(result)`, not on
+`isinstance(result, str)`** — see the LangGraph section above for why this
+changed in 1.9.0. Transport and entrypoint boundaries raise
 `DelphiBlockedError` instead — there is no in-band way for an HTTP send to say
 "refused".
 
